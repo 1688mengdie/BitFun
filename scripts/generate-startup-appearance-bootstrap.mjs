@@ -10,11 +10,11 @@ const repoRoot = path.resolve(__dirname, '..');
 const webUiRoot = path.join(repoRoot, 'src/web-ui');
 const outputPath = path.join(
   repoRoot,
-  'src/apps/desktop/src/generated/startup_theme_bootstrap.json',
+  'src/apps/desktop/src/generated/startup_appearance_bootstrap.json',
 );
-const themePromptSnapshotOutputPath = path.join(
+const appearancePromptSnapshotOutputPath = path.join(
   repoRoot,
-  'src/crates/assembly/core/src/agentic/tools/implementations/generated/theme_prompt_snapshots.json',
+  'src/crates/assembly/core/src/agentic/tools/implementations/generated/appearance_prompt_snapshots.json',
 );
 const checkOnly = process.argv.includes('--check');
 
@@ -35,25 +35,25 @@ const server = await createServer({
 
 try {
   const [
-    { builtinThemes },
-    { createStartupThemeBootstrapManifest },
-    { createThemePromptSnapshotManifest },
+    { builtinAppearancePalettes },
+    { createStartupAppearanceBootstrapManifest },
+    { createAppearancePromptSnapshotManifest },
   ] = await Promise.all([
-    server.ssrLoadModule('/src/infrastructure/theme/presets/index.ts'),
-    server.ssrLoadModule('/src/infrastructure/theme/presets/startupThemeBootstrap.ts'),
-    server.ssrLoadModule('/src/infrastructure/theme/presets/themePromptSnapshots.ts'),
+    server.ssrLoadModule('/src/infrastructure/appearance/builtins/palettes.ts'),
+    server.ssrLoadModule('/src/infrastructure/appearance/builtins/startupAppearanceBootstrap.ts'),
+    server.ssrLoadModule('/src/infrastructure/appearance/builtins/appearancePromptSnapshots.ts'),
   ]);
 
   const generatedFiles = [
     {
-      label: 'Startup theme bootstrap manifest',
+      label: 'Startup appearance bootstrap manifest',
       outputPath,
-      content: `${JSON.stringify(createStartupThemeBootstrapManifest(builtinThemes), null, 2)}\n`,
+      content: `${JSON.stringify(createStartupAppearanceBootstrapManifest(builtinAppearancePalettes), null, 2)}\n`,
     },
     {
-      label: 'Theme prompt snapshot manifest',
-      outputPath: themePromptSnapshotOutputPath,
-      content: `${JSON.stringify(createThemePromptSnapshotManifest(builtinThemes), null, 2)}\n`,
+      label: 'Appearance prompt snapshot manifest',
+      outputPath: appearancePromptSnapshotOutputPath,
+      content: `${JSON.stringify(createAppearancePromptSnapshotManifest(builtinAppearancePalettes), null, 2)}\n`,
     },
   ];
 
@@ -68,7 +68,7 @@ try {
         : normalizeGeneratedText(currentContent);
       if (currentContentForCheck !== normalizeGeneratedText(generatedFile.content)) {
         console.error(
-          `${generatedFile.label} is stale. Run \`pnpm run generate-startup-theme-bootstrap\`.`,
+          `${generatedFile.label} is stale. Run \`pnpm run generate-startup-appearance-bootstrap\`.`,
         );
         process.exitCode = 1;
       }

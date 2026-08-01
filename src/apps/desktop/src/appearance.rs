@@ -1,4 +1,4 @@
-//! Theme System
+//! Desktop appearance bootstrap and window creation.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
@@ -22,9 +22,11 @@ const AGENT_COMPANION_WINDOW_EDGE_MARGIN: f64 = 8.0;
 static AGENT_COMPANION_WINDOW_OPS: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static AGENT_COMPANION_WINDOW_LAST_POSITION: OnceLock<RwLock<Option<tauri::LogicalPosition<f64>>>> =
     OnceLock::new();
-static STARTUP_THEME_BOOTSTRAP_MANIFEST: OnceLock<StartupThemeBootstrapManifest> = OnceLock::new();
+static STARTUP_APPEARANCE_BOOTSTRAP_MANIFEST: OnceLock<StartupAppearanceBootstrapManifest> =
+    OnceLock::new();
 
-const STARTUP_THEME_BOOTSTRAP_JSON: &str = include_str!("generated/startup_theme_bootstrap.json");
+const STARTUP_APPEARANCE_BOOTSTRAP_JSON: &str =
+    include_str!("generated/startup_appearance_bootstrap.json");
 
 struct MainWebviewNavigationPolicy {
     first_page_navigation: AtomicBool,
@@ -126,7 +128,7 @@ fn clamp_agent_companion_window_position(
 }
 
 #[derive(Debug, Clone)]
-pub struct ThemeConfig {
+pub struct AppearanceConfig {
     pub id: String,
     pub selection_id: Option<String>,
     pub bg_primary: String,
@@ -140,16 +142,16 @@ pub struct ThemeConfig {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StartupThemeBootstrapManifest {
-    version: u8,
-    default_light_theme_id: String,
-    default_dark_theme_id: String,
-    themes: Vec<StartupThemeBootstrapTheme>,
+struct StartupAppearanceBootstrapManifest {
+    schema_version: u8,
+    default_light_appearance_id: String,
+    default_dark_appearance_id: String,
+    appearances: Vec<StartupAppearanceBootstrapEntry>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StartupThemeBootstrapTheme {
+struct StartupAppearanceBootstrapEntry {
     id: String,
     bg_primary: String,
     bg_secondary: String,
@@ -160,9 +162,9 @@ struct StartupThemeBootstrapTheme {
     accent_color: String,
 }
 
-impl StartupThemeBootstrapTheme {
-    fn to_theme_config(&self, selection_id: Option<String>) -> ThemeConfig {
-        ThemeConfig {
+impl StartupAppearanceBootstrapEntry {
+    fn to_appearance_config(&self, selection_id: Option<String>) -> AppearanceConfig {
+        AppearanceConfig {
             id: self.id.clone(),
             selection_id,
             bg_primary: self.bg_primary.clone(),
@@ -178,7 +180,7 @@ impl StartupThemeBootstrapTheme {
 
 #[derive(Debug, Clone)]
 struct StartupBootstrapConfig {
-    theme: ThemeConfig,
+    appearance: AppearanceConfig,
     locale: String,
     keybindings: Option<serde_json::Value>,
 }
@@ -186,51 +188,55 @@ struct StartupBootstrapConfig {
 const MAX_BOOTSTRAP_KEYBINDINGS_JSON_BYTES: usize = 64 * 1024;
 const MAX_BOOTSTRAP_WORKSPACE_STATE_JSON_BYTES: usize = 64 * 1024;
 
-impl Default for ThemeConfig {
+impl Default for AppearanceConfig {
     fn default() -> Self {
-        let default_light_theme_id = Self::startup_theme_bootstrap_manifest()
-            .default_light_theme_id
+        let default_light_appearance_id = Self::startup_appearance_bootstrap_manifest()
+            .default_light_appearance_id
             .as_str();
-        let mut theme = Self::get_builtin_theme(default_light_theme_id)
-            .expect("startup theme bootstrap manifest must include the default light theme");
-        theme.selection_id = None;
-        theme
+        let mut appearance = Self::get_builtin_appearance(default_light_appearance_id).expect(
+            "startup appearance bootstrap manifest must include the default light appearance",
+        );
+        appearance.selection_id = None;
+        appearance
     }
 }
 
-impl ThemeConfig {
-    pub fn get_builtin_theme(theme_id: &str) -> Option<Self> {
-        Self::startup_theme_bootstrap_manifest()
-            .themes
+impl AppearanceConfig {
+    pub fn get_builtin_appearance(appearance_id: &str) -> Option<Self> {
+        Self::startup_appearance_bootstrap_manifest()
+            .appearances
             .iter()
-            .find(|theme| theme.id == theme_id)
-            .map(|theme| theme.to_theme_config(Some(theme_id.to_string())))
+            .find(|appearance| appearance.id == appearance_id)
+            .map(|appearance| appearance.to_appearance_config(Some(appearance_id.to_string())))
     }
 
-    fn startup_theme_bootstrap_manifest() -> &'static StartupThemeBootstrapManifest {
-        STARTUP_THEME_BOOTSTRAP_MANIFEST.get_or_init(|| {
-            let manifest: StartupThemeBootstrapManifest =
-                serde_json::from_str(STARTUP_THEME_BOOTSTRAP_JSON)
-                    .expect("startup theme bootstrap manifest must be valid JSON");
+    fn startup_appearance_bootstrap_manifest() -> &'static StartupAppearanceBootstrapManifest {
+        STARTUP_APPEARANCE_BOOTSTRAP_MANIFEST.get_or_init(|| {
+            let manifest: StartupAppearanceBootstrapManifest =
+                serde_json::from_str(STARTUP_APPEARANCE_BOOTSTRAP_JSON)
+                    .expect("startup appearance bootstrap manifest must be valid JSON");
             assert_eq!(
-                manifest.version, 1,
-                "startup theme bootstrap manifest version is unsupported"
+                manifest.schema_version, 1,
+                "startup appearance bootstrap manifest version is unsupported"
             );
             manifest
         })
     }
 
     fn load_startup_bootstrap_config() -> StartupBootstrapConfig {
-        let default_theme = Self::default();
+        let default_appearance = Self::default();
         let default = StartupBootstrapConfig {
-            theme: default_theme.clone(),
+            appearance: default_appearance.clone(),
             locale: "zh-CN".to_string(),
             keybindings: None,
         };
         let path_manager = match try_get_path_manager_arc() {
             Ok(pm) => pm,
             Err(e) => {
-                debug!("Failed to create PathManager, using default theme: {}", e);
+                debug!(
+                    "Failed to create PathManager, using default appearance: {}",
+                    e
+                );
                 return default;
             }
         };
@@ -243,7 +249,10 @@ impl ThemeConfig {
         let config_content = match std::fs::read_to_string(&config_file) {
             Ok(content) => content,
             Err(e) => {
-                debug!("Failed to read config file, using default theme: {}", e);
+                debug!(
+                    "Failed to read config file, using default appearance: {}",
+                    e
+                );
                 return default;
             }
         };
@@ -251,7 +260,10 @@ impl ThemeConfig {
         let config_value: serde_json::Value = match serde_json::from_str(&config_content) {
             Ok(value) => value,
             Err(e) => {
-                debug!("Failed to parse config file, using default theme: {}", e);
+                debug!(
+                    "Failed to parse config file, using default appearance: {}",
+                    e
+                );
                 return default;
             }
         };
@@ -267,51 +279,56 @@ impl ThemeConfig {
             .unwrap_or("zh-CN")
             .to_string();
 
+        let appearance_selection = config_value
+            .pointer("/appearance/selection")
+            .and_then(|value| value.as_str())
+            .unwrap_or("system")
+            .to_string();
+
         let global_config: GlobalConfig = match serde_json::from_value(config_value) {
             Ok(config) => config,
             Err(e) => {
-                debug!("Failed to parse config file, using default theme: {}", e);
+                debug!(
+                    "Failed to parse config file, using default appearance: {}",
+                    e
+                );
                 return StartupBootstrapConfig { locale, ..default };
             }
         };
 
-        let theme_id = global_config
-            .themes
-            .as_ref()
-            .map(|t| t.current.as_str())
-            .unwrap_or("bitfun-light");
+        let resolved_id = Self::resolve_builtin_appearance_id(&appearance_selection);
 
-        let resolved_id = Self::resolve_builtin_theme_id(theme_id);
-
-        let theme = match Self::get_builtin_theme(resolved_id) {
+        let appearance = match Self::get_builtin_appearance(resolved_id) {
             Some(mut config) => {
-                config.selection_id = Some(theme_id.to_string());
+                config.selection_id = Some(appearance_selection.clone());
                 config
             }
             None => {
-                warn!("Unknown theme ID: {}, using default theme", theme_id);
-                default_theme
+                warn!(
+                    "Unknown appearance ID: {}, using default appearance",
+                    appearance_selection
+                );
+                default_appearance
             }
         };
 
         StartupBootstrapConfig {
-            theme,
+            appearance,
             locale,
             keybindings: global_config.app.keybindings,
         }
     }
 
-    /// Maps config `themes.current` to a built-in id for splash / window chrome.
-    /// `system` follows OS light/dark (aligned with web-ui `getSystemPreferredDefaultThemeId`).
-    fn resolve_builtin_theme_id(theme_id: &str) -> &str {
-        if theme_id == "system" {
-            let manifest = Self::startup_theme_bootstrap_manifest();
+    /// Resolves the selected appearance for splash and window chrome.
+    fn resolve_builtin_appearance_id(appearance_id: &str) -> &str {
+        if appearance_id == "system" {
+            let manifest = Self::startup_appearance_bootstrap_manifest();
             return match dark_light::detect() {
-                Mode::Dark => manifest.default_dark_theme_id.as_str(),
-                Mode::Light | Mode::Default => manifest.default_light_theme_id.as_str(),
+                Mode::Dark => manifest.default_dark_appearance_id.as_str(),
+                Mode::Light | Mode::Default => manifest.default_light_appearance_id.as_str(),
             };
         }
-        theme_id
+        appearance_id
     }
 
     fn startup_messages_json(locale: &str) -> String {
@@ -347,7 +364,7 @@ impl ThemeConfig {
         bootstrap_config: &StartupBootstrapConfig,
         workspace_startup_state: Option<&serde_json::Value>,
     ) -> String {
-        let theme_type = if self.is_light { "light" } else { "dark" };
+        let appearance_mode = if self.is_light { "light" } else { "dark" };
         let startup_locale = &bootstrap_config.locale;
         let startup_locale_json =
             serde_json::to_string(&startup_locale).unwrap_or_else(|_| "\"zh-CN\"".to_string());
@@ -362,9 +379,9 @@ impl ThemeConfig {
         let perf_trace_enabled = cfg!(debug_assertions)
             || ((cfg!(feature = "devtools") || std::env::var_os("BITFUN_PERF_TRACE").is_some())
                 && std::env::var_os("BITFUN_WEBDRIVER_PORT").is_some());
-        let bootstrap_theme_id_json =
+        let bootstrap_appearance_id_json =
             serde_json::to_string(&self.id).unwrap_or_else(|_| "\"bitfun-light\"".to_string());
-        let bootstrap_theme_selection_json = self
+        let bootstrap_appearance_selection_json = self
             .selection_id
             .as_ref()
             .and_then(|selection| serde_json::to_string(selection).ok())
@@ -389,24 +406,24 @@ impl ThemeConfig {
                 window.__BITFUN_BOOTSTRAP_LOCALE__ = {startup_locale_json};
                 window.__BITFUN_BOOTSTRAP_MESSAGES__ = {startup_messages_json};
                 window.__BITFUN_SHOW_STARTUP_WINDOW_CONTROLS__ = {show_startup_window_controls};
-                window.__BITFUN_BOOTSTRAP_THEME_ID__ = {bootstrap_theme_id_json};
-                window.__BITFUN_BOOTSTRAP_THEME_SELECTION__ = {bootstrap_theme_selection_json};
+                window.__BITFUN_BOOTSTRAP_APPEARANCE_ID__ = {bootstrap_appearance_id_json};
+                window.__BITFUN_BOOTSTRAP_APPEARANCE_SELECTION__ = {bootstrap_appearance_selection_json};
                 {bootstrap_keybindings_assignment}
                 {bootstrap_workspace_startup_state_assignment}
-                function applyTheme() {{
+                function applyAppearance() {{
                     var root = document.documentElement;
                     if (!root) return false;
                     
-                    root.setAttribute('data-theme', '{id}');
-                    root.setAttribute('data-theme-type', '{theme_type}');
+                    root.setAttribute('data-bf-appearance', '{id}');
+                    root.setAttribute('data-bf-appearance-mode', '{appearance_mode}');
                     
-                    root.style.setProperty('--color-bg-primary', '{bg_primary}');
-                    root.style.setProperty('--color-bg-secondary', '{bg_secondary}');
-                    root.style.setProperty('--color-bg-tertiary', '{bg_primary}');
-                    root.style.setProperty('--color-bg-workbench', '{bg_primary}');
-                    root.style.setProperty('--color-bg-flowchat', '{bg_scene}');
-                    root.style.setProperty('--color-bg-scene', '{bg_scene}');
-                    root.style.setProperty('--color-text-primary', '{text_primary}');
+                    root.style.setProperty('--bf-appearance-token-color-bg-primary', '{bg_primary}');
+                    root.style.setProperty('--bf-appearance-token-color-bg-secondary', '{bg_secondary}');
+                    root.style.setProperty('--bf-appearance-token-color-bg-tertiary', '{bg_primary}');
+                    root.style.setProperty('--bf-appearance-token-color-bg-workbench', '{bg_primary}');
+                    root.style.setProperty('--bf-appearance-token-color-bg-scene', '{bg_scene}');
+                    root.style.setProperty('--bf-appearance-token-color-text-primary', '{text_primary}');
+                    root.style.setProperty('--bf-appearance-token-color-accent-500', '{accent_color}');
                     root.style.backgroundColor = '{bg_primary}';
                     
                     if (document.body) {{
@@ -417,22 +434,25 @@ impl ThemeConfig {
                 }}
                 
                 if (document.documentElement) {{
-                    applyTheme();
+                    applyAppearance();
                 }}
                 
                 if (document.readyState === 'loading') {{
-                    document.addEventListener('DOMContentLoaded', applyTheme);
+                    document.addEventListener('DOMContentLoaded', applyAppearance);
                 }} else {{
-                    applyTheme();
+                    applyAppearance();
                 }}
             }})();
             "#,
             id = self.id,
-            theme_type = theme_type,
+            appearance_mode = appearance_mode,
+            bootstrap_appearance_id_json = bootstrap_appearance_id_json,
+            bootstrap_appearance_selection_json = bootstrap_appearance_selection_json,
             bg_primary = self.bg_primary,
             bg_secondary = self.bg_secondary,
             bg_scene = self.bg_scene,
             text_primary = self.text_primary,
+            accent_color = self.accent_color,
             startup_trace_id_json = startup_trace_id_json,
             perf_trace_enabled = perf_trace_enabled,
             bootstrap_log_level_json = bootstrap_log_level_json,
@@ -454,6 +474,64 @@ impl ThemeConfig {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{AppearanceConfig, StartupBootstrapConfig};
+
+    #[test]
+    fn startup_init_script_uses_only_appearance_bootstrap_contracts() {
+        let appearance = AppearanceConfig {
+            id: "test.appearance".to_string(),
+            selection_id: Some("test.appearance".to_string()),
+            bg_primary: "#101214".to_string(),
+            bg_secondary: "#181a1d".to_string(),
+            bg_scene: "#202328".to_string(),
+            is_light: false,
+            text_primary: "#f5f7fa".to_string(),
+            text_muted: "#9aa1aa".to_string(),
+            accent_color: "#60a5fa".to_string(),
+        };
+        let bootstrap = StartupBootstrapConfig {
+            appearance: appearance.clone(),
+            locale: "en-US".to_string(),
+            keybindings: None,
+        };
+
+        let script = appearance.generate_init_script("trace-id", &bootstrap, None);
+
+        assert!(script.contains("__BITFUN_BOOTSTRAP_APPEARANCE_ID__"));
+        assert!(script.contains("__BITFUN_BOOTSTRAP_APPEARANCE_SELECTION__"));
+        assert!(script.contains("data-bf-appearance"));
+        assert!(script.contains("data-bf-appearance-mode"));
+        assert!(script.contains("--bf-appearance-token-color-bg-primary"));
+        assert!(script.contains("--bf-appearance-token-color-bg-scene"));
+        assert!(script.contains("--bf-appearance-token-color-text-primary"));
+        assert!(script.contains("--bf-appearance-token-color-accent-500"));
+        let retired_bootstrap_global = ["__BITFUN_BOOTSTRAP", "THEME"].join("_");
+        let retired_background_token = ["--", "color-bg-"].concat();
+        let retired_text_token = ["--", "color-text-"].concat();
+        assert!(!script.contains(&retired_bootstrap_global));
+        assert!(!script.contains("data-theme"));
+        assert!(!script.contains(&retired_background_token));
+        assert!(!script.contains(&retired_text_token));
+    }
+
+    #[test]
+    fn startup_manifest_exposes_both_default_appearances() {
+        let manifest = AppearanceConfig::startup_appearance_bootstrap_manifest();
+
+        assert_eq!(manifest.schema_version, 1);
+        assert!(
+            AppearanceConfig::get_builtin_appearance(&manifest.default_light_appearance_id)
+                .is_some()
+        );
+        assert!(
+            AppearanceConfig::get_builtin_appearance(&manifest.default_dark_appearance_id)
+                .is_some()
+        );
+    }
+}
+
 pub fn create_main_window(
     app_handle: &tauri::AppHandle,
     startup_trace_id: &str,
@@ -461,10 +539,10 @@ pub fn create_main_window(
     workspace_startup_state: Option<serde_json::Value>,
 ) {
     let total_started_at = Instant::now();
-    let bootstrap_config = ThemeConfig::load_startup_bootstrap_config();
-    let theme = bootstrap_config.theme.clone();
-    let bg_color = theme.to_tauri_color();
-    let init_script = theme.generate_init_script(
+    let bootstrap_config = AppearanceConfig::load_startup_bootstrap_config();
+    let appearance = bootstrap_config.appearance.clone();
+    let bg_color = appearance.to_tauri_color();
+    let init_script = appearance.generate_init_script(
         startup_trace_id,
         &bootstrap_config,
         workspace_startup_state.as_ref(),
@@ -472,11 +550,11 @@ pub fn create_main_window(
     startup_trace.record_step(
         "native_step_end",
         "native_window",
-        "prepare_theme",
+        "prepare_appearance",
         total_started_at.elapsed().as_millis(),
     );
     debug!(
-        "Main window creation step completed: step=prepare_theme duration_ms={}",
+        "Main window creation step completed: step=prepare_appearance duration_ms={}",
         total_started_at.elapsed().as_millis()
     );
 

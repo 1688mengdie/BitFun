@@ -1,8 +1,8 @@
 {
-  "version": 1,
-  "defaultLightThemeId": "bitfun-light",
-  "defaultDarkThemeId": "bitfun-dark",
-  "themes": [
+  "schemaVersion": 1,
+  "defaultLightAppearanceId": "bitfun-light",
+  "defaultDarkAppearanceId": "bitfun-dark",
+  "appearances": [
     {
       "id": "bitfun-light",
       "bgPrimary": "#f3f3f5",
