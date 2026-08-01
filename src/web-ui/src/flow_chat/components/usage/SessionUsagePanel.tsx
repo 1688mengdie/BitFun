@@ -20,9 +20,7 @@ import { createDiffEditorTab } from '@/shared/utils/tabUtils';
 import { createLogger } from '@/shared/utils/logger';
 import {
   FLOWCHAT_FOCUS_ITEM_EVENT,
-  FLOWCHAT_PIN_TURN_TO_TOP_EVENT,
   type FlowChatFocusItemRequest,
-  type FlowChatPinTurnToTopRequest,
 } from '../../events/flowchatNavigation';
 import {
   calculateShare,
@@ -414,12 +412,14 @@ function UsageRowAnchorLink({
   label,
   help,
   sessionId,
+  turnId,
   turnIndex,
   itemId,
 }: {
   label: string;
   help?: string;
   sessionId?: string;
+  turnId?: string;
   turnIndex?: number;
   itemId?: string;
 }) {
@@ -427,7 +427,7 @@ function UsageRowAnchorLink({
   const displayTurnIndex = typeof turnIndex === 'number' && Number.isFinite(turnIndex)
     ? getDisplayTurnIndex(turnIndex)
     : undefined;
-  const canJump = Boolean(sessionId && displayTurnIndex);
+  const canJump = Boolean(sessionId && (turnId || displayTurnIndex));
 
   if (!canJump) {
     return <UsageValue value={label} help={help} />;
@@ -441,9 +441,14 @@ function UsageRowAnchorLink({
       onClick={() => {
         const request: FlowChatFocusItemRequest = {
           sessionId: sessionId as string,
-          turnIndex: displayTurnIndex as number,
           source: 'usage-report',
         };
+        if (turnId) {
+          request.turnId = turnId;
+        }
+        if (displayTurnIndex) {
+          request.turnIndex = displayTurnIndex;
+        }
         if (itemId) {
           request.itemId = itemId;
         }
@@ -704,6 +709,7 @@ function UsageModels({ report, sessionId }: { report: SessionUsageReport; sessio
                 label={modelLabel}
                 help={modelHelp}
                 sessionId={sessionId}
+                turnId={model.sampleTurnId}
                 turnIndex={model.sampleTurnIndex}
               />
             ),
@@ -765,6 +771,7 @@ function UsageTools({ report, sessionId }: { report: SessionUsageReport; session
               <UsageRowAnchorLink
                 label={tool.redacted ? getRedactedLabel(t) : tool.toolName}
                 sessionId={sessionId}
+                turnId={tool.sampleTurnId}
                 turnIndex={tool.sampleTurnIndex}
                 itemId={tool.sampleItemId}
               />
@@ -1036,6 +1043,7 @@ function UsageErrors({ report, sessionId }: { report: SessionUsageReport; sessio
                   label={example.redacted ? getRedactedLabel(t) : example.label}
                   help={t('usage.help.errorExampleRow')}
                   sessionId={sessionId}
+                  turnId={example.sampleTurnId}
                   turnIndex={example.sampleTurnIndex}
                   itemId={example.sampleItemId}
                 />
@@ -1080,27 +1088,22 @@ function UsageSlowest({ report, sessionId }: { report: SessionUsageReport; sessi
   const handleJumpToSpan = useCallback((span: SessionUsageReport['slowest'][number]) => {
     if (!sessionId) return;
 
-    if (span.itemId && typeof span.turnIndex === 'number') {
-      const request: FlowChatFocusItemRequest = {
-        sessionId,
-        turnIndex: span.turnIndex,
-        itemId: span.itemId,
-        source: 'usage-report',
-      };
-      globalEventBus.emit(FLOWCHAT_FOCUS_ITEM_EVENT, request, 'SessionUsagePanel');
-      return;
-    }
+    if (!span.turnId && typeof span.turnIndex !== 'number') return;
 
-    if (!span.turnId) return;
-
-    const request: FlowChatPinTurnToTopRequest = {
+    const request: FlowChatFocusItemRequest = {
       sessionId,
-      turnId: span.turnId,
-      behavior: 'smooth',
-      pinMode: 'transient',
       source: 'usage-report',
     };
-    globalEventBus.emit(FLOWCHAT_PIN_TURN_TO_TOP_EVENT, request, 'SessionUsagePanel');
+    if (span.turnId) {
+      request.turnId = span.turnId;
+    }
+    if (typeof span.turnIndex === 'number' && Number.isFinite(span.turnIndex)) {
+      request.turnIndex = getDisplayTurnIndex(span.turnIndex);
+    }
+    if (span.itemId) {
+      request.itemId = span.itemId;
+    }
+    globalEventBus.emit(FLOWCHAT_FOCUS_ITEM_EVENT, request, 'SessionUsagePanel');
   }, [sessionId]);
 
   return (
@@ -1130,7 +1133,7 @@ function UsageSlowest({ report, sessionId }: { report: SessionUsageReport; sessi
           const detailRows = getSlowSpanDetailRows(span, t);
           const canJumpToSpan = Boolean(
             sessionId &&
-            (span.turnId || (span.itemId && typeof span.turnIndex === 'number'))
+            (span.turnId || (typeof span.turnIndex === 'number' && Number.isFinite(span.turnIndex)))
           );
           const jumpHelp = t('usage.actions.jumpToTurn');
           const labelCell: UsageTableCell = canJumpToSpan
