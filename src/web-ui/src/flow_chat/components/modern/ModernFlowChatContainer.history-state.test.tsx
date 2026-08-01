@@ -1478,7 +1478,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     );
   });
 
-  it('materializes a loaded Turn window before reusing the shared pin transaction', async () => {
+  it('materializes a loaded Turn window for cross-feature focus before reusing the shared pin transaction', async () => {
     const targetTurn = createTurn('turn-5', 'Target prompt');
     const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
       status: 'ready',
@@ -1540,8 +1540,18 @@ describe('ModernFlowChatContainer historical empty state', () => {
     const target = container.querySelector<HTMLButtonElement>('[data-turn-id="turn-5"]');
     expect(target).not.toBeNull();
     await act(async () => {
-      target?.click();
-      await Promise.resolve();
+      const onNavigateToFocusTurn = navigationOptionsMock.latest?.onNavigateToFocusTurn as (
+        request: {
+          sessionId: string;
+          turnIndex: number;
+          source: 'usage-report';
+        },
+      ) => Promise<boolean>;
+      await expect(onNavigateToFocusTurn({
+        sessionId: 'session-1',
+        turnIndex: 5,
+        source: 'usage-report',
+      })).resolves.toBe(true);
     });
 
     expect(loadSpy).toHaveBeenCalledWith('session-1', 4, { source: 'target' });

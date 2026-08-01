@@ -452,6 +452,12 @@ these ownership rules intact:
   window. An explicit `send-message` Turn-pin request first restores the tail
   presentation, then lets the existing sticky-latest pin materialize the newly
   submitted Turn.
+- Cross-feature focus requests identify a Turn by stable `turnId` whenever one
+  is available, with `turnIndex` reserved for the absolute one-based visible
+  ordinal. They delegate to the same catalog/window materialization transaction
+  as the Turn rail. Never pass that absolute ordinal to `scrollToTurn` on a
+  partial tail or bounded history presentation; that method only understands
+  the currently rendered local list.
 - Search, edit, rollback, and compatibility fallback are explicit full-history
   consumers. Their shared ensure operation deduplicates an existing request and
   applies the completed projection only after the caller asks for it.

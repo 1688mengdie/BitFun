@@ -25,6 +25,7 @@ import { handleThreadGoalUpdated } from '../threadGoalEventService';
 import { resolveThreadGoalUserMessageDisplay } from '../../utils/threadGoalDisplay';
 import { cleanRemoteUserInput } from '../../utils/userInputText';
 import { effectiveToolInvocation, getEffectiveToolName } from '../../utils/toolInvocationIdentity';
+import { absoluteSessionTurnIndexForId } from '../../utils/flowChatTurnOrdinal';
 import type {
   DeepReviewQueueStateChangedEvent,
   ImageAnalysisEvent,
@@ -428,8 +429,8 @@ function ensureSubagentSession(
 
   const parentSession = store.getState().sessions.get(parentInfo.sessionId);
   const parentTurnIndex = parentSession
-    ?.dialogTurns
-    .findIndex(turn => turn.id === parentInfo.dialogTurnId);
+    ? absoluteSessionTurnIndexForId(parentSession, parentInfo.dialogTurnId)
+    : undefined;
   store.addExternalSession(
     subagentSessionId,
     buildSubagentSessionTitleWithType(parentInfo, explicitSubagentType),
@@ -443,9 +444,7 @@ function ensureSubagentSession(
       btwOrigin: {
         parentSessionId: parentInfo.sessionId,
         parentDialogTurnId: parentInfo.dialogTurnId,
-        parentTurnIndex: typeof parentTurnIndex === 'number' && parentTurnIndex >= 0
-          ? parentTurnIndex + 1
-          : undefined,
+        parentTurnIndex,
       },
       focusedReviewDisplayLabel,
       projectWorkspacePath:

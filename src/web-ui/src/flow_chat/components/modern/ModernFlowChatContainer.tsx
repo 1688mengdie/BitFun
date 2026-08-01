@@ -48,7 +48,10 @@ import type {
   SessionHistoryPresentation,
 } from '../../types/flow-chat';
 import type { SessionHistoryWindowDirection } from '../../store/FlowChatStore';
-import type { FlowChatPinTurnToTopRequest } from '../../events/flowchatNavigation';
+import type {
+  FlowChatFocusItemRequest,
+  FlowChatPinTurnToTopRequest,
+} from '../../events/flowchatNavigation';
 import {
   useBackgroundCommandActivityStore,
   visibleBackgroundCommandActivitiesForSession,
@@ -418,14 +421,6 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       clearHistoryPresentationForSession(request.sessionId);
     }
   }, [clearHistoryPresentationForSession]);
-
-  useFlowChatNavigation({
-    activeSessionId: activeSession?.sessionId,
-    virtualItems,
-    virtualListRef,
-    onExpandExploreGroup: handleExpandGroup,
-    onBeforeTurnPinRequest: handleBeforeTurnPinRequest,
-  });
 
   useEffect(() => {
     historyPresentationRef.current = historyPresentation;
@@ -1400,7 +1395,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         ordinal: targetItem.ordinal,
         turnId: renderedTargetId,
       });
-      return false;
+      return true;
     }
 
     let result;
@@ -1472,6 +1467,68 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     turnRailItems,
     turnSummaries,
   ]);
+
+  const handleNavigateToFocusTurn = useCallback(async (request: FlowChatFocusItemRequest) => {
+    const sessionId = activeSession?.sessionId;
+    if (!sessionId || request.sessionId !== sessionId) {
+      return false;
+    }
+
+    const requestedTurnId = request.turnId?.trim() || null;
+    const targetById = requestedTurnId
+      ? turnRailItems.find(turn => turn.turnId === requestedTurnId)
+      : undefined;
+    if (targetById) {
+      return handleJumpToTurn(targetById);
+    }
+
+    if (requestedTurnId) {
+      const historyReady = await flowChatStore.ensureSessionFullHistory(
+        sessionId,
+        'flowchat-focus-navigation',
+      );
+      if (!historyReady || flowChatStore.getState().activeSessionId !== sessionId) {
+        return false;
+      }
+      const hydratedSession = flowChatStore.getState().sessions.get(sessionId);
+      const hydratedTurnIndex = hydratedSession?.dialogTurns.findIndex(
+        turn => turn.id === requestedTurnId,
+      ) ?? -1;
+      if (hydratedTurnIndex < 0) {
+        return false;
+      }
+
+      restoreTailPresentation();
+      setQueuedTurnNavigation({
+        ordinal: hydratedTurnIndex,
+        turnId: requestedTurnId,
+      });
+      return true;
+    }
+
+    const requestedOrdinal = typeof request.turnIndex === 'number'
+      ? Math.max(0, Math.floor(request.turnIndex) - 1)
+      : null;
+    if (requestedOrdinal === null) {
+      return false;
+    }
+    const targetByOrdinal = turnRailItems.find(turn => turn.ordinal === requestedOrdinal);
+    return targetByOrdinal ? handleJumpToTurn(targetByOrdinal) : false;
+  }, [
+    activeSession?.sessionId,
+    handleJumpToTurn,
+    restoreTailPresentation,
+    turnRailItems,
+  ]);
+
+  useFlowChatNavigation({
+    activeSessionId: activeSession?.sessionId,
+    virtualItems,
+    virtualListRef,
+    onExpandExploreGroup: handleExpandGroup,
+    onBeforeTurnPinRequest: handleBeforeTurnPinRequest,
+    onNavigateToFocusTurn: handleNavigateToFocusTurn,
+  });
 
   const handleRetryHistoryLoad = useCallback(() => {
     const sessionId = activeSession?.sessionId;
