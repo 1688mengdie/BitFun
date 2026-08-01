@@ -101,7 +101,8 @@
     overflow-anchor: none;
     visibility: hidden;
 
-    &[data-history-paging-sentinel='loading'] {
+    &[data-history-paging-sentinel='loading'],
+    &[data-history-paging-sentinel='error'] {
       visibility: visible;
     }
   }

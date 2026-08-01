@@ -33,6 +33,7 @@ const virtualListMock = vi.hoisted(() => ({
   isTurnTextRenderedInViewport: vi.fn(() => false),
   pinTurnToTop: vi.fn(() => true),
   pinTurnToTopWithStatus: vi.fn(() => 'settled' as const),
+  prepareTurnPinToTop: vi.fn(() => 'pending' as const),
 }));
 const virtualListActionClickMock = vi.hoisted(() => vi.fn());
 const startupTraceMock = vi.hoisted(() => ({
@@ -123,6 +124,11 @@ vi.mock('../../utils/acpSession', () => ({
 }));
 
 vi.mock('../../store/modernFlowChatStore', () => ({
+  sessionToVirtualItems: (session: Session | null) => (session?.dialogTurns ?? []).map(turn => ({
+    type: 'user-message',
+    turnId: turn.id,
+    data: turn.userMessage,
+  })),
   useVirtualItems: () => stateMocks.virtualItems,
   useActiveSession: () => stateMocks.activeSession,
   useVisibleTurnInfo: () => stateMocks.visibleTurnInfo,
@@ -293,6 +299,8 @@ describe('ModernFlowChatContainer historical empty state', () => {
     virtualListMock.pinTurnToTop.mockReturnValue(true);
     virtualListMock.pinTurnToTopWithStatus.mockReset();
     virtualListMock.pinTurnToTopWithStatus.mockReturnValue('settled');
+    virtualListMock.prepareTurnPinToTop.mockReset();
+    virtualListMock.prepareTurnPinToTop.mockReturnValue('pending');
     virtualListActionClickMock.mockReset();
     startupTraceMock.markPhase.mockReset();
     historySessionDiagnosticsMock.beginHistorySessionDiagnostics.mockReset();
@@ -1287,7 +1295,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus.mock.calls.length).toBe(retryCallCount);
   });
 
-  it('renders non-navigable count placeholders for old hosts without a turn catalog', async () => {
+  it('renders ordinal navigation placeholders for old hosts without a turn catalog', async () => {
     stateMocks.activeSession = createSession({
       isHistorical: false,
       historyState: 'ready',
@@ -1319,7 +1327,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
       totalTurns: 100,
     });
     expect(container.querySelectorAll('.flowchat-turn-rail__item')).toHaveLength(100);
-    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBe('true');
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-98"]')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
@@ -1373,7 +1381,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     const markers = container.querySelectorAll('.flowchat-turn-rail__item');
     expect(markers).toHaveLength(100);
-    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBe('true');
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
   });
@@ -1416,7 +1424,10 @@ describe('ModernFlowChatContainer historical empty state', () => {
       root.render(<ModernFlowChatContainer />);
     });
 
-    clickTurnRailItem(container, 'turn-1');
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-turn-id="turn-1"]')?.click();
+      await Promise.resolve();
+    });
 
     expect(projectionSpy).toHaveBeenCalledWith('session-1', 'turn-rail-navigation');
     expect(virtualListMock.pinTurnToTopWithStatus).not.toHaveBeenCalledWith(
@@ -1424,6 +1435,131 @@ describe('ModernFlowChatContainer historical empty state', () => {
       expect.anything(),
     );
     projectionSpy.mockRestore();
+  });
+
+  it('materializes a loaded Turn window before reusing the shared pin transaction', async () => {
+    const targetTurn = createTurn('turn-5', 'Target prompt');
+    const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
+      status: 'ready',
+      sessionId: 'session-1',
+      targetOrdinal: 4,
+      targetTurnId: 'turn-5',
+      navigationGeneration: 7,
+      isCurrent: true,
+      cacheHit: false,
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 7,
+        turns: Array.from({ length: 5 }, (_, index) => createTurn(`turn-${index + 3}`, `Prompt ${index + 3}`)),
+        lastAccessedAt: 1,
+        source: 'target',
+      },
+    });
+    const activateSpy = vi.spyOn(flowChatStore, 'activateSessionHistoryWindow').mockReturnValue({
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 7,
+        targetTurnId: targetTurn.id,
+        mode: 'history-window',
+      },
+      turns: Array.from({ length: 5 }, (_, index) => createTurn(`turn-${index + 3}`, `Prompt ${index + 3}`)),
+    });
+    stateMocks.activeSession = createSession({
+      historyState: 'ready',
+      isPartial: true,
+      totalTurnCount: 10,
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'session-1',
+        revision: 'catalog-v1',
+        totalTurnCount: 10,
+        complete: true,
+        entries: Array.from({ length: 10 }, (_, ordinal) => ({
+          ordinal,
+          storageTurnIndex: ordinal,
+          turnId: `turn-${ordinal + 1}`,
+          preview: `Prompt ${ordinal + 1}`,
+          previewTruncated: false,
+        })),
+      },
+      dialogTurns: [
+        createTurn('turn-9', 'Recent prompt'),
+        createTurn('turn-10', 'Latest prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    const target = container.querySelector<HTMLButtonElement>('[data-turn-id="turn-5"]');
+    expect(target).not.toBeNull();
+    await act(async () => {
+      target?.click();
+      await Promise.resolve();
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith('session-1', 4, { source: 'target' });
+    expect(virtualListMock.prepareTurnPinToTop).toHaveBeenCalledWith('turn-5', {
+      behavior: 'auto',
+      pinMode: 'transient',
+    });
+    expect(activateSpy).toHaveBeenCalledWith('session-1', 4, 7);
+    expect(virtualListPropsMock.latest).toMatchObject({
+      presentationMode: 'history-window',
+      presentationRevision: 1,
+    });
+    expect((virtualListPropsMock.latest?.items as Array<{ turnId: string }>).map(item => item.turnId)).toEqual([
+      'turn-3',
+      'turn-4',
+      'turn-5',
+      'turn-6',
+      'turn-7',
+    ]);
+    expect(stateMocks.activeSession.dialogTurns.map(turn => turn.id)).toEqual(['turn-9', 'turn-10']);
+    expect(virtualListMock.prepareTurnPinToTop.mock.invocationCallOrder[0]).toBeLessThan(
+      activateSpy.mock.invocationCallOrder[0],
+    );
+
+    const latestTailPinCallCount = virtualListMock.pinTurnToTop.mock.calls.length;
+    const latestTailEndCallCount = virtualListMock.scrollToTurnEndAndClearPin.mock.calls.length;
+    stateMocks.activeSession = {
+      ...stateMocks.activeSession,
+      totalTurnCount: 11,
+      dialogTurns: [
+        ...stateMocks.activeSession.dialogTurns,
+        createTurn('turn-11', 'Streaming prompt', 'processing'),
+      ],
+    };
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    flushAnimationFrame();
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+    expect(virtualListMock.pinTurnToTop.mock.calls.length).toBe(latestTailPinCallCount);
+    expect(virtualListMock.scrollToTurnEndAndClearPin.mock.calls.length).toBe(latestTailEndCallCount);
+
+    const restoreTailSpy = vi.spyOn(flowChatStore, 'restoreSessionTailPresentation');
+    await act(async () => {
+      (virtualListPropsMock.latest?.onRequestJumpToLatest as (() => void) | undefined)?.();
+    });
+    flushAnimationFrame();
+    expect(restoreTailSpy).toHaveBeenCalledWith('session-1');
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
+    expect(virtualListMock.scrollToLatestEndPosition).toHaveBeenCalledOnce();
+
+    restoreTailSpy.mockRestore();
+    loadSpy.mockRestore();
+    activateSpy.mockRestore();
   });
 
   it('lets streaming restored sessions use follow-output instead of container sticky anchoring', async () => {

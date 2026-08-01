@@ -16,11 +16,13 @@ import {
   ImageAnalysisResult,
   AnyFlowItem,
   AcpContextUsage,
+  ActiveTurnRenderRange,
   LoadedTurnRange,
   LoadedTurnRangeSource,
   SessionConfig,
   SessionContextRestoreState,
   SessionHistoryViewState,
+  SessionHistoryPresentation,
   SessionHistoryState,
   TokenUsage,
 } from '../types/flow-chat';
@@ -151,6 +153,9 @@ const HISTORICAL_SESSION_PREVIOUS_WINDOW_TURN_COUNT = 12;
 const PEER_SESSION_REFRESH_TAIL_TURN_COUNT = 3;
 const SESSION_TURN_WINDOW_DEFAULT_BEFORE = 4;
 const SESSION_TURN_WINDOW_DEFAULT_AFTER = 12;
+const SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET = 48;
+const SESSION_HISTORY_PRESENTATION_HARD_TURN_BUDGET = 64;
+const SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT = 16;
 
 type RemoveSessionOptions = {
   nextActiveSessionId?: string | null;
@@ -176,6 +181,8 @@ export interface LoadSessionTurnWindowOptions {
   includeInternal?: boolean;
   source?: Exclude<LoadedTurnRangeSource, 'initial-tail' | 'live'>;
 }
+
+export type SessionHistoryWindowDirection = 'before' | 'after';
 
 export type SessionTurnWindowLoadResult = {
   status: 'ready' | 'stale' | 'not-found' | 'unsupported';
@@ -891,6 +898,93 @@ function mergeLoadedTurnRanges(
   return merged;
 }
 
+function sliceLoadedTurnRange(
+  range: LoadedTurnRange,
+  startOrdinal: number,
+  endOrdinalExclusive: number,
+): DialogTurn[] | null {
+  if (
+    startOrdinal < range.startOrdinal
+    || endOrdinalExclusive > range.endOrdinalExclusive
+    || endOrdinalExclusive <= startOrdinal
+  ) {
+    return null;
+  }
+
+  const turns = range.turns.slice(
+    startOrdinal - range.startOrdinal,
+    endOrdinalExclusive - range.startOrdinal,
+  );
+  return turns.length === endOrdinalExclusive - startOrdinal ? turns : null;
+}
+
+function selectTargetHistoryPresentationRange(
+  range: LoadedTurnRange,
+  targetOrdinal: number,
+): { startOrdinal: number; endOrdinalExclusive: number } {
+  if (range.endOrdinalExclusive - range.startOrdinal <= SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET) {
+    return {
+      startOrdinal: range.startOrdinal,
+      endOrdinalExclusive: range.endOrdinalExclusive,
+    };
+  }
+
+  const beforeBudget = Math.min(
+    SESSION_TURN_WINDOW_DEFAULT_BEFORE,
+    SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET - 1,
+  );
+  let startOrdinal = Math.max(range.startOrdinal, targetOrdinal - beforeBudget);
+  const endOrdinalExclusive = Math.min(
+    range.endOrdinalExclusive,
+    startOrdinal + SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET,
+  );
+  startOrdinal = Math.max(
+    range.startOrdinal,
+    endOrdinalExclusive - SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET,
+  );
+
+  return { startOrdinal, endOrdinalExclusive };
+}
+
+function selectExtendedHistoryPresentationRange(
+  loadedRange: LoadedTurnRange,
+  activeRange: ActiveTurnRenderRange,
+  direction: SessionHistoryWindowDirection,
+): { startOrdinal: number; endOrdinalExclusive: number } {
+  let startOrdinal = activeRange.startOrdinal;
+  let endOrdinalExclusive = activeRange.endOrdinalExclusive;
+
+  if (direction === 'before') {
+    startOrdinal = Math.max(
+      loadedRange.startOrdinal,
+      activeRange.startOrdinal - SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT,
+    );
+  } else {
+    endOrdinalExclusive = Math.min(
+      loadedRange.endOrdinalExclusive,
+      activeRange.endOrdinalExclusive + SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT,
+    );
+  }
+
+  if (endOrdinalExclusive - startOrdinal <= SESSION_HISTORY_PRESENTATION_HARD_TURN_BUDGET) {
+    return { startOrdinal, endOrdinalExclusive };
+  }
+
+  if (direction === 'before') {
+    endOrdinalExclusive = Math.min(
+      loadedRange.endOrdinalExclusive,
+      startOrdinal + SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET,
+    );
+  } else {
+    startOrdinal = Math.max(
+      loadedRange.startOrdinal,
+      endOrdinalExclusive - SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET,
+    );
+  }
+
+  return { startOrdinal, endOrdinalExclusive };
+}
+
 function startsWithStringArray(values: string[], prefix: string[]): boolean {
   return values.length >= prefix.length && prefix.every((value, index) => values[index] === value);
 }
@@ -1155,6 +1249,108 @@ export class FlowChatStore {
     };
   }
 
+  public activateSessionHistoryWindow(
+    sessionId: string,
+    targetOrdinal: number,
+    navigationGeneration: number,
+  ): SessionHistoryPresentation | null {
+    const view = this.sessionHistoryViews.get(sessionId);
+    const normalizedTargetOrdinal = Math.max(0, Math.floor(targetOrdinal));
+    if (
+      this.state.activeSessionId !== sessionId
+      || !view
+      || view.navigationGeneration !== navigationGeneration
+      || view.pendingTargetOrdinal !== normalizedTargetOrdinal
+    ) {
+      return null;
+    }
+
+    const loadedRange = view.loadedRanges.find(range =>
+      range.startOrdinal <= normalizedTargetOrdinal
+      && range.endOrdinalExclusive > normalizedTargetOrdinal
+    );
+    if (!loadedRange) {
+      return null;
+    }
+
+    const selected = selectTargetHistoryPresentationRange(loadedRange, normalizedTargetOrdinal);
+    const turns = sliceLoadedTurnRange(
+      loadedRange,
+      selected.startOrdinal,
+      selected.endOrdinalExclusive,
+    );
+    if (!turns) {
+      return null;
+    }
+
+    const targetTurn = turns[normalizedTargetOrdinal - selected.startOrdinal];
+    const range: ActiveTurnRenderRange = {
+      ...selected,
+      targetTurnId: targetTurn?.id ?? null,
+      mode: 'history-window',
+    };
+    loadedRange.lastAccessedAt = Date.now();
+    view.activeRange = range;
+    view.pendingTargetOrdinal = null;
+    return { range: { ...range }, turns: [...turns] };
+  }
+
+  public extendSessionHistoryWindow(
+    sessionId: string,
+    direction: SessionHistoryWindowDirection,
+  ): SessionHistoryPresentation | null {
+    const view = this.sessionHistoryViews.get(sessionId);
+    const activeRange = view?.activeRange;
+    if (
+      this.state.activeSessionId !== sessionId
+      || !view
+      || !activeRange
+      || activeRange.mode !== 'history-window'
+    ) {
+      return null;
+    }
+
+    const loadedRange = view.loadedRanges.find(range =>
+      range.startOrdinal <= activeRange.startOrdinal
+      && range.endOrdinalExclusive >= activeRange.endOrdinalExclusive
+    );
+    if (!loadedRange) {
+      return null;
+    }
+
+    const selected = selectExtendedHistoryPresentationRange(loadedRange, activeRange, direction);
+    const turns = sliceLoadedTurnRange(
+      loadedRange,
+      selected.startOrdinal,
+      selected.endOrdinalExclusive,
+    );
+    if (!turns) {
+      return null;
+    }
+
+    const targetTurnId = activeRange.targetTurnId && turns.some(turn => turn.id === activeRange.targetTurnId)
+      ? activeRange.targetTurnId
+      : null;
+    const range: ActiveTurnRenderRange = {
+      ...selected,
+      targetTurnId,
+      mode: 'history-window',
+    };
+    loadedRange.lastAccessedAt = Date.now();
+    view.activeRange = range;
+    return { range: { ...range }, turns: [...turns] };
+  }
+
+  public restoreSessionTailPresentation(sessionId: string): void {
+    const view = this.sessionHistoryViews.get(sessionId);
+    if (!view) {
+      return;
+    }
+    view.navigationGeneration += 1;
+    view.pendingTargetOrdinal = null;
+    view.activeRange = null;
+  }
+
   private ensureSessionHistoryView(
     sessionId: string,
     catalog?: SessionTurnCatalog | null,
@@ -1301,6 +1497,22 @@ export class FlowChatStore {
     return this.state.activeSessionId === sessionId
       && view?.navigationGeneration === generation
       && view.pendingTargetOrdinal === targetOrdinal;
+  }
+
+  private isSessionTurnWindowRequestCurrent(
+    sessionId: string,
+    generation: number,
+    targetOrdinal: number,
+    source: 'target' | 'prefetch',
+  ): boolean {
+    if (source === 'target') {
+      return this.isSessionTurnNavigationCurrent(sessionId, generation, targetOrdinal);
+    }
+
+    const view = this.sessionHistoryViews.get(sessionId);
+    return this.state.activeSessionId === sessionId
+      && view?.navigationGeneration === generation
+      && view.activeRange?.mode === 'history-window';
   }
 
   private invalidateSessionTurnNavigationIntents(): void {
@@ -1620,7 +1832,8 @@ export class FlowChatStore {
       : this.sessionHistoryViews.get(sessionId)?.catalog ?? undefined;
     const normalizedTargetOrdinal = Math.max(0, Math.floor(targetOrdinal));
     const view = this.ensureSessionHistoryView(sessionId, catalog ?? null);
-    if (view.pendingTargetOrdinal !== normalizedTargetOrdinal) {
+    const source = options?.source ?? 'target';
+    if (source === 'target' && view.pendingTargetOrdinal !== normalizedTargetOrdinal) {
       view.navigationGeneration += 1;
       view.pendingTargetOrdinal = normalizedTargetOrdinal;
     }
@@ -1634,10 +1847,11 @@ export class FlowChatStore {
         sessionId,
         targetOrdinal: normalizedTargetOrdinal,
         navigationGeneration: generation,
-        isCurrent: this.isSessionTurnNavigationCurrent(
+        isCurrent: this.isSessionTurnWindowRequestCurrent(
           sessionId,
           generation,
           normalizedTargetOrdinal,
+          source,
         ),
         cacheHit: false,
         ...(catalog ? { catalog } : {}),
@@ -1658,10 +1872,11 @@ export class FlowChatStore {
           targetOrdinal: normalizedTargetOrdinal,
           targetTurnId: cachedTarget?.id,
           navigationGeneration: generation,
-          isCurrent: this.isSessionTurnNavigationCurrent(
+          isCurrent: this.isSessionTurnWindowRequestCurrent(
             sessionId,
             generation,
             normalizedTargetOrdinal,
+            source,
           ),
           cacheHit: true,
           range: cachedRange,
@@ -1677,10 +1892,11 @@ export class FlowChatStore {
         sessionId,
         targetOrdinal: normalizedTargetOrdinal,
         navigationGeneration: generation,
-        isCurrent: this.isSessionTurnNavigationCurrent(
+        isCurrent: this.isSessionTurnWindowRequestCurrent(
           sessionId,
           generation,
           normalizedTargetOrdinal,
+          source,
         ),
         cacheHit: false,
         catalog,
@@ -1688,11 +1904,11 @@ export class FlowChatStore {
     }
 
     const before = Math.min(
-      SESSION_TURN_WINDOW_DEFAULT_BEFORE,
+      SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT,
       Math.max(0, Math.floor(options?.before ?? SESSION_TURN_WINDOW_DEFAULT_BEFORE)),
     );
     const after = Math.min(
-      SESSION_TURN_WINDOW_DEFAULT_AFTER,
+      SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT,
       Math.max(1, Math.floor(options?.after ?? SESSION_TURN_WINDOW_DEFAULT_AFTER)),
     );
     return this.loadSessionTurnWindowAttempt({
@@ -1709,7 +1925,7 @@ export class FlowChatStore {
       catalog,
       before,
       after,
-      source: options?.source ?? 'target',
+      source,
       generation,
       staleRetryCount: 0,
     });
@@ -1747,10 +1963,11 @@ export class FlowChatStore {
         targetOrdinal: request.targetOrdinal,
         targetTurnId: request.originalTargetTurnId,
         navigationGeneration: request.generation,
-        isCurrent: this.isSessionTurnNavigationCurrent(
+        isCurrent: this.isSessionTurnWindowRequestCurrent(
           request.sessionId,
           request.generation,
           request.targetOrdinal,
+          request.source,
         ),
         cacheHit: false,
         catalog: request.catalog,
@@ -1800,10 +2017,11 @@ export class FlowChatStore {
         targetOrdinal: request.targetOrdinal,
         targetTurnId: request.originalTargetTurnId,
         navigationGeneration: request.generation,
-        isCurrent: this.isSessionTurnNavigationCurrent(
+        isCurrent: this.isSessionTurnWindowRequestCurrent(
           request.sessionId,
           request.generation,
           request.targetOrdinal,
+          request.source,
         ),
         cacheHit: false,
         catalog: request.catalog,
@@ -1842,10 +2060,11 @@ export class FlowChatStore {
         targetOrdinal: request.targetOrdinal,
         targetTurnId: response.targetTurnId,
         navigationGeneration: request.generation,
-        isCurrent: this.isSessionTurnNavigationCurrent(
+        isCurrent: this.isSessionTurnWindowRequestCurrent(
           request.sessionId,
           request.generation,
           request.targetOrdinal,
+          request.source,
         ),
         cacheHit: false,
         range,
@@ -1853,10 +2072,11 @@ export class FlowChatStore {
       };
     }
 
-    const isCurrent = this.isSessionTurnNavigationCurrent(
+    const isCurrent = this.isSessionTurnWindowRequestCurrent(
       request.sessionId,
       request.generation,
       request.targetOrdinal,
+      request.source,
     );
     const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
     if (
@@ -1874,7 +2094,7 @@ export class FlowChatStore {
           );
       if (relocatedEntry) {
         const view = this.sessionHistoryViews.get(request.sessionId);
-        if (view?.navigationGeneration === request.generation) {
+        if (request.source === 'target' && view?.navigationGeneration === request.generation) {
           view.pendingTargetOrdinal = relocatedEntry.ordinal;
         }
         return this.loadSessionTurnWindowAttempt({

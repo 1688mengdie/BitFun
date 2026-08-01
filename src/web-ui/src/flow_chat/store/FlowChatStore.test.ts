@@ -4013,6 +4013,125 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(flowChatStore.getState().sessions.get('history-1')?.dialogTurns).toEqual([]);
   });
 
+  it('activates only the current contiguous target window and extends it with prefetch data', async () => {
+    const catalog = createTurnCatalog(60);
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          historyState: 'ready',
+          isPartial: true,
+          totalTurnCount: 60,
+          turnCatalog: catalog,
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+    apiMocks.loadSessionTurnWindow
+      .mockResolvedValueOnce({
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: 60,
+        startOrdinal: 16,
+        endOrdinalExclusive: 33,
+        targetTurnId: 'turn-20',
+        turns: Array.from({ length: 17 }, (_, index) => createPersistedTurn(index + 16)),
+      })
+      .mockResolvedValueOnce({
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: 60,
+        startOrdinal: 29,
+        endOrdinalExclusive: 46,
+        targetTurnId: 'turn-33',
+        turns: Array.from({ length: 17 }, (_, index) => createPersistedTurn(index + 29)),
+      });
+
+    const navigation = await flowChatStore.loadSessionTurnWindow('history-1', 20);
+    expect(navigation).toMatchObject({ status: 'ready', isCurrent: true });
+    const activated = flowChatStore.activateSessionHistoryWindow(
+      'history-1',
+      navigation.targetOrdinal,
+      navigation.navigationGeneration,
+    );
+    expect(activated?.range).toMatchObject({
+      startOrdinal: 16,
+      endOrdinalExclusive: 33,
+      targetTurnId: 'turn-20',
+      mode: 'history-window',
+    });
+    expect(activated?.turns).toHaveLength(17);
+
+    const generationBeforePrefetch = flowChatStore
+      .getSessionHistoryViewState('history-1')
+      ?.navigationGeneration;
+    const prefetch = await flowChatStore.loadSessionTurnWindow('history-1', 33, {
+      source: 'prefetch',
+    });
+    expect(prefetch).toMatchObject({ status: 'ready', isCurrent: true });
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.navigationGeneration).toBe(
+      generationBeforePrefetch,
+    );
+    expect(flowChatStore.extendSessionHistoryWindow('history-1', 'after')?.range).toMatchObject({
+      startOrdinal: 16,
+      endOrdinalExclusive: 46,
+      mode: 'history-window',
+    });
+    expect(flowChatStore.getState().sessions.get('history-1')?.dialogTurns).toEqual([]);
+  });
+
+  it('trims the remote side of an oversized presentation while keeping a contiguous range', async () => {
+    const catalog = createTurnCatalog(100);
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          historyState: 'ready',
+          isPartial: true,
+          totalTurnCount: 100,
+          turnCatalog: catalog,
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+    apiMocks.loadSessionTurnWindow.mockResolvedValueOnce({
+      status: 'ready',
+      catalogRevision: catalog.revision,
+      totalTurnCount: 100,
+      startOrdinal: 0,
+      endOrdinalExclusive: 100,
+      targetTurnId: 'turn-50',
+      turns: Array.from({ length: 100 }, (_, index) => createPersistedTurn(index)),
+    });
+
+    const navigation = await flowChatStore.loadSessionTurnWindow('history-1', 50);
+    const activated = flowChatStore.activateSessionHistoryWindow(
+      'history-1',
+      navigation.targetOrdinal,
+      navigation.navigationGeneration,
+    );
+    expect(activated?.range).toMatchObject({
+      startOrdinal: 46,
+      endOrdinalExclusive: 94,
+    });
+
+    await flowChatStore.loadSessionTurnWindow('history-1', 45, { source: 'prefetch' });
+    expect(flowChatStore.extendSessionHistoryWindow('history-1', 'before')?.range).toMatchObject({
+      startOrdinal: 30,
+      endOrdinalExclusive: 94,
+    });
+    await flowChatStore.loadSessionTurnWindow('history-1', 29, { source: 'prefetch' });
+    const trimmed = flowChatStore.extendSessionHistoryWindow('history-1', 'before');
+    expect(trimmed?.range).toMatchObject({
+      startOrdinal: 14,
+      endOrdinalExclusive: 62,
+      targetTurnId: 'turn-50',
+    });
+    expect(trimmed?.turns).toHaveLength(48);
+  });
+
   it('updates a stale catalog and retries the original Turn identity once', async () => {
     const catalog = createTurnCatalog(8, 'catalog-v1');
     const relocatedCatalog = {

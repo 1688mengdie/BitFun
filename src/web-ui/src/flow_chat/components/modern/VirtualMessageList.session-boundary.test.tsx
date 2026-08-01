@@ -8,6 +8,7 @@ import {
   VirtualMessageList,
   type VirtualMessageListRef,
 } from './VirtualMessageList';
+import { getLeadingVirtualItemIndexDelta } from './virtualMessageListLayout';
 import { FlowChatViewportCoordinator } from './FlowChatViewportCoordinator';
 import {
   clampPinReservationPxToViewport,
@@ -62,6 +63,9 @@ const inputStateMocks = vi.hoisted(() => ({
   isActive: false,
   isExpanded: false,
   inputHeight: 0,
+}));
+const activeSessionStateMocks = vi.hoisted(() => ({
+  isProcessing: false,
 }));
 const flowDiagnosticsMocks = vi.hoisted(() => ({
   enabled: false,
@@ -190,7 +194,7 @@ vi.mock('../../store/modernFlowChatStore', () => {
 
 vi.mock('../../hooks/useActiveSessionState', () => ({
   useActiveSessionState: () => ({
-    isProcessing: false,
+    isProcessing: activeSessionStateMocks.isProcessing,
     processingPhase: null,
   }),
 }));
@@ -410,8 +414,19 @@ describe('VirtualMessageList session boundary', () => {
     inputStateMocks.isActive = false;
     inputStateMocks.isExpanded = false;
     inputStateMocks.inputHeight = 0;
+    activeSessionStateMocks.isProcessing = false;
     flowDiagnosticsMocks.enabled = false;
     flowDiagnosticsMocks.trace.mockReset();
+  });
+
+  it('keeps Virtuoso absolute indexes stable across prepend and remote-side trimming', () => {
+    const previous = ['turn-3', 'turn-4', 'turn-5', 'turn-6'].map(createItem);
+    const prepended = ['turn-1', 'turn-2', 'turn-3', 'turn-4', 'turn-5'].map(createItem);
+    const trimmed = ['turn-4', 'turn-5', 'turn-6', 'turn-7'].map(createItem);
+
+    const getStableKey = (item: VirtualItem) => `${item.type}:${item.turnId}`;
+    expect(getLeadingVirtualItemIndexDelta(previous, prepended, getStableKey)).toBe(-2);
+    expect(getLeadingVirtualItemIndexDelta(previous, trimmed, getStableKey)).toBe(1);
   });
 
   afterEach(() => {
@@ -442,6 +457,142 @@ describe('VirtualMessageList session boundary', () => {
     expect(container.querySelector('.message-list-footer')).toBe(firstFooter);
     expect(firstFooter.style.height).toBe('900px');
     expect(firstFooter.style.minHeight).toBe('900px');
+  });
+
+  it('routes jump-to-latest through the presentation owner while reading a history window', () => {
+    const onRequestJumpToLatest = vi.fn();
+    stateMocks.activeSession = createSession('session-a', 'turn-10');
+    stateMocks.virtualItems = [createItem('turn-10')];
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 2,
+            endOrdinalExclusive: 7,
+            targetTurnId: 'turn-5',
+            mode: 'history-window',
+          }}
+          presentationRevision={1}
+          onRequestJumpToLatest={onRequestJumpToLatest}
+        />,
+      );
+    });
+
+    const jumpButton = container.querySelector<HTMLButtonElement>('[data-testid="scroll-to-latest"]');
+    expect(jumpButton?.dataset.visible).toBe('true');
+    act(() => jumpButton?.click());
+    expect(onRequestJumpToLatest).toHaveBeenCalledOnce();
+  });
+
+  it('keeps canonical streaming output hidden from tail follow in history-window mode', () => {
+    activeSessionStateMocks.isProcessing = true;
+    stateMocks.activeSession = createSession('session-a', 'turn-10', {
+      dialogTurns: [{
+        ...createSession('session-a', 'turn-10').dialogTurns[0],
+        status: 'processing',
+      }],
+    });
+    const historyItems = ['turn-3', 'turn-4', 'turn-5'].map(createItem);
+    stateMocks.virtualItems = historyItems;
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={historyItems}
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 2,
+            endOrdinalExclusive: 5,
+            targetTurnId: 'turn-4',
+            mode: 'history-window',
+          }}
+          presentationRevision={1}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="flowchat-message-list"]')?.getAttribute(
+      'data-streaming-output',
+    )).toBe('false');
+  });
+
+  it('prefetches an adjacent history window from user intent and preserves the visible element anchor', () => {
+    const onBoundaryIntent = vi.fn();
+    stateMocks.activeSession = createSession('session-a', 'turn-10');
+    const initialItems = ['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7'].map(createItem);
+    stateMocks.virtualItems = initialItems;
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={initialItems}
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 2,
+            endOrdinalExclusive: 7,
+            targetTurnId: 'turn-5',
+            mode: 'history-window',
+          }}
+          presentationRevision={1}
+          historyBoundaryState={{ before: 'idle', after: 'idle' }}
+          onHistoryWindowBoundaryIntent={onBoundaryIntent}
+        />,
+      );
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-testid="virtuoso"]');
+    const anchor = container.querySelector<HTMLElement>('[data-turn-id="turn-3"]');
+    expect(scroller).not.toBeNull();
+    expect(anchor).not.toBeNull();
+    if (!scroller || !anchor) return;
+
+    for (let frame = 0; frame < 8 && rafCallbacks.length > 0; frame += 1) {
+      flushAnimationFrame();
+    }
+
+    setScrollerGeometry(scroller, {
+      clientHeight: 100,
+      scrollHeight: 500,
+      scrollTop: 40,
+    });
+    scroller.getBoundingClientRect = () => createRect({ top: 0, bottom: 100, height: 100 });
+    let anchorDocumentTop = 60;
+    anchor.getBoundingClientRect = () => {
+      const top = anchorDocumentTop - scroller.scrollTop;
+      return createRect({ top, bottom: top + 20, height: 20 });
+    };
+
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true }));
+    });
+    expect(onBoundaryIntent).toHaveBeenCalledWith('before');
+
+    const extendedItems = ['turn-1', 'turn-2', ...initialItems.map(item => item.turnId)].map(createItem);
+    anchorDocumentTop = 120;
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={extendedItems}
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 0,
+            endOrdinalExclusive: 7,
+            targetTurnId: 'turn-5',
+            mode: 'history-window',
+          }}
+          presentationRevision={2}
+          historyBoundaryState={{ before: 'loading', after: 'idle' }}
+          onHistoryWindowBoundaryIntent={onBoundaryIntent}
+        />,
+      );
+    });
+    flushAnimationFrame();
+    flushAnimationFrame();
+
+    expect(scroller.scrollTop).toBe(100);
+    expect(container.querySelector('[data-history-paging-sentinel="loading"]')).not.toBeNull();
   });
 
   it('reports every turn intersecting the readable viewport in DOM order', () => {

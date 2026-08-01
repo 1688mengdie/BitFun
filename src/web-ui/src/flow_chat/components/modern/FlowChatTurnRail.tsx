@@ -7,6 +7,7 @@ import './FlowChatTurnRail.scss';
 export interface FlowChatTurnRailItem {
   itemKey: string;
   turnId: string | null;
+  ordinal: number;
   turnIndex: number;
   content: string | null;
 }
@@ -15,7 +16,7 @@ interface FlowChatTurnRailProps {
   turns: readonly FlowChatTurnRailItem[];
   currentTurnId: string | null;
   visibleTurnIds: readonly string[];
-  onNavigate: (turnId: string) => void;
+  onNavigate: (turn: FlowChatTurnRailItem) => void;
 }
 
 export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
@@ -164,15 +165,12 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
                 className={`flowchat-turn-rail__item${isVisible ? ' flowchat-turn-rail__item--visible' : ''}`}
                 aria-label={turnLabel}
                 aria-current={isCurrent ? 'step' : undefined}
-                aria-disabled={turn.turnId === null ? true : undefined}
                 tabIndex={turn.itemKey === focusItemKey ? 0 : -1}
                 data-turn-id={turn.turnId ?? undefined}
                 data-turn-key={turn.itemKey}
                 data-turn-index={turn.turnIndex}
                 onClick={() => {
-                  if (turn.turnId) {
-                    onNavigate(turn.turnId);
-                  }
+                  onNavigate(turn);
                 }}
                 onFocus={() => setFocusItemKey(turn.itemKey)}
                 onKeyDown={(event) => handleKeyDown(event, index)}

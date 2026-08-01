@@ -306,6 +306,11 @@ export interface SessionHistoryViewState {
   navigationGeneration: number;
 }
 
+export interface SessionHistoryPresentation {
+  range: ActiveTurnRenderRange;
+  turns: DialogTurn[];
+}
+
 export type SessionContextRestoreState =
   | 'ready'
   | 'pending'
