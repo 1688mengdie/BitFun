@@ -172,7 +172,15 @@ describe('startup performance contract', () => {
     const invokeHandlerStart = desktopLibSource.indexOf('.invoke_handler(', windowEventStart);
     const windowEventSource = desktopLibSource.slice(windowEventStart, invokeHandlerStart);
 
-    expect(desktopAppearanceSource).toContain('.inner_size(1200.0, 800.0)\n        .center()');
+    const mainWindowSizeStart = desktopAppearanceSource.indexOf('.inner_size(');
+    const mainWindowCenter = desktopAppearanceSource.indexOf('.center()', mainWindowSizeStart);
+    const mainWindowSizeSource = desktopAppearanceSource.slice(mainWindowSizeStart, mainWindowCenter);
+    expect(mainWindowSizeStart).toBeGreaterThanOrEqual(0);
+    expect(mainWindowCenter).toBeGreaterThan(mainWindowSizeStart);
+    expect(mainWindowSizeSource).toContain('crate::MAIN_WINDOW_DEFAULT_WIDTH');
+    expect(mainWindowSizeSource).toContain('crate::MAIN_WINDOW_DEFAULT_HEIGHT');
+    expect(desktopLibSource).toContain('MAIN_WINDOW_DEFAULT_WIDTH: f64 = 1200.0');
+    expect(desktopLibSource).toContain('MAIN_WINDOW_DEFAULT_HEIGHT: f64 = 800.0');
     expect(desktopAppearanceSource).not.toContain('windows_maximize_show_wait_action');
     expect(desktopLibSource).toContain('tauri_plugin_window_state::Builder::default()');
     expect(desktopLibSource).toContain('.with_state_flags(StateFlags::empty())');

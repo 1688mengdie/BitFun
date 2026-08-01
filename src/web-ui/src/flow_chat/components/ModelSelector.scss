@@ -170,7 +170,7 @@
       0 8px 32px var(--bf-appearance-token-color-overlay-black-50),
       0 0 1px var(--bf-appearance-token-color-overlay-white-12),
       inset 0 1px 0 var(--bf-appearance-token-color-overlay-white-08);
-    z-index: $z-dropdown;
+    z-index: $z-popover;
     animation: bitfun-model-dropdown-fade-in 0.15s ease-out;
   }
   

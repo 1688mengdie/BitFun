@@ -340,7 +340,7 @@
      The generic thinking content has vertical padding; with a one-line max-height
      that can leave only padding visible and push the prompt text out of view. */
   .task-expanded-content .task-prompt-content {
-    padding: 0 var(--bf-appearance-token-flowchat-card-pad-x);
+    padding: 0;
     max-height: 3.2em;
     overflow-y: auto;
   }

@@ -571,7 +571,7 @@ describe('AppearanceCompiler', () => {
         },
         'flow-chat-header': {
           parts: {
-            turnItem: { states: { active: { backgroundColor: accent } } },
+            turnBadge: { base: { backgroundColor: accent } },
           },
         },
         'session-files-badge': {
@@ -778,7 +778,7 @@ describe('AppearanceCompiler', () => {
     expect(snapshot.cssText).toContain('[data-bf-component="flexible-panel"][data-bf-part="code"][data-bf-state~="needsFix"]');
     expect(snapshot.cssText).toContain('[data-bf-component="btw-session-panel"][data-bf-part="root"][data-bf-view="session"]');
     expect(snapshot.cssText).toContain('[data-bf-component="model-selector"][data-bf-part="trigger"][data-bf-state~="open"]');
-    expect(snapshot.cssText).toContain('[data-bf-component="flow-chat-header"][data-bf-part="turnItem"][data-bf-state~="active"]');
+    expect(snapshot.cssText).toContain('[data-bf-component="flow-chat-header"][data-bf-part="turnBadge"]');
     expect(snapshot.cssText).toContain('[data-bf-component="session-files-badge"][data-bf-part="file"][data-bf-operation="modify"]');
     expect(snapshot.cssText).toContain('[data-bf-component="code-review-tool-card"][data-bf-part="group"][data-bf-state~="expanded"]');
     expect(snapshot.cssText).toContain('[data-bf-component="create-agent-page"][data-bf-part="levelOption"][data-bf-state~="active"]');

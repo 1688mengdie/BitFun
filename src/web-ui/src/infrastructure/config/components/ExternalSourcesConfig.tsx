@@ -1959,8 +1959,36 @@ const ExternalSourcesConfig: React.FC = () => {
                       {request.definition.remoteUrlPreview ? (
                         <span>{t('mcp.url', { url: request.definition.remoteUrlPreview })}</span>
                       ) : null}
+                      <span>{t('mcp.argumentCount', {
+                        count: request.definition.argumentCount,
+                      })}</span>
+                      {request.definition.workingDirectory ? (
+                        <span>{t('mcp.workingDirectory', {
+                          location: request.definition.workingDirectory,
+                        })}</span>
+                      ) : null}
+                      {(request.definition.environmentKeys?.length ?? 0) > 0 ? (
+                        <span>{t('mcp.environmentNames', {
+                          names: request.definition.environmentKeys.join(', '),
+                        })}</span>
+                      ) : null}
+                      {(request.definition.environmentReferenceNames?.length ?? 0) > 0 ? (
+                        <span>{t('mcp.environmentReads', {
+                          names: (request.definition.environmentReferenceNames ?? []).join(', '),
+                        })}</span>
+                      ) : null}
+                      {(request.definition.headerNames?.length ?? 0) > 0 ? (
+                        <span>{t('mcp.headerNames', {
+                          names: request.definition.headerNames.join(', '),
+                        })}</span>
+                      ) : null}
                     </div>
-                    <div className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
+                    <div
+                      id={reviewRiskId}
+                      className="bitfun-external-sources-config__tool-warning"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="toolWarning"
+                    >
                       {t('mcpApprovals.warning')}
                     </div>
                     <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">

@@ -475,7 +475,7 @@ impl AppearanceConfig {
 }
 
 #[cfg(test)]
-mod tests {
+mod startup_appearance_tests {
     use super::{AppearanceConfig, StartupBootstrapConfig};
 
     #[test]

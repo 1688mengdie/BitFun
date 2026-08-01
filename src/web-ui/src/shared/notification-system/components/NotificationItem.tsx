@@ -13,6 +13,7 @@ export interface NotificationItemProps {
 
 export const NotificationItem: React.FC<NotificationItemProps> = ({ notification }) => {
   const { id, type, title, message, messageNode, closable, actions } = notification;
+  const isAssertive = type === 'error' || type === 'warning';
   const { t } = useI18n('common');
 
   
@@ -49,6 +50,9 @@ export const NotificationItem: React.FC<NotificationItemProps> = ({ notification
       className={`notification-item notification-item--${type}`}
       data-bf-component="notification"
       data-bf-part="item"
+      role={isAssertive ? 'alert' : 'status'}
+      aria-live={isAssertive ? 'assertive' : 'polite'}
+      aria-atomic="true"
     >
       
       <div className="notification-item__icon" data-bf-component="notification" data-bf-part="itemIcon">

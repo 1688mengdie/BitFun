@@ -5125,6 +5125,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       recordScrollerGeometry(scroller);
     }
   }, [
+    applyFooterCompensationNow,
     clearTurnPinRequest,
     clearCollapseIntentScheduling,
     clearPendingStickyPinGrowth,

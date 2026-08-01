@@ -58,8 +58,8 @@ describe('FlowChat collapse spacing', () => {
     const subagentProjectionStyles = readSource('../subagent/SubagentProjectionView.scss');
     const taskStyles = readSource('../../tool-cards/TaskToolDisplay.scss');
 
-    expect(extractBlock(baseToolStyles, '.base-tool-card-expanded')).toMatch(
-      /padding:\s*var\(--bf-appearance-token-flowchat-card-expanded-pad-y\)\s*var\(--bf-appearance-token-tool-card-expanded-pad-x\)\s*var\(--bf-appearance-token-flowchat-card-expanded-pad-y\)\s*var\(--bf-appearance-token-tool-card-expanded-pad-x\);/,
+    expect(extractBlock(baseToolStyles, '.base-tool-card-expanded')).toContain(
+      'padding: var(--bf-appearance-token-flowchat-card-expanded-pad-y) var(--bf-appearance-token-tool-card-expanded-pad-x);',
     );
     expect(extractBlock(baseToolStyles, '.base-tool-card-error')).toContain(
       'margin-left: 0;',
@@ -90,9 +90,9 @@ describe('FlowChat collapse spacing', () => {
     expect(
       extractBlock(taskStyles, '.task-expanded-content .task-prompt-content'),
     ).toContain('padding: 0;');
-    expect(taskStyles).toContain(
-      '.subagent-projection-container--expanded {\n' +
-      '      padding: var(--bf-appearance-token-flowchat-card-expanded-pad-y) var(--bf-appearance-token-flowchat-card-expanded-pad-x);',
+    expect(taskStyles).toContain('--task-prompt-inline-pad: calc(');
+    expect(taskStyles).toMatch(
+      /\.subagent-projection-container--expanded\s*\{[\s\S]*?padding:\s*8px\s*var\(--task-prompt-inline-pad\)\s*10px\s*var\(--task-prompt-inline-pad\);/,
     );
   });
 
