@@ -277,6 +277,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
   let root: Root;
 
   beforeEach(() => {
+    vi.restoreAllMocks();
     rafCallbacks = [];
     vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
       rafCallbacks.push(callback);
@@ -853,19 +854,16 @@ describe('ModernFlowChatContainer historical empty state', () => {
     releaseSpy.mockRestore();
   });
 
-  it('keeps partial-session search scoped to the loaded window', async () => {
-    const pendingSpy = vi
-      .spyOn(flowChatStore, 'hasPendingSessionHistoryCompletion')
-      .mockReturnValue(true);
-    const projectionSpy = vi
-      .spyOn(flowChatStore, 'requestSessionFullHistoryProjection')
-      .mockReturnValue(true);
+  it('requests full history when search starts from a partial session', async () => {
+    const ensureSpy = vi
+      .spyOn(flowChatStore, 'ensureSessionFullHistory')
+      .mockResolvedValue(true);
 
-    searchStateMock.searchQuery = 'older prompt';
     stateMocks.activeSession = createSession({
       isHistorical: false,
       historyState: 'ready',
       contextRestoreState: 'ready',
+      isPartial: true,
       dialogTurns: [
         createTurn('turn-2', 'Latest restored prompt'),
       ],
@@ -879,14 +877,15 @@ describe('ModernFlowChatContainer historical empty state', () => {
       root.render(<ModernFlowChatContainer />);
     });
 
-    expect(projectionSpy).not.toHaveBeenCalled();
-    expect(startupTraceMock.markPhase).not.toHaveBeenCalledWith(
-      'historical_session_full_hydrate_released_for_search',
-      expect.anything(),
-    );
+    await act(async () => {
+      (headerPropsMock.latest?.onSearchChange as ((query: string) => void) | undefined)?.(
+        'older prompt',
+      );
+      await Promise.resolve();
+    });
 
-    projectionSpy.mockRestore();
-    pendingSpy.mockRestore();
+    expect(searchStateMock.onSearchChange).toHaveBeenCalledWith('older prompt');
+    expect(ensureSpy).toHaveBeenCalledWith('session-1', 'flowchat-search');
   });
 
   it('repositions an unchanged virtual match when the search query changes', async () => {
@@ -1423,10 +1422,10 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(container.querySelector('[data-turn-id="turn-100"]')).toBeNull();
   });
 
-  it('requests the existing full-history fallback for an unloaded catalog target', async () => {
-    const projectionSpy = vi
-      .spyOn(flowChatStore, 'requestSessionFullHistoryProjection')
-      .mockReturnValue(true);
+  it('requests the unified full-history fallback for an unloaded catalog target', async () => {
+    const ensureSpy = vi
+      .spyOn(flowChatStore, 'ensureSessionFullHistory')
+      .mockResolvedValue(true);
     stateMocks.activeSession = createSession({
       isHistorical: false,
       historyState: 'ready',
@@ -1466,12 +1465,11 @@ describe('ModernFlowChatContainer historical empty state', () => {
       await Promise.resolve();
     });
 
-    expect(projectionSpy).toHaveBeenCalledWith('session-1', 'turn-rail-navigation');
+    expect(ensureSpy).toHaveBeenCalledWith('session-1', 'turn-rail-navigation');
     expect(virtualListMock.pinTurnToTopWithStatus).not.toHaveBeenCalledWith(
       'turn-1',
       expect.anything(),
     );
-    projectionSpy.mockRestore();
   });
 
   it('materializes a loaded Turn window before reusing the shared pin transaction', async () => {
@@ -1597,6 +1595,106 @@ describe('ModernFlowChatContainer historical empty state', () => {
     restoreTailSpy.mockRestore();
     loadSpy.mockRestore();
     activateSpy.mockRestore();
+  });
+
+  it('materializes an adjacent catalog window when tail history requests older turns', async () => {
+    const catalog = {
+      schemaVersion: 1,
+      sessionId: 'session-1',
+      revision: 'catalog-1',
+      totalTurnCount: 10,
+      complete: true,
+      entries: Array.from({ length: 10 }, (_, ordinal) => ({
+        ordinal,
+        storageTurnIndex: ordinal,
+        turnId: `turn-${ordinal + 1}`,
+        preview: `Prompt ${ordinal + 1}`,
+        previewTruncated: false,
+      })),
+    };
+    stateMocks.activeSession = createSession({
+      isHistorical: false,
+      historyState: 'ready',
+      isPartial: true,
+      loadedTurnCount: 2,
+      totalTurnCount: 10,
+      turnCatalog: catalog,
+      dialogTurns: [
+        createTurn('turn-9', 'Recent prompt'),
+        createTurn('turn-10', 'Latest prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+    const presentationTurns = Array.from(
+      { length: 8 },
+      (_, index) => createTurn(`turn-${index + 3}`, `Prompt ${index + 3}`),
+    );
+    vi.spyOn(flowChatStore, 'getState').mockReturnValue({
+      sessions: new Map([['session-1', stateMocks.activeSession]]),
+      activeSessionId: 'session-1',
+    });
+    vi.spyOn(flowChatStore, 'getSessionHistoryViewState').mockReturnValue({
+      catalog,
+      loadedRanges: [{
+        startOrdinal: 8,
+        endOrdinalExclusive: 10,
+        turns: stateMocks.activeSession.dialogTurns,
+        lastAccessedAt: 1,
+        source: 'initial-tail',
+      }],
+      activeRange: null,
+      pendingTargetOrdinal: null,
+      navigationGeneration: 0,
+    });
+    const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
+      status: 'ready',
+      sessionId: 'session-1',
+      targetOrdinal: 7,
+      targetTurnId: 'turn-8',
+      navigationGeneration: 0,
+      isCurrent: true,
+      cacheHit: false,
+      catalog,
+    });
+    const activateSpy = vi.spyOn(
+      flowChatStore,
+      'activateSessionHistoryWindowFromTail',
+    ).mockReturnValue({
+      range: {
+        startOrdinal: 2,
+        endOrdinalExclusive: 10,
+        targetTurnId: null,
+        mode: 'history-window',
+      },
+      turns: presentationTurns,
+    });
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    await act(async () => {
+      const handled = await (
+        virtualListPropsMock.latest?.onHistoryWindowBoundaryIntent as
+          | ((direction: 'before' | 'after') => Promise<boolean>)
+          | undefined
+      )?.('before');
+      expect(handled).toBe(true);
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith('session-1', 7, {
+      source: 'prefetch',
+      before: 12,
+      after: 1,
+    });
+    expect(activateSpy).toHaveBeenCalledWith('session-1', 7);
+    expect(virtualListPropsMock.latest).toMatchObject({
+      presentationMode: 'history-window',
+      presentationRevision: 1,
+    });
   });
 
   it('lets streaming restored sessions use follow-output instead of container sticky anchoring', async () => {

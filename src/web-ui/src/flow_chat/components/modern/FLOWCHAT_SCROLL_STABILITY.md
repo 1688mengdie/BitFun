@@ -367,10 +367,12 @@ This path is safer than doing nothing, but it is more likely to show visible mov
 ## C. Static Initial-History Turn Navigation
 
 The initial-history path renders a bounded static window plus estimated leading
-and trailing spacers before handing the complete projection to Virtuoso. The
-left-side turn rail may target a turn outside that window. The list first
-materializes a new window around the target and then issues the requested
-scroll.
+and trailing spacers before handing the current presentation to Virtuoso. A
+catalog-backed partial session keeps only its restored tail as the default
+presentation; it does not hydrate the complete transcript after first paint.
+The left-side turn rail may target a turn outside that tail. The container first
+loads and materializes a bounded Turn window around the target and then issues
+the requested scroll.
 
 A smooth scroll does not update `scrollTop` synchronously. The window swap can
 therefore emit a scroll event at the old, browser-clamped physical bottom before
@@ -423,6 +425,30 @@ turn remains the semantic current turn, while every intersecting turn marker
 uses the same rail emphasis. Publish a new ordered `visibleTurnIds` snapshot
 only when membership or order changes so ordinary scroll frames do not cause
 redundant rail renders.
+
+### Catalog-backed history loading
+
+Catalog, loaded Turn cache, and active presentation are separate layers. Keep
+these ownership rules intact:
+
+- `Session.dialogTurns` remains the live restored tail unless an explicit
+  full-history consumer calls `ensureSessionFullHistory`.
+- Turn-rail navigation and sequential boundary loading use
+  `load_session_turn_window`; neither path writes the FlowChat scroller.
+- Upward user intent at the restored-tail boundary captures the existing
+  element anchor, loads the adjacent ordinal window, and changes to one
+  contiguous history-window presentation. It must not expose a later cached
+  range across an unloaded gap.
+- Appending below the current presentation does not require compensation.
+  Prepending or trimming above it must retain the existing element-anchor
+  transaction until the same user message returns to its captured viewport
+  offset.
+- Search, edit, rollback, and compatibility fallback are explicit full-history
+  consumers. Their shared ensure operation deduplicates an existing request and
+  applies the completed projection only after the caller asks for it.
+- A Host without `turnCatalog`, or without `load_session_turn_window`, retains
+  the legacy full-restore fallback. This compatibility path must not cause a
+  catalog-capable Host to resume unconditional background hydration.
 
 ## Why Transition Tracking Exists
 

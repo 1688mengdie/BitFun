@@ -783,6 +783,7 @@ interface FullHistoryHydrationRequest {
   sessionTraceId: string;
   promise: Promise<void>;
   cancel?: () => void;
+  startNow?: () => void;
   releaseAfterInitialPaint?: (options?: FullHistoryHydrationReleaseOptions) => void;
 }
 
@@ -793,6 +794,7 @@ interface CompleteSessionHistoryLoadRequest {
   remoteSshHost?: string;
   includeInternal?: boolean;
   requireActiveSession?: boolean;
+  startImmediately?: boolean;
   initialSessionTraceId: string;
   expectedDialogTurnIds: string[];
 }
@@ -1341,6 +1343,62 @@ export class FlowChatStore {
     return { range: { ...range }, turns: [...turns] };
   }
 
+  public activateSessionHistoryWindowFromTail(
+    sessionId: string,
+    targetOrdinal: number,
+  ): SessionHistoryPresentation | null {
+    const session = this.state.sessions.get(sessionId);
+    const view = this.sessionHistoryViews.get(sessionId);
+    if (
+      this.state.activeSessionId !== sessionId
+      || !session
+      || !view
+      || view.activeRange !== null
+    ) {
+      return null;
+    }
+
+    const totalTurnCount = Math.max(
+      view.catalog?.totalTurnCount ?? 0,
+      session.totalTurnCount ?? 0,
+      session.dialogTurns.length,
+    );
+    const normalizedTargetOrdinal = Math.max(0, Math.floor(targetOrdinal));
+    const tailOrdinal = totalTurnCount - 1;
+    const loadedRange = view.loadedRanges.find(range =>
+      range.startOrdinal <= normalizedTargetOrdinal
+      && range.endOrdinalExclusive > normalizedTargetOrdinal
+      && range.startOrdinal <= tailOrdinal
+      && range.endOrdinalExclusive > tailOrdinal
+    );
+    if (!loadedRange) {
+      return null;
+    }
+
+    const endOrdinalExclusive = Math.min(totalTurnCount, loadedRange.endOrdinalExclusive);
+    const startOrdinal = Math.max(
+      loadedRange.startOrdinal,
+      endOrdinalExclusive - SESSION_HISTORY_PRESENTATION_HARD_TURN_BUDGET,
+    );
+    if (normalizedTargetOrdinal < startOrdinal) {
+      return null;
+    }
+    const turns = sliceLoadedTurnRange(loadedRange, startOrdinal, endOrdinalExclusive);
+    if (!turns) {
+      return null;
+    }
+
+    const range: ActiveTurnRenderRange = {
+      startOrdinal,
+      endOrdinalExclusive,
+      targetTurnId: null,
+      mode: 'history-window',
+    };
+    loadedRange.lastAccessedAt = Date.now();
+    view.activeRange = range;
+    return { range: { ...range }, turns: [...turns] };
+  }
+
   public restoreSessionTailPresentation(sessionId: string): void {
     const view = this.sessionHistoryViews.get(sessionId);
     if (!view) {
@@ -1512,7 +1570,7 @@ export class FlowChatStore {
     const view = this.sessionHistoryViews.get(sessionId);
     return this.state.activeSessionId === sessionId
       && view?.navigationGeneration === generation
-      && view.activeRange?.mode === 'history-window';
+      && (view.activeRange === null || view.activeRange.mode === 'history-window');
   }
 
   private invalidateSessionTurnNavigationIntents(): void {
@@ -1569,7 +1627,9 @@ export class FlowChatStore {
     ]);
   }
 
-  private scheduleCompleteSessionHistoryLoad(request: CompleteSessionHistoryLoadRequest): void {
+  private scheduleCompleteSessionHistoryLoad(
+    request: CompleteSessionHistoryLoadRequest,
+  ): FullHistoryHydrationRequest {
     const requestKey = this.getFullHistoryHydrationKey(
       request.sessionId,
       request.workspacePath,
@@ -1577,8 +1637,12 @@ export class FlowChatStore {
       request.remoteSshHost,
       request.includeInternal,
     );
-    if (this.fullHistoryHydrationRequests.has(requestKey)) {
-      return;
+    const existingRequest = this.fullHistoryHydrationRequests.get(requestKey);
+    if (existingRequest) {
+      if (request.startImmediately === true) {
+        existingRequest.startNow?.();
+      }
+      return existingRequest;
     }
 
     const remote = isRemoteTraceContext(request.remoteConnectionId, request.remoteSshHost);
@@ -1595,9 +1659,17 @@ export class FlowChatStore {
     let cancelScheduled: (() => void) | undefined;
     let releaseAfterInitialPaint: ((options?: FullHistoryHydrationReleaseOptions) => void) | undefined;
     let resolveRequest: (() => void) | undefined;
+    let started = false;
+    let startFullHydrate: (
+      trigger: 'idle' | 'initial_paint' | 'timeout' | 'explicit',
+    ) => void = () => undefined;
     const promise = new Promise<void>(resolve => {
       resolveRequest = resolve;
-      const startFullHydrate = (trigger: 'idle' | 'initial_paint' | 'timeout' | 'explicit') => {
+      startFullHydrate = (trigger: 'idle' | 'initial_paint' | 'timeout' | 'explicit') => {
+        if (started) {
+          return;
+        }
+        started = true;
         startupTrace.markPhase('historical_session_full_hydrate_released', {
           remote,
           sessionId: request.sessionId,
@@ -1618,6 +1690,11 @@ export class FlowChatStore {
           })
           .finally(resolve);
       };
+
+      if (request.startImmediately === true) {
+        startFullHydrate('explicit');
+        return;
+      }
 
       if (remote) {
         cancelScheduled = scheduleHistoricalSessionFullHydrate(() => startFullHydrate('idle'));
@@ -1644,6 +1721,10 @@ export class FlowChatStore {
         cancelScheduled?.();
         resolveRequest?.();
       },
+      startNow: () => {
+        cancelScheduled?.();
+        startFullHydrate('explicit');
+      },
     };
 
     if (releaseAfterInitialPaint) {
@@ -1653,6 +1734,7 @@ export class FlowChatStore {
     }
 
     this.fullHistoryHydrationRequests.set(requestKey, hydrationRequest);
+    return hydrationRequest;
   }
 
   private cancelLocalSessionHistoryCompletion(sessionId: string, reason: string): boolean {
@@ -1713,7 +1795,7 @@ export class FlowChatStore {
     }
   }
 
-  private scheduleActiveLocalPartialSessionHistoryCompletion(
+  private scheduleActiveLegacyPartialSessionHistoryCompletion(
     sessionId: string,
     reason: string
   ): boolean {
@@ -1723,6 +1805,7 @@ export class FlowChatStore {
       !session ||
       session.historyState !== 'ready' ||
       session.isPartial !== true ||
+      session.turnCatalog?.sessionId === sessionId ||
       isRemoteTraceContext(session.remoteConnectionId, session.remoteSshHost) ||
       this.hasPendingSessionHistoryCompletion(sessionId) ||
       this.hasDeferredSessionHistoryProjection(sessionId)
@@ -1767,38 +1850,78 @@ export class FlowChatStore {
     return this.deferredFullHistoryProjections.has(sessionId);
   }
 
-  public requestSessionFullHistoryProjection(sessionId: string, reason: string): boolean {
+  public async ensureSessionFullHistory(sessionId: string, reason: string): Promise<boolean> {
+    const session = this.state.sessions.get(sessionId);
+    if (!session || session.historyState !== 'ready') {
+      return false;
+    }
+    if (session.isPartial !== true) {
+      return true;
+    }
+
     this.fullHistoryProjectionApplyRequests.add(sessionId);
     const applied = this.applyDeferredSessionHistoryProjection(sessionId, reason);
-    const released = this.releaseSessionHistoryCompletionAfterInitialPaint(sessionId, {
-      immediate: true,
-      reason,
-    });
+    if (applied) {
+      return true;
+    }
 
-    if (!applied && !released) {
+    let hydrationRequest = Array.from(this.fullHistoryHydrationRequests.values()).find(
+      request => request.sessionId === sessionId,
+    );
+    if (!hydrationRequest) {
+      const workspacePath = sessionProjectWorkspacePath(session);
+      if (!workspacePath || session.dialogTurns.length === 0) {
+        this.fullHistoryProjectionApplyRequests.delete(sessionId);
+        return false;
+      }
+
+      const sessionTraceId = `${sessionId.slice(0, 8)}-${Math.random().toString(36).slice(2, 8)}`;
+      hydrationRequest = this.scheduleCompleteSessionHistoryLoad({
+        sessionId,
+        workspacePath,
+        remoteConnectionId: session.remoteConnectionId,
+        remoteSshHost: session.remoteSshHost,
+        includeInternal: session.sessionKind === 'subagent',
+        requireActiveSession: false,
+        startImmediately: true,
+        initialSessionTraceId: sessionTraceId,
+        expectedDialogTurnIds: session.dialogTurns.map(turn => turn.id),
+      });
+    } else {
+      hydrationRequest.startNow?.();
+    }
+
+    startupTrace.markPhase('historical_session_full_history_ensure_requested', {
+      sessionId,
+      reason,
+      remote: hydrationRequest.remote,
+      loadedTurnCount: session.dialogTurns.length,
+      totalTurnCount: session.totalTurnCount,
+    });
+    await hydrationRequest.promise;
+
+    const appliedAfterLoad = this.applyDeferredSessionHistoryProjection(sessionId, reason);
+    const ready = this.state.sessions.get(sessionId)?.isPartial !== true;
+    if (!ready) {
       this.fullHistoryProjectionApplyRequests.delete(sessionId);
     }
-
-    if (applied || released) {
-      startupTrace.markPhase('historical_session_full_hydrate_projection_requested', {
-        sessionId,
-        reason,
-        applied,
-        released,
-      });
-    }
-
-    return applied || released;
+    startupTrace.markPhase('historical_session_full_history_ensure_finished', {
+      sessionId,
+      reason,
+      remote: hydrationRequest.remote,
+      ready,
+      applied: appliedAfterLoad,
+    });
+    return ready;
   }
 
   private requestTurnWindowCompatibilityFallback(sessionId: string): boolean {
-    const requested = this.requestSessionFullHistoryProjection(
-      sessionId,
-      'turn-window-unsupported',
-    );
-    return requested
-      || this.hasPendingSessionHistoryCompletion(sessionId)
-      || this.hasDeferredSessionHistoryProjection(sessionId);
+    const session = this.state.sessions.get(sessionId);
+    if (!session || session.historyState !== 'ready' || session.isPartial !== true) {
+      return false;
+    }
+    void this.ensureSessionFullHistory(sessionId, 'turn-window-unsupported');
+    return true;
   }
 
   private async invokeSessionTurnWindowRequest(
@@ -2149,12 +2272,12 @@ export class FlowChatStore {
   }
 
   private shouldDeferFullHistoryProjection(sessionId: string, remote: boolean, _requireActiveSession: boolean): boolean {
-    if (remote) {
-      return true;
-    }
-
     if (this.fullHistoryProjectionApplyRequests.has(sessionId)) {
       return false;
+    }
+
+    if (remote) {
+      return true;
     }
 
     return this.state.activeSessionId === sessionId;
@@ -2188,7 +2311,7 @@ export class FlowChatStore {
       return false;
     }
 
-    if (projection.remote) {
+    if (projection.remote && !this.fullHistoryProjectionApplyRequests.has(sessionId)) {
       startupTrace.markPhase('historical_session_full_hydrate_remote_projection_blocked', {
         remote: true,
         sessionId,
@@ -2906,7 +3029,7 @@ export class FlowChatStore {
     }));
 
     if (targetSessionExists && previousSessionId !== sessionId) {
-      this.scheduleActiveLocalPartialSessionHistoryCompletion(sessionId, 'session-switch');
+      this.scheduleActiveLegacyPartialSessionHistoryCompletion(sessionId, 'session-switch');
     }
   }
 
@@ -6195,11 +6318,21 @@ export class FlowChatStore {
         durationMs: elapsedMs(traceStartedAt),
       });
       if (restoredHistoryPartial) {
+        const supportsTurnCatalog = restoredTurnCatalog?.sessionId === sessionId;
         const deferFullHistoryUntilActive =
           !remote &&
           options?.deferFullHistoryUntilActive === true &&
           this.state.activeSessionId !== sessionId;
-        if (!deferFullHistoryUntilActive) {
+        if (supportsTurnCatalog) {
+          startupTrace.markPhase('historical_session_full_hydrate_skipped', {
+            remote,
+            sessionId,
+            sessionTraceId,
+            reason: 'turn-catalog-windowing-available',
+            loadedTurnCount: dialogTurns.length,
+            totalTurnCount: restoredTotalTurnCount,
+          });
+        } else if (!deferFullHistoryUntilActive) {
           this.scheduleCompleteSessionHistoryLoad({
             sessionId,
             workspacePath: storageWorkspacePath,
