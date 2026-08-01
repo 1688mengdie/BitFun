@@ -272,6 +272,31 @@ fn is_well_formed_turn_catalog(catalog: &SessionTurnCatalog) -> bool {
         && catalog.revision == turn_catalog_revision(&catalog.entries)
 }
 
+fn can_incrementally_update_turn_catalog_after_save(
+    catalog: &SessionTurnCatalog,
+    physical_indices: &[usize],
+    saved_turn_index: usize,
+) -> bool {
+    let catalog_len = catalog.entries.len();
+    let aligned_prefix = catalog
+        .entries
+        .iter()
+        .zip(physical_indices.iter())
+        .all(|(entry, index)| entry.storage_turn_index == *index);
+    if !aligned_prefix {
+        return false;
+    }
+
+    match physical_indices.len().checked_sub(catalog_len) {
+        Some(0) => catalog
+            .entries
+            .iter()
+            .any(|entry| entry.storage_turn_index == saved_turn_index),
+        Some(1) => physical_indices.get(catalog_len) == Some(&saved_turn_index),
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSessionPromptCacheFile {
     schema_version: u32,
@@ -2549,8 +2574,9 @@ impl PersistenceManager {
     /// Build the lightweight navigation catalog for a Session view.
     ///
     /// The read path never mutates Session storage. Missing or stale legacy
-    /// entries are returned as index-only placeholders and are completed by a
-    /// full restore or the next protected Turn save.
+    /// entries are returned as index-only placeholders. Aligned sidecars are
+    /// repaired incrementally as those Turns are saved; a full restore can
+    /// still complete the entire projection.
     pub async fn load_session_turn_catalog(
         &self,
         workspace_path: &Path,
@@ -2804,15 +2830,15 @@ impl PersistenceManager {
             .iter()
             .map(|(index, _)| *index)
             .collect::<Vec<_>>();
+        // Completeness is independent from structural alignment. A legacy
+        // catalog with placeholders can safely repair only the saved entry as
+        // long as its indices still match the physical Turn sequence.
         let can_update_incrementally = cached.as_ref().is_some_and(|catalog| {
-            catalog.complete
-                && catalog.entries.len() <= physical_indices.len()
-                && physical_indices.len().saturating_sub(catalog.entries.len()) <= 1
-                && catalog
-                    .entries
-                    .iter()
-                    .zip(physical_indices.iter())
-                    .all(|(entry, index)| entry.storage_turn_index == *index)
+            can_incrementally_update_turn_catalog_after_save(
+                catalog,
+                &physical_indices,
+                turn.turn_index,
+            )
         });
 
         let next_catalog = if can_update_incrementally {
@@ -3980,8 +4006,9 @@ impl PersistenceManager {
 #[cfg(test)]
 mod tests {
     use super::{
-        context_snapshot_payload_stats, current_unix_secs, truncate_turn_catalog_preview,
-        PendingSessionDirectory, PersistenceManager, StoredDialogTurnFile,
+        build_turn_catalog, context_snapshot_payload_stats, current_unix_secs,
+        is_well_formed_turn_catalog, placeholder_turn_catalog_entry, truncate_turn_catalog_preview,
+        turn_catalog_entry, PendingSessionDirectory, PersistenceManager, StoredDialogTurnFile,
         SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT, SESSION_TURN_CATALOG_PREVIEW_CHAR_LIMIT,
     };
     use crate::agentic::core::{Message, Session, SessionConfig, SessionKind, ToolResult};
@@ -5005,6 +5032,184 @@ mod tests {
         assert!(complete.complete);
         assert_eq!(complete.entries.len(), 5);
         assert_eq!(complete.entries[0].turn_id.as_deref(), Some("turn-0"));
+    }
+
+    #[tokio::test]
+    async fn incomplete_turn_catalog_repairs_saved_entries_without_rebuilding_placeholders() {
+        let workspace = TestWorkspace::new();
+        let manager =
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Incremental catalog repair".to_string(),
+            "agentic".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+
+        let turns = (0..5)
+            .map(|index| {
+                DialogTurnData::new(
+                    format!("turn-{index}"),
+                    index,
+                    session_id.clone(),
+                    user_message(&format!("prompt {index}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        for turn in &turns {
+            manager
+                .save_dialog_turn(workspace.path(), turn)
+                .await
+                .expect("turn should save");
+        }
+
+        let incomplete = build_turn_catalog(
+            &session_id,
+            turns
+                .iter()
+                .enumerate()
+                .map(|(ordinal, turn)| {
+                    if ordinal < 3 {
+                        placeholder_turn_catalog_entry(turn.turn_index, ordinal)
+                    } else {
+                        turn_catalog_entry(turn, ordinal)
+                    }
+                })
+                .collect(),
+        );
+        assert!(!incomplete.complete);
+        let catalog_path = manager.turn_catalog_path(workspace.path(), &session_id);
+        manager
+            .write_json_atomic(&catalog_path, &incomplete)
+            .await
+            .expect("incomplete catalog fixture should save");
+
+        let updated_turn = DialogTurnData::new(
+            "turn-1".to_string(),
+            1,
+            session_id.clone(),
+            user_message("updated prompt 1"),
+        );
+        manager
+            .save_dialog_turn(workspace.path(), &updated_turn)
+            .await
+            .expect("existing turn should update");
+
+        let repaired: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path).expect("catalog should be readable"),
+        )
+        .expect("catalog should deserialize");
+        assert!(is_well_formed_turn_catalog(&repaired));
+        assert!(!repaired.complete);
+        assert_eq!(repaired.total_turn_count, 5);
+        assert!(repaired.entries[0].turn_id.is_none());
+        assert_eq!(repaired.entries[1].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(
+            repaired.entries[1].preview.as_deref(),
+            Some("updated prompt 1")
+        );
+        assert!(repaired.entries[2].preview.is_none());
+        assert_eq!(repaired.entries[4].turn_id.as_deref(), Some("turn-4"));
+
+        let appended_turn = DialogTurnData::new(
+            "turn-5".to_string(),
+            5,
+            session_id.clone(),
+            user_message("prompt 5"),
+        );
+        manager
+            .save_dialog_turn(workspace.path(), &appended_turn)
+            .await
+            .expect("new tail turn should append");
+
+        let appended: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path).expect("catalog should be readable"),
+        )
+        .expect("catalog should deserialize");
+        assert!(is_well_formed_turn_catalog(&appended));
+        assert!(!appended.complete);
+        assert_eq!(appended.total_turn_count, 6);
+        assert!(appended.entries[0].turn_id.is_none());
+        assert!(appended.entries[2].preview.is_none());
+        assert_eq!(appended.entries[5].turn_id.as_deref(), Some("turn-5"));
+        assert_eq!(appended.entries[5].preview.as_deref(), Some("prompt 5"));
+    }
+
+    #[tokio::test]
+    async fn misaligned_incomplete_turn_catalog_falls_back_to_full_rebuild() {
+        let workspace = TestWorkspace::new();
+        let manager =
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Catalog rebuild fallback".to_string(),
+            "agentic".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+
+        let turns = (0..3)
+            .map(|index| {
+                DialogTurnData::new(
+                    format!("turn-{index}"),
+                    index,
+                    session_id.clone(),
+                    user_message(&format!("prompt {index}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        for turn in &turns {
+            manager
+                .save_dialog_turn(workspace.path(), turn)
+                .await
+                .expect("turn should save");
+        }
+
+        let misaligned = build_turn_catalog(
+            &session_id,
+            vec![
+                placeholder_turn_catalog_entry(0, 0),
+                placeholder_turn_catalog_entry(2, 1),
+            ],
+        );
+        assert!(!misaligned.complete);
+        let catalog_path = manager.turn_catalog_path(workspace.path(), &session_id);
+        manager
+            .write_json_atomic(&catalog_path, &misaligned)
+            .await
+            .expect("misaligned catalog fixture should save");
+
+        manager
+            .save_dialog_turn(workspace.path(), &turns[0])
+            .await
+            .expect("saved turn should trigger safe fallback");
+
+        let rebuilt: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path).expect("catalog should be readable"),
+        )
+        .expect("catalog should deserialize");
+        assert!(is_well_formed_turn_catalog(&rebuilt));
+        assert!(rebuilt.complete);
+        assert_eq!(rebuilt.total_turn_count, 3);
+        assert_eq!(rebuilt.entries[0].storage_turn_index, 0);
+        assert_eq!(rebuilt.entries[1].storage_turn_index, 1);
+        assert_eq!(rebuilt.entries[2].storage_turn_index, 2);
+        assert_eq!(rebuilt.entries[2].preview.as_deref(), Some("prompt 2"));
     }
 
     #[tokio::test]
