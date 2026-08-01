@@ -310,7 +310,7 @@ const MiniAppGalleryView: React.FC = () => {
   };
 
   return (
-    <GalleryLayout className="miniapp-gallery">
+    <GalleryLayout data-bf-component="miniapp-gallery-view" data-bf-part="root" className="miniapp-gallery">
       <GalleryPageHeader
         title={t('title')}
         subtitle={t('subtitle')}
@@ -339,7 +339,7 @@ const MiniAppGalleryView: React.FC = () => {
         )}
       />
 
-      <div className="gallery-zones">
+      <div data-bf-component="miniapp-gallery-view" data-bf-part="content" className="gallery-zones">
         <GalleryZone
           title={t('running')}
           tools={runningApps.length > 0 ? <span className="gallery-zone-badge">{runningApps.length}</span> : null}
@@ -373,9 +373,11 @@ const MiniAppGalleryView: React.FC = () => {
           tools={(
             <>
               {categories.length > 1 ? (
-                <div className="gallery-chip-row">
+                <div data-bf-component="miniapp-gallery-view" data-bf-part="categoryFilters" className="gallery-chip-row">
                   {categories.map((category) => (
                     <button
+                      data-bf-component="miniapp-gallery-view"
+                      data-bf-part="categoryFilter"
                       key={category}
                       type="button"
                       className={[
@@ -432,7 +434,7 @@ const MiniAppGalleryView: React.FC = () => {
         {selectedApp ? (() => {
           const detailTags = pickLocalizedTags(selectedApp, currentLanguage);
           return detailTags.length ? (
-            <div className="miniapp-gallery__detail-tags">
+            <div data-bf-component="miniapp-gallery-view" data-bf-part="detailTags" className="miniapp-gallery__detail-tags">
               {detailTags.map((tag) => (
                 <span key={tag} className="miniapp-gallery__detail-tag">
                   <Tag size={11} />

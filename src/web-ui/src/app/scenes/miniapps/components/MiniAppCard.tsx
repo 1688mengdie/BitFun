@@ -26,7 +26,7 @@ interface MiniAppCardProps {
 }
 
 const MINIAPP_CARD_GRADIENT_RUNNING =
-  'linear-gradient(135deg, color-mix(in srgb, var(--color-success) 28%, transparent) 0%, color-mix(in srgb, var(--color-success) 18%, transparent) 100%)';
+  'linear-gradient(135deg, color-mix(in srgb, var(--bf-appearance-token-color-success) 28%, transparent) 0%, color-mix(in srgb, var(--bf-appearance-token-color-success) 18%, transparent) 100%)';
 
 const MiniAppCard: React.FC<MiniAppCardProps> = ({
   app,
@@ -63,7 +63,7 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
   };
 
   return (
-    <div
+    <div data-bf-component="mini-app-card" data-bf-part="root"
       className={[
         'miniapp-card',
         isRunning && 'miniapp-card--running',
@@ -82,18 +82,18 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
       aria-label={localizedName}
     >
       {/* Header with icon and title */}
-      <div className="miniapp-card__header">
-        <div className="miniapp-card__icon-area">
-          <div className="miniapp-card__icon">
+      <div className="miniapp-card__header" data-bf-component="mini-app-card" data-bf-part="header">
+        <div className="miniapp-card__icon-area" data-bf-component="mini-app-card" data-bf-part="iconArea">
+          <div className="miniapp-card__icon" data-bf-component="mini-app-card" data-bf-part="icon">
             {renderMiniAppIcon(app.icon || 'box', 20)}
           </div>
         </div>
-        <div className="miniapp-card__title-group">
-          <span className="miniapp-card__name">{localizedName}</span>
-          <span className="miniapp-card__version">v{marketReleaseNumber ?? app.version}</span>
+        <div className="miniapp-card__title-group" data-bf-component="mini-app-card" data-bf-part="title">
+          <span className="miniapp-card__name" data-bf-component="mini-app-card" data-bf-part="name">{localizedName}</span>
+          <span className="miniapp-card__version" data-bf-component="mini-app-card" data-bf-part="version">v{marketReleaseNumber ?? app.version}</span>
         </div>
         {(isRunning || isCustomizing) && (
-          <span className="miniapp-card__status-dots" aria-hidden="true">
+          <span className="miniapp-card__status-dots" data-bf-component="mini-app-card" data-bf-part="status" aria-hidden="true">
             {isRunning && <span className="miniapp-card__run-dot" />}
             {isCustomizing && <span className="miniapp-card__customize-dot" />}
           </span>
@@ -101,14 +101,14 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
       </div>
 
       {/* Body: description + tags */}
-      <div className="miniapp-card__body">
+      <div className="miniapp-card__body" data-bf-component="mini-app-card" data-bf-part="body">
         {localizedDescription ? (
-          <div className="miniapp-card__desc">
+          <div className="miniapp-card__desc" data-bf-component="mini-app-card" data-bf-part="description">
             <span className="miniapp-card__desc-inner">{localizedDescription}</span>
           </div>
         ) : null}
         {localizedTags.length > 0 ? (
-          <div className="miniapp-card__tags">
+        <div className="miniapp-card__tags" data-bf-component="mini-app-card" data-bf-part="tags">
             {localizedTags.slice(0, 3).map((tag) => (
               <span key={tag} className="miniapp-card__tag">{tag}</span>
             ))}
@@ -117,8 +117,8 @@ const MiniAppCard: React.FC<MiniAppCardProps> = ({
       </div>
 
       {/* Footer with actions */}
-      <div className="miniapp-card__footer">
-        <div className="miniapp-card__actions" onClick={(e) => e.stopPropagation()}>
+      <div className="miniapp-card__footer" data-bf-component="mini-app-card" data-bf-part="footer">
+        <div className="miniapp-card__actions" data-bf-component="mini-app-card" data-bf-part="actions" onClick={(e) => e.stopPropagation()}>
           <button
             className="miniapp-card__action-btn miniapp-card__action-btn--primary"
             onClick={handleOpenClick}

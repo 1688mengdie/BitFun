@@ -565,7 +565,7 @@ impl<'a> MiniAppRuntimeFacade<'a> {
                 app.id.clone(),
                 app.source.clone(),
                 app.permissions.clone(),
-                request.theme,
+                request.appearance_mode,
                 request.workspace_root,
             )
             .await?;
