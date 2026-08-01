@@ -400,6 +400,42 @@ pub struct SessionTurnCatalog {
     pub entries: Vec<SessionTurnCatalogEntry>,
 }
 
+/// Result of loading one bounded, contiguous window around a persisted Turn.
+///
+/// Catalog changes caused by live appends, revert operations, or external
+/// writers are ordinary synchronization outcomes rather than transport errors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(
+    tag = "status",
+    rename_all = "kebab-case",
+    rename_all_fields = "camelCase"
+)]
+pub enum SessionTurnWindowResponse {
+    Ready {
+        catalog_revision: String,
+        total_turn_count: usize,
+        start_ordinal: usize,
+        end_ordinal_exclusive: usize,
+        target_turn_id: String,
+        turns: Vec<DialogTurnData>,
+    },
+    Stale {
+        catalog: SessionTurnCatalog,
+    },
+    NotFound {
+        catalog: SessionTurnCatalog,
+    },
+}
+
+impl SessionTurnWindowResponse {
+    pub fn ready_turns_mut(&mut self) -> Option<&mut Vec<DialogTurnData>> {
+        match self {
+            Self::Ready { turns, .. } => Some(turns),
+            Self::Stale { .. } | Self::NotFound { .. } => None,
+        }
+    }
+}
+
 /// Full dialog turn data
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1105,8 +1141,8 @@ impl DialogTurnData {
 mod tests {
     use super::{
         DialogTurnData, DialogTurnKind, ModelRoundData, SessionMemoryMode, SessionMetadata,
-        SessionRelationship, SessionRelationshipKind, TextItemData, ThinkingItemData, ToolItemData,
-        UserMessageData,
+        SessionRelationship, SessionRelationshipKind, SessionTurnWindowResponse, TextItemData,
+        ThinkingItemData, ToolItemData, UserMessageData,
     };
     use bitfun_core_types::{SessionContinuationPolicy, SessionKind};
 
@@ -1148,6 +1184,37 @@ mod tests {
         );
 
         assert_eq!(turn.kind, DialogTurnKind::UserDialog);
+    }
+
+    #[test]
+    fn session_turn_window_response_uses_tagged_camel_case_wire_shape() {
+        let turn = DialogTurnData::new(
+            "turn-4".to_string(),
+            4,
+            "session-1".to_string(),
+            UserMessageData {
+                id: "user-4".to_string(),
+                content: "hello".to_string(),
+                timestamp: 1,
+                metadata: None,
+            },
+        );
+        let serialized = serde_json::to_value(SessionTurnWindowResponse::Ready {
+            catalog_revision: "catalog-1".to_string(),
+            total_turn_count: 20,
+            start_ordinal: 2,
+            end_ordinal_exclusive: 10,
+            target_turn_id: "turn-4".to_string(),
+            turns: vec![turn],
+        })
+        .expect("window response should serialize");
+
+        assert_eq!(serialized["status"], "ready");
+        assert_eq!(serialized["catalogRevision"], "catalog-1");
+        assert_eq!(serialized["totalTurnCount"], 20);
+        assert_eq!(serialized["startOrdinal"], 2);
+        assert_eq!(serialized["endOrdinalExclusive"], 10);
+        assert_eq!(serialized["targetTurnId"], "turn-4");
     }
 
     #[test]

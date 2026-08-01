@@ -26,13 +26,15 @@ use crate::service::remote_ssh::workspace_state::{
 };
 use crate::service::session::{
     DialogTurnData, SessionMetadata, SessionTranscriptExport, SessionTranscriptExportOptions,
-    SessionTurnCatalog, SessionTurnCatalogEntry, TranscriptLineRange,
+    SessionTurnCatalog, SessionTurnCatalogEntry, SessionTurnWindowResponse, TranscriptLineRange,
     SESSION_STORAGE_SCHEMA_VERSION, SESSION_TURN_CATALOG_SCHEMA_VERSION,
 };
 use crate::service::workspace_runtime::WorkspaceRuntimeService;
 use crate::util::errors::{BitFunError, BitFunResult};
 use crate::util::timing::elapsed_ms_u64;
-use bitfun_runtime_ports::{SessionTurnLoadRequest, SessionTurnLoadTiming};
+use bitfun_runtime_ports::{
+    SessionTurnLoadRequest, SessionTurnLoadTiming, SessionTurnWindowRequest,
+};
 use bitfun_services_core::{
     json_store::{JsonFileStore, JsonFileStoreError},
     session::{
@@ -64,6 +66,8 @@ const COMPRESSION_TRANSCRIPT_CREATE_ATTEMPTS: usize = 32;
 const TOKEN_ANCHOR_SCHEMA_VERSION: u32 = 1;
 const SESSION_TURN_READ_CONCURRENCY: usize = 4;
 const SESSION_TURN_CATALOG_PREVIEW_CHAR_LIMIT: usize = 320;
+const SESSION_TURN_WINDOW_MAX_BEFORE: usize = 4;
+const SESSION_TURN_WINDOW_MAX_TARGET_AND_AFTER: usize = 12;
 pub const SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT: usize = 60_000;
 
 static SESSION_PERSISTENCE_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
@@ -2579,6 +2583,24 @@ impl PersistenceManager {
             }
         };
 
+        self.build_session_turn_catalog_projection(
+            workspace_path,
+            session_id,
+            physical_indices,
+            loaded_turns,
+            visible_total_turn_count,
+        )
+        .await
+    }
+
+    async fn build_session_turn_catalog_projection(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+        physical_indices: Vec<usize>,
+        loaded_turns: &[DialogTurnData],
+        visible_total_turn_count: usize,
+    ) -> BitFunResult<SessionTurnCatalog> {
         let cached = self
             .read_session_turn_catalog_cache(workspace_path, session_id)
             .await;
@@ -2617,6 +2639,142 @@ impl PersistenceManager {
             .take(visible_total_turn_count)
             .collect::<Vec<_>>();
         Ok(build_turn_catalog(session_id, visible_entries))
+    }
+
+    /// Load a bounded, contiguous Turn window without materializing the full
+    /// Session transcript.
+    ///
+    /// The operation holds the persisted writer lease while it snapshots the
+    /// staged-revert boundary, catalog, and selected Turn files. A raced or
+    /// missing file therefore never produces a sparse ready range.
+    pub async fn load_session_turn_window(
+        &self,
+        request: &SessionTurnWindowRequest,
+    ) -> BitFunResult<SessionTurnWindowResponse> {
+        Self::validate_session_id(&request.session_id)?;
+        let _session_write =
+            self.lock_session_write_operation(&request.workspace_path, &request.session_id)?;
+        let boundary_turn = self
+            .load_session_revert_state(&request.workspace_path, &request.session_id)
+            .await?
+            .map(|state| state.boundary_turn);
+        let indexed_paths = self
+            .list_indexed_turn_paths(&request.workspace_path, &request.session_id)
+            .await?
+            .into_iter()
+            .filter(|(index, _)| boundary_turn.is_none_or(|boundary| *index < boundary))
+            .collect::<Vec<_>>();
+        let visible_indices = indexed_paths
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>();
+        let catalog = self
+            .build_session_turn_catalog_projection(
+                &request.workspace_path,
+                &request.session_id,
+                visible_indices.clone(),
+                &[],
+                visible_indices.len(),
+            )
+            .await?;
+
+        if request
+            .expected_catalog_revision
+            .as_deref()
+            .is_some_and(|revision| revision != catalog.revision)
+        {
+            return Ok(SessionTurnWindowResponse::Stale { catalog });
+        }
+
+        let Some(target_ordinal) = catalog
+            .entries
+            .iter()
+            .position(|entry| entry.storage_turn_index == request.target_storage_turn_index)
+        else {
+            return Ok(SessionTurnWindowResponse::NotFound { catalog });
+        };
+        if let (Some(expected_turn_id), Some(catalog_turn_id)) = (
+            request.expected_turn_id.as_deref(),
+            catalog.entries[target_ordinal].turn_id.as_deref(),
+        ) {
+            if expected_turn_id != catalog_turn_id {
+                return Ok(SessionTurnWindowResponse::Stale { catalog });
+            }
+        }
+
+        let before = request.before.min(SESSION_TURN_WINDOW_MAX_BEFORE);
+        let target_and_after = request
+            .after
+            .clamp(1, SESSION_TURN_WINDOW_MAX_TARGET_AND_AFTER);
+        let start_ordinal = target_ordinal.saturating_sub(before);
+        let end_ordinal_exclusive = indexed_paths
+            .len()
+            .min(target_ordinal.saturating_add(target_and_after));
+        let selected_paths = indexed_paths[start_ordinal..end_ordinal_exclusive].to_vec();
+        let selected_indices = selected_paths
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>();
+        let read_result = self.read_turn_paths(selected_paths).await?;
+
+        if read_result.missing_turn_file_count > 0
+            || read_result.turns.len() != selected_indices.len()
+        {
+            let refreshed_indices = self
+                .list_indexed_turn_paths(&request.workspace_path, &request.session_id)
+                .await?
+                .into_iter()
+                .filter(|(index, _)| boundary_turn.is_none_or(|boundary| *index < boundary))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let catalog = self
+                .build_session_turn_catalog_projection(
+                    &request.workspace_path,
+                    &request.session_id,
+                    refreshed_indices.clone(),
+                    &[],
+                    refreshed_indices.len(),
+                )
+                .await?;
+            return Ok(SessionTurnWindowResponse::NotFound { catalog });
+        }
+
+        for (turn, expected_index) in read_result.turns.iter().zip(selected_indices.iter()) {
+            if turn.session_id != request.session_id || turn.turn_index != *expected_index {
+                return Err(BitFunError::Validation(format!(
+                    "Persisted Turn identity does not match its storage path: session_id={} expected_turn_index={} actual_session_id={} actual_turn_index={}",
+                    request.session_id, expected_index, turn.session_id, turn.turn_index
+                )));
+            }
+        }
+
+        let target_offset = target_ordinal - start_ordinal;
+        let target_turn = &read_result.turns[target_offset];
+        if request
+            .expected_turn_id
+            .as_deref()
+            .is_some_and(|expected_turn_id| expected_turn_id != target_turn.turn_id)
+        {
+            let catalog = self
+                .build_session_turn_catalog_projection(
+                    &request.workspace_path,
+                    &request.session_id,
+                    visible_indices,
+                    &read_result.turns,
+                    indexed_paths.len(),
+                )
+                .await?;
+            return Ok(SessionTurnWindowResponse::Stale { catalog });
+        }
+
+        Ok(SessionTurnWindowResponse::Ready {
+            catalog_revision: catalog.revision,
+            total_turn_count: catalog.total_turn_count,
+            start_ordinal,
+            end_ordinal_exclusive,
+            target_turn_id: target_turn.turn_id.clone(),
+            turns: read_result.turns,
+        })
     }
 
     async fn persist_session_turn_catalog_after_save(
@@ -3839,9 +3997,10 @@ mod tests {
     use crate::service::session::{
         DialogTurnData, ModelRoundData, SessionMemoryMode, SessionMetadata, SessionRelationship,
         SessionRelationshipKind, SessionTranscriptExportOptions, SessionTurnCatalog,
-        StoredSessionIndexFile, TextItemData, UserMessageData,
+        SessionTurnWindowResponse, StoredSessionIndexFile, TextItemData, UserMessageData,
     };
     use crate::BitFunError;
+    use bitfun_runtime_ports::SessionTurnWindowRequest;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Instant;
@@ -4921,6 +5080,133 @@ mod tests {
         .expect("physical catalog should deserialize");
         assert_eq!(physical.total_turn_count, 2);
         assert_eq!(physical.entries[1].turn_id.as_deref(), Some("turn-1"));
+    }
+
+    #[tokio::test]
+    async fn turn_window_is_bounded_revision_aware_and_staged_revert_safe() {
+        let workspace = TestWorkspace::new();
+        let manager =
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Turn window".to_string(),
+            "agentic".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+        for index in 0..30 {
+            manager
+                .save_dialog_turn(
+                    workspace.path(),
+                    &DialogTurnData::new(
+                        format!("turn-{index}"),
+                        index,
+                        session_id.clone(),
+                        user_message(&format!("prompt {index}")),
+                    ),
+                )
+                .await
+                .expect("turn should save");
+        }
+
+        let catalog = manager
+            .load_session_turn_catalog(workspace.path(), &session_id, &[], 30)
+            .await
+            .expect("catalog should load");
+        let request = SessionTurnWindowRequest {
+            workspace_path: workspace.path().to_path_buf(),
+            session_id: session_id.clone(),
+            include_internal: false,
+            target_storage_turn_index: 10,
+            expected_turn_id: Some("turn-10".to_string()),
+            expected_catalog_revision: Some(catalog.revision.clone()),
+            before: usize::MAX,
+            after: usize::MAX,
+        };
+
+        let ready = manager
+            .load_session_turn_window(&request)
+            .await
+            .expect("window should load");
+        match ready {
+            SessionTurnWindowResponse::Ready {
+                catalog_revision,
+                total_turn_count,
+                start_ordinal,
+                end_ordinal_exclusive,
+                target_turn_id,
+                turns,
+            } => {
+                assert_eq!(catalog_revision, catalog.revision);
+                assert_eq!(total_turn_count, 30);
+                assert_eq!(start_ordinal, 6);
+                assert_eq!(end_ordinal_exclusive, 22);
+                assert_eq!(target_turn_id, "turn-10");
+                assert_eq!(turns.len(), 16);
+                assert_eq!(turns.first().map(|turn| turn.turn_index), Some(6));
+                assert_eq!(turns.last().map(|turn| turn.turn_index), Some(21));
+            }
+            response => panic!("unexpected response: {response:?}"),
+        }
+
+        let mut stale_revision_request = request.clone();
+        stale_revision_request.expected_catalog_revision = Some("obsolete".to_string());
+        assert!(matches!(
+            manager
+                .load_session_turn_window(&stale_revision_request)
+                .await
+                .expect("stale revision should be structured"),
+            SessionTurnWindowResponse::Stale { .. }
+        ));
+
+        let mut stale_turn_request = request.clone();
+        stale_turn_request.expected_turn_id = Some("replaced-turn".to_string());
+        assert!(matches!(
+            manager
+                .load_session_turn_window(&stale_turn_request)
+                .await
+                .expect("stale Turn ID should be structured"),
+            SessionTurnWindowResponse::Stale { .. }
+        ));
+
+        manager
+            .save_session_revert_state(
+                workspace.path(),
+                &session_id,
+                &SessionRevertState {
+                    schema_version: SESSION_REVERT_SCHEMA_VERSION,
+                    boundary_turn: 8,
+                    original_turn_end: 30,
+                    phase: SessionRevertPhase::Staged,
+                    workspace_checkpoint: Vec::new(),
+                },
+            )
+            .await
+            .expect("staged revert should save");
+        let hidden = manager
+            .load_session_turn_window(&SessionTurnWindowRequest {
+                expected_catalog_revision: None,
+                ..request
+            })
+            .await
+            .expect("hidden target should be structured");
+        match hidden {
+            SessionTurnWindowResponse::NotFound { catalog } => {
+                assert_eq!(catalog.total_turn_count, 8);
+                assert!(catalog
+                    .entries
+                    .iter()
+                    .all(|entry| entry.storage_turn_index < 8));
+            }
+            response => panic!("unexpected response: {response:?}"),
+        }
     }
 
     #[test]

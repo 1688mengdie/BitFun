@@ -228,6 +228,21 @@ pub struct SessionTurnLoadRequest {
     pub tail_turn_count: Option<usize>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTurnWindowRequest {
+    pub workspace_path: PathBuf,
+    pub session_id: String,
+    pub include_internal: bool,
+    pub target_storage_turn_index: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_turn_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_catalog_revision: Option<String>,
+    pub before: usize,
+    pub after: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionTurnLoadTiming {

@@ -281,6 +281,31 @@ export type SessionHistoryState =
   | 'ready'
   | 'failed';
 
+export type LoadedTurnRangeSource = 'initial-tail' | 'target' | 'prefetch' | 'live';
+
+export interface LoadedTurnRange {
+  startOrdinal: number;
+  endOrdinalExclusive: number;
+  turns: DialogTurn[];
+  lastAccessedAt: number;
+  source: LoadedTurnRangeSource;
+}
+
+export interface ActiveTurnRenderRange {
+  startOrdinal: number;
+  endOrdinalExclusive: number;
+  targetTurnId: string | null;
+  mode: 'tail' | 'history-window';
+}
+
+export interface SessionHistoryViewState {
+  catalog: SessionTurnCatalog | null;
+  loadedRanges: LoadedTurnRange[];
+  activeRange: ActiveTurnRenderRange | null;
+  pendingTargetOrdinal: number | null;
+  navigationGeneration: number;
+}
+
 export type SessionContextRestoreState =
   | 'ready'
   | 'pending'
