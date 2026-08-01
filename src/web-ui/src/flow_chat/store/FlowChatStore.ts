@@ -156,6 +156,8 @@ const SESSION_TURN_WINDOW_DEFAULT_AFTER = 12;
 const SESSION_HISTORY_PRESENTATION_SOFT_TURN_BUDGET = 48;
 const SESSION_HISTORY_PRESENTATION_HARD_TURN_BUDGET = 64;
 const SESSION_HISTORY_PRESENTATION_PREFETCH_TURN_COUNT = 16;
+const SESSION_HISTORY_LOADED_RANGE_CACHE_SOFT_TURN_BUDGET = 48;
+const SESSION_HISTORY_LOADED_RANGE_CACHE_HARD_TURN_BUDGET = 64;
 
 type RemoveSessionOptions = {
   nextActiveSessionId?: string | null;
@@ -196,6 +198,16 @@ export type SessionTurnWindowLoadResult = {
   catalog?: SessionTurnCatalog;
   fallbackRequested?: boolean;
 };
+
+interface OrdinalInterval {
+  startOrdinal: number;
+  endOrdinalExclusive: number;
+}
+
+interface SessionTurnWindowProtection extends OrdinalInterval {
+  sessionId: string;
+  retainCount: number;
+}
 
 function dispatchTerminalTurnStatus(
   state: NonNullable<SessionConfig['dispatchJobState']>,
@@ -920,6 +932,96 @@ function sliceLoadedTurnRange(
   return turns.length === endOrdinalExclusive - startOrdinal ? turns : null;
 }
 
+function mergeOrdinalIntervals(intervals: readonly OrdinalInterval[]): OrdinalInterval[] {
+  const sorted = intervals
+    .filter(interval => interval.endOrdinalExclusive > interval.startOrdinal)
+    .map(interval => ({ ...interval }))
+    .sort((left, right) =>
+      left.startOrdinal - right.startOrdinal
+      || left.endOrdinalExclusive - right.endOrdinalExclusive
+    );
+  const merged: OrdinalInterval[] = [];
+
+  for (const interval of sorted) {
+    const previous = merged[merged.length - 1];
+    if (!previous || interval.startOrdinal > previous.endOrdinalExclusive) {
+      merged.push(interval);
+      continue;
+    }
+    previous.endOrdinalExclusive = Math.max(
+      previous.endOrdinalExclusive,
+      interval.endOrdinalExclusive,
+    );
+  }
+
+  return merged;
+}
+
+function ordinalIsInIntervals(
+  ordinal: number,
+  intervals: readonly OrdinalInterval[],
+): boolean {
+  return intervals.some(interval =>
+    interval.startOrdinal <= ordinal && interval.endOrdinalExclusive > ordinal
+  );
+}
+
+function ordinalDistanceFromIntervals(
+  ordinal: number,
+  intervals: readonly OrdinalInterval[],
+): number {
+  if (intervals.length === 0) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  let distance = Number.MAX_SAFE_INTEGER;
+  for (const interval of intervals) {
+    if (ordinal < interval.startOrdinal) {
+      distance = Math.min(distance, interval.startOrdinal - ordinal);
+    } else if (ordinal >= interval.endOrdinalExclusive) {
+      distance = Math.min(distance, ordinal - interval.endOrdinalExclusive + 1);
+    } else {
+      return 0;
+    }
+  }
+  return distance;
+}
+
+function subtractOrdinalIntervals(
+  interval: OrdinalInterval,
+  exclusions: readonly OrdinalInterval[],
+): OrdinalInterval[] {
+  const remaining: OrdinalInterval[] = [];
+  let cursor = interval.startOrdinal;
+
+  for (const exclusion of exclusions) {
+    if (exclusion.endOrdinalExclusive <= cursor) {
+      continue;
+    }
+    if (exclusion.startOrdinal >= interval.endOrdinalExclusive) {
+      break;
+    }
+    if (exclusion.startOrdinal > cursor) {
+      remaining.push({
+        startOrdinal: cursor,
+        endOrdinalExclusive: Math.min(exclusion.startOrdinal, interval.endOrdinalExclusive),
+      });
+    }
+    cursor = Math.max(cursor, exclusion.endOrdinalExclusive);
+    if (cursor >= interval.endOrdinalExclusive) {
+      break;
+    }
+  }
+
+  if (cursor < interval.endOrdinalExclusive) {
+    remaining.push({
+      startOrdinal: cursor,
+      endOrdinalExclusive: interval.endOrdinalExclusive,
+    });
+  }
+  return remaining;
+}
+
 function selectTargetHistoryPresentationRange(
   range: LoadedTurnRange,
   targetOrdinal: number,
@@ -1187,7 +1289,12 @@ export class FlowChatStore {
   private deferredFullHistoryProjections = new Map<string, DeferredFullHistoryProjection>();
   private fullHistoryProjectionApplyRequests = new Set<string>();
   private sessionHistoryViews = new Map<string, SessionHistoryViewState>();
+  /** Per-ordinal recency survives adjacent range merges and enables stable range slicing. */
+  private sessionHistoryTurnAccessTimes = new Map<string, Map<number, number>>();
+  private sessionHistoryAccessClock = 0;
   private sessionTurnWindowRequests = new Map<string, Promise<LoadSessionTurnWindowResponse>>();
+  /** Requested intervals remain protected until every deduplicated caller processes the response. */
+  private sessionTurnWindowProtections = new Map<string, SessionTurnWindowProtection>();
   private unsupportedRestoreCommands = new Set<string>();
   private pendingRemoveSessionOptions = new Map<string, RemoveSessionOptions>();
   private onPersistUnreadCompletion?: (sessionId: string, value: 'completed' | 'error' | 'interrupted' | undefined) => void;
@@ -1291,9 +1398,15 @@ export class FlowChatStore {
       targetTurnId: targetTurn?.id ?? null,
       mode: 'history-window',
     };
-    loadedRange.lastAccessedAt = Date.now();
+    this.touchSessionHistoryTurnRange(
+      sessionId,
+      loadedRange,
+      selected.startOrdinal,
+      selected.endOrdinalExclusive,
+    );
     view.activeRange = range;
     view.pendingTargetOrdinal = null;
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
     return { range: { ...range }, turns: [...turns] };
   }
 
@@ -1338,8 +1451,14 @@ export class FlowChatStore {
       targetTurnId,
       mode: 'history-window',
     };
-    loadedRange.lastAccessedAt = Date.now();
+    this.touchSessionHistoryTurnRange(
+      sessionId,
+      loadedRange,
+      selected.startOrdinal,
+      selected.endOrdinalExclusive,
+    );
     view.activeRange = range;
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
     return { range: { ...range }, turns: [...turns] };
   }
 
@@ -1394,8 +1513,14 @@ export class FlowChatStore {
       targetTurnId: null,
       mode: 'history-window',
     };
-    loadedRange.lastAccessedAt = Date.now();
+    this.touchSessionHistoryTurnRange(
+      sessionId,
+      loadedRange,
+      startOrdinal,
+      endOrdinalExclusive,
+    );
     view.activeRange = range;
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
     return { range: { ...range }, turns: [...turns] };
   }
 
@@ -1407,6 +1532,7 @@ export class FlowChatStore {
     view.navigationGeneration += 1;
     view.pendingTargetOrdinal = null;
     view.activeRange = null;
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
   }
 
   private ensureSessionHistoryView(
@@ -1432,17 +1558,286 @@ export class FlowChatStore {
     return created;
   }
 
+  private nextSessionHistoryAccessTime(candidate: number = Date.now()): number {
+    this.sessionHistoryAccessClock = Math.max(
+      this.sessionHistoryAccessClock + 1,
+      candidate,
+    );
+    return this.sessionHistoryAccessClock;
+  }
+
+  private getSessionHistoryTurnAccessTimes(sessionId: string): Map<number, number> {
+    const existing = this.sessionHistoryTurnAccessTimes.get(sessionId);
+    if (existing) {
+      return existing;
+    }
+    const created = new Map<number, number>();
+    this.sessionHistoryTurnAccessTimes.set(sessionId, created);
+    return created;
+  }
+
+  private touchSessionHistoryTurnRange(
+    sessionId: string,
+    range: LoadedTurnRange,
+    startOrdinal: number,
+    endOrdinalExclusive: number,
+    accessedAt: number = this.nextSessionHistoryAccessTime(),
+  ): void {
+    const boundedStartOrdinal = Math.max(range.startOrdinal, startOrdinal);
+    const boundedEndOrdinalExclusive = Math.min(
+      range.endOrdinalExclusive,
+      endOrdinalExclusive,
+    );
+    if (boundedEndOrdinalExclusive <= boundedStartOrdinal) {
+      return;
+    }
+
+    const accessTimes = this.getSessionHistoryTurnAccessTimes(sessionId);
+    for (
+      let ordinal = boundedStartOrdinal;
+      ordinal < boundedEndOrdinalExclusive;
+      ordinal += 1
+    ) {
+      accessTimes.set(ordinal, accessedAt);
+    }
+    range.lastAccessedAt = Math.max(range.lastAccessedAt, accessedAt);
+  }
+
+  private getSessionHistoryTailProtectedIntervals(
+    sessionId: string,
+    view: SessionHistoryViewState,
+  ): OrdinalInterval[] {
+    const session = this.state.sessions.get(sessionId);
+    if (!session || session.dialogTurns.length === 0) {
+      return [];
+    }
+
+    const catalog = view.catalog?.sessionId === sessionId
+      ? view.catalog
+      : session.turnCatalog?.sessionId === sessionId
+        ? session.turnCatalog
+        : null;
+    const totalTurnCount = Math.max(
+      catalog?.totalTurnCount ?? 0,
+      session.totalTurnCount ?? 0,
+      session.dialogTurns.length,
+    );
+    if (totalTurnCount <= 0) {
+      return [];
+    }
+
+    return [{
+      startOrdinal: Math.max(0, totalTurnCount - session.dialogTurns.length),
+      endOrdinalExclusive: totalTurnCount,
+    }];
+  }
+
+  private getSessionHistoryProtectedIntervals(
+    sessionId: string,
+    view: SessionHistoryViewState,
+    tailIntervals: readonly OrdinalInterval[],
+  ): OrdinalInterval[] {
+    const intervals: OrdinalInterval[] = [...tailIntervals];
+    if (view.activeRange) {
+      intervals.push({
+        startOrdinal: view.activeRange.startOrdinal,
+        endOrdinalExclusive: view.activeRange.endOrdinalExclusive,
+      });
+    }
+    const pendingTargetOrdinal = view.pendingTargetOrdinal;
+    if (pendingTargetOrdinal !== null) {
+      const pendingRange = view.loadedRanges.find(range =>
+        range.startOrdinal <= pendingTargetOrdinal
+        && range.endOrdinalExclusive > pendingTargetOrdinal
+      );
+      if (pendingRange) {
+        intervals.push(selectTargetHistoryPresentationRange(
+          pendingRange,
+          pendingTargetOrdinal,
+        ));
+      } else {
+        intervals.push({
+          startOrdinal: pendingTargetOrdinal,
+          endOrdinalExclusive: pendingTargetOrdinal + 1,
+        });
+      }
+    }
+    for (const protection of this.sessionTurnWindowProtections.values()) {
+      if (protection.sessionId !== sessionId) {
+        continue;
+      }
+      intervals.push({
+        startOrdinal: protection.startOrdinal,
+        endOrdinalExclusive: protection.endOrdinalExclusive,
+      });
+    }
+    return mergeOrdinalIntervals(intervals);
+  }
+
+  private pruneSessionLoadedTurnRanges(
+    sessionId: string,
+    view: SessionHistoryViewState = this.ensureSessionHistoryView(sessionId),
+  ): void {
+    // The canonical tail is retained outside the ordinary cache budget. When
+    // non-tail data crosses the hard limit, LRU entries are sliced back toward
+    // the soft limit without touching active or pending navigation intervals.
+    const tailIntervals = mergeOrdinalIntervals(
+      this.getSessionHistoryTailProtectedIntervals(sessionId, view),
+    );
+    const nonTailSegments = view.loadedRanges.flatMap(range =>
+      subtractOrdinalIntervals(range, tailIntervals).map(interval => ({
+        ...interval,
+        range,
+      }))
+    );
+    const nonTailTurnCount = nonTailSegments.reduce(
+      (count, segment) => count + segment.endOrdinalExclusive - segment.startOrdinal,
+      0,
+    );
+    if (
+      nonTailTurnCount
+      <= SESSION_HISTORY_LOADED_RANGE_CACHE_HARD_TURN_BUDGET
+    ) {
+      return;
+    }
+    const nonTailOrdinals = nonTailSegments.flatMap(segment =>
+      Array.from(
+        { length: segment.endOrdinalExclusive - segment.startOrdinal },
+        (_, index) => ({
+          ordinal: segment.startOrdinal + index,
+          range: segment.range,
+        }),
+      )
+    );
+
+    const protectedIntervals = this.getSessionHistoryProtectedIntervals(
+      sessionId,
+      view,
+      tailIntervals,
+    );
+    const protectedNonTailCount = nonTailOrdinals.reduce(
+      (count, entry) => count + Number(
+        ordinalIsInIntervals(entry.ordinal, protectedIntervals),
+      ),
+      0,
+    );
+    const retainedNonTailTarget = Math.max(
+      SESSION_HISTORY_LOADED_RANGE_CACHE_SOFT_TURN_BUDGET,
+      protectedNonTailCount,
+    );
+    const evictionCount = Math.max(
+      0,
+      nonTailOrdinals.length - retainedNonTailTarget,
+    );
+    if (evictionCount === 0) {
+      return;
+    }
+
+    const accessTimes = this.getSessionHistoryTurnAccessTimes(sessionId);
+    const candidates = nonTailOrdinals
+      .filter(entry => !ordinalIsInIntervals(entry.ordinal, protectedIntervals))
+      .sort((left, right) => {
+        const leftAccessedAt = accessTimes.get(left.ordinal) ?? left.range.lastAccessedAt;
+        const rightAccessedAt = accessTimes.get(right.ordinal) ?? right.range.lastAccessedAt;
+        return leftAccessedAt - rightAccessedAt
+          || ordinalDistanceFromIntervals(right.ordinal, protectedIntervals)
+            - ordinalDistanceFromIntervals(left.ordinal, protectedIntervals)
+          || left.ordinal - right.ordinal;
+      });
+    const evictedOrdinals = new Set(
+      candidates.slice(0, evictionCount).map(entry => entry.ordinal),
+    );
+    if (evictedOrdinals.size === 0) {
+      return;
+    }
+
+    const retainedRanges: LoadedTurnRange[] = [];
+    const retainedOrdinals = new Set<number>();
+    for (const range of view.loadedRanges) {
+      let segmentStartOrdinal: number | null = null;
+      for (
+        let ordinal = range.startOrdinal;
+        ordinal <= range.endOrdinalExclusive;
+        ordinal += 1
+      ) {
+        const retained = ordinal < range.endOrdinalExclusive
+          && !evictedOrdinals.has(ordinal);
+        if (retained && segmentStartOrdinal === null) {
+          segmentStartOrdinal = ordinal;
+          continue;
+        }
+        if (retained || segmentStartOrdinal === null) {
+          continue;
+        }
+
+        const segmentTurns = range.turns.slice(
+          segmentStartOrdinal - range.startOrdinal,
+          ordinal - range.startOrdinal,
+        );
+        if (segmentTurns.length > 0) {
+          let lastAccessedAt = range.lastAccessedAt;
+          for (
+            let retainedOrdinal = segmentStartOrdinal;
+            retainedOrdinal < ordinal;
+            retainedOrdinal += 1
+          ) {
+            retainedOrdinals.add(retainedOrdinal);
+            lastAccessedAt = Math.max(
+              lastAccessedAt,
+              accessTimes.get(retainedOrdinal) ?? range.lastAccessedAt,
+            );
+          }
+          retainedRanges.push({
+            startOrdinal: segmentStartOrdinal,
+            endOrdinalExclusive: ordinal,
+            turns: segmentTurns,
+            lastAccessedAt,
+            source: range.source,
+          });
+        }
+        segmentStartOrdinal = null;
+      }
+    }
+
+    for (const ordinal of accessTimes.keys()) {
+      if (!retainedOrdinals.has(ordinal)) {
+        accessTimes.delete(ordinal);
+      }
+    }
+    if (accessTimes.size === 0) {
+      this.sessionHistoryTurnAccessTimes.delete(sessionId);
+    }
+    view.loadedRanges = retainedRanges;
+  }
+
   private cacheSessionLoadedTurnRange(
     sessionId: string,
     range: LoadedTurnRange,
     catalog?: SessionTurnCatalog | null,
+    preferredOrdinal: number = range.startOrdinal,
   ): LoadedTurnRange {
     const view = this.ensureSessionHistoryView(sessionId, catalog);
-    view.loadedRanges = mergeLoadedTurnRanges(view.loadedRanges, range);
+    const accessedAt = this.nextSessionHistoryAccessTime(range.lastAccessedAt);
+    const incomingRange = { ...range, lastAccessedAt: accessedAt };
+    view.loadedRanges = mergeLoadedTurnRanges(view.loadedRanges, incomingRange);
+    const mergedRange = view.loadedRanges.find(candidate =>
+      candidate.startOrdinal <= incomingRange.startOrdinal
+      && candidate.endOrdinalExclusive >= incomingRange.endOrdinalExclusive
+    );
+    if (mergedRange) {
+      this.touchSessionHistoryTurnRange(
+        sessionId,
+        mergedRange,
+        incomingRange.startOrdinal,
+        incomingRange.endOrdinalExclusive,
+        accessedAt,
+      );
+    }
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
     return view.loadedRanges.find(candidate =>
-      candidate.startOrdinal <= range.startOrdinal
-      && candidate.endOrdinalExclusive >= range.endOrdinalExclusive
-    ) ?? range;
+      candidate.startOrdinal <= preferredOrdinal
+      && candidate.endOrdinalExclusive > preferredOrdinal
+    ) ?? incomingRange;
   }
 
   private seedSessionHistoryLoadedRanges(
@@ -1514,13 +1909,13 @@ export class FlowChatStore {
       session.dialogTurns.length,
     );
     const startOrdinal = Math.max(0, totalTurnCount - session.dialogTurns.length);
-    view.loadedRanges = mergeLoadedTurnRanges(view.loadedRanges, {
+    this.cacheSessionLoadedTurnRange(sessionId, {
       startOrdinal,
       endOrdinalExclusive: startOrdinal + session.dialogTurns.length,
       turns: [...session.dialogTurns],
       lastAccessedAt: now,
       source,
-    });
+    }, catalog ?? null);
   }
 
   private updateAuthoritativeSessionTurnCatalog(
@@ -1574,12 +1969,13 @@ export class FlowChatStore {
   }
 
   private invalidateSessionTurnNavigationIntents(): void {
-    for (const view of this.sessionHistoryViews.values()) {
+    for (const [sessionId, view] of this.sessionHistoryViews) {
       if (view.pendingTargetOrdinal === null) {
         continue;
       }
       view.navigationGeneration += 1;
       view.pendingTargetOrdinal = null;
+      this.pruneSessionLoadedTurnRanges(sessionId, view);
     }
   }
 
@@ -1781,6 +2177,7 @@ export class FlowChatStore {
       this.deferredFullHistoryProjections.delete(sessionId);
       this.fullHistoryProjectionApplyRequests.delete(sessionId);
       this.sessionHistoryViews.delete(sessionId);
+      this.sessionHistoryTurnAccessTimes.delete(sessionId);
     }
 
     for (const requestKey of this.sessionTurnWindowRequests.keys()) {
@@ -1791,6 +2188,11 @@ export class FlowChatStore {
         }
       } catch {
         // Ignore malformed internal keys; they expire when their request settles.
+      }
+    }
+    for (const [requestKey, protection] of this.sessionTurnWindowProtections) {
+      if (removedSessionIds.has(protection.sessionId)) {
+        this.sessionTurnWindowProtections.delete(requestKey);
       }
     }
   }
@@ -1924,6 +2326,32 @@ export class FlowChatStore {
     return true;
   }
 
+  private retainSessionTurnWindowProtection(
+    key: string,
+    protection: Omit<SessionTurnWindowProtection, 'retainCount'>,
+  ): () => void {
+    const existing = this.sessionTurnWindowProtections.get(key);
+    if (existing) {
+      existing.retainCount += 1;
+    } else {
+      this.sessionTurnWindowProtections.set(key, {
+        ...protection,
+        retainCount: 1,
+      });
+    }
+
+    return () => {
+      const current = this.sessionTurnWindowProtections.get(key);
+      if (!current) {
+        return;
+      }
+      current.retainCount -= 1;
+      if (current.retainCount <= 0) {
+        this.sessionTurnWindowProtections.delete(key);
+      }
+    };
+  }
+
   private async invokeSessionTurnWindowRequest(
     key: string,
     request: Parameters<typeof agentAPI.loadSessionTurnWindow>[0],
@@ -1988,7 +2416,16 @@ export class FlowChatStore {
     if (cachedRange) {
       const cachedTarget = cachedRange.turns[normalizedTargetOrdinal - cachedRange.startOrdinal];
       if (!entry.turnId || cachedTarget?.id === entry.turnId) {
-        cachedRange.lastAccessedAt = Date.now();
+        const selected = selectTargetHistoryPresentationRange(
+          cachedRange,
+          normalizedTargetOrdinal,
+        );
+        this.touchSessionHistoryTurnRange(
+          sessionId,
+          cachedRange,
+          selected.startOrdinal,
+          selected.endOrdinalExclusive,
+        );
         return {
           status: 'ready',
           sessionId,
@@ -2108,6 +2545,17 @@ export class FlowChatStore {
       request.before,
       request.after,
     ]);
+    const releaseWindowProtection = this.retainSessionTurnWindowProtection(
+      requestKey,
+      {
+        sessionId: request.sessionId,
+        startOrdinal: Math.max(0, request.targetOrdinal - request.before),
+        endOrdinalExclusive: Math.min(
+          request.catalog.totalTurnCount,
+          request.targetOrdinal + request.after + 1,
+        ),
+      },
+    );
     let response: LoadSessionTurnWindowResponse;
     try {
       response = await this.invokeSessionTurnWindowRequest(requestKey, {
@@ -2123,6 +2571,7 @@ export class FlowChatStore {
         remoteSshHost: request.remoteSshHost,
       });
     } catch (error) {
+      releaseWindowProtection();
       if (!isUnsupportedTauriCommandError(error, 'load_session_turn_window')) {
         throw error;
       }
@@ -2152,85 +2601,103 @@ export class FlowChatStore {
       };
     }
 
-    if (response.status === 'ready') {
-      if (
-        response.endOrdinalExclusive <= response.startOrdinal
-        || response.turns.length !== response.endOrdinalExclusive - response.startOrdinal
-      ) {
-        throw new Error('Session Turn window response is not contiguous');
+    try {
+      if (response.status === 'ready') {
+        if (
+          response.endOrdinalExclusive <= response.startOrdinal
+          || response.turns.length !== response.endOrdinalExclusive - response.startOrdinal
+        ) {
+          throw new Error('Session Turn window response is not contiguous');
+        }
+        const liveTurnId = [...(this.state.sessions.get(request.sessionId)?.dialogTurns ?? [])]
+          .reverse()
+          .find(turn => !['completed', 'cancelled', 'error'].includes(turn.status))?.id;
+        const turns = this.convertToDialogTurns(response.turns, {
+          activeTurnId: liveTurnId,
+        });
+        const incomingRange: LoadedTurnRange = {
+          startOrdinal: response.startOrdinal,
+          endOrdinalExclusive: response.endOrdinalExclusive,
+          turns,
+          lastAccessedAt: Date.now(),
+          source: request.source,
+        };
+        const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
+        const range = this.state.sessions.has(request.sessionId)
+          && (!currentCatalog || currentCatalog.revision === response.catalogRevision)
+          ? this.cacheSessionLoadedTurnRange(
+            request.sessionId,
+            incomingRange,
+            undefined,
+            request.targetOrdinal,
+          )
+          : incomingRange;
+        return {
+          status: 'ready',
+          sessionId: request.sessionId,
+          targetOrdinal: request.targetOrdinal,
+          targetTurnId: response.targetTurnId,
+          navigationGeneration: request.generation,
+          isCurrent: this.isSessionTurnWindowRequestCurrent(
+            request.sessionId,
+            request.generation,
+            request.targetOrdinal,
+            request.source,
+          ),
+          cacheHit: false,
+          range,
+          catalog: request.catalog,
+        };
       }
-      const liveTurnId = [...(this.state.sessions.get(request.sessionId)?.dialogTurns ?? [])]
-        .reverse()
-        .find(turn => !['completed', 'cancelled', 'error'].includes(turn.status))?.id;
-      const turns = this.convertToDialogTurns(response.turns, {
-        activeTurnId: liveTurnId,
-      });
-      const incomingRange: LoadedTurnRange = {
-        startOrdinal: response.startOrdinal,
-        endOrdinalExclusive: response.endOrdinalExclusive,
-        turns,
-        lastAccessedAt: Date.now(),
-        source: request.source,
-      };
-      const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
-      const range = this.state.sessions.has(request.sessionId)
-        && (!currentCatalog || currentCatalog.revision === response.catalogRevision)
-        ? this.cacheSessionLoadedTurnRange(request.sessionId, incomingRange)
-        : incomingRange;
-      return {
-        status: 'ready',
-        sessionId: request.sessionId,
-        targetOrdinal: request.targetOrdinal,
-        targetTurnId: response.targetTurnId,
-        navigationGeneration: request.generation,
-        isCurrent: this.isSessionTurnWindowRequestCurrent(
-          request.sessionId,
-          request.generation,
-          request.targetOrdinal,
-          request.source,
-        ),
-        cacheHit: false,
-        range,
-        catalog: request.catalog,
-      };
-    }
 
-    const isCurrent = this.isSessionTurnWindowRequestCurrent(
-      request.sessionId,
-      request.generation,
-      request.targetOrdinal,
-      request.source,
-    );
-    const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
-    if (
-      isCurrent
-      || !currentCatalog
-      || currentCatalog.revision === request.catalog.revision
-    ) {
-      this.updateAuthoritativeSessionTurnCatalog(request.sessionId, response.catalog);
-    }
-    if (response.status === 'stale' && request.staleRetryCount === 0 && isCurrent) {
-      const relocatedEntry = request.originalTargetTurnId
-        ? response.catalog.entries.find(entry => entry.turnId === request.originalTargetTurnId)
-        : response.catalog.entries.find(
+      const isCurrent = this.isSessionTurnWindowRequestCurrent(
+        request.sessionId,
+        request.generation,
+        request.targetOrdinal,
+        request.source,
+      );
+      const currentCatalog = this.sessionHistoryViews.get(request.sessionId)?.catalog;
+      if (
+        isCurrent
+        || !currentCatalog
+        || currentCatalog.revision === request.catalog.revision
+      ) {
+        this.updateAuthoritativeSessionTurnCatalog(request.sessionId, response.catalog);
+      }
+      if (response.status === 'stale' && request.staleRetryCount === 0 && isCurrent) {
+        const relocatedEntry = request.originalTargetTurnId
+          ? response.catalog.entries.find(entry => entry.turnId === request.originalTargetTurnId)
+          : response.catalog.entries.find(
             entry => entry.storageTurnIndex === request.targetStorageTurnIndex,
           );
-      if (relocatedEntry) {
-        const view = this.sessionHistoryViews.get(request.sessionId);
-        if (request.source === 'target' && view?.navigationGeneration === request.generation) {
-          view.pendingTargetOrdinal = relocatedEntry.ordinal;
+        if (relocatedEntry) {
+          const view = this.sessionHistoryViews.get(request.sessionId);
+          if (request.source === 'target' && view?.navigationGeneration === request.generation) {
+            view.pendingTargetOrdinal = relocatedEntry.ordinal;
+          }
+          return this.loadSessionTurnWindowAttempt({
+            ...request,
+            targetOrdinal: relocatedEntry.ordinal,
+            targetStorageTurnIndex: relocatedEntry.storageTurnIndex,
+            originalTargetTurnId: relocatedEntry.turnId ?? request.originalTargetTurnId,
+            catalog: response.catalog,
+            staleRetryCount: 1,
+          });
         }
-        return this.loadSessionTurnWindowAttempt({
-          ...request,
-          targetOrdinal: relocatedEntry.ordinal,
-          targetStorageTurnIndex: relocatedEntry.storageTurnIndex,
-          originalTargetTurnId: relocatedEntry.turnId ?? request.originalTargetTurnId,
+        return {
+          status: 'not-found',
+          sessionId: request.sessionId,
+          targetOrdinal: request.targetOrdinal,
+          targetTurnId: request.originalTargetTurnId,
+          navigationGeneration: request.generation,
+          isCurrent,
+          cacheHit: false,
           catalog: response.catalog,
-          staleRetryCount: 1,
-        });
+        };
       }
+
       return {
-        status: 'not-found',
+        status: response.status,
         sessionId: request.sessionId,
         targetOrdinal: request.targetOrdinal,
         targetTurnId: request.originalTargetTurnId,
@@ -2239,18 +2706,9 @@ export class FlowChatStore {
         cacheHit: false,
         catalog: response.catalog,
       };
+    } finally {
+      releaseWindowProtection();
     }
-
-    return {
-      status: response.status,
-      sessionId: request.sessionId,
-      targetOrdinal: request.targetOrdinal,
-      targetTurnId: request.originalTargetTurnId,
-      navigationGeneration: request.generation,
-      isCurrent,
-      cacheHit: false,
-      catalog: response.catalog,
-    };
   }
 
   public releaseSessionHistoryCompletionAfterInitialPaint(

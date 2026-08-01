@@ -443,6 +443,11 @@ these ownership rules intact:
   Prepending or trimming above it must retain the existing element-anchor
   transaction until the same user message returns to its captured viewport
   offset.
+- The non-tail loaded Turn cache uses a 48-Turn soft budget and a 64-Turn hard
+  budget. Crossing the hard budget evicts least-recently-used ordinals back
+  toward the soft budget. The live tail, active presentation, pending target,
+  and in-flight request intervals are protected; merged cached ranges may be
+  sliced, but the active presentation is never trimmed by cache eviction.
 - Search, edit, rollback, and compatibility fallback are explicit full-history
   consumers. Their shared ensure operation deduplicates an existing request and
   applies the completed projection only after the caller asks for it.
