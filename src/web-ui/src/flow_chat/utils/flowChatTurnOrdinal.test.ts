@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Session } from '../types/flow-chat';
 import {
   absoluteSessionTurnIndexForId,
+  createAbsoluteSessionTurnIndexResolver,
   loadedSessionTurnIdForAbsoluteIndex,
 } from './flowChatTurnOrdinal';
 
@@ -62,5 +63,6 @@ describe('FlowChat absolute Turn ordinal helpers', () => {
 
     expect(absoluteSessionTurnIndexForId(session, 'turn-98')).toBe(98);
     expect(loadedSessionTurnIdForAbsoluteIndex(session, 98)).toBe('turn-98');
+    expect(createAbsoluteSessionTurnIndexResolver(session)(0)).toBe(98);
   });
 });
