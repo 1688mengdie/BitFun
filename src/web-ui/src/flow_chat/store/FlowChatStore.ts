@@ -1410,6 +1410,57 @@ export class FlowChatStore {
     return { range: { ...range }, turns: [...turns] };
   }
 
+  public reactivateSessionHistoryWindow(
+    sessionId: string,
+    range: ActiveTurnRenderRange,
+  ): SessionHistoryPresentation | null {
+    const view = this.sessionHistoryViews.get(sessionId);
+    if (
+      this.state.activeSessionId !== sessionId
+      || !view
+      || range.mode !== 'history-window'
+    ) {
+      return null;
+    }
+
+    const loadedRange = view.loadedRanges.find(candidate =>
+      candidate.startOrdinal <= range.startOrdinal
+      && candidate.endOrdinalExclusive >= range.endOrdinalExclusive
+    );
+    if (!loadedRange) {
+      return null;
+    }
+
+    const turns = sliceLoadedTurnRange(
+      loadedRange,
+      range.startOrdinal,
+      range.endOrdinalExclusive,
+    );
+    if (!turns) {
+      return null;
+    }
+
+    const targetTurnId = range.targetTurnId && turns.some(turn => turn.id === range.targetTurnId)
+      ? range.targetTurnId
+      : null;
+    const nextRange: ActiveTurnRenderRange = {
+      ...range,
+      targetTurnId,
+      mode: 'history-window',
+    };
+    view.navigationGeneration += 1;
+    view.pendingTargetOrdinal = null;
+    this.touchSessionHistoryTurnRange(
+      sessionId,
+      loadedRange,
+      nextRange.startOrdinal,
+      nextRange.endOrdinalExclusive,
+    );
+    view.activeRange = nextRange;
+    this.pruneSessionLoadedTurnRanges(sessionId, view);
+    return { range: { ...nextRange }, turns: [...turns] };
+  }
+
   public extendSessionHistoryWindow(
     sessionId: string,
     direction: SessionHistoryWindowDirection,
