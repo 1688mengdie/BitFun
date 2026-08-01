@@ -31,6 +31,10 @@ import type {
 } from '@/shared/types/context';
 import { Tooltip } from '@/component-library';
 import { createLogger } from '@/shared/utils/logger';
+import {
+  workspaceReferenceItems,
+  type FileItem,
+} from './workspaceReferenceItems';
 import './FileMentionPicker.scss';
 
 const log = createLogger('FileMentionPicker');
@@ -48,37 +52,6 @@ export interface FileMentionPickerProps {
   onClose: () => void;
   position?: { top: number; left: number };
   onNavigate?: (direction: 'up' | 'down' | 'enter' | 'escape') => void;
-}
-
-interface FileItem {
-  path: string;
-  name: string;
-  isDirectory: boolean;
-  relativePath: string;
-  referenceStableKey?: string;
-  referenceDescription?: string;
-}
-
-export function workspaceReferenceItems(
-  references: WorkspaceReferenceEntry[],
-  query = '',
-): FileItem[] {
-  const normalizedQuery = query.trim().toLocaleLowerCase();
-  return references
-    .filter(reference => !reference.hidden)
-    .filter(reference => {
-      if (!normalizedQuery) return true;
-      return [reference.alias, reference.description, reference.path]
-        .some(value => value?.toLocaleLowerCase().includes(normalizedQuery));
-    })
-    .map(reference => ({
-      path: reference.path,
-      name: reference.alias ? `@${reference.alias}` : reference.path.replace(/\\/g, '/').split('/').pop() || reference.path,
-      isDirectory: true,
-      relativePath: reference.path,
-      referenceStableKey: reference.stableKey,
-      referenceDescription: reference.description,
-    }));
 }
 
 type MentionItem =

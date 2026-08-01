@@ -231,8 +231,8 @@
     var(--bf-appearance-token-flowchat-card-expanded-pad-y)
     var(--bf-appearance-token-flowchat-card-expanded-pad-x)
     var(--bf-appearance-token-flowchat-card-expanded-pad-y)
-    calc(var(--bf-appearance-token-flowchat-card-expanded-pad-x) + var(--bf-appearance-token-flowchat-card-expanded-pad-x));
-  margin-left: var(--bf-appearance-token-flowchat-inline-gap);
+    var(--bf-appearance-token-flowchat-card-expanded-pad-x);
+  margin-left: 0;
   background: none !important;
   border: none !important;
   box-shadow: none !important;

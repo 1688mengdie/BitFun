@@ -104,7 +104,7 @@
   font-family: var(--bf-appearance-token-font-family-sans);
   word-break: break-word;
   color: var(--bf-appearance-token-color-text-muted);
-  padding: var(--bf-appearance-token-flowchat-card-expanded-pad-y) var(--bf-appearance-token-flowchat-card-expanded-pad-x);
+  padding: var(--bf-appearance-token-flowchat-card-expanded-pad-y) var(--bf-appearance-token-flowchat-card-expanded-pad-x) var(--bf-appearance-token-flowchat-card-expanded-pad-y) 0;
   background: transparent;
   border: none;
   border-radius: 6px;

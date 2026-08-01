@@ -984,8 +984,10 @@ export function installDispatchJobObserver(context: FlowChatContext): () => void
   let immediateTimer: ReturnType<typeof setTimeout> | null = null;
   let interval: ReturnType<typeof setInterval> | null = null;
   let handleVisibilityChanged: (() => void) | null = null;
-  let lease: DispatchObserverLease;
-
+  const lease: DispatchObserverLease = {
+    requestRefresh: schedule,
+    dispose,
+  };
   const ownsLease = (): boolean => (
     !disposed
     && observerGlobal.__bitfunDispatchJobObserverLease__ === lease
@@ -1060,7 +1062,7 @@ export function installDispatchJobObserver(context: FlowChatContext): () => void
     }, 0);
   }
 
-  const dispose = (): void => {
+  function dispose(): void {
     if (disposed) {
       return;
     }
@@ -1083,11 +1085,7 @@ export function installDispatchJobObserver(context: FlowChatContext): () => void
     // already cached, so losing it costs a few replayed events, while writing
     // during teardown could race whatever tears the store down next.
     cancelDispatchTranscriptSaves();
-  };
-  lease = {
-    requestRefresh: schedule,
-    dispose,
-  };
+  }
   observerGlobal.__bitfunDispatchJobObserverLease__ = lease;
 
   interval = setInterval(() => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WorkspaceReferenceEntry } from '@/infrastructure/api/service-api/ExternalSourcesAPI';
-import { workspaceReferenceItems } from './FileMentionPicker';
+import { workspaceReferenceItems } from './workspaceReferenceItems';
 
 function reference(
   stableKey: string,
