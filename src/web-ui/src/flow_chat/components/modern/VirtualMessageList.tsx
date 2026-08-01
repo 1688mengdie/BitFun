@@ -3297,9 +3297,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     const anchor = captureHistoryPrependAnchor();
-    if (anchor?.element) {
-      viewportCoordinatorRef.current.preserveElement(anchor.element);
-    }
+    const anchorLease = anchor?.element
+      ? viewportCoordinatorRef.current.preserveElementWithLease(anchor.element)
+      : null;
     startupTrace.markPhase('flowchat_history_window_boundary_requested', {
       sessionId: activeSessionIdRef.current,
       direction,
@@ -3308,7 +3308,36 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       endOrdinalExclusive: historyWindow.endOrdinalExclusive,
       presentationRevision,
     });
-    onHistoryWindowBoundaryIntent(direction);
+    let boundaryIntentResult: boolean | void | Promise<boolean | void>;
+    try {
+      boundaryIntentResult = onHistoryWindowBoundaryIntent(direction);
+    } catch {
+      if (anchorLease !== null) {
+        viewportCoordinatorRef.current.releaseElementPreservationLease(
+          anchorLease,
+          'history-window-boundary-intent-threw',
+        );
+      }
+      return false;
+    }
+    void Promise.resolve(boundaryIntentResult).then(
+      handled => {
+        if (handled === false && anchorLease !== null) {
+          viewportCoordinatorRef.current.releaseElementPreservationLease(
+            anchorLease,
+            'history-window-boundary-not-handled',
+          );
+        }
+      },
+      () => {
+        if (anchorLease !== null) {
+          viewportCoordinatorRef.current.releaseElementPreservationLease(
+            anchorLease,
+            'history-window-boundary-failed',
+          );
+        }
+      },
+    );
     return true;
   }, [
     captureHistoryPrependAnchor,

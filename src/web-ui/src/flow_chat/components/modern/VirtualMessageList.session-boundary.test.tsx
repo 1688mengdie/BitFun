@@ -592,6 +592,67 @@ describe('VirtualMessageList session boundary', () => {
     expect(container.querySelector('[data-history-paging-sentinel="loading"]')).not.toBeNull();
   });
 
+  it('releases the visible element anchor when an adjacent history request is not handled', async () => {
+    const onBoundaryIntent = vi.fn(async () => false);
+    stateMocks.activeSession = createSession('session-a', 'turn-10');
+    const initialItems = ['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7'].map(createItem);
+    stateMocks.virtualItems = initialItems;
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={initialItems}
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 2,
+            endOrdinalExclusive: 7,
+            targetTurnId: 'turn-5',
+            mode: 'history-window',
+          }}
+          presentationRevision={1}
+          historyBoundaryState={{ before: 'idle', after: 'idle' }}
+          onHistoryWindowBoundaryIntent={onBoundaryIntent}
+        />,
+      );
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-testid="virtuoso"]');
+    const anchor = container.querySelector<HTMLElement>('[data-turn-id="turn-3"]');
+    expect(scroller).not.toBeNull();
+    expect(anchor).not.toBeNull();
+    if (!scroller || !anchor) return;
+
+    for (let frame = 0; frame < 8 && rafCallbacks.length > 0; frame += 1) {
+      flushAnimationFrame();
+    }
+
+    setScrollerGeometry(scroller, {
+      clientHeight: 100,
+      scrollHeight: 500,
+      scrollTop: 40,
+    });
+    scroller.getBoundingClientRect = () => createRect({ top: 0, bottom: 100, height: 100 });
+    let anchorDocumentTop = 60;
+    anchor.getBoundingClientRect = () => {
+      const top = anchorDocumentTop - scroller.scrollTop;
+      return createRect({ top, bottom: top + 20, height: 20 });
+    };
+
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onBoundaryIntent).toHaveBeenCalledWith('before');
+
+    scroller.scrollTop = 80;
+    anchorDocumentTop = 60;
+    flushAnimationFrame();
+
+    expect(scroller.scrollTop).toBe(80);
+  });
+
   it('reports every turn intersecting the readable viewport in DOM order', () => {
     stateMocks.setVisibleTurnInfo.mockImplementation((info: unknown) => {
       stateMocks.visibleTurnInfo = info;
