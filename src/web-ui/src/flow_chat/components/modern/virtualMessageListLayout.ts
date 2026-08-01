@@ -16,6 +16,26 @@ const TOOL_CARD_ESTIMATE_HEIGHT_PX = 88;
 const EXPLORE_GROUP_BASE_HEIGHT_PX = 96;
 const ESTIMATED_TEXT_CHARS_PER_LINE = 60;
 
+export function getLeadingVirtualItemIndexDelta<T>(
+  previousItems: readonly T[],
+  nextItems: readonly T[],
+  getStableKey: (item: T) => string,
+): number {
+  if (previousItems.length === 0 || nextItems.length === 0) {
+    return 0;
+  }
+
+  const previousFirstKey = getStableKey(previousItems[0]);
+  const prependedCount = nextItems.findIndex(item => getStableKey(item) === previousFirstKey);
+  if (prependedCount > 0) {
+    return -prependedCount;
+  }
+
+  const nextFirstKey = getStableKey(nextItems[0]);
+  const removedCount = previousItems.findIndex(item => getStableKey(item) === nextFirstKey);
+  return removedCount > 0 ? removedCount : 0;
+}
+
 export function getVirtualMessageDefaultItemHeight(params: {
   isHistorical: boolean;
   hasCompactHistoricalProjection: boolean;
