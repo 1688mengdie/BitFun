@@ -515,8 +515,23 @@ describe('VirtualMessageList session boundary', () => {
     )).toBe('false');
   });
 
-  it('prefetches an adjacent history window from user intent and preserves the visible element anchor', () => {
-    const onBoundaryIntent = vi.fn();
+  it('waits for quiet scroll input before capturing an adjacent history anchor', async () => {
+    let prepareViewportForPresentationCommit:
+      | (() => boolean | void | Promise<boolean | void>)
+      | undefined;
+    let resolveBoundaryIntent: ((handled: boolean) => void) | undefined;
+    const boundaryIntent = new Promise<boolean>(resolve => {
+      resolveBoundaryIntent = resolve;
+    });
+    const onBoundaryIntent = vi.fn((
+      _direction: 'before' | 'after',
+      options?: {
+        prepareViewportForPresentationCommit?: () => boolean | void | Promise<boolean | void>;
+      },
+    ) => {
+      prepareViewportForPresentationCommit = options?.prepareViewportForPresentationCommit;
+      return boundaryIntent;
+    });
     stateMocks.activeSession = createSession('session-a', 'turn-10');
     const initialItems = ['turn-3', 'turn-4', 'turn-5', 'turn-6', 'turn-7'].map(createItem);
     stateMocks.virtualItems = initialItems;
@@ -561,35 +576,85 @@ describe('VirtualMessageList session boundary', () => {
       return createRect({ top, bottom: top + 20, height: 20 });
     };
 
-    act(() => {
-      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true }));
-    });
-    expect(onBoundaryIntent).toHaveBeenCalledWith('before');
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true }));
+      });
+      expect(onBoundaryIntent).toHaveBeenCalledWith('before', expect.objectContaining({
+        prepareViewportForPresentationCommit: expect.any(Function),
+      }));
 
-    const extendedItems = ['turn-1', 'turn-2', ...initialItems.map(item => item.turnId)].map(createItem);
-    anchorDocumentTop = 120;
-    act(() => {
-      root.render(
-        <VirtualMessageList
-          items={extendedItems}
-          presentationMode="history-window"
-          historyWindow={{
-            startOrdinal: 0,
-            endOrdinalExclusive: 7,
-            targetTurnId: 'turn-5',
-            mode: 'history-window',
-          }}
-          presentationRevision={2}
-          historyBoundaryState={{ before: 'loading', after: 'idle' }}
-          onHistoryWindowBoundaryIntent={onBoundaryIntent}
-        />,
-      );
-    });
-    flushAnimationFrame();
-    flushAnimationFrame();
+      scroller.scrollTop = 80;
+      let preparationSettled = false;
+      const preparation = Promise.resolve(prepareViewportForPresentationCommit?.()).then(result => {
+        preparationSettled = true;
+        return result;
+      });
 
-    expect(scroller.scrollTop).toBe(100);
-    expect(container.querySelector('[data-history-paging-sentinel="loading"]')).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(319);
+        scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -20, bubbles: true }));
+        vi.advanceTimersByTime(319);
+      });
+      await Promise.resolve();
+      expect(preparationSettled).toBe(false);
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+        expect(await preparation).not.toBe(false);
+      });
+
+      const extendedItems = ['turn-1', 'turn-2', ...initialItems.map(item => item.turnId)].map(createItem);
+      act(() => {
+        anchorDocumentTop = 120;
+        root.render(
+          <VirtualMessageList
+            items={extendedItems}
+            presentationMode="history-window"
+            historyWindow={{
+              startOrdinal: 0,
+              endOrdinalExclusive: 7,
+              targetTurnId: 'turn-5',
+              mode: 'history-window',
+            }}
+            presentationRevision={2}
+            historyBoundaryState={{ before: 'loading', after: 'idle' }}
+            onHistoryWindowBoundaryIntent={onBoundaryIntent}
+          />,
+        );
+        resolveBoundaryIntent?.(true);
+      });
+      await act(async () => {
+        await boundaryIntent;
+      });
+      flushAnimationFrame();
+      flushAnimationFrame();
+
+      expect(scroller.scrollTop).toBe(140);
+      expect(container.querySelector('[data-history-paging-sentinel="loading"]')).not.toBeNull();
+
+      act(() => {
+        root.render(
+          <VirtualMessageList
+            items={extendedItems}
+            presentationMode="history-window"
+            historyWindow={{
+              startOrdinal: 0,
+              endOrdinalExclusive: 7,
+              targetTurnId: 'turn-5',
+              mode: 'history-window',
+            }}
+            presentationRevision={2}
+            historyBoundaryState={{ before: 'idle', after: 'idle' }}
+            onHistoryWindowBoundaryIntent={onBoundaryIntent}
+          />,
+        );
+      });
+      expect(container.querySelector('[data-history-paging-sentinel]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('releases the visible element anchor when an adjacent history request is not handled', async () => {
@@ -644,7 +709,9 @@ describe('VirtualMessageList session boundary', () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(onBoundaryIntent).toHaveBeenCalledWith('before');
+    expect(onBoundaryIntent).toHaveBeenCalledWith('before', expect.objectContaining({
+      prepareViewportForPresentationCommit: expect.any(Function),
+    }));
 
     scroller.scrollTop = 80;
     anchorDocumentTop = 60;
@@ -2844,7 +2911,14 @@ describe('VirtualMessageList session boundary', () => {
   });
 
   it('requests an adjacent Turn window for catalog-backed tail history', async () => {
-    const onHistoryWindowBoundaryIntent = vi.fn(async () => true);
+    const onHistoryWindowBoundaryIntent = vi.fn(async (
+      _direction: 'before' | 'after',
+      _options?: {
+        prepareViewportForPresentationCommit?: () => boolean | void | Promise<boolean | void>;
+      },
+    ) => {
+      return true;
+    });
     stateMocks.activeSession = createSession('session-a', 'turn-a', {
       isHistorical: false,
       historyState: 'ready',
@@ -2899,7 +2973,9 @@ describe('VirtualMessageList session boundary', () => {
       await Promise.resolve();
     });
 
-    expect(onHistoryWindowBoundaryIntent).toHaveBeenCalledWith('before');
+    expect(onHistoryWindowBoundaryIntent).toHaveBeenCalledWith('before', expect.objectContaining({
+      prepareViewportForPresentationCommit: expect.any(Function),
+    }));
     expect(flowStoreMocks.revealPreviousSessionHistoryWindow).not.toHaveBeenCalled();
     expect(flowStoreMocks.releaseSessionHistoryCompletionAfterInitialPaint).not.toHaveBeenCalled();
   });

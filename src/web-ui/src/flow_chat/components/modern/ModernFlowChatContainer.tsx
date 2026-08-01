@@ -11,6 +11,7 @@ import { useSessionModeStore } from '@/app/stores/sessionModeStore';
 import {
   VirtualMessageList,
   type FlowChatTurnPinRequestStatus,
+  type HistoryWindowBoundaryIntentOptions,
   type VirtualMessageListRef,
 } from './VirtualMessageList';
 import {
@@ -291,6 +292,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     before: null,
     after: null,
   });
+  const historyPresentationOwnerGenerationRef = useRef(0);
   const virtualItems = useMemo(() => {
     if (!activeSession || historyPresentation?.sessionId !== activeSession.sessionId) {
       return canonicalVirtualItems;
@@ -406,6 +408,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useFlowChatCopyDialog();
 
   const clearHistoryPresentationForSession = useCallback((sessionId: string) => {
+    historyPresentationOwnerGenerationRef.current += 1;
     flowChatStore.restoreSessionTailPresentation(sessionId);
     historyPresentationRef.current = null;
     setHistoryPresentation(null);
@@ -428,6 +431,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
   useLayoutEffect(() => {
     const sessionId = activeSession?.sessionId;
+    historyPresentationOwnerGenerationRef.current += 1;
     historyPresentationRef.current = null;
     setHistoryPresentation(null);
     setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
@@ -1303,6 +1307,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     presentation: SessionHistoryPresentation,
     options?: { completedBoundary?: SessionHistoryWindowDirection },
   ) => {
+    historyPresentationOwnerGenerationRef.current += 1;
     setHistoryPresentation(previous => {
       const next: FlowChatHistoryPresentationState = {
         ...presentation,
@@ -1542,6 +1547,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
   const handleHistoryWindowBoundaryIntent = useCallback((
     direction: SessionHistoryWindowDirection,
+    options?: HistoryWindowBoundaryIntentOptions,
   ): Promise<boolean> => {
     const existingRequest = historyBoundaryRequestsRef.current[direction];
     if (existingRequest) {
@@ -1551,6 +1557,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     const request = (async () => {
       const presentation = historyPresentationRef.current;
       const sessionId = activeSessionIdRef.current;
+      const presentationOwnerGeneration = historyPresentationOwnerGenerationRef.current;
       if (!sessionId || (presentation && presentation.sessionId !== sessionId)) {
         return false;
       }
@@ -1588,6 +1595,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       }
 
       setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
+      let viewportPreparationStarted = false;
       try {
         const result = await flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
           source: 'prefetch',
@@ -1612,16 +1620,42 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           return false;
         }
 
+        viewportPreparationStarted = Boolean(options?.prepareViewportForPresentationCommit);
+        const preparationResult = await options?.prepareViewportForPresentationCommit?.();
+        const activeSessionIsCurrent = activeSessionIdRef.current === sessionId;
+        const presentationOwnerIsCurrent = (
+          historyPresentationOwnerGenerationRef.current === presentationOwnerGeneration
+        );
+        if (
+          preparationResult === false
+          || !activeSessionIsCurrent
+          || !presentationOwnerIsCurrent
+        ) {
+          if (viewportPreparationStarted) {
+            options?.cancelViewportPresentationCommit?.();
+          }
+          if (activeSessionIsCurrent) {
+            setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
+          }
+          return activeSessionIsCurrent;
+        }
+
         const nextPresentation = presentation
           ? flowChatStore.extendSessionHistoryWindow(sessionId, direction)
           : flowChatStore.activateSessionHistoryWindowFromTail(sessionId, targetOrdinal);
         if (!nextPresentation) {
+          if (viewportPreparationStarted) {
+            options?.cancelViewportPresentationCommit?.();
+          }
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
           return false;
         }
         applyHistoryPresentation(sessionId, nextPresentation, { completedBoundary: direction });
         return true;
       } catch (error) {
+        if (viewportPreparationStarted) {
+          options?.cancelViewportPresentationCommit?.();
+        }
         if (activeSessionIdRef.current === sessionId) {
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
         }

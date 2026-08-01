@@ -435,17 +435,24 @@ these ownership rules intact:
   full-history consumer calls `ensureSessionFullHistory`.
 - Turn-rail navigation and sequential boundary loading use
   `load_session_turn_window`; neither path writes the FlowChat scroller.
-- Upward user intent at the restored-tail boundary captures the existing
-  element anchor, loads the adjacent ordinal window, and changes to one
-  contiguous history-window presentation. It must not expose a later cached
-  range across an unloaded gap.
+- Upward user intent at the restored-tail boundary loads the adjacent ordinal
+  window without holding viewport ownership. Presentation activation then waits
+  for a bounded 320 ms quiet window after the latest wheel, touch, keyboard, or
+  scrollbar intent. New input resets that wait; session changes and newer
+  presentation-owner generations cancel it. Only after the quiet window is
+  acquired does the list capture the current element anchor and change to one
+  contiguous history-window presentation. This keeps a multi-thousand-pixel
+  prepend commit out of an active wheel gesture while still allowing the data
+  request itself to prefetch in parallel. Never expose a later cached range
+  across an unloaded gap.
 - Appending below the current presentation does not require compensation.
   Prepending or trimming above it must retain the existing element-anchor
   transaction until the same user message returns to its captured viewport
   offset.
 - A rejected or failed adjacent-window request must release only the element
-  anchor lease created for that request. A stale completion must never release
-  a newer navigation or layout-preservation transaction.
+  anchor lease created during its commit preparation, if any. A stale
+  completion must never release a newer navigation or layout-preservation
+  transaction.
 - The non-tail loaded Turn cache uses a 48-Turn soft budget and a 64-Turn hard
   budget. Crossing the hard budget evicts least-recently-used ordinals back
   toward the soft budget. The live tail, active presentation, pending target,

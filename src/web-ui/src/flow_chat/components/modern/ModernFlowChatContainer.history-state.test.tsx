@@ -1724,17 +1724,45 @@ describe('ModernFlowChatContainer historical empty state', () => {
       },
       turns: presentationTurns,
     });
+    let resolveViewportPreparation: ((ready: boolean) => void) | undefined;
+    const viewportPreparation = new Promise<boolean>(resolve => {
+      resolveViewportPreparation = resolve;
+    });
+    const prepareViewportForPresentationCommit = vi.fn(() => viewportPreparation);
+    const cancelViewportPresentationCommit = vi.fn();
 
     await act(async () => {
       root.render(<ModernFlowChatContainer />);
     });
+    let boundaryIntent: Promise<boolean> | undefined;
     await act(async () => {
-      const handled = await (
+      boundaryIntent = (
         virtualListPropsMock.latest?.onHistoryWindowBoundaryIntent as
-          | ((direction: 'before' | 'after') => Promise<boolean>)
+          | ((
+            direction: 'before' | 'after',
+            options?: {
+              prepareViewportForPresentationCommit?: () => (
+                boolean | void | Promise<boolean | void>
+              );
+              cancelViewportPresentationCommit?: () => void;
+            },
+          ) => Promise<boolean>)
           | undefined
-      )?.('before');
-      expect(handled).toBe(true);
+      )?.('before', {
+        prepareViewportForPresentationCommit,
+        cancelViewportPresentationCommit,
+      });
+      await Promise.resolve();
+    });
+
+    expect(prepareViewportForPresentationCommit).toHaveBeenCalledOnce();
+    expect(cancelViewportPresentationCommit).not.toHaveBeenCalled();
+    expect(activateSpy).not.toHaveBeenCalled();
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
+
+    await act(async () => {
+      resolveViewportPreparation?.(true);
+      expect(await boundaryIntent).toBe(true);
     });
 
     expect(loadSpy).toHaveBeenCalledWith('session-1', 7, {
