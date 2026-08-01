@@ -394,6 +394,8 @@ pub struct SessionTurnCatalogEntry {
 pub struct SessionTurnCatalog {
     pub schema_version: u32,
     pub session_id: String,
+    /// Changes only when the visible storage sequence changes. Repairing
+    /// optional Turn ids or previews does not invalidate an in-flight window.
     pub revision: String,
     pub total_turn_count: usize,
     pub complete: bool,

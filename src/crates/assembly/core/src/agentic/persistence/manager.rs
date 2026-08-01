@@ -161,6 +161,12 @@ struct ReadTurnPathsResult {
     max_turn_read_duration_ms: u64,
 }
 
+struct BuiltSessionTurnCatalogProjection {
+    visible: SessionTurnCatalog,
+    physical: SessionTurnCatalog,
+    physical_changed: bool,
+}
+
 fn truncate_turn_catalog_preview(content: &str) -> (String, bool) {
     let mut chars = content.trim().chars();
     let preview = chars
@@ -214,24 +220,9 @@ fn turn_catalog_revision(entries: &[SessionTurnCatalogEntry]) -> String {
     for entry in entries {
         hasher.update((entry.ordinal as u64).to_le_bytes());
         hasher.update((entry.storage_turn_index as u64).to_le_bytes());
-        if let Some(turn_id) = entry.turn_id.as_deref() {
-            hasher.update([1]);
-            hasher.update((turn_id.len() as u64).to_le_bytes());
-            hasher.update(turn_id.as_bytes());
-        } else {
-            hasher.update([0]);
-        }
-        if let Some(preview) = entry.preview.as_deref() {
-            hasher.update([1]);
-            hasher.update((preview.len() as u64).to_le_bytes());
-            hasher.update(preview.as_bytes());
-        } else {
-            hasher.update([0]);
-        }
-        hasher.update([u8::from(entry.preview_truncated)]);
     }
     let digest = hasher.finalize();
-    format!("v1-{}", hex::encode(&digest[..8]))
+    format!("v2-{}", hex::encode(&digest[..8]))
 }
 
 fn build_turn_catalog(
@@ -2573,10 +2564,9 @@ impl PersistenceManager {
 
     /// Build the lightweight navigation catalog for a Session view.
     ///
-    /// The read path never mutates Session storage. Missing or stale legacy
-    /// entries are returned as index-only placeholders. Aligned sidecars are
-    /// repaired incrementally as those Turns are saved; a full restore can
-    /// still complete the entire projection.
+    /// Missing or stale legacy entries are returned as index-only placeholders.
+    /// Metadata for the already-loaded Turns is merged into the derived sidecar
+    /// so reopening the Session does not discard completed migration work.
     pub async fn load_session_turn_catalog(
         &self,
         workspace_path: &Path,
@@ -2585,38 +2575,68 @@ impl PersistenceManager {
         visible_total_turn_count: usize,
     ) -> BitFunResult<SessionTurnCatalog> {
         Self::validate_session_id(session_id)?;
+        let _session_write = self.lock_session_write_operation(workspace_path, session_id)?;
 
-        let physical_indices = match self
+        let (physical_indices, can_persist_physical_projection) = match self
             .list_indexed_turn_paths(workspace_path, session_id)
             .await
         {
-            Ok(paths) => complete_turn_catalog_indices(
-                paths
+            Ok(paths) => {
+                let persisted_indices = paths
                     .into_iter()
                     .map(|(index, _)| index)
-                    .chain(loaded_turns.iter().map(|turn| turn.turn_index)),
-                visible_total_turn_count,
-            ),
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let projected_indices = complete_turn_catalog_indices(
+                    persisted_indices
+                        .iter()
+                        .copied()
+                        .chain(loaded_turns.iter().map(|turn| turn.turn_index)),
+                    visible_total_turn_count,
+                );
+                let can_persist = projected_indices == persisted_indices;
+                (projected_indices, can_persist)
+            }
             Err(error) => {
                 warn!(
                     "Failed to list Turn files while building Session Turn catalog; using bounded placeholders: session_id={} visible_turn_count={} error={}",
                     session_id, visible_total_turn_count, error
                 );
-                complete_turn_catalog_indices(
-                    loaded_turns.iter().map(|turn| turn.turn_index),
-                    visible_total_turn_count,
+                (
+                    complete_turn_catalog_indices(
+                        loaded_turns.iter().map(|turn| turn.turn_index),
+                        visible_total_turn_count,
+                    ),
+                    false,
                 )
             }
         };
 
-        self.build_session_turn_catalog_projection(
-            workspace_path,
-            session_id,
-            physical_indices,
-            loaded_turns,
-            visible_total_turn_count,
-        )
-        .await
+        let projection = self
+            .build_session_turn_catalog_projection_with_physical(
+                workspace_path,
+                session_id,
+                physical_indices,
+                loaded_turns,
+                visible_total_turn_count,
+            )
+            .await?;
+        if can_persist_physical_projection && projection.physical_changed {
+            if let Err(error) = self
+                .write_json_atomic(
+                    &self.turn_catalog_path(workspace_path, session_id),
+                    &projection.physical,
+                )
+                .await
+            {
+                warn!(
+                    "Failed to persist incrementally repaired Session Turn catalog: session_id={} error={}",
+                    session_id, error
+                );
+            }
+        }
+        Ok(projection.visible)
     }
 
     async fn build_session_turn_catalog_projection(
@@ -2627,14 +2647,36 @@ impl PersistenceManager {
         loaded_turns: &[DialogTurnData],
         visible_total_turn_count: usize,
     ) -> BitFunResult<SessionTurnCatalog> {
+        Ok(self
+            .build_session_turn_catalog_projection_with_physical(
+                workspace_path,
+                session_id,
+                physical_indices,
+                loaded_turns,
+                visible_total_turn_count,
+            )
+            .await?
+            .visible)
+    }
+
+    async fn build_session_turn_catalog_projection_with_physical(
+        &self,
+        workspace_path: &Path,
+        session_id: &str,
+        physical_indices: Vec<usize>,
+        loaded_turns: &[DialogTurnData],
+        visible_total_turn_count: usize,
+    ) -> BitFunResult<BuiltSessionTurnCatalogProjection> {
         let cached = self
             .read_session_turn_catalog_cache(workspace_path, session_id)
             .await;
         let mut cached_by_index = cached
+            .as_ref()
             .map(|catalog| {
                 catalog
                     .entries
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|entry| (entry.storage_turn_index, entry))
                     .collect::<HashMap<_, _>>()
             })
@@ -2661,10 +2703,16 @@ impl PersistenceManager {
         let physical_catalog = build_turn_catalog(session_id, physical_entries);
         let visible_entries = physical_catalog
             .entries
-            .into_iter()
+            .iter()
             .take(visible_total_turn_count)
+            .cloned()
             .collect::<Vec<_>>();
-        Ok(build_turn_catalog(session_id, visible_entries))
+        let physical_changed = cached.as_ref() != Some(&physical_catalog);
+        Ok(BuiltSessionTurnCatalogProjection {
+            visible: build_turn_catalog(session_id, visible_entries),
+            physical: physical_catalog,
+            physical_changed,
+        })
     }
 
     /// Load a bounded, contiguous Turn window without materializing the full
@@ -2684,9 +2732,14 @@ impl PersistenceManager {
             .load_session_revert_state(&request.workspace_path, &request.session_id)
             .await?
             .map(|state| state.boundary_turn);
-        let indexed_paths = self
+        let physical_indexed_paths = self
             .list_indexed_turn_paths(&request.workspace_path, &request.session_id)
-            .await?
+            .await?;
+        let physical_indices = physical_indexed_paths
+            .iter()
+            .map(|(index, _)| *index)
+            .collect::<Vec<_>>();
+        let indexed_paths = physical_indexed_paths
             .into_iter()
             .filter(|(index, _)| boundary_turn.is_none_or(|boundary| *index < boundary))
             .collect::<Vec<_>>();
@@ -2771,6 +2824,30 @@ impl PersistenceManager {
                     "Persisted Turn identity does not match its storage path: session_id={} expected_turn_index={} actual_session_id={} actual_turn_index={}",
                     request.session_id, expected_index, turn.session_id, turn.turn_index
                 )));
+            }
+        }
+
+        let repaired_projection = self
+            .build_session_turn_catalog_projection_with_physical(
+                &request.workspace_path,
+                &request.session_id,
+                physical_indices.clone(),
+                &read_result.turns,
+                physical_indices.len(),
+            )
+            .await?;
+        if repaired_projection.physical_changed {
+            if let Err(error) = self
+                .write_json_atomic(
+                    &self.turn_catalog_path(&request.workspace_path, &request.session_id),
+                    &repaired_projection.physical,
+                )
+                .await
+            {
+                warn!(
+                    "Failed to persist Session Turn catalog metadata loaded by a window request: session_id={} start_ordinal={} end_ordinal_exclusive={} error={}",
+                    request.session_id, start_ordinal, end_ordinal_exclusive, error
+                );
             }
         }
 
@@ -5012,6 +5089,12 @@ mod tests {
             .all(|entry| entry.turn_id.is_none() && entry.preview.is_none()));
         assert_eq!(catalog.entries[3].turn_id.as_deref(), Some("turn-3"));
         assert_eq!(catalog.entries[4].preview.as_deref(), Some("prompt 4"));
+        let persisted_tail: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path)
+                .expect("tail repair should create the catalog sidecar"),
+        )
+        .expect("tail-repaired catalog should deserialize");
+        assert_eq!(persisted_tail, catalog);
 
         std::fs::write(&catalog_path, "{ not valid json")
             .expect("corrupt catalog fixture should write");
@@ -5020,6 +5103,12 @@ mod tests {
             .await
             .expect("corrupt catalog should fall back safely");
         assert_eq!(fallback, catalog);
+        let repaired_fallback: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path)
+                .expect("corrupt catalog should be repaired during restore"),
+        )
+        .expect("repaired catalog should deserialize");
+        assert_eq!(repaired_fallback, catalog);
 
         let all_turns = manager
             .load_session_turns(workspace.path(), &session_id)
@@ -5032,6 +5121,157 @@ mod tests {
         assert!(complete.complete);
         assert_eq!(complete.entries.len(), 5);
         assert_eq!(complete.entries[0].turn_id.as_deref(), Some("turn-0"));
+        let persisted_complete: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path)
+                .expect("full restore should persist the complete catalog"),
+        )
+        .expect("complete catalog should deserialize");
+        assert_eq!(persisted_complete, complete);
+    }
+
+    #[tokio::test]
+    async fn legacy_turn_catalog_window_avoids_synthetic_stale_and_persists_loaded_metadata() {
+        let workspace = TestWorkspace::new();
+        let manager =
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Legacy catalog window".to_string(),
+            "agentic".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+        for index in 0..6 {
+            manager
+                .save_dialog_turn(
+                    workspace.path(),
+                    &DialogTurnData::new(
+                        format!("turn-{index}"),
+                        index,
+                        session_id.clone(),
+                        user_message(&format!("prompt {index}")),
+                    ),
+                )
+                .await
+                .expect("turn should save");
+        }
+
+        let catalog_path = manager.turn_catalog_path(workspace.path(), &session_id);
+        std::fs::remove_file(&catalog_path).expect("legacy fixture should omit catalog");
+        let tail = manager
+            .load_session_tail_turns(workspace.path(), &session_id, 2)
+            .await
+            .expect("tail turns should load");
+        let initial_catalog = manager
+            .load_session_turn_catalog(workspace.path(), &session_id, &tail, 6)
+            .await
+            .expect("legacy catalog should project");
+        assert!(initial_catalog.entries[1].turn_id.is_none());
+        assert_eq!(
+            initial_catalog.entries[4].turn_id.as_deref(),
+            Some("turn-4")
+        );
+
+        let response = manager
+            .load_session_turn_window(&SessionTurnWindowRequest {
+                workspace_path: workspace.path().to_path_buf(),
+                session_id: session_id.clone(),
+                include_internal: false,
+                target_storage_turn_index: 1,
+                expected_turn_id: None,
+                expected_catalog_revision: Some(initial_catalog.revision.clone()),
+                before: 0,
+                after: 1,
+            })
+            .await
+            .expect("legacy window should load without a retry");
+        assert!(matches!(
+            response,
+            SessionTurnWindowResponse::Ready {
+                target_turn_id,
+                ..
+            } if target_turn_id == "turn-1"
+        ));
+
+        let repaired: SessionTurnCatalog = serde_json::from_str(
+            &std::fs::read_to_string(&catalog_path)
+                .expect("window metadata should persist to the catalog sidecar"),
+        )
+        .expect("window-repaired catalog should deserialize");
+        assert_eq!(repaired.revision, initial_catalog.revision);
+        assert_eq!(repaired.entries[1].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(repaired.entries[1].preview.as_deref(), Some("prompt 1"));
+        assert_eq!(repaired.entries[4].turn_id.as_deref(), Some("turn-4"));
+        assert!(!repaired.complete);
+
+        let reopened = manager
+            .load_session_turn_catalog(workspace.path(), &session_id, &tail, 6)
+            .await
+            .expect("reopened catalog should retain repaired metadata");
+        assert_eq!(reopened.entries[1].turn_id.as_deref(), Some("turn-1"));
+        assert_eq!(reopened.entries[1].preview.as_deref(), Some("prompt 1"));
+    }
+
+    #[tokio::test]
+    async fn turn_catalog_restore_does_not_persist_padded_missing_file_indices() {
+        let workspace = TestWorkspace::new();
+        let manager =
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager");
+        let session_id = Uuid::new_v4().to_string();
+        let session = Session::new_with_id(
+            session_id.clone(),
+            "Catalog missing file".to_string(),
+            "agentic".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+        let turns = (0..3)
+            .map(|index| {
+                DialogTurnData::new(
+                    format!("turn-{index}"),
+                    index,
+                    session_id.clone(),
+                    user_message(&format!("prompt {index}")),
+                )
+            })
+            .collect::<Vec<_>>();
+        for turn in &turns {
+            manager
+                .save_dialog_turn(workspace.path(), turn)
+                .await
+                .expect("turn should save");
+        }
+
+        let catalog_path = manager.turn_catalog_path(workspace.path(), &session_id);
+        std::fs::remove_file(&catalog_path).expect("fixture should omit catalog");
+        std::fs::remove_file(manager.turn_path(workspace.path(), &session_id, 1))
+            .expect("fixture should omit one Turn file");
+
+        let projected = manager
+            .load_session_turn_catalog(
+                workspace.path(),
+                &session_id,
+                std::slice::from_ref(&turns[2]),
+                3,
+            )
+            .await
+            .expect("missing file catalog should still project safely");
+
+        assert_eq!(projected.total_turn_count, 3);
+        assert!(!catalog_path.exists());
     }
 
     #[tokio::test]
