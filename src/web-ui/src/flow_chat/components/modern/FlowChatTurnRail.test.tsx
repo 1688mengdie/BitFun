@@ -41,6 +41,16 @@ const turns: FlowChatTurnRailItem[] = [
   { itemKey: 'storage:3', turnId: 'turn-4', ordinal: 3, turnIndex: 4, content: 'Fourth user message' },
 ];
 
+function createTurns(count: number): FlowChatTurnRailItem[] {
+  return Array.from({ length: count }, (_, ordinal) => ({
+    itemKey: `storage:${ordinal}`,
+    turnId: `turn-${ordinal + 1}`,
+    ordinal,
+    turnIndex: ordinal + 1,
+    content: `Message ${ordinal + 1}`,
+  }));
+}
+
 describe('FlowChatTurnRail', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -198,14 +208,10 @@ describe('FlowChatTurnRail', () => {
     });
 
     const list = container.querySelector<HTMLElement>('.flowchat-turn-rail__list');
-    const target = container.querySelector<HTMLElement>('[data-turn-id="turn-4"]');
     expect(list).not.toBeNull();
-    expect(target).not.toBeNull();
-    if (!list || !target) return;
+    if (!list) return;
 
     Object.defineProperty(list, 'clientHeight', { configurable: true, value: 40 });
-    Object.defineProperty(target, 'offsetTop', { configurable: true, value: 60 });
-    Object.defineProperty(target, 'offsetHeight', { configurable: true, value: 20 });
     list.scrollTop = 0;
 
     act(() => {
@@ -219,7 +225,7 @@ describe('FlowChatTurnRail', () => {
       );
     });
 
-    expect(list.scrollTop).toBe(40);
+    expect(list.scrollTop).toBe(19);
   });
 
   it('moves keyboard focus through the vertical turn list', () => {
@@ -251,5 +257,74 @@ describe('FlowChatTurnRail', () => {
     expect(document.activeElement).toBe(next);
     expect(next.tabIndex).toBe(0);
     expect(current.tabIndex).toBe(-1);
+  });
+
+  it('bounds rendered markers to the viewport plus overscan', () => {
+    const manyTurns = createTurns(100);
+    act(() => {
+      root.render(
+        <FlowChatTurnRail
+          turns={manyTurns}
+          currentTurnId="turn-1"
+          visibleTurnIds={['turn-1']}
+          onNavigate={vi.fn()}
+        />,
+      );
+    });
+
+    const rail = container.querySelector<HTMLElement>('[data-testid="flowchat-turn-rail"]');
+    const list = container.querySelector<HTMLDivElement>('.flowchat-turn-rail__list');
+    expect(rail?.dataset.totalTurnCount).toBe('100');
+    expect(list).not.toBeNull();
+    if (!list) return;
+
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 56 });
+    list.scrollTop = 50 * 14;
+    act(() => {
+      list.dispatchEvent(new Event('scroll', { bubbles: true }));
+    });
+
+    const renderedItems = container.querySelectorAll<HTMLButtonElement>('.flowchat-turn-rail__item');
+    expect(renderedItems.length).toBeLessThanOrEqual(18);
+    expect(renderedItems.length).toBeGreaterThanOrEqual(10);
+    expect(container.querySelector('[data-turn-ordinal="50"]')).not.toBeNull();
+    expect(container.querySelector('[data-turn-ordinal="0"]')).toBeNull();
+    expect(Array.from(renderedItems).filter(item => item.tabIndex === 0)).toHaveLength(1);
+  });
+
+  it('moves virtual keyboard focus across unmounted markers', () => {
+    const manyTurns = createTurns(100);
+    act(() => {
+      root.render(
+        <FlowChatTurnRail
+          turns={manyTurns}
+          currentTurnId="turn-1"
+          visibleTurnIds={['turn-1']}
+          onNavigate={vi.fn()}
+        />,
+      );
+    });
+
+    const list = container.querySelector<HTMLDivElement>('.flowchat-turn-rail__list');
+    const first = container.querySelector<HTMLButtonElement>('[data-turn-ordinal="0"]');
+    expect(list).not.toBeNull();
+    expect(first).not.toBeNull();
+    if (!list || !first) return;
+    Object.defineProperty(list, 'clientHeight', { configurable: true, value: 42 });
+
+    act(() => {
+      first.focus();
+      first.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'End',
+        bubbles: true,
+      }));
+    });
+
+    const last = container.querySelector<HTMLButtonElement>('[data-turn-ordinal="99"]');
+    expect(last).not.toBeNull();
+    expect(document.activeElement).toBe(last);
+    expect(last?.getAttribute('aria-posinset')).toBe('100');
+    expect(last?.getAttribute('aria-setsize')).toBe('100');
+    expect(container.querySelector('[data-turn-ordinal="0"]')).toBeNull();
   });
 });

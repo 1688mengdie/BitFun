@@ -11,6 +11,7 @@ import {
   dispatchHistorySessionOpenIntent,
   HISTORY_SESSION_OPEN_INTENT_EVENT,
 } from '../../services/sessionOpenIntent';
+import { FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX } from './flowChatTurnRailWindow';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -252,6 +253,22 @@ function clickTurnRailItem(container: HTMLElement, turnId: string) {
   expect(item).not.toBeNull();
   act(() => {
     item?.click();
+  });
+}
+
+function scrollTurnRailToOrdinal(
+  container: HTMLElement,
+  ordinal: number,
+  clientHeight = FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX * 5,
+) {
+  const list = container.querySelector<HTMLDivElement>('.flowchat-turn-rail__list');
+  expect(list).not.toBeNull();
+  if (!list) return;
+
+  Object.defineProperty(list, 'clientHeight', { configurable: true, value: clientHeight });
+  list.scrollTop = ordinal * FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX;
+  act(() => {
+    list.dispatchEvent(new Event('scroll', { bubbles: true }));
   });
 }
 
@@ -1232,7 +1249,12 @@ describe('ModernFlowChatContainer historical empty state', () => {
       currentTurn: 25,
       totalTurns: 25,
     });
-    expect(container.querySelectorAll('.flowchat-turn-rail__item')).toHaveLength(25);
+    expect(container.querySelector('[data-testid="flowchat-turn-rail"]')?.getAttribute(
+      'data-total-turn-count',
+    )).toBe('25');
+    expect(container.querySelectorAll('.flowchat-turn-rail__item').length).toBeLessThan(25);
+
+    scrollTurnRailToOrdinal(container, 6);
 
     const beforeSelectionCallCount = virtualListMock.pinTurnToTopWithStatus.mock.calls.length;
     clickTurnRailItem(container, 'turn-7');
@@ -1326,15 +1348,23 @@ describe('ModernFlowChatContainer historical empty state', () => {
       currentTurn: 99,
       totalTurns: 100,
     });
-    expect(container.querySelectorAll('.flowchat-turn-rail__item')).toHaveLength(100);
-    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-testid="flowchat-turn-rail"]')?.getAttribute(
+      'data-total-turn-count',
+    )).toBe('100');
+    expect(container.querySelectorAll('.flowchat-turn-rail__item').length).toBeLessThan(100);
+    expect(container.querySelector('[data-turn-key="storage:0"]')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-98"]')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
+
+    scrollTurnRailToOrdinal(container, 0);
+
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-turn-id="turn-99"]')).toBeNull();
     expect(virtualListMock.pinTurnToTopWithStatus).not.toHaveBeenCalled();
   });
 
-  it('renders every catalog marker and resolves loaded tail identities', async () => {
+  it('windows catalog markers while resolving loaded tail identities', async () => {
     stateMocks.activeSession = createSession({
       isHistorical: false,
       historyState: 'ready',
@@ -1379,11 +1409,18 @@ describe('ModernFlowChatContainer historical empty state', () => {
       root.render(<ModernFlowChatContainer />);
     });
 
-    const markers = container.querySelectorAll('.flowchat-turn-rail__item');
-    expect(markers).toHaveLength(100);
-    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-testid="flowchat-turn-rail"]')?.getAttribute(
+      'data-total-turn-count',
+    )).toBe('100');
+    expect(container.querySelectorAll('.flowchat-turn-rail__item').length).toBeLessThan(100);
+    expect(container.querySelector('[data-turn-key="storage:0"]')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-99"]')?.getAttribute('aria-disabled')).toBeNull();
     expect(container.querySelector('[data-turn-id="turn-100"]')?.getAttribute('aria-disabled')).toBeNull();
+
+    scrollTurnRailToOrdinal(container, 0);
+
+    expect(container.querySelector('[data-turn-key="storage:0"]')?.getAttribute('aria-disabled')).toBeNull();
+    expect(container.querySelector('[data-turn-id="turn-100"]')).toBeNull();
   });
 
   it('requests the existing full-history fallback for an unloaded catalog target', async () => {
