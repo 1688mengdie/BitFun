@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { UI_EXCEPTION_ACCENTS } from '@/shared/theme/uiExceptionAccents';
+import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
 import { getLanguageColor, getLanguageDisplayName } from './CodeSnippetContextImpl';
 
 describe('CodeSnippetContextImpl language metadata', () => {
@@ -21,6 +21,6 @@ describe('CodeSnippetContextImpl language metadata', () => {
   });
 
   it('keeps mermaid diagram context color in the UI exception registry', () => {
-    expect(UI_EXCEPTION_ACCENTS.mermaidDiagram).toBe('#22c55e');
+    expect(APPEARANCE_DOMAIN_TOKENS.mermaidDiagram).toBe('#22c55e');
   });
 });

@@ -47,23 +47,22 @@ export const NotificationItem: React.FC<NotificationItemProps> = ({ notification
   return (
     <div
       className={`notification-item notification-item--${type}`}
-      role={type === 'error' ? 'alert' : 'status'}
-      aria-live={type === 'error' ? 'assertive' : 'polite'}
-      aria-atomic="true"
+      data-bf-component="notification"
+      data-bf-part="item"
     >
       
-      <div className="notification-item__icon">
+      <div className="notification-item__icon" data-bf-component="notification" data-bf-part="itemIcon">
         {getIcon()}
       </div>
 
       
-      <div className="notification-item__content">
-        <div className="notification-item__title">{title}</div>
-        <div className="notification-item__message">{messageNode ?? message}</div>
+      <div className="notification-item__content" data-bf-component="notification" data-bf-part="itemContent">
+        <div className="notification-item__title" data-bf-component="notification" data-bf-part="itemTitle">{title}</div>
+        <div className="notification-item__message" data-bf-component="notification" data-bf-part="itemMessage">{messageNode ?? message}</div>
 
         
         {actions && actions.length > 0 && (
-          <div className="notification-item__actions">
+          <div className="notification-item__actions" data-bf-component="notification" data-bf-part="itemActions">
             {actions.map((action, index) => (
               <button
                 key={index}
@@ -81,6 +80,8 @@ export const NotificationItem: React.FC<NotificationItemProps> = ({ notification
       {closable && (
         <button
           className="notification-item__close"
+          data-bf-component="notification"
+          data-bf-part="itemClose"
           onClick={handleClose}
           aria-label={t('actions.close')}
         >

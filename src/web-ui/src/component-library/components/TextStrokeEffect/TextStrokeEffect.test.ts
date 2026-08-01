@@ -4,7 +4,7 @@ import {
   TEXT_STROKE_GRADIENT_COLORS,
   buildTextStrokeColorCycle,
 } from './TextStrokeEffectGradient';
-import { UI_EXCEPTION_ACCENTS } from '@/shared/theme/uiExceptionAccents';
+import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
 
 const MIGRATED_TEXT_STROKE_VISUAL_SEQUENCE = [
   '#eab308',
@@ -16,8 +16,8 @@ const MIGRATED_TEXT_STROKE_VISUAL_SEQUENCE = [
 
 describe('TextStrokeEffect color cycles', () => {
   it('keeps gradient animation values closed over the original visual color sequence', () => {
-    expect(UI_EXCEPTION_ACCENTS.textStroke).toEqual(MIGRATED_TEXT_STROKE_VISUAL_SEQUENCE);
-    expect(TEXT_STROKE_GRADIENT_COLORS).toBe(UI_EXCEPTION_ACCENTS.textStroke);
+    expect(APPEARANCE_DOMAIN_TOKENS.textStroke).toEqual(MIGRATED_TEXT_STROKE_VISUAL_SEQUENCE);
+    expect(TEXT_STROKE_GRADIENT_COLORS).toBe(APPEARANCE_DOMAIN_TOKENS.textStroke);
 
     const expectedCycle = [
       ...MIGRATED_TEXT_STROKE_VISUAL_SEQUENCE.slice(2),

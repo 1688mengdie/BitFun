@@ -236,19 +236,23 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
         contentInset
         contentClassName="workspace-related-paths-dialog__modal"
       >
-        <div className="workspace-related-paths-dialog">
-          <div className="workspace-related-paths-dialog__intro">
+        <div
+          className="workspace-related-paths-dialog"
+          data-bf-component="workspace-related-paths-dialog"
+          data-bf-part="root"
+        >
+          <div data-bf-component="workspace-related-paths-dialog" data-bf-part="intro" className="workspace-related-paths-dialog__intro">
             <div className="workspace-related-paths-dialog__intro-icon">
               <Link2 size={18} />
             </div>
-            <div className="workspace-related-paths-dialog__intro-copy">
+            <div data-bf-component="workspace-related-paths-dialog" data-bf-part="introCopy" className="workspace-related-paths-dialog__intro-copy">
               <div className="workspace-related-paths-dialog__intro-title">
                 {t('nav.workspaces.relatedPaths.dialog.heading')}
               </div>
               <div className="workspace-related-paths-dialog__intro-text">
                 {t('nav.workspaces.relatedPaths.dialog.description')}
               </div>
-              <div className="workspace-related-paths-dialog__scope">
+              <div data-bf-component="workspace-related-paths-dialog" data-bf-part="scope" className="workspace-related-paths-dialog__scope">
                 {scopeDescription}
               </div>
             </div>
@@ -264,14 +268,14 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
           </div>
 
           {drafts.length === 0 ? (
-            <div className="workspace-related-paths-dialog__empty">
+            <div data-bf-component="workspace-related-paths-dialog" data-bf-part="empty" className="workspace-related-paths-dialog__empty">
               {t('nav.workspaces.relatedPaths.dialog.empty')}
             </div>
           ) : (
-            <div className="workspace-related-paths-dialog__list">
+            <div data-bf-component="workspace-related-paths-dialog" data-bf-part="list" className="workspace-related-paths-dialog__list">
               {drafts.map((draft, index) => (
-                <div key={draft.id} className="workspace-related-paths-dialog__card">
-                  <div className="workspace-related-paths-dialog__card-header">
+                <div data-bf-component="workspace-related-paths-dialog" data-bf-part="card" key={draft.id} className="workspace-related-paths-dialog__card">
+                  <div data-bf-component="workspace-related-paths-dialog" data-bf-part="cardHeader" className="workspace-related-paths-dialog__card-header">
                     <span className="workspace-related-paths-dialog__card-index">
                       {t('nav.workspaces.relatedPaths.dialog.itemLabel', { index: index + 1 })}
                     </span>
@@ -285,7 +289,7 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
                     </button>
                   </div>
 
-                  <div className="workspace-related-paths-dialog__path-row">
+                  <div data-bf-component="workspace-related-paths-dialog" data-bf-part="pathRow" className="workspace-related-paths-dialog__path-row">
                     <Input
                       className="workspace-related-paths-dialog__path-input"
                       value={draft.path}
@@ -313,6 +317,8 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
                   </div>
 
                   <Textarea
+                    data-bf-component="workspace-related-paths-dialog"
+                    data-bf-part="description"
                     className="workspace-related-paths-dialog__description"
                     value={draft.description}
                     onChange={event => setDraftValue(draft.id, 'description', event.target.value)}
@@ -397,12 +403,12 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
           ) : null}
 
           {error ? (
-            <div className="workspace-related-paths-dialog__error" role="alert">
+            <div data-bf-component="workspace-related-paths-dialog" data-bf-part="error" className="workspace-related-paths-dialog__error" role="alert">
               {error}
             </div>
           ) : null}
 
-          <div className="workspace-related-paths-dialog__footer">
+          <div data-bf-component="workspace-related-paths-dialog" data-bf-part="footer" className="workspace-related-paths-dialog__footer">
             <Button
               type="button"
               className="workspace-related-paths-dialog__add"
@@ -415,7 +421,7 @@ export const WorkspaceRelatedPathsDialog: React.FC<WorkspaceRelatedPathsDialogPr
               <span>{t('nav.workspaces.relatedPaths.dialog.add')}</span>
             </Button>
 
-            <div className="workspace-related-paths-dialog__footer-actions">
+            <div data-bf-component="workspace-related-paths-dialog" data-bf-part="footerActions" className="workspace-related-paths-dialog__footer-actions">
               <Button
                 type="button"
                 variant="secondary"
