@@ -133,6 +133,7 @@ const STICKY_PIN_GROWTH_SETTLE_MS = 300;
 const RETAINED_COLLAPSE_QUIET_SETTLE_MS = 120;
 const RETAINED_COLLAPSE_QUIET_SETTLE_FRAMES = 2;
 const RETAINED_COLLAPSE_RELEASE_QUIET_MS = COLLAPSE_INTENT_TTL_MS;
+const HISTORY_PRESENTATION_COMMIT_SCROLL_QUIET_MS = 320;
 const IDLE_HISTORY_WINDOW_BOUNDARY_STATE: Record<
   SessionHistoryWindowDirection,
   'idle' | 'loading' | 'error'
@@ -259,9 +260,15 @@ export interface VirtualMessageListProps {
   historyBoundaryState?: Record<SessionHistoryWindowDirection, 'idle' | 'loading' | 'error'>;
   onHistoryWindowBoundaryIntent?: (
     direction: SessionHistoryWindowDirection,
+    options?: HistoryWindowBoundaryIntentOptions,
   ) => boolean | void | Promise<boolean | void>;
   onRequestJumpToLatest?: () => void;
   onUserScrollIntent?: () => void;
+}
+
+export interface HistoryWindowBoundaryIntentOptions {
+  prepareViewportForPresentationCommit?: () => boolean | void | Promise<boolean | void>;
+  cancelViewportPresentationCommit?: () => void;
 }
 
 interface PendingCollapseIntentState {
@@ -279,6 +286,19 @@ interface RetainedCollapseAnchorState {
   anchorScrollTop: number;
   toolId: string | null;
   toolName: string | null;
+}
+
+interface HistoryPresentationCommitQuietWaiter {
+  cancel: () => void;
+  restart: () => void;
+}
+
+interface PendingHistoryPrependAnchorState {
+  turnId: string;
+  offsetFromScrollerTop: number;
+  beforeItemCount: number;
+  handoffRestored: boolean;
+  prependRestored: boolean;
 }
 
 function createInactiveCollapseIntentState(): PendingCollapseIntentState {
@@ -510,13 +530,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     omittedEstimatedHeightPx: number;
     wasAtBottom: boolean;
   } | null>(null);
-  const pendingHistoryPrependAnchorRef = useRef<{
-    turnId: string;
-    offsetFromScrollerTop: number;
-    beforeItemCount: number;
-    handoffRestored: boolean;
-    prependRestored: boolean;
-  } | null>(null);
+  const pendingHistoryPrependAnchorRef = useRef<PendingHistoryPrependAnchorState | null>(null);
   const historyPagingActiveRef = useRef(false);
   const historyPagingRevealScheduledRef = useRef(false);
   const pendingHistoryPagingRevealRef = useRef<{
@@ -525,6 +539,11 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   } | null>(null);
   const historyPagingRetryTimerRef = useRef<number | null>(null);
   const catalogHistoryWindowRequestRef = useRef<Promise<boolean | void> | null>(null);
+  const lastUserScrollIntentAtMsRef = useRef(Number.NEGATIVE_INFINITY);
+  const historyPresentationCommitQuietGenerationRef = useRef(0);
+  const historyPresentationCommitQuietWaitersRef = useRef(
+    new Set<HistoryPresentationCommitQuietWaiter>(),
+  );
   const pendingStaticTurnPinRef = useRef<PendingStaticTurnPinState | null>(null);
   const pendingStaticLatestScrollBehaviorRef = useRef<('auto' | 'smooth') | null>(null);
   const staticHistoryBottomReturnIntentUntilMsRef = useRef(0);
@@ -753,7 +772,88 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     recordScrollerGeometry(scroller);
   }, [recordScrollerGeometry]);
 
+  const restartHistoryPresentationCommitQuietWaiters = useCallback(() => {
+    historyPresentationCommitQuietWaitersRef.current.forEach(waiter => waiter.restart());
+  }, []);
+
+  const cancelHistoryPresentationCommitQuietWaiters = useCallback(() => {
+    historyPresentationCommitQuietGenerationRef.current += 1;
+    const waiters = Array.from(historyPresentationCommitQuietWaitersRef.current);
+    waiters.forEach(waiter => waiter.cancel());
+  }, []);
+
+  const waitForHistoryPresentationCommitQuiet = useCallback((sessionId: string): Promise<boolean> => {
+    const generation = historyPresentationCommitQuietGenerationRef.current;
+
+    return new Promise(resolve => {
+      let timerId: number | null = null;
+      let settled = false;
+      let waiter: HistoryPresentationCommitQuietWaiter | null = null;
+
+      const finish = (ready: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timerId !== null) {
+          window.clearTimeout(timerId);
+          timerId = null;
+        }
+        if (waiter) {
+          historyPresentationCommitQuietWaitersRef.current.delete(waiter);
+        }
+        resolve(ready);
+      };
+
+      const check = () => {
+        timerId = null;
+        const scroller = scrollerElementRef.current;
+        if (
+          generation !== historyPresentationCommitQuietGenerationRef.current
+          || activeSessionIdRef.current !== sessionId
+          || !scroller?.isConnected
+        ) {
+          finish(false);
+          return;
+        }
+
+        const hasActivePointerGesture = (
+          touchScrollIntentStartYRef.current !== null
+          || scrollbarPointerInteractionActiveRef.current
+        );
+        const quietForMs = performance.now() - lastUserScrollIntentAtMsRef.current;
+        if (!hasActivePointerGesture && quietForMs >= HISTORY_PRESENTATION_COMMIT_SCROLL_QUIET_MS) {
+          finish(true);
+          return;
+        }
+
+        const remainingQuietMs = hasActivePointerGesture
+          ? HISTORY_PRESENTATION_COMMIT_SCROLL_QUIET_MS
+          : HISTORY_PRESENTATION_COMMIT_SCROLL_QUIET_MS - quietForMs;
+        timerId = window.setTimeout(check, Math.max(1, remainingQuietMs));
+      };
+
+      waiter = {
+        cancel: () => finish(false),
+        restart: () => {
+          if (settled) {
+            return;
+          }
+          if (timerId !== null) {
+            window.clearTimeout(timerId);
+            timerId = null;
+          }
+          timerId = window.setTimeout(check, HISTORY_PRESENTATION_COMMIT_SCROLL_QUIET_MS);
+        },
+      };
+      historyPresentationCommitQuietWaitersRef.current.add(waiter);
+      check();
+    });
+  }, []);
+
   const notifyUserScrollIntent = useCallback((reason = 'user-scroll-intent') => {
+    lastUserScrollIntentAtMsRef.current = performance.now();
+    restartHistoryPresentationCommitQuietWaiters();
     if (flowChatDiagnostics.isEnabled()) {
       flowChatDiagnostics.trace({
         hypothesis: 'A',
@@ -780,7 +880,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     exitPinnedViewportForUserIntentRef.current(reason);
     followOutputControllerRef.current.handleUserScrollIntent();
     onUserScrollIntent?.();
-  }, [clearRetainedCollapseSettlement, onUserScrollIntent]);
+  }, [clearRetainedCollapseSettlement, onUserScrollIntent, restartHistoryPresentationCommitQuietWaiters]);
 
   const syncPhysicalBottomAfterViewportResize = useCallback((scroller: HTMLElement): boolean => {
     const previousGeometry = previousScrollerGeometryRef.current;
@@ -3282,7 +3382,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     const scroller = scrollerElementRef.current;
-    if (!scroller) {
+    const sessionId = activeSessionIdRef.current;
+    if (!scroller || !sessionId) {
       return false;
     }
     const thresholdPx = Math.max(
@@ -3296,10 +3397,38 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return false;
     }
 
-    const anchor = captureHistoryPrependAnchor();
-    const anchorLease = anchor?.element
-      ? viewportCoordinatorRef.current.preserveElementWithLease(anchor.element)
-      : null;
+    let preparedAnchorState: PendingHistoryPrependAnchorState | null = null;
+    const cancelViewportPresentationCommit = () => {
+      if (
+        preparedAnchorState
+        && pendingHistoryPrependAnchorRef.current === preparedAnchorState
+      ) {
+        pendingHistoryPrependAnchorRef.current = null;
+        setHistoryPagingAnchorTurnId(null);
+      }
+      setHistoryPagingLoading(false);
+      clearPreviousHistoryBoundaryStatus();
+    };
+    const prepareViewportForPresentationCommit = async () => {
+      const quietReady = await waitForHistoryPresentationCommitQuiet(sessionId);
+      if (!quietReady || activeSessionIdRef.current !== sessionId) {
+        return false;
+      }
+      const anchor = captureHistoryPrependAnchor();
+      if (anchor) {
+        historyPagingActiveRef.current = true;
+        setHistoryPagingActive(true);
+        setHistoryPagingAnchorTurnId(anchor.turnId);
+        preparedAnchorState = {
+          ...anchor,
+          beforeItemCount: virtualItems.length,
+          handoffRestored: true,
+          prependRestored: false,
+        };
+        pendingHistoryPrependAnchorRef.current = preparedAnchorState;
+      }
+      return true;
+    };
     startupTrace.markPhase('flowchat_history_window_boundary_requested', {
       sessionId: activeSessionIdRef.current,
       direction,
@@ -3308,44 +3437,25 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       endOrdinalExclusive: historyWindow.endOrdinalExclusive,
       presentationRevision,
     });
-    let boundaryIntentResult: boolean | void | Promise<boolean | void>;
     try {
-      boundaryIntentResult = onHistoryWindowBoundaryIntent(direction);
+      void Promise.resolve(onHistoryWindowBoundaryIntent(direction, {
+        prepareViewportForPresentationCommit,
+        cancelViewportPresentationCommit,
+      })).catch(() => {});
     } catch {
-      if (anchorLease !== null) {
-        viewportCoordinatorRef.current.releaseElementPreservationLease(
-          anchorLease,
-          'history-window-boundary-intent-threw',
-        );
-      }
       return false;
     }
-    void Promise.resolve(boundaryIntentResult).then(
-      handled => {
-        if (handled === false && anchorLease !== null) {
-          viewportCoordinatorRef.current.releaseElementPreservationLease(
-            anchorLease,
-            'history-window-boundary-not-handled',
-          );
-        }
-      },
-      () => {
-        if (anchorLease !== null) {
-          viewportCoordinatorRef.current.releaseElementPreservationLease(
-            anchorLease,
-            'history-window-boundary-failed',
-          );
-        }
-      },
-    );
     return true;
   }, [
     captureHistoryPrependAnchor,
+    clearPreviousHistoryBoundaryStatus,
     historyBoundaryState,
     historyWindow,
     onHistoryWindowBoundaryIntent,
     presentationMode,
     presentationRevision,
+    virtualItems.length,
+    waitForHistoryPresentationCommitQuiet,
   ]);
 
   const revealPreviousHistoryWindowForUserIntent = useCallback((reason: string) => {
@@ -3359,8 +3469,13 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return;
     }
 
+    const usesCatalogHistoryWindow = (
+      activeSession.turnCatalog?.sessionId === sessionId
+      && Boolean(onHistoryWindowBoundaryIntent)
+    );
+
     if (!historyPagingActiveRef.current) {
-      const anchor = captureHistoryPrependAnchor();
+      const anchor = usesCatalogHistoryWindow ? null : captureHistoryPrependAnchor();
       historyPagingActiveRef.current = true;
       setHistoryPagingActive(true);
       setHistoryPagingLoading(true);
@@ -3384,29 +3499,47 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       return;
     }
 
-    const pendingAnchor = pendingHistoryPrependAnchorRef.current;
-    if (!pendingAnchor || pendingAnchor.prependRestored) {
-      const anchor = captureHistoryPrependAnchor();
-      if (anchor) {
-        setHistoryPagingAnchorTurnId(anchor.turnId);
-        pendingHistoryPrependAnchorRef.current = {
-          ...anchor,
-          beforeItemCount: virtualItems.length,
-          handoffRestored: true,
-          prependRestored: false,
-        };
-      }
-    }
-    setHistoryPagingLoading(true);
-
-    if (
-      activeSession.turnCatalog?.sessionId === sessionId
-      && onHistoryWindowBoundaryIntent
-    ) {
+    if (usesCatalogHistoryWindow && onHistoryWindowBoundaryIntent) {
+      setHistoryPagingLoading(true);
       if (catalogHistoryWindowRequestRef.current) {
         return;
       }
-      const request = Promise.resolve(onHistoryWindowBoundaryIntent('before'))
+      let preparedAnchorState: PendingHistoryPrependAnchorState | null = null;
+      const cancelViewportPresentationCommit = () => {
+        if (
+          preparedAnchorState
+          && pendingHistoryPrependAnchorRef.current === preparedAnchorState
+        ) {
+          pendingHistoryPrependAnchorRef.current = null;
+        }
+        historyPagingActiveRef.current = false;
+        setHistoryPagingActive(false);
+        setHistoryPagingLoading(false);
+        setHistoryPagingAnchorTurnId(null);
+        clearPreviousHistoryBoundaryStatus();
+      };
+      const prepareViewportForPresentationCommit = async () => {
+        const quietReady = await waitForHistoryPresentationCommitQuiet(sessionId);
+        if (!quietReady || activeSessionIdRef.current !== sessionId) {
+          return false;
+        }
+        const anchor = captureHistoryPrependAnchor();
+        if (anchor) {
+          setHistoryPagingAnchorTurnId(anchor.turnId);
+          preparedAnchorState = {
+            ...anchor,
+            beforeItemCount: virtualItems.length,
+            handoffRestored: true,
+            prependRestored: false,
+          };
+          pendingHistoryPrependAnchorRef.current = preparedAnchorState;
+        }
+        return true;
+      };
+      const request = Promise.resolve(onHistoryWindowBoundaryIntent('before', {
+        prepareViewportForPresentationCommit,
+        cancelViewportPresentationCommit,
+      }))
         .then(handled => {
           if (handled || activeSessionIdRef.current !== sessionId) {
             return handled;
@@ -3434,6 +3567,21 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       catalogHistoryWindowRequestRef.current = request;
       return;
     }
+
+    const pendingAnchor = pendingHistoryPrependAnchorRef.current;
+    if (!pendingAnchor || pendingAnchor.prependRestored) {
+      const anchor = captureHistoryPrependAnchor();
+      if (anchor) {
+        setHistoryPagingAnchorTurnId(anchor.turnId);
+        pendingHistoryPrependAnchorRef.current = {
+          ...anchor,
+          beforeItemCount: virtualItems.length,
+          handoffRestored: true,
+          prependRestored: false,
+        };
+      }
+    }
+    setHistoryPagingLoading(true);
 
     if (!flowChatStore.hasDeferredSessionHistoryProjection(sessionId)) {
       if (flowChatStore.hasPendingSessionHistoryCompletion(sessionId)) {
@@ -3493,6 +3641,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     presentationMode,
     onHistoryWindowBoundaryIntent,
     virtualItems.length,
+    waitForHistoryPresentationCommitQuiet,
   ]);
 
   useEffect(() => {
@@ -3598,6 +3747,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   useLayoutEffect(() => {
     previousMeasuredHeightRef.current = null;
     previousScrollTopRef.current = 0;
+    cancelHistoryPresentationCommitQuietWaiters();
     viewportCoordinatorRef.current.release('session-reset');
     clearTurnPinRequest();
     cancelLatestEndAnchorStabilization();
@@ -3630,6 +3780,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     resetBottomReservations();
   }, [
     activeSession?.sessionId,
+    cancelHistoryPresentationCommitQuietWaiters,
     cancelLatestEndAnchorStabilization,
     cancelStaticInitialHistoryBottomGuard,
     clearCollapseIntentScheduling,
@@ -3663,6 +3814,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
   useEffect(() => {
     return () => {
+      cancelHistoryPresentationCommitQuietWaiters();
       clearRetainedCollapseSettlement();
       cancelLatestEndAnchorStabilization();
       cancelStaticInitialHistoryBottomGuard();
@@ -3672,6 +3824,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       }
     };
   }, [
+    cancelHistoryPresentationCommitQuietWaiters,
     cancelLatestEndAnchorStabilization,
     cancelStaticInitialHistoryBottomGuard,
     clearRetainedCollapseSettlement,
@@ -3790,6 +3943,15 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       const intentCheckPreviousScrollTop = previousScrollTopRef.current;
       const intentCheckScrollDelta = intentCheckScrollTop - intentCheckPreviousScrollTop;
       const hasRecentUserUpwardIntent = now <= userInitiatedUpwardScrollUntilMsRef.current;
+      const pendingHistoryAnchor = pendingHistoryPrependAnchorRef.current;
+      if (pendingHistoryAnchor && !pendingHistoryAnchor.prependRestored) {
+        const anchorElement = getRenderedUserMessageElement(pendingHistoryAnchor.turnId);
+        if (anchorElement) {
+          const scrollerRect = scrollerElement.getBoundingClientRect();
+          pendingHistoryAnchor.offsetFromScrollerTop =
+            anchorElement.getBoundingClientRect().top - scrollerRect.top;
+        }
+      }
       if (scrollbarPointerInteractionActiveRef.current) {
         if (intentCheckScrollDelta > COMPENSATION_EPSILON_PX) {
           markStaticHistoryBottomReturnIntent();
@@ -4074,6 +4236,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
     const resetTouchScrollIntent = () => {
       touchScrollIntentStartYRef.current = null;
+      restartHistoryPresentationCommitQuietWaiters();
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -4172,6 +4335,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
     const endScrollbarPointerInteraction = () => {
       scrollbarPointerInteractionActiveRef.current = false;
+      restartHistoryPresentationCommitQuietWaiters();
     };
 
     scrollerElement.addEventListener('wheel', handleWheel, { passive: true });
@@ -4404,6 +4568,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     clearRetainedCollapseSettlement,
     clearTurnPinRequest,
     finalizeCollapseIntent,
+    getRenderedUserMessageElement,
     getTotalBottomCompensationPx,
     latestTurnId,
     notifyUserScrollIntent,
@@ -4421,6 +4586,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     scheduleHistoryProjectionHandoffRelease,
     schedulePinReservationReconcile,
     requestHistoryWindowBoundaryForUserIntent,
+    restartHistoryPresentationCommitQuietWaiters,
     scheduleRetainedCollapseSettlement,
     scheduleTransientTurnPinStabilization,
     scheduleVisibleTurnMeasure,
@@ -5052,9 +5218,14 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     if (Math.abs(correction) > COMPENSATION_EPSILON_PX) {
       scroller.scrollTop = Math.max(0, scroller.scrollTop + correction);
     }
+    if (presentationMode === 'history-window') {
+      viewportCoordinatorRef.current.preserveElement(anchorElement);
+    }
     if (isPrependCommit) {
       pendingAnchor.prependRestored = true;
+      pendingHistoryPrependAnchorRef.current = null;
       setHistoryPagingLoading(false);
+      setHistoryPagingAnchorTurnId(null);
       clearPreviousHistoryBoundaryStatus();
     } else {
       pendingAnchor.handoffRestored = true;
@@ -5067,6 +5238,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     getRenderedUserMessageElement,
     historyPagingActive,
     historyPagingAnchorTurnId,
+    presentationMode,
     recordScrollerGeometry,
     scrollerElement,
     snapshotMeasuredContentHeight,
@@ -7071,13 +7243,17 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     [activeSessionId, historyPagingActive, previousHistoryBoundaryStatus, t],
   );
   const historyPagingSentinelNode = React.useMemo(
-    () => historyPagingActive && activeSession?.isPartial === true ? (
+    () => (
+      presentationMode === 'tail'
+      && historyPagingActive
+      && activeSession?.isPartial === true
+    ) ? (
       <FlowChatHistoryPagingSentinel
         state={historyPagingLoading ? 'loading' : 'idle'}
         label={t('historyState.preparingOlderHistory')}
       />
     ) : null,
-    [activeSession?.isPartial, historyPagingActive, historyPagingLoading, t],
+    [activeSession?.isPartial, historyPagingActive, historyPagingLoading, presentationMode, t],
   );
   const previousHistoryWindowSentinelNode = React.useMemo(() => {
     if (presentationMode !== 'history-window' || historyBoundaryState.before === 'idle') {
