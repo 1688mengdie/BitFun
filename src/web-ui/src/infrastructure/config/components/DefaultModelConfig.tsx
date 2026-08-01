@@ -151,7 +151,7 @@ export const DefaultModelConfig: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="default-model-config__loading">
+      <div className="default-model-config__loading" data-bf-component="default-model-config" data-bf-part="loading" data-bf-state="loading">
         <CubeLoading size="small" />
         <p>{t('loading')}</p>
       </div>
@@ -160,7 +160,7 @@ export const DefaultModelConfig: React.FC = () => {
 
   if (models.length === 0) {
     return (
-      <div className="default-model-config__empty">
+      <div className="default-model-config__empty" data-bf-component="default-model-config" data-bf-part="empty" data-bf-state="empty">
         <Layers size={48} />
         <p>{t('empty.noModels')}</p>
       </div>
@@ -168,13 +168,15 @@ export const DefaultModelConfig: React.FC = () => {
   }
 
   return (
-    <div className="default-model-config">
+    <div className="default-model-config" data-bf-component="default-model-config" data-bf-part="root">
       <ConfigPageRow
         label={t('core.primary.label')}
         description={t('core.primary.description')}
         align="center"
       >
         <Select
+          data-bf-component="default-model-config"
+          data-bf-part="primaryModel"
           value={defaultModels.primary || ''}
           onChange={(value) => handleDefaultModelChange('primary', normalizeSelectValue(value))}
           placeholder={t('core.primary.placeholder')}
@@ -193,6 +195,8 @@ export const DefaultModelConfig: React.FC = () => {
         align="center"
       >
         <Select
+          data-bf-component="default-model-config"
+          data-bf-part="lightweightModel"
           value={defaultModels.fast || ''}
           onChange={(value) => handleDefaultModelChange('fast', normalizeSelectValue(value))}
           placeholder={t('core.fast.placeholder')}
@@ -213,6 +217,8 @@ export const DefaultModelConfig: React.FC = () => {
         align="center"
       >
         <Select
+          data-bf-component="default-model-config"
+          data-bf-part="embeddingModel"
           value={defaultModels.image_understanding || ''}
           onChange={(value) => handleDefaultModelChange('image_understanding', normalizeSelectValue(value))}
           placeholder={t('optional.selectModel')}

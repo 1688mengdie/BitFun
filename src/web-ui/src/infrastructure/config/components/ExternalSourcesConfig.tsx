@@ -1163,6 +1163,8 @@ const ExternalSourcesConfig: React.FC = () => {
   const renderSourceMembers = useCallback((group: ExternalSourcePresentationGroup) => (
     <div
       className="bitfun-external-sources-config__source-members"
+      data-bf-component="external-sources-config"
+      data-bf-part="sourceMembers"
       role="group"
       aria-label={t('sources.toggleLabel', { name: group.displayName })}
     >
@@ -1197,7 +1199,7 @@ const ExternalSourcesConfig: React.FC = () => {
             )}
           >
             {member.lifecycle !== 'available' ? (
-              <span className={`bitfun-external-sources-config__state is-${member.lifecycle}`}>
+              <span className={`bitfun-external-sources-config__state is-${member.lifecycle}`} data-bf-component="external-sources-config" data-bf-part="state">
                 {t(`lifecycle.${member.lifecycle}`)}
               </span>
             ) : null}
@@ -1221,7 +1223,7 @@ const ExternalSourcesConfig: React.FC = () => {
   const hostUnavailable = !snapshot && error?.code === 'host_unavailable';
 
   return (
-    <ConfigPageLayout className="bitfun-external-sources-config">
+    <ConfigPageLayout className="bitfun-external-sources-config" data-bf-component="external-sources-config" data-bf-part="root">
       <ConfigPageHeader
         title={t('title')}
         subtitle={t('subtitle')}
@@ -1261,6 +1263,8 @@ const ExternalSourcesConfig: React.FC = () => {
             {error ? (
               <div
                 className="bitfun-external-sources-config__notice"
+                data-bf-component="external-sources-config"
+                data-bf-part="notice"
                 role={error.kind === 'mutation' ? 'alert' : 'status'}
               >
                 <div>{t(externalErrorMessageKey(error, Boolean(snapshot)))}</div>
@@ -1345,13 +1349,13 @@ const ExternalSourcesConfig: React.FC = () => {
               </div>
             ) : null}
             {snapshot && hostReadOnly ? (
-              <div className="bitfun-external-sources-config__host-mode" role="status">
+              <div className="bitfun-external-sources-config__host-mode" data-bf-component="external-sources-config" data-bf-part="hostMode" role="status">
                 <ShieldCheck size={16} aria-hidden="true" />
                 <span>{t(readOnlyHintKey)}</span>
               </div>
             ) : null}
             {control?.recoveryActions.some((action) => action.type === 'reconnect_host') ? (
-              <div className="bitfun-external-sources-config__notice" role="status">
+              <div className="bitfun-external-sources-config__notice" data-bf-component="external-sources-config" data-bf-part="notice" role="status">
                 <div>{t('legacyHostNotice')}</div>
                 <div>{t('recoveryActions.reconnect_host')}</div>
               </div>
@@ -1376,6 +1380,8 @@ const ExternalSourcesConfig: React.FC = () => {
                 {control.safeMode ? (
                   <div
                     className="bitfun-external-sources-config__notice"
+                    data-bf-component="external-sources-config"
+                    data-bf-part="notice"
                     role="status"
                     data-external-attention="true"
                   >
@@ -1387,9 +1393,11 @@ const ExternalSourcesConfig: React.FC = () => {
             {snapshot && policy ? (
               <ConfigPageSection
                 className="bitfun-external-sources-config__policy-card"
+                data-bf-component="external-sources-config"
+                data-bf-part="policyCard"
                 title={t('policy.title')}
                 description={externalAttentionCount > 0 ? (
-                  <span className="bitfun-external-sources-config__policy-summary">
+                  <span className="bitfun-external-sources-config__policy-summary" data-bf-component="external-sources-config" data-bf-part="policySummary">
                     <button
                       type="button"
                       aria-controls="external-integration-attention-region"
@@ -1418,6 +1426,8 @@ const ExternalSourcesConfig: React.FC = () => {
                 {policyIncompatible ? (
                   <div
                     className="bitfun-external-sources-config__policy-recovery"
+                    data-bf-component="external-sources-config"
+                    data-bf-part="policyRecovery"
                     role="alert"
                     data-external-attention="true"
                   >
@@ -1440,6 +1450,8 @@ const ExternalSourcesConfig: React.FC = () => {
                 {policyUnknown ? (
                   <div
                     className="bitfun-external-sources-config__policy-recovery"
+                    data-bf-component="external-sources-config"
+                    data-bf-part="policyRecovery"
                     role="alert"
                     data-external-attention="true"
                   >
@@ -1523,7 +1535,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                 mcps: opencodeGroups.reduce((sum, g) => sum + g.counts.mcps, 0),
                               })}</span>
                             </div>
-                            <div className="bitfun-external-sources-config__policy-actions">
+                            <div className="bitfun-external-sources-config__policy-actions" data-bf-component="external-sources-config" data-bf-part="policyActions">
                               <Select
                                 size="small"
                                 value={selectedPolicyEnabled ? ecosystem.mode : 'disabled'}
@@ -1589,6 +1601,8 @@ const ExternalSourcesConfig: React.FC = () => {
                                   {group.diagnostics.length > 0 ? (
                                     <details
                                       className="bitfun-external-sources-config__notice"
+                                      data-bf-component="external-sources-config"
+                                      data-bf-part="notice"
                                       data-external-attention="true"
                                     >
                                       <summary>
@@ -1597,7 +1611,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                           count: group.diagnostics.length,
                                         })}
                                       </summary>
-                                      <ul className="bitfun-external-sources-config__diagnostics">
+                                      <ul className="bitfun-external-sources-config__diagnostics" data-bf-component="external-sources-config" data-bf-part="diagnostics">
                                         {group.diagnostics.map((diagnostic) => (
                                           <li key={externalSourceDiagnosticKey(diagnostic)}>
                                             <span>{t(`diagnostics.category.${sourceDiagnosticCategory(diagnostic.code)}`)}</span>
@@ -1659,7 +1673,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                         {t(`opencode.capability.${capabilityId}.effect`)}
                                       </span>
                                       {riskText && riskText !== riskKey ? (
-                                        <span className="bitfun-external-sources-config__tool-warning">
+                                        <span className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
                                           {riskText}
                                         </span>
                                       ) : null}
@@ -1723,12 +1737,12 @@ const ExternalSourcesConfig: React.FC = () => {
                   }
                   return (
                   <React.Fragment key={ecosystem.ecosystemId}>
-                <div className="bitfun-external-sources-config__ecosystem-card">
-                  <div className="bitfun-external-sources-config__ecosystem-heading">
+                <div className="bitfun-external-sources-config__ecosystem-card" data-bf-component="external-sources-config" data-bf-part="ecosystemCard">
+                  <div className="bitfun-external-sources-config__ecosystem-heading" data-bf-component="external-sources-config" data-bf-part="ecosystemHeading">
                     <div>
-                      <div className="bitfun-external-sources-config__ecosystem-name">
+                      <div className="bitfun-external-sources-config__ecosystem-name" data-bf-component="external-sources-config" data-bf-part="ecosystemName">
                         {ecosystem.descriptor.displayName}
-                        <span className={`bitfun-external-sources-config__ecosystem-state is-${ecosystem.state}`}>
+                        <span className={`bitfun-external-sources-config__ecosystem-state is-${ecosystem.state}`} data-bf-component="external-sources-config" data-bf-part="ecosystemState">
                           {ecosystem.state === 'checking' ? <CircleDashed size={13} aria-hidden="true" /> : null}
                           {ecosystem.state === 'attention' ? <AlertTriangle size={13} aria-hidden="true" /> : null}
                           {ecosystem.state === 'ready' ? <CheckCircle2 size={13} aria-hidden="true" /> : null}
@@ -1738,7 +1752,7 @@ const ExternalSourcesConfig: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                  <div className="bitfun-external-sources-config__policy-actions">
+                  <div className="bitfun-external-sources-config__policy-actions" data-bf-component="external-sources-config" data-bf-part="policyActions">
                     <Select
                       size="small"
                       value={selectedPolicyEnabled ? ecosystem.mode : 'disabled'}
@@ -1865,6 +1879,8 @@ const ExternalSourcesConfig: React.FC = () => {
             {operationStatus ? (
               <div
                 className="bitfun-external-sources-config__notice"
+                data-bf-component="external-sources-config"
+                data-bf-part="notice"
                 role="status"
                 aria-live="polite"
               >
@@ -1874,6 +1890,8 @@ const ExternalSourcesConfig: React.FC = () => {
             {agentChangeNotice ? (
               <div
                 className="bitfun-external-sources-config__notice"
+                data-bf-component="external-sources-config"
+                data-bf-part="notice"
                 role="status"
                 aria-live="polite"
               >
@@ -1883,13 +1901,15 @@ const ExternalSourcesConfig: React.FC = () => {
             {catalogDiagnostics.length > 0 ? (
               <details
                 className="bitfun-external-sources-config__notice"
+                data-bf-component="external-sources-config"
+                data-bf-part="notice"
                 data-external-attention={catalogDiagnostics
                   .some((diagnostic) => diagnostic.severity !== 'info') ? 'true' : undefined}
               >
                 <summary>
                   {t('diagnostics.summary', { count: catalogDiagnostics.length })}
                 </summary>
-                <ul className="bitfun-external-sources-config__diagnostics">
+                <ul className="bitfun-external-sources-config__diagnostics" data-bf-component="external-sources-config" data-bf-part="diagnostics">
                   {catalogDiagnostics.map((diagnostic) => (
                     <li key={externalSourceDiagnosticKey(diagnostic)}>
                       <span>{t(`diagnostics.category.${sourceDiagnosticCategory(diagnostic.code)}`)}</span>
@@ -1903,7 +1923,7 @@ const ExternalSourcesConfig: React.FC = () => {
               </details>
             ) : null}
             {snapshot?.discoveryPending ? (
-              <div className="bitfun-external-sources-config__notice" role="status">
+              <div className="bitfun-external-sources-config__notice" data-bf-component="external-sources-config" data-bf-part="notice" role="status">
                 {t('checkingNonBlocking')}
               </div>
             ) : null}
@@ -1921,12 +1941,14 @@ const ExternalSourcesConfig: React.FC = () => {
                   return (
                     <div
                       className="bitfun-external-sources-config__tool-card"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="toolCard"
                       key={request.decisionKey}
                     >
-                    <div className="bitfun-external-sources-config__conflict-title">
+                    <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="toolTitle">
                       {request.definition.name}
                     </div>
-                    <div className="bitfun-external-sources-config__review-summary">
+                    <div className="bitfun-external-sources-config__tool-detail" data-bf-component="external-sources-config" data-bf-part="toolDetail">
                       <span>{t('mcp.source', {
                         source: source?.record.displayName ?? t('mcp.externalSource'),
                       })}</span>
@@ -1938,64 +1960,10 @@ const ExternalSourcesConfig: React.FC = () => {
                         <span>{t('mcp.url', { url: request.definition.remoteUrlPreview })}</span>
                       ) : null}
                     </div>
-                    <div
-                      className={[
-                        'bitfun-external-sources-config__tool-warning',
-                        'bitfun-external-sources-config__review-risk',
-                      ].join(' ')}
-                      id={reviewRiskId}
-                      role="note"
-                    >
-                      {t('mcpApprovals.compactWarning')}
+                    <div className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
+                      {t('mcpApprovals.warning')}
                     </div>
-                    <details className="bitfun-external-sources-config__review-details">
-                      <summary>{t('mcpApprovals.showDetails')}</summary>
-                      <div className="bitfun-external-sources-config__tool-detail">
-                        {source ? (
-                          <span>{t('mcp.sourceLocation', {
-                            location: source.record.location,
-                          })}</span>
-                        ) : null}
-                        {source ? (
-                          <span>{t('mcp.scope', {
-                            scope: sourceScopeLabel(source.record.scope, t),
-                          })}</span>
-                        ) : null}
-                        {request.definition.workingDirectory ? (
-                          <span>{t('mcp.workingDirectory', {
-                            location: request.definition.workingDirectory,
-                          })}</span>
-                        ) : null}
-                        <span>{t('mcp.argumentCount', {
-                          count: request.definition.argumentCount,
-                        })}</span>
-                        <span>{t('mcp.environmentCount', {
-                          count: request.definition.environmentKeys.length,
-                        })}</span>
-                        {request.definition.environmentKeys.length > 0 ? (
-                          <span>{t('mcp.environmentNames', {
-                            names: request.definition.environmentKeys.join(', '),
-                          })}</span>
-                        ) : null}
-                        {(request.definition.environmentReferenceNames?.length ?? 0) > 0 ? (
-                          <span>{t('mcp.environmentReads', {
-                            names: (request.definition.environmentReferenceNames ?? []).join(', '),
-                          })}</span>
-                        ) : null}
-                        <span>{t('mcp.headerCount', {
-                          count: request.definition.headerNames.length,
-                        })}</span>
-                        {request.definition.headerNames.length > 0 ? (
-                          <span>{t('mcp.headerNames', {
-                            names: request.definition.headerNames.join(', '),
-                          })}</span>
-                        ) : null}
-                      </div>
-                      <div className="bitfun-external-sources-config__tool-warning">
-                        {t('mcpApprovals.warning')}
-                      </div>
-                    </details>
-                    <div className="bitfun-external-sources-config__tool-actions">
+                    <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                       <Button
                         variant="secondary"
                         size="small"
@@ -2048,9 +2016,11 @@ const ExternalSourcesConfig: React.FC = () => {
                         description={`${t(`mcp.transport.${server.definition.transport}`)} · ${t('mcp.externalSource')}`}
                         align="center"
                       >
-                        <div className="bitfun-external-sources-config__source-control">
+                        <div className="bitfun-external-sources-config__source-control" data-bf-component="external-sources-config" data-bf-part="sourceControl">
                           <span
                             className={`bitfun-external-sources-config__state is-${state}`}
+                            data-bf-component="external-sources-config"
+                            data-bf-part="state"
                             data-external-attention={state === 'approval_required' ? 'true' : undefined}
                           >
                             {t(`mcpState.${state}`)}
@@ -2081,8 +2051,8 @@ const ExternalSourcesConfig: React.FC = () => {
                         </div>
                       </ConfigPageRow>
                       {reviewing ? (
-                        <div className="bitfun-external-sources-config__tool-card">
-                          <div className="bitfun-external-sources-config__tool-detail">
+                        <div className="bitfun-external-sources-config__tool-card" data-bf-component="external-sources-config" data-bf-part="toolCard">
+                          <div className="bitfun-external-sources-config__tool-detail" data-bf-component="external-sources-config" data-bf-part="toolDetail">
                             <span>{t('mcp.source', {
                               source: source?.record.displayName ?? t('mcp.externalSource'),
                             })}</span>
@@ -2124,7 +2094,7 @@ const ExternalSourcesConfig: React.FC = () => {
                             <span>{t('mcp.changePolicy')}</span>
                           </div>
                           {canEnable ? (
-                            <div className="bitfun-external-sources-config__tool-actions">
+                            <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                               <Button
                                 variant="primary"
                                 size="small"
@@ -2155,13 +2125,15 @@ const ExternalSourcesConfig: React.FC = () => {
                 {mcpConflicts.map((conflict) => (
                   <div
                     className="bitfun-external-sources-config__conflict"
+                    data-bf-component="external-sources-config"
+                    data-bf-part="conflict"
                     key={conflict.conflictKey}
                     data-external-attention={!conflict.selectedCandidateId ? 'true' : undefined}
                   >
-                    <div className="bitfun-external-sources-config__conflict-title">
+                    <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="conflictTitle">
                       {t('mcpConflicts.serverName', { name: conflict.serverName })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-options">
+                    <div className="bitfun-external-sources-config__conflict-options" data-bf-component="external-sources-config" data-bf-part="conflictOptions">
                       {conflict.candidates.map((candidate) => {
                         const selected = conflict.selectedCandidateId === candidate.candidateId;
                         const externalServer = candidate.external
@@ -2181,7 +2153,7 @@ const ExternalSourcesConfig: React.FC = () => {
                         const reviewingExternal = reviewingMcpConflictKey === conflictReviewKey;
                         const detailId = `mcp-conflict-detail-${candidate.candidateId.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
                         return (
-                          <div className="bitfun-external-sources-config__candidate" key={candidate.candidateId}>
+                          <div className="bitfun-external-sources-config__candidate" data-bf-component="external-sources-config" data-bf-part="candidate" key={candidate.candidateId}>
                             <Button
                               variant={selected ? 'primary' : 'secondary'}
                               size="small"
@@ -2210,7 +2182,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                   : t('mcpConflicts.review', { name: candidate.displayName })
                                 : candidate.displayName}
                             </Button>
-                            <span className="bitfun-external-sources-config__candidate-state">
+                            <span className="bitfun-external-sources-config__candidate-state" data-bf-component="external-sources-config" data-bf-part="candidateState">
                               {!candidate.available
                                 ? t(candidate.external
                                   ? 'mcpConflicts.unavailable'
@@ -2220,13 +2192,15 @@ const ExternalSourcesConfig: React.FC = () => {
                                   : t('common.availableChoice')}
                             </span>
                             {!candidate.available && candidate.unavailableReason ? (
-                              <span className="bitfun-external-sources-config__candidate-state">
+                              <span className="bitfun-external-sources-config__candidate-state" data-bf-component="external-sources-config" data-bf-part="candidateState">
                                 {candidate.unavailableReason}
                               </span>
                             ) : null}
                             {externalServer && (reviewingExternal || selected) ? (
                               <div
                                 className="bitfun-external-sources-config__tool-detail"
+                                data-bf-component="external-sources-config"
+                                data-bf-part="candidateDetail"
                                 id={detailId}
                               >
                                 <span>{t('mcp.source', {
@@ -2277,11 +2251,11 @@ const ExternalSourcesConfig: React.FC = () => {
                                     names: externalServer.definition.headerNames.join(', '),
                                   })}</span>
                                 ) : null}
-                                <span className="bitfun-external-sources-config__tool-warning">
+                                <span className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
                                   {t('mcpApprovals.warning')}
                                 </span>
                                 {reviewingExternal && !selected && candidate.available ? (
-                                  <div className="bitfun-external-sources-config__tool-actions">
+                                  <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                                     <Button
                                       variant="primary"
                                       size="small"
@@ -2308,7 +2282,7 @@ const ExternalSourcesConfig: React.FC = () => {
                         );
                       })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-hint">
+                    <div className="bitfun-external-sources-config__conflict-hint" data-bf-component="external-sources-config" data-bf-part="conflictHint">
                       {conflict.selectedCandidateId
                         ? t('mcpConflicts.currentSelection')
                         : t('mcpConflicts.pending')}
@@ -2323,7 +2297,7 @@ const ExternalSourcesConfig: React.FC = () => {
               && mcpConflicts.length === 0
               && !snapshot?.discoveryPending ? (
               <ConfigPageSection title={t('mcp.title')}>
-                <div className="bitfun-external-sources-config__mcp-empty">
+                <div className="bitfun-external-sources-config__mcp-empty" data-bf-component="external-sources-config" data-bf-part="empty">
                   <span>{t('mcp.empty')}</span>
                   <span>{t('mcp.emptyGuidance')}</span>
                   <span>· {t('mcp.emptyLocation.userGlobal')}</span>
@@ -2461,9 +2435,11 @@ const ExternalSourcesConfig: React.FC = () => {
                         description={`${agent.providerLabel} · ${agent.logicalId} · ${externalAgentEffectiveModelLabel(agent.effectiveModelLabel, agent.modelBindingMethod, t)} · ${t('agents.singleRun')}`}
                         align="center"
                       >
-                        <div className="bitfun-external-sources-config__source-control">
+                        <div className="bitfun-external-sources-config__source-control" data-bf-component="external-sources-config" data-bf-part="sourceControl">
                           <span
                             className={`bitfun-external-sources-config__state is-${state}`}
+                            data-bf-component="external-sources-config"
+                            data-bf-part="state"
                             data-external-attention={state === 'approval_required' ? 'true' : undefined}
                           >
                             {t(`agentState.${state}`)}
@@ -2490,11 +2466,11 @@ const ExternalSourcesConfig: React.FC = () => {
                         </div>
                       </ConfigPageRow>
                       {reviewing ? (
-                        <div className="bitfun-external-sources-config__tool-card">
-                          <div className="bitfun-external-sources-config__conflict-title">
+                        <div className="bitfun-external-sources-config__tool-card" data-bf-component="external-sources-config" data-bf-part="toolCard">
+                          <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="toolTitle">
                             {t('agents.reviewTitle', { name: agent.displayName })}
                           </div>
-                          <div className="bitfun-external-sources-config__tool-detail">
+                          <div className="bitfun-external-sources-config__tool-detail" data-bf-component="external-sources-config" data-bf-part="toolDetail">
                             <span>{agent.description || t('agents.noDescription')}</span>
                             <span>{t('agents.requestedModel', {
                               model: externalAgentRequestedModelLabel(agent.requestedModel, t),
@@ -2549,11 +2525,11 @@ const ExternalSourcesConfig: React.FC = () => {
                             })}
                           </div>
                           {canEnable ? (
-                            <div className="bitfun-external-sources-config__tool-warning">
+                            <div className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
                               {t('agents.approvalWarning')}
                             </div>
                           ) : null}
-                          <div className="bitfun-external-sources-config__tool-actions">
+                          <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                             <Button
                               variant="secondary"
                               size="small"
@@ -2602,13 +2578,15 @@ const ExternalSourcesConfig: React.FC = () => {
                   return (
                     <div
                       className="bitfun-external-sources-config__conflict"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="conflict"
                       key={conflict.conflictKey}
                       data-external-attention={!conflict.selectedCandidateId ? 'true' : undefined}
                     >
-                    <div className="bitfun-external-sources-config__conflict-title">
+                    <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="conflictTitle">
                       {t('agentConflicts.agentName', { name: conflict.logicalId })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-options">
+                    <div className="bitfun-external-sources-config__conflict-options" data-bf-component="external-sources-config" data-bf-part="conflictOptions">
                       {conflict.candidates.map((candidate) => {
                         const selected = conflict.selectedCandidateId === candidate.candidateId;
                         const externalAgent = candidate.external
@@ -2617,7 +2595,7 @@ const ExternalSourcesConfig: React.FC = () => {
                           ))
                           : undefined;
                         return (
-                          <div className="bitfun-external-sources-config__candidate" key={candidate.candidateId}>
+                          <div className="bitfun-external-sources-config__candidate" data-bf-component="external-sources-config" data-bf-part="candidate" key={candidate.candidateId}>
                             <Button
                               variant={selected ? 'primary' : 'secondary'}
                               size="small"
@@ -2635,7 +2613,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                 {candidate.sourceLabel}
                               </span>
                             </Button>
-                            <span className="bitfun-external-sources-config__candidate-state">
+                            <span className="bitfun-external-sources-config__candidate-state" data-bf-component="external-sources-config" data-bf-part="candidateState">
                               {t(selected
                                 ? selectedChoiceUnavailable
                                   ? 'common.selectedUnavailable'
@@ -2645,7 +2623,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                   : 'common.availableChoice')}
                             </span>
                             {externalAgent ? (
-                              <div className="bitfun-external-sources-config__candidate-detail">
+                              <div className="bitfun-external-sources-config__candidate-detail" data-bf-component="external-sources-config" data-bf-part="candidateDetail">
                                 <span>{t('agents.model', { model: externalAgentEffectiveModelLabel(externalAgent.effectiveModelLabel, externalAgent.modelBindingMethod, t) })}</span>
                                 <span>{t('agents.tools', { tools: externalAgent.effectiveToolLabels.join(', ') || t('agents.noTools') })}</span>
                                 <span>{t('agents.executionDomain')}</span>
@@ -2701,7 +2679,7 @@ const ExternalSourcesConfig: React.FC = () => {
                         {t('agentConflicts.disableAll')}
                       </Button>
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-hint">
+                    <div className="bitfun-external-sources-config__conflict-hint" data-bf-component="external-sources-config" data-bf-part="conflictHint">
                       {conflict.selectedCandidateId === DISABLED_SUBAGENT_CONFLICT_CHOICE
                         ? t('agentConflicts.keptUnavailable')
                         : conflict.selectedCandidateId
@@ -2736,12 +2714,14 @@ const ExternalSourcesConfig: React.FC = () => {
                   return (
                     <div
                       className="bitfun-external-sources-config__tool-card"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="toolCard"
                       key={request.decisionKey}
                     >
-                      <div className="bitfun-external-sources-config__conflict-title">
+                      <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="toolTitle">
                         {request.sourceDisplayName}: {request.toolNames.join(', ')}
                       </div>
-                      <div className="bitfun-external-sources-config__tool-detail">
+                      <div className="bitfun-external-sources-config__tool-detail" data-bf-component="external-sources-config" data-bf-part="toolDetail">
                         <span title={source?.record.location ?? request.sourceLocation}>
                           {t('toolApprovals.sourceRoot', {
                             location: source?.record.location ?? request.sourceLocation,
@@ -2783,10 +2763,10 @@ const ExternalSourcesConfig: React.FC = () => {
                           })}
                         </span>
                       </div>
-                      <div className="bitfun-external-sources-config__tool-warning">
+                      <div className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
                         {t('toolApprovals.warning')}
                       </div>
-                      <div className="bitfun-external-sources-config__tool-actions">
+                      <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                         <Button
                           variant="secondary"
                           size="small"
@@ -2829,8 +2809,8 @@ const ExternalSourcesConfig: React.FC = () => {
                         className="bitfun-external-sources-config__source-group"
                         label={group.displayName}
                         description={(
-                          <div className="bitfun-external-sources-config__source-description">
-                            <span className="bitfun-external-sources-config__source-origin">
+                          <div className="bitfun-external-sources-config__source-description" data-bf-component="external-sources-config" data-bf-part="sourceGroup">
+                            <span className="bitfun-external-sources-config__source-origin" data-bf-component="external-sources-config" data-bf-part="sourceDescription">
                               <span
                                 className="bitfun-external-sources-config__source-location"
                                 title={group.location}
@@ -2876,6 +2856,8 @@ const ExternalSourcesConfig: React.FC = () => {
                       {group.diagnostics.length > 0 ? (
                         <details
                           className="bitfun-external-sources-config__notice"
+                          data-bf-component="external-sources-config"
+                          data-bf-part="notice"
                           data-external-attention="true"
                         >
                           <summary>
@@ -2884,7 +2866,7 @@ const ExternalSourcesConfig: React.FC = () => {
                               count: group.diagnostics.length,
                             })}
                           </summary>
-                          <ul className="bitfun-external-sources-config__diagnostics">
+                          <ul className="bitfun-external-sources-config__diagnostics" data-bf-component="external-sources-config" data-bf-part="diagnostics">
                             {group.diagnostics.map((diagnostic) => (
                               <li key={externalSourceDiagnosticKey(diagnostic)}>
                                 <span>{t(`diagnostics.category.${sourceDiagnosticCategory(diagnostic.code)}`)}</span>
@@ -2933,9 +2915,11 @@ const ExternalSourcesConfig: React.FC = () => {
                           || abbreviatedLocation(tool.definition.modulePath)}
                         align="center"
                       >
-                        <div className="bitfun-external-sources-config__source-control">
+                        <div className="bitfun-external-sources-config__source-control" data-bf-component="external-sources-config" data-bf-part="sourceControl">
                           <span
                             className={`bitfun-external-sources-config__state is-${tool.activation.state}`}
+                            data-bf-component="external-sources-config"
+                            data-bf-part="state"
                             data-external-attention={tool.activation.state === 'approval_required'
                               ? 'true'
                               : undefined}
@@ -2968,14 +2952,14 @@ const ExternalSourcesConfig: React.FC = () => {
                         </div>
                       </ConfigPageRow>
                       {reviewing ? (
-                        <div className="bitfun-external-sources-config__tool-card">
-                          <div className="bitfun-external-sources-config__conflict-title">
+                        <div className="bitfun-external-sources-config__tool-card" data-bf-component="external-sources-config" data-bf-part="toolCard">
+                          <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="toolTitle">
                             {t('tools.reviewTitle', {
                               name: tool.definition.name,
                               source: source?.record.displayName ?? tool.definition.id.target.source.providerId,
                             })}
                           </div>
-                          <div className="bitfun-external-sources-config__tool-detail">
+                          <div className="bitfun-external-sources-config__tool-detail" data-bf-component="external-sources-config" data-bf-part="toolDetail">
                             <span title={source?.record.location}>
                               {t('toolApprovals.sourceRoot', {
                                 location: source?.record.location ?? t('common.unknown'),
@@ -3024,11 +3008,11 @@ const ExternalSourcesConfig: React.FC = () => {
                             </span>
                           </div>
                           {enableable ? (
-                            <div className="bitfun-external-sources-config__tool-warning">
+                            <div className="bitfun-external-sources-config__tool-warning" data-bf-component="external-sources-config" data-bf-part="toolWarning">
                               {t('toolApprovals.warning')}
                             </div>
                           ) : null}
-                          <div className="bitfun-external-sources-config__tool-actions">
+                          <div className="bitfun-external-sources-config__tool-actions" data-bf-component="external-sources-config" data-bf-part="toolActions">
                             <Button
                               variant="secondary"
                               size="small"
@@ -3076,19 +3060,23 @@ const ExternalSourcesConfig: React.FC = () => {
                   return (
                     <div
                       className="bitfun-external-sources-config__conflict"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="conflict"
                       key={conflict.conflictKey}
                       data-external-attention={!conflict.selectedCandidateId ? 'true' : undefined}
                     >
-                    <div className="bitfun-external-sources-config__conflict-title">
+                    <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="conflictTitle">
                       {t('conflicts.commandName', { name: conflict.commandName })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-options">
+                    <div className="bitfun-external-sources-config__conflict-options" data-bf-component="external-sources-config" data-bf-part="conflictOptions">
                       {conflict.candidates.map((candidate) => {
                         const selected = conflict.selectedCandidateId === candidate.candidateId;
                         const available = candidate.availability.state === 'available';
                         return (
                           <div
                             className="bitfun-external-sources-config__candidate"
+                            data-bf-component="external-sources-config"
+                            data-bf-part="candidate"
                             key={candidate.candidateId}
                           >
                             <Button
@@ -3107,7 +3095,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                 {candidate.ecosystemId}
                               </span>
                             </Button>
-                            <span className="bitfun-external-sources-config__candidate-state">
+                            <span className="bitfun-external-sources-config__candidate-state" data-bf-component="external-sources-config" data-bf-part="candidateState">
                               {t(selected
                                 ? selectedChoiceUnavailable
                                   ? 'common.selectedUnavailable'
@@ -3118,7 +3106,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                     ? 'common.notSelected'
                                     : 'common.availableChoice')}
                             </span>
-                            <div className="bitfun-external-sources-config__candidate-detail">
+                            <div className="bitfun-external-sources-config__candidate-detail" data-bf-component="external-sources-config" data-bf-part="candidateDetail">
                               {candidate.commandDescription}
                               {' · '}
                               {sourceScopeLabel(candidate.sourceScope, t)}
@@ -3132,7 +3120,7 @@ const ExternalSourcesConfig: React.FC = () => {
                         );
                       })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-hint">
+                    <div className="bitfun-external-sources-config__conflict-hint" data-bf-component="external-sources-config" data-bf-part="conflictHint">
                       {conflict.selectedCandidateId
                         ? t(selectedChoiceUnavailable
                           ? 'conflicts.currentSelectionUnavailable'
@@ -3169,17 +3157,19 @@ const ExternalSourcesConfig: React.FC = () => {
                   return (
                     <div
                       className="bitfun-external-sources-config__conflict"
+                      data-bf-component="external-sources-config"
+                      data-bf-part="conflict"
                       key={conflict.conflictKey}
                       data-external-attention={!conflict.selectedCandidateId ? 'true' : undefined}
                     >
-                    <div className="bitfun-external-sources-config__conflict-title">
+                    <div className="bitfun-external-sources-config__conflict-title" data-bf-component="external-sources-config" data-bf-part="conflictTitle">
                       {t('toolConflicts.toolName', { name: conflict.toolName })}
                     </div>
-                    <div className="bitfun-external-sources-config__conflict-options">
+                    <div className="bitfun-external-sources-config__conflict-options" data-bf-component="external-sources-config" data-bf-part="conflictOptions">
                       {conflict.candidates.map((candidate) => {
                         const selected = conflict.selectedCandidateId === candidate.candidateId;
                         return (
-                          <div className="bitfun-external-sources-config__candidate" key={candidate.candidateId}>
+                          <div className="bitfun-external-sources-config__candidate" data-bf-component="external-sources-config" data-bf-part="candidate" key={candidate.candidateId}>
                             <Button
                               variant={selected ? 'primary' : 'secondary'}
                               size="small"
@@ -3196,7 +3186,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                 {t(`toolCandidateKind.${candidate.kind}`)}
                               </span>
                             </Button>
-                            <span className="bitfun-external-sources-config__candidate-state">
+                            <span className="bitfun-external-sources-config__candidate-state" data-bf-component="external-sources-config" data-bf-part="candidateState">
                               {t(selected
                                 ? selectedChoiceUnavailable
                                   ? 'common.selectedUnavailable'
@@ -3205,7 +3195,7 @@ const ExternalSourcesConfig: React.FC = () => {
                                   ? 'common.notSelected'
                                   : 'common.availableChoice')}
                             </span>
-                            <div className="bitfun-external-sources-config__candidate-detail">
+                            <div className="bitfun-external-sources-config__candidate-detail" data-bf-component="external-sources-config" data-bf-part="candidateDetail">
                               {candidate.sourceLocation
                                 ? abbreviatedLocation(candidate.sourceLocation)
                                 : candidate.providerId}
