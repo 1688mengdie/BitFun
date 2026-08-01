@@ -4127,7 +4127,7 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(flowChatStore.getState().sessions.get('history-1')?.dialogTurns).toEqual([]);
   });
 
-  it('trims the remote side of an oversized presentation while keeping a contiguous range', async () => {
+  it('slices oversized merged ranges around the protected presentation window', async () => {
     const catalog = createTurnCatalog(100);
     flowChatStore.setState(() => ({
       sessions: new Map([[
@@ -4142,17 +4142,31 @@ describe('FlowChatStore historical session hydration state', () => {
       ]]),
       activeSessionId: 'history-1',
     }));
-    apiMocks.loadSessionTurnWindow.mockResolvedValueOnce({
-      status: 'ready',
-      catalogRevision: catalog.revision,
-      totalTurnCount: 100,
-      startOrdinal: 0,
-      endOrdinalExclusive: 100,
-      targetTurnId: 'turn-50',
-      turns: Array.from({ length: 100 }, (_, index) => createPersistedTurn(index)),
-    });
+    apiMocks.loadSessionTurnWindow
+      .mockResolvedValueOnce({
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: 100,
+        startOrdinal: 0,
+        endOrdinalExclusive: 100,
+        targetTurnId: 'turn-50',
+        turns: Array.from({ length: 100 }, (_, index) => createPersistedTurn(index)),
+      })
+      .mockResolvedValueOnce({
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: 100,
+        startOrdinal: 29,
+        endOrdinalExclusive: 47,
+        targetTurnId: 'turn-45',
+        turns: Array.from({ length: 18 }, (_, index) => createPersistedTurn(index + 29)),
+      });
 
     const navigation = await flowChatStore.loadSessionTurnWindow('history-1', 50);
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges).toMatchObject([{
+      startOrdinal: 46,
+      endOrdinalExclusive: 94,
+    }]);
     const activated = flowChatStore.activateSessionHistoryWindow(
       'history-1',
       navigation.targetOrdinal,
@@ -4163,19 +4177,151 @@ describe('FlowChatStore historical session hydration state', () => {
       endOrdinalExclusive: 94,
     });
 
-    await flowChatStore.loadSessionTurnWindow('history-1', 45, { source: 'prefetch' });
+    await flowChatStore.loadSessionTurnWindow('history-1', 45, {
+      source: 'prefetch',
+      before: 16,
+      after: 1,
+    });
     expect(flowChatStore.extendSessionHistoryWindow('history-1', 'before')?.range).toMatchObject({
       startOrdinal: 30,
       endOrdinalExclusive: 94,
     });
-    await flowChatStore.loadSessionTurnWindow('history-1', 29, { source: 'prefetch' });
-    const trimmed = flowChatStore.extendSessionHistoryWindow('history-1', 'before');
-    expect(trimmed?.range).toMatchObject({
-      startOrdinal: 14,
-      endOrdinalExclusive: 62,
-      targetTurnId: 'turn-50',
+    expect(flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges).toMatchObject([{
+      startOrdinal: 30,
+      endOrdinalExclusive: 94,
+    }]);
+  });
+
+  it('evicts least-recently-used non-tail ordinals while retaining recent target windows', async () => {
+    const catalog = createTurnCatalog(120);
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          historyState: 'ready',
+          isPartial: true,
+          totalTurnCount: 120,
+          turnCatalog: catalog,
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+    const windows = new Map([
+      [5, { startOrdinal: 0, endOrdinalExclusive: 17 }],
+      [30, { startOrdinal: 25, endOrdinalExclusive: 42 }],
+      [55, { startOrdinal: 50, endOrdinalExclusive: 67 }],
+      [80, { startOrdinal: 75, endOrdinalExclusive: 92 }],
+    ]);
+    apiMocks.loadSessionTurnWindow.mockImplementation(async request => {
+      const targetOrdinal = request.targetStorageTurnIndex;
+      const window = windows.get(targetOrdinal);
+      if (!window) {
+        throw new Error(`Unexpected target ordinal ${targetOrdinal}`);
+      }
+      return {
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: catalog.totalTurnCount,
+        ...window,
+        targetTurnId: `turn-${targetOrdinal}`,
+        turns: Array.from(
+          { length: window.endOrdinalExclusive - window.startOrdinal },
+          (_, index) => createPersistedTurn(index + window.startOrdinal),
+        ),
+      };
     });
-    expect(trimmed?.turns).toHaveLength(48);
+
+    await flowChatStore.loadSessionTurnWindow('history-1', 5);
+    await flowChatStore.loadSessionTurnWindow('history-1', 30);
+    await flowChatStore.loadSessionTurnWindow('history-1', 55);
+    await expect(flowChatStore.loadSessionTurnWindow('history-1', 5)).resolves.toMatchObject({
+      cacheHit: true,
+    });
+    await flowChatStore.loadSessionTurnWindow('history-1', 80);
+
+    const loadedRanges = flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges ?? [];
+    const loadedTurnCount = loadedRanges.reduce((count, range) => count + range.turns.length, 0);
+    const containsOrdinal = (ordinal: number) => loadedRanges.some(range =>
+      range.startOrdinal <= ordinal && range.endOrdinalExclusive > ordinal
+    );
+    expect(loadedTurnCount).toBe(48);
+    expect(containsOrdinal(5)).toBe(true);
+    expect(containsOrdinal(30)).toBe(false);
+    expect(containsOrdinal(80)).toBe(true);
+    expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps the restored live tail outside the non-tail LRU budget', async () => {
+    const catalog = createTurnCatalog(100);
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: {
+        sessionId: 'history-1',
+        sessionName: 'History 1',
+        agentType: 'agentic',
+        state: 'Idle',
+        turnCount: 100,
+        createdAt: 1,
+      },
+      turns: [97, 98, 99].map(index => createPersistedTurn(index)),
+      turnCatalog: catalog,
+      contextRestoreState: 'pending',
+      isPartial: true,
+      loadedTurnCount: 3,
+      totalTurnCount: 100,
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+    await flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun');
+
+    const windows = new Map([
+      [5, { startOrdinal: 0, endOrdinalExclusive: 17 }],
+      [25, { startOrdinal: 20, endOrdinalExclusive: 37 }],
+      [45, { startOrdinal: 40, endOrdinalExclusive: 57 }],
+      [65, { startOrdinal: 60, endOrdinalExclusive: 77 }],
+    ]);
+    apiMocks.loadSessionTurnWindow.mockImplementation(async request => {
+      const targetOrdinal = request.targetStorageTurnIndex;
+      const window = windows.get(targetOrdinal);
+      if (!window) {
+        throw new Error(`Unexpected target ordinal ${targetOrdinal}`);
+      }
+      return {
+        status: 'ready',
+        catalogRevision: catalog.revision,
+        totalTurnCount: catalog.totalTurnCount,
+        ...window,
+        targetTurnId: `turn-${targetOrdinal}`,
+        turns: Array.from(
+          { length: window.endOrdinalExclusive - window.startOrdinal },
+          (_, index) => createPersistedTurn(index + window.startOrdinal),
+        ),
+      };
+    });
+
+    await flowChatStore.loadSessionTurnWindow('history-1', 5);
+    await flowChatStore.loadSessionTurnWindow('history-1', 25);
+    await flowChatStore.loadSessionTurnWindow('history-1', 45);
+    await flowChatStore.loadSessionTurnWindow('history-1', 65);
+
+    const loadedRanges = flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges ?? [];
+    const nonTailTurnCount = loadedRanges.reduce((count, range) => {
+      const nonTailEndOrdinalExclusive = Math.min(range.endOrdinalExclusive, 97);
+      return count + Math.max(0, nonTailEndOrdinalExclusive - range.startOrdinal);
+    }, 0);
+    expect(nonTailTurnCount).toBe(48);
+    expect(loadedRanges.some(range =>
+      range.startOrdinal <= 97 && range.endOrdinalExclusive >= 100
+    )).toBe(true);
   });
 
   it('updates a stale catalog and retries the original Turn identity once', async () => {
