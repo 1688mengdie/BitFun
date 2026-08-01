@@ -48,6 +48,7 @@ import type {
   SessionHistoryPresentation,
 } from '../../types/flow-chat';
 import type { SessionHistoryWindowDirection } from '../../store/FlowChatStore';
+import type { FlowChatPinTurnToTopRequest } from '../../events/flowchatNavigation';
 import {
   useBackgroundCommandActivityStore,
   visibleBackgroundCommandActivitiesForSession,
@@ -401,11 +402,29 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useFlowChatSync();
   useFlowChatCopyDialog();
 
+  const clearHistoryPresentationForSession = useCallback((sessionId: string) => {
+    flowChatStore.restoreSessionTailPresentation(sessionId);
+    historyPresentationRef.current = null;
+    setHistoryPresentation(null);
+    setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
+    setQueuedTurnNavigation(null);
+  }, []);
+
+  const handleBeforeTurnPinRequest = useCallback((request: FlowChatPinTurnToTopRequest) => {
+    if (
+      request.source === 'send-message'
+      && historyPresentationRef.current?.sessionId === request.sessionId
+    ) {
+      clearHistoryPresentationForSession(request.sessionId);
+    }
+  }, [clearHistoryPresentationForSession]);
+
   useFlowChatNavigation({
     activeSessionId: activeSession?.sessionId,
     virtualItems,
     virtualListRef,
     onExpandExploreGroup: handleExpandGroup,
+    onBeforeTurnPinRequest: handleBeforeTurnPinRequest,
   });
 
   useEffect(() => {
@@ -1315,11 +1334,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       return false;
     }
 
-    flowChatStore.restoreSessionTailPresentation(sessionId);
-    historyPresentationRef.current = null;
-    setHistoryPresentation(null);
-    setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
-    setQueuedTurnNavigation(null);
+    clearHistoryPresentationForSession(sessionId);
 
     if (options?.followLatest) {
       requestAnimationFrame(() => {
@@ -1329,7 +1344,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       });
     }
     return true;
-  }, [activeSession?.sessionId]);
+  }, [activeSession?.sessionId, clearHistoryPresentationForSession]);
 
   const handleSearchChange = useCallback((query: string) => {
     setSearchQuery(query);

@@ -1,7 +1,20 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import React, { act, useRef } from 'react';
+import { createRoot } from 'react-dom/client';
+import { describe, expect, it, vi } from 'vitest';
+import { globalEventBus } from '@/infrastructure/event-bus';
 import type { FlowToolItem, ModelRound, Session } from '../../types/flow-chat';
 import type { VirtualItem } from '../../store/modernFlowChatStore';
+import {
+  FLOWCHAT_PIN_TURN_TO_TOP_EVENT,
+  type FlowChatPinTurnToTopRequest,
+} from '../../events/flowchatNavigation';
 import { resolveFlowChatFocusTarget } from './flowChatFocusTarget';
+import { useFlowChatNavigation } from './useFlowChatNavigation';
+import type { VirtualMessageListRef } from './VirtualMessageList';
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 function makeReadTool(id: string): FlowToolItem {
   return {
@@ -101,5 +114,66 @@ describe('useFlowChatNavigation focus resolution', () => {
       focusItemId: tool.id,
       preferPinnedTurnNavigation: false,
     });
+  });
+});
+
+describe('useFlowChatNavigation Turn pin handling', () => {
+  it('runs the pre-pin callback before pinning a newly submitted Turn', async () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    const onBeforeTurnPinRequest = vi.fn();
+    const pinTurnToTop = vi.fn(() => true);
+    const virtualItems: VirtualItem[] = [{
+      type: 'user-message',
+      turnId: 'turn-2',
+      data: {
+        id: 'user-2',
+        content: 'New prompt',
+        timestamp: 1000,
+      },
+    }];
+
+    function Harness() {
+      const virtualListRef = useRef<VirtualMessageListRef | null>({
+        pinTurnToTop,
+      } as unknown as VirtualMessageListRef);
+      useFlowChatNavigation({
+        activeSessionId: 'session-1',
+        virtualItems,
+        virtualListRef,
+        onBeforeTurnPinRequest,
+      });
+      return null;
+    }
+
+    await act(async () => {
+      root.render(React.createElement(Harness));
+    });
+    const request: FlowChatPinTurnToTopRequest = {
+      sessionId: 'session-1',
+      turnId: 'turn-2',
+      behavior: 'auto',
+      source: 'send-message',
+      pinMode: 'sticky-latest',
+    };
+    await act(async () => {
+      globalEventBus.emit(FLOWCHAT_PIN_TURN_TO_TOP_EVENT, request, 'test');
+      await Promise.resolve();
+    });
+
+    expect(onBeforeTurnPinRequest).toHaveBeenCalledWith(request);
+    expect(pinTurnToTop).toHaveBeenCalledWith('turn-2', {
+      behavior: 'auto',
+      pinMode: 'sticky-latest',
+    });
+    expect(onBeforeTurnPinRequest.mock.invocationCallOrder[0]).toBeLessThan(
+      pinTurnToTop.mock.invocationCallOrder[0],
+    );
+
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
   });
 });

@@ -27,6 +27,7 @@ interface UseFlowChatNavigationOptions {
   virtualItems: VirtualItem[];
   virtualListRef: RefObject<VirtualMessageListRef | null>;
   onExpandExploreGroup?: (groupId: string) => void;
+  onBeforeTurnPinRequest?: (request: FlowChatPinTurnToTopRequest) => void;
 }
 
 async function waitForCondition(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -73,6 +74,7 @@ export function useFlowChatNavigation({
   virtualItems,
   virtualListRef,
   onExpandExploreGroup,
+  onBeforeTurnPinRequest,
 }: UseFlowChatNavigationOptions): void {
   const [pendingTurnPinRequest, setPendingTurnPinRequest] = useState<FlowChatPinTurnToTopRequest | null>(null);
 
@@ -82,11 +84,12 @@ export function useFlowChatNavigation({
         return;
       }
 
+      onBeforeTurnPinRequest?.(request);
       setPendingTurnPinRequest(request);
     });
 
     return unsubscribe;
-  }, [activeSessionId]);
+  }, [activeSessionId, onBeforeTurnPinRequest]);
 
   useEffect(() => {
     if (!pendingTurnPinRequest) return;
