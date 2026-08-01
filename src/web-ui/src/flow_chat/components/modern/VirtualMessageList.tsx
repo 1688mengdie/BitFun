@@ -144,7 +144,7 @@ type FlowChatVirtuosoContext = {
 
 const FlowChatVirtuosoHeader = ({ context }: ContextProp<FlowChatVirtuosoContext>) => (
   <>
-    <div className="message-list-header" />
+    <div className="message-list-header"  data-bf-component="virtual-message-list" data-bf-part="header"/>
     {context.previousHistoryBoundaryStatusNode}
   </>
 );
@@ -175,6 +175,8 @@ const FlowChatVirtuosoFooter = ({ context }: ContextProp<FlowChatVirtuosoContext
   <div
     ref={context.footerRef}
     className="message-list-footer"
+    data-bf-component="virtual-message-list"
+    data-bf-part="footer"
   >
     {context.nextHistoryBoundaryStatusNode}
     <RuntimeStatusSlot sessionId={context.runtimeStatusSessionId} placement="footer" />
@@ -1136,6 +1138,31 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       });
     }
   }, [applyFooterHeightToElement, getTotalBottomCompensationPx]);
+
+  const clearBottomReservationsForUserBrowsing = useCallback(() => {
+    const currentState = bottomReservationStateRef.current;
+    const nextState = createInitialBottomReservationState();
+    pendingCollapseIntentRef.current = createInactiveCollapseIntentState();
+
+    if (areBottomReservationStatesEqual(currentState, nextState)) {
+      return;
+    }
+
+    updateBottomReservationState(nextState);
+    applyFooterCompensationNow(nextState);
+
+    const scroller = scrollerElementRef.current;
+    if (scroller) {
+      previousScrollTopRef.current = scroller.scrollTop;
+      previousMeasuredHeightRef.current = snapshotMeasuredContentHeight(scroller, nextState);
+      recordScrollerGeometry(scroller);
+    }
+  }, [
+    applyFooterCompensationNow,
+    recordScrollerGeometry,
+    snapshotMeasuredContentHeight,
+    updateBottomReservationState,
+  ]);
 
   const preserveCollapseAnchorScrollTop = useCallback((
     scroller: HTMLElement,
@@ -4283,6 +4310,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       }
 
       if (currentY - startY > TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX) {
+        clearBottomReservationsForUserBrowsing();
         touchScrollIntentStartYRef.current = currentY;
         userInitiatedUpwardScrollUntilMsRef.current =
           performance.now() + USER_UPWARD_SCROLL_INTENT_WINDOW_MS;
@@ -4369,6 +4397,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         return;
       }
 
+      clearBottomReservationsForUserBrowsing();
       clearTurnPinRequest();
       if (flowChatDiagnostics.isEnabled()) {
         flowChatDiagnostics.trace({
@@ -4621,6 +4650,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     applyFooterCompensationNow,
     canProcessViewportGeometry,
     cancelLatestEndAnchorStabilization,
+    clearBottomReservationsForUserBrowsing,
     consumeBottomCompensation,
     clearRetainedCollapseSettlement,
     clearTurnPinRequest,
@@ -5095,7 +5125,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       recordScrollerGeometry(scroller);
     }
   }, [
-    applyFooterCompensationNow,
     clearTurnPinRequest,
     clearCollapseIntentScheduling,
     clearPendingStickyPinGrowth,
@@ -7095,7 +7124,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         data-history-boundary-status={previousHistoryBoundaryStatus.state}
         role="status"
         aria-live="polite"
-      >
+       data-bf-component="virtual-message-list" data-bf-part="boundaryStatus" data-bf-state={previousHistoryBoundaryStatus.state === 'preparing' ? 'preparing' : 'unavailable'}>
         {previousHistoryBoundaryStatus.state === 'preparing'
           ? t('historyState.preparingOlderHistory')
           : t('historyState.olderHistoryNotReady')}
@@ -7173,11 +7202,14 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   if (virtualItems.length === 0) {
     return (
       <div
+        data-bf-component="virtual-message-list"
+        data-bf-part="root"
+        data-bf-state="empty"
         className="virtual-message-list virtual-message-list--empty"
         data-testid="flowchat-message-list-empty"
       >
-        <div className="empty-state">
-          <p>No messages yet</p>
+        <div className="empty-state" data-bf-component="virtual-message-list" data-bf-part="empty">
+          <p data-bf-component="virtual-message-list" data-bf-part="emptyMessage">No messages yet</p>
         </div>
       </div>
     );
@@ -7185,6 +7217,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
 
   return (
     <div
+      data-bf-component="virtual-message-list"
+      data-bf-part="root"
       className="virtual-message-list"
       data-testid="flowchat-message-list"
       data-presentation-mode={presentationMode}
@@ -7227,6 +7261,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       {activeHistoryProjectionHandoff ? (
         <div
           className="virtual-message-list__projection-handoff-overlay"
+          data-bf-component="virtual-message-list"
+          data-bf-part="handoffOverlay"
           data-history-projection-handoff="true"
           data-initial-history-snapshot={
             activeHistoryProjectionHandoff.reason === 'initial-history-snapshot' ? 'true' : 'false'
@@ -7237,9 +7273,11 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         >
           <div
             className="virtual-message-list__projection-handoff-content virtual-message-list__projection-handoff-content--bottom"
+            data-bf-component="virtual-message-list"
+            data-bf-part="handoffContent"
           >
-            <div className="message-list-header" />
-            <div className="virtual-message-list__projection-handoff-items">
+            <div className="message-list-header" data-bf-component="virtual-message-list" data-bf-part="header" />
+            <div className="virtual-message-list__projection-handoff-items" data-bf-component="virtual-message-list" data-bf-part="items">
               {activeHistoryProjectionHandoff.items.map((item, index) => (
                 <VirtualItemRenderer
                   key={`history-projection-handoff:${activeHistoryProjectionHandoff.sessionId}:${getVirtualItemStableKey(item)}`}
@@ -7250,6 +7288,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
             </div>
             <div
               className="message-list-footer"
+              data-bf-component="virtual-message-list"
+              data-bf-part="footer"
               style={{
                 height: `${activeHistoryProjectionHandoff.footerHeightPx}px`,
                 minHeight: `${activeHistoryProjectionHandoff.footerHeightPx}px`,

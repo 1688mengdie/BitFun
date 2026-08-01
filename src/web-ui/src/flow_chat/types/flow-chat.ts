@@ -685,5 +685,4 @@ export interface FlowChatConfig {
   showTimestamps: boolean;
   maxHistoryRounds: number;
   enableVirtualScroll: boolean;
-  theme: 'light' | 'dark' | 'auto';
 }

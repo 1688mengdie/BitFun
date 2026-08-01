@@ -438,9 +438,6 @@ describe('AppearanceCompiler', () => {
         },
         'virtual-message-list': {
           parts: {
-            root: {
-              facets: { renderMode: { static: { backgroundColor: accent } } },
-            },
             boundaryStatus: {
               states: { unavailable: { color: accent } },
             },
@@ -755,7 +752,6 @@ describe('AppearanceCompiler', () => {
 
     const snapshot = new AppearanceCompiler(createDefaultAppearanceRegistry()).compile(pkg, 1);
     expect(snapshot.cssText).toContain('[data-bf-component="chat-input"][data-bf-part="target"][data-bf-target="btw"][data-bf-state~="selected"]');
-    expect(snapshot.cssText).toContain('[data-bf-component="virtual-message-list"][data-bf-part="root"][data-bf-render-mode="static"]');
     expect(snapshot.cssText).toContain('[data-bf-component="virtual-message-list"][data-bf-part="boundaryStatus"][data-bf-state~="unavailable"]');
     expect(snapshot.cssText).toContain('[data-bf-component="ai-model-config"][data-bf-part="root"][data-bf-view="selection"]');
     expect(snapshot.cssText).toContain('[data-bf-component="external-sources-config"][data-bf-part="conflict"]');

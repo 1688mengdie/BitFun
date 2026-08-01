@@ -233,6 +233,8 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     <nav
       ref={railRef}
       className="flowchat-turn-rail"
+      data-bf-component="flow-chat-turn-rail"
+      data-bf-part="root"
       aria-label={navigationLabel}
       data-testid="flowchat-turn-rail"
       data-rendered-start-ordinal={renderedRange.startOrdinal}
@@ -242,6 +244,8 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
       <div
         ref={listRef}
         className="flowchat-turn-rail__list"
+        data-bf-component="flow-chat-turn-rail"
+        data-bf-part="list"
         onScroll={handleScroll}
       >
         <div
@@ -264,10 +268,10 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
                 delay={250}
                 className="flowchat-turn-rail__tooltip"
                 content={(
-                  <span className="flowchat-turn-rail__tooltip-content">
-                    <span className="flowchat-turn-rail__tooltip-turn">{turnLabel}</span>
+                  <span className="flowchat-turn-rail__tooltip-content" data-bf-component="flow-chat-turn-rail" data-bf-part="tooltipContent">
+                    <span className="flowchat-turn-rail__tooltip-turn" data-bf-component="flow-chat-turn-rail" data-bf-part="tooltipTurn">{turnLabel}</span>
                     {content !== null ? (
-                      <span className="flowchat-turn-rail__tooltip-message">{content}</span>
+                      <span className="flowchat-turn-rail__tooltip-message" data-bf-component="flow-chat-turn-rail" data-bf-part="tooltipMessage">{content}</span>
                     ) : null}
                   </span>
                 )}
@@ -282,6 +286,9 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
                   }}
                   type="button"
                   className={`flowchat-turn-rail__item${isVisible ? ' flowchat-turn-rail__item--visible' : ''}`}
+                  data-bf-component="flow-chat-turn-rail"
+                  data-bf-part="item"
+                  data-bf-state={[isCurrent && 'current', isVisible && 'visible'].filter(Boolean).join(' ')}
                   style={{
                     top: `${FLOWCHAT_TURN_RAIL_VERTICAL_PADDING_PX + turn.ordinal * FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX}px`,
                   }}
@@ -300,7 +307,7 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
                   onFocus={() => setFocusOrdinal(turn.ordinal)}
                   onKeyDown={(event) => handleKeyDown(event, turnArrayIndex)}
                 >
-                  <span className="flowchat-turn-rail__bar" aria-hidden="true" />
+                  <span className="flowchat-turn-rail__bar" data-bf-component="flow-chat-turn-rail" data-bf-part="bar" aria-hidden="true" />
                 </button>
               </Tooltip>
             );

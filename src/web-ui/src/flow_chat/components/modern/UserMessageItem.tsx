@@ -5,6 +5,7 @@
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import { Copy, Check, RotateCcw, Loader2, ArrowDownToLine, X, CircleUser, Pencil } from 'lucide-react';
 import type { DialogTurn, FlowUserSteeringItem } from '../../types/flow-chat';
 import { flowChatManager } from '../../services/FlowChatManager';
@@ -477,7 +478,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
 
     // Avoid zero-size errors by rendering a placeholder instead of null.
     if (!message) {
-      return <div style={{ minHeight: '1px' }} />;
+      return <div data-bf-component="user-message-item" data-bf-part="root" style={{ minHeight: '1px' }} />;
     }
 
     if (isUsageReportMessage) {
@@ -494,7 +495,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
 
     if (isGoalLoadingMessage) {
       return (
-        <div className="session-usage-report-card session-usage-report-card--loading" aria-live="polite">
+        <div data-bf-component="user-message-item" data-bf-part="loading" data-bf-state="loading" className="session-usage-report-card session-usage-report-card--loading" aria-live="polite">
           <div className="session-usage-report-card__loading-main">
             <ToolProcessingDots className="session-usage-report-card__loading-dots" size={12} />
             <div>
@@ -506,7 +507,10 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     }
     
     return (
-      <div 
+      <div
+        data-bf-component="user-message-item"
+        data-bf-part="root"
+        data-bf-state={[expanded && 'expanded', isFailed && 'failed'].filter(Boolean).join(' ') || undefined}
         ref={containerRef}
         className={`user-message-item ${expanded ? 'user-message-item--expanded' : ''}${isFailed ? ' user-message-item--failed' : ''}`}
         data-testid="chat-user-message"
@@ -515,7 +519,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         data-failed={isFailed ? 'true' : 'false'}
       >
         {config?.showTimestamps && (
-          <div className="user-message-item__timestamp">
+          <div className="user-message-item__timestamp" data-bf-component="user-message-item" data-bf-part="timestamp">
             {formatDate(new Date(message.timestamp), {
               hour: '2-digit',
               minute: '2-digit',
@@ -538,7 +542,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
             excludeSessionId={resolvedSessionId}
           />
         ) : (
-          <div className="user-message-item__main">
+          <div className="user-message-item__main" data-bf-component="user-message-item" data-bf-part="main">
             {isFailed && (
             <span className="user-message-item__failed-avatar" aria-hidden>
               <CircleUser size={18} strokeWidth={1.75} />
@@ -556,6 +560,8 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
                 <div 
                   ref={contentRef}
                   className="user-message-item__content"
+                  data-bf-component="user-message-item"
+                  data-bf-part="content"
                   data-testid="chat-user-message-content"
                   data-turn-id={turnId}
                   onClick={handleToggleExpand}
@@ -569,7 +575,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
                   ) : displayText}
                 </div>
                 {steeringTag && (
-                  <div className={`user-message-item__steering-tag ${steeringTag.className}`}>
+                  <div className={`user-message-item__steering-tag ${steeringTag.className}`} data-bf-component="user-message-item" data-bf-part="steeringTag">
                     {steeringTag.label}
                   </div>
                 )}
@@ -579,6 +585,8 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
                 <div 
                   ref={contentRef}
                   className="user-message-item__content"
+                  data-bf-component="user-message-item"
+                  data-bf-part="content"
                   data-testid="chat-user-message-content"
                   data-turn-id={turnId}
                   onClick={handleToggleExpand}
@@ -592,13 +600,13 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
                   ) : displayText}
                 </div>
                 {steeringTag && (
-                  <div className={`user-message-item__steering-tag ${steeringTag.className}`}>
+                  <div className={`user-message-item__steering-tag ${steeringTag.className}`} data-bf-component="user-message-item" data-bf-part="steeringTag">
                     {steeringTag.label}
                   </div>
                 )}
               </>
             )}
-            <div className="user-message-item__actions">
+            <div className="user-message-item__actions" data-bf-component="user-message-item" data-bf-part="actions">
               <button
                 className={`user-message-item__copy-btn ${copied ? 'copied' : ''}`}
                 onClick={handleCopy}
@@ -650,11 +658,11 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         )}
 
         {message.images && message.images.length > 0 && (
-          <div className="user-message-item__images">
+          <div className="user-message-item__images" data-bf-component="user-message-item" data-bf-part="images">
             {message.images.map(img => {
               const src = img.dataUrl || (img.imagePath ? `https://asset.localhost/${encodeURIComponent(img.imagePath)}` : undefined);
               return src ? (
-                <div key={img.id} className="user-message-item__image-thumb" onClick={(e) => { e.stopPropagation(); setLightboxImage(src); }}>
+                <div data-bf-component="user-message-item" data-bf-part="image" key={img.id} className="user-message-item__image-thumb" onClick={(e) => { e.stopPropagation(); setLightboxImage(src); }}>
                   <img src={src} alt={img.name} />
                 </div>
               ) : null;
@@ -663,19 +671,19 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         )}
 
         {reproductionSteps && (
-          <div className="user-message-item__blocks">
+          <div className="user-message-item__blocks" data-bf-component="user-message-item" data-bf-part="blocks">
             {reproductionSteps && <ReproductionStepsBlock steps={reproductionSteps} />}
           </div>
         )}
 
         {lightboxImage && createPortal(
-          <div className="user-message-item__lightbox" onClick={() => setLightboxImage(null)}>
+          <div className="user-message-item__lightbox" onClick={() => setLightboxImage(null)} data-bf-component="user-message-item" data-bf-part="lightbox">
             <button className="user-message-item__lightbox-close" onClick={() => setLightboxImage(null)}>
               <X size={20} />
             </button>
             <img src={lightboxImage} alt="Preview" onClick={(e) => e.stopPropagation()} />
           </div>,
-          document.body,
+          getAppearanceOverlayHost(),
         )}
       </div>
     );

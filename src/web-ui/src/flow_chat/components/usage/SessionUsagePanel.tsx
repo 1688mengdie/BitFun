@@ -154,8 +154,8 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
 
   if (!report) {
     return (
-      <div className="session-usage-panel session-usage-panel--fallback">
-        <div className="session-usage-panel__fallback-toolbar">
+      <div data-bf-component="session-usage-panel" data-bf-part="root" data-bf-state="fallback" className="session-usage-panel session-usage-panel--fallback">
+        <div className="session-usage-panel__fallback-toolbar" data-bf-component="session-usage-panel" data-bf-part="header">
           <Tooltip content={copied ? t('usage.actions.copied') : t('usage.actions.copyMarkdown')}>
             <IconButton
               variant="ghost"
@@ -188,8 +188,8 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
   );
 
   return (
-    <div className="session-usage-panel">
-      <header className="session-usage-panel__header">
+    <div data-bf-component="session-usage-panel" data-bf-part="root" data-bf-tab={activeTab} className="session-usage-panel">
+      <header className="session-usage-panel__header" data-bf-component="session-usage-panel" data-bf-part="header">
         <div className="session-usage-panel__title-wrap">
           <div className="session-usage-panel__title-main">
             <h2>{t('usage.title')}</h2>
@@ -242,6 +242,8 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
 
       <nav
         className="session-usage-panel__tabs"
+        data-bf-component="session-usage-panel"
+        data-bf-part="tabs"
         role="tablist"
         aria-orientation="horizontal"
         aria-label={t('usage.panel.tabsLabel')}
@@ -259,6 +261,10 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
             aria-controls={tabPanelId(tab)}
             tabIndex={activeTab === tab ? 0 : -1}
             className={`session-usage-panel__tab${activeTab === tab ? ' session-usage-panel__tab--active' : ''}`}
+            data-bf-component="session-usage-panel"
+            data-bf-part="tab"
+            data-bf-tab={tab}
+            data-bf-state={activeTab === tab ? 'active' : undefined}
             onClick={() => setActiveTab(tab)}
             onKeyDown={event => handleTabKeyDown(event, tab)}
           >
@@ -269,6 +275,9 @@ export const SessionUsagePanel: React.FC<SessionUsagePanelProps> = ({
 
       <main
         className="session-usage-panel__body"
+        data-bf-component="session-usage-panel"
+        data-bf-part="body"
+        data-bf-tab={activeTab}
         role="tabpanel"
         id={tabPanelId(activeTab)}
         aria-labelledby={tabId(activeTab)}
@@ -330,7 +339,7 @@ function UsageMetaRow({
   onCopy?: () => void;
 }) {
   return (
-    <div className="session-usage-panel__meta-row">
+    <div data-bf-component="session-usage-panel" data-bf-part="metaRow" className="session-usage-panel__meta-row">
       <span className="session-usage-panel__meta-label">{label}</span>
       <span className="session-usage-panel__meta-value" title={value}>{value}</span>
       {onCopy && copyLabel && (
@@ -620,7 +629,7 @@ function UsageOverview({ report }: { report: SessionUsageReport }) {
   ];
 
   return (
-    <section className="session-usage-panel__section">
+    <section data-bf-component="session-usage-panel" data-bf-part="section" className="session-usage-panel__section">
       {report.coverage.level !== 'complete' && (
         <div className="session-usage-panel__notice">
           <AlertTriangle size={14} aria-hidden />
@@ -632,7 +641,7 @@ function UsageOverview({ report }: { report: SessionUsageReport }) {
         {metrics.map(metric => {
           const Icon = metric.icon;
           return (
-            <div className="session-usage-panel__overview-metric" key={metric.key}>
+            <div data-bf-component="session-usage-panel" data-bf-part="metric" className="session-usage-panel__overview-metric" key={metric.key}>
               <Icon size={16} aria-hidden />
               <div>
                 <span>{metric.label}</span>
@@ -953,7 +962,7 @@ function UsageFiles({
   }), [handleJumpToFileTurn, handleOpenFileDiff, openingDiffKey, redactPaths, report.files.files, report.files.scope, sessionId, t, workspacePath]);
 
   return (
-    <section className="session-usage-panel__section">
+    <section data-bf-component="session-usage-panel" data-bf-part="section" className="session-usage-panel__section">
       <div className="session-usage-panel__scope-line">
         <span>{t('usage.panel.fileScope')}</span>
         <UsageValue
@@ -984,7 +993,7 @@ function UsageFiles({
 function UsageErrors({ report, sessionId }: { report: SessionUsageReport; sessionId?: string }) {
   const { t } = useTranslation('flow-chat');
   return (
-    <section className="session-usage-panel__section">
+    <section data-bf-component="session-usage-panel" data-bf-part="section" className="session-usage-panel__section">
       <div className="session-usage-panel__scope-line">
         <span>{t('usage.panel.errorScope')}</span>
         <UsageValue
@@ -1107,7 +1116,7 @@ function UsageSlowest({ report, sessionId }: { report: SessionUsageReport; sessi
   }, [sessionId]);
 
   return (
-    <section className="session-usage-panel__section">
+    <section data-bf-component="session-usage-panel" data-bf-part="section" className="session-usage-panel__section">
       <div className="session-usage-panel__scope-line">
         <span>{t('usage.sections.slowest')}</span>
         <UsageValue
@@ -1260,7 +1269,7 @@ function UsageTable({ empty, emptyLabel, emptyDescription, emptyHelp, headers, r
 
   if (empty) {
     return (
-      <div className="session-usage-panel__empty">
+      <div data-bf-component="session-usage-panel" data-bf-part="empty" className="session-usage-panel__empty">
         <UsageValue value={emptyLabel} help={emptyHelp} strong />
         {emptyDescription && <span>{emptyDescription}</span>}
       </div>
@@ -1274,7 +1283,7 @@ function UsageTable({ empty, emptyLabel, emptyDescription, emptyHelp, headers, r
 
   return (
     <>
-      <div className="session-usage-panel__table-wrap">
+      <div data-bf-component="session-usage-panel" data-bf-part="table" className="session-usage-panel__table-wrap">
         <table className={['session-usage-panel__table', tableClassName].filter(Boolean).join(' ')}>
           <thead>
             <tr>

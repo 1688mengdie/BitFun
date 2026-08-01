@@ -26,7 +26,7 @@ export const CopyableTextPreview = React.forwardRef<HTMLElement, CopyableTextPre
   const { t } = useTranslation('flow-chat');
   const content = text?.trim()
     ? text
-    : <span className="copyable-text-preview__empty">{emptyText}</span>;
+    : <span className="copyable-text-preview__empty" data-bf-component="copyable-text-preview" data-bf-part="empty">{emptyText}</span>;
   const resolvedClassName = `copyable-text-preview${className ? ` ${className}` : ''}`;
   const copyText = typeof tooltipContent === 'string' && tooltipContent.trim()
     ? tooltipContent
@@ -39,11 +39,11 @@ export const CopyableTextPreview = React.forwardRef<HTMLElement, CopyableTextPre
   });
   const copyTooltip = copied ? t('toolCards.common.copied') : t('toolCards.common.copy');
   const node = as === 'code' ? (
-    <code ref={ref} className={resolvedClassName} {...restProps}>
+    <code ref={ref} className={resolvedClassName} {...restProps} data-bf-component="copyable-text-preview" data-bf-part="root">
       {content}
     </code>
   ) : (
-    <span ref={ref} className={resolvedClassName} {...restProps}>
+    <span ref={ref} className={resolvedClassName} {...restProps} data-bf-component="copyable-text-preview" data-bf-part="root">
       {content}
     </span>
   );
@@ -55,11 +55,14 @@ export const CopyableTextPreview = React.forwardRef<HTMLElement, CopyableTextPre
   return (
     <Tooltip
       content={
-        <div className="copyable-text-preview-tooltip-content">
-          <span className="copyable-text-preview-tooltip-content__text">{tooltipContent}</span>
+        <div className="copyable-text-preview-tooltip-content" data-bf-component="copyable-text-preview" data-bf-part="tooltipContent">
+          <span className="copyable-text-preview-tooltip-content__text" data-bf-component="copyable-text-preview" data-bf-part="tooltipText">{tooltipContent}</span>
           {copyText && (
             <IconButton
               className={`copyable-text-preview-tooltip__copy${copied ? ' copied' : ''}`}
+              data-bf-component="copyable-text-preview"
+              data-bf-part="copyAction"
+              data-bf-state={copied ? 'copied' : undefined}
               variant="ghost"
               size="xs"
               onClick={copy}
