@@ -40,6 +40,51 @@ export function absoluteSessionTurnIndexForLocalIndex(
   return localIndex + 1;
 }
 
+export function createAbsoluteSessionTurnIndexResolver(
+  session: Session,
+): (localIndex: number) => number {
+  const catalog = sessionTurnCatalog(session);
+  const catalogOrdinalByTurnId = new Map<string, number>();
+  const catalogOrdinalByStorageIndex = new Map<number, number>();
+  for (const entry of catalog?.entries ?? []) {
+    if (entry.turnId) {
+      catalogOrdinalByTurnId.set(entry.turnId, entry.ordinal);
+    }
+    catalogOrdinalByStorageIndex.set(entry.storageTurnIndex, entry.ordinal);
+  }
+  const partialTurnOffset = session.isPartial === true
+    ? Math.max(
+        0,
+        Math.max(
+          session.totalTurnCount ?? 0,
+          catalog?.totalTurnCount ?? 0,
+          session.dialogTurns.length,
+        ) - session.dialogTurns.length,
+      )
+    : 0;
+
+  return (localIndex: number): number => {
+    const turn = session.dialogTurns[localIndex];
+    if (!turn) {
+      return localIndex + 1;
+    }
+
+    const catalogOrdinal = catalogOrdinalByTurnId.get(turn.id)
+      ?? (
+        typeof turn.backendTurnIndex === 'number'
+          ? catalogOrdinalByStorageIndex.get(turn.backendTurnIndex)
+          : undefined
+      );
+    if (catalogOrdinal !== undefined) {
+      return catalogOrdinal + 1;
+    }
+    if (typeof turn.backendTurnIndex === 'number') {
+      return turn.backendTurnIndex + 1;
+    }
+    return partialTurnOffset + localIndex + 1;
+  };
+}
+
 export function absoluteSessionTurnIndexForId(
   session: Session,
   turnId: string,

@@ -33,6 +33,7 @@ import type { SessionUsagePanelTab } from '../usage/sessionUsagePanelTypes';
 import { coerceSessionUsageReport } from '../usage/usageReportUtils';
 import { resolveSessionRelationship } from '../../utils/sessionMetadata';
 import { isRemoteWorkspaceSession } from '../../utils/sessionWorkspace';
+import { absoluteSessionTurnIndexForId } from '../../utils/flowChatTurnOrdinal';
 import {
   composerPresentationToAccessibleText,
   composerPresentationContexts,
@@ -51,6 +52,8 @@ const log = createLogger('UserMessageItem');
 interface UserMessageItemProps {
   message: DialogTurn['userMessage'];
   turnId: string;
+  absoluteTurnIndex?: number;
+  turnStatus?: DialogTurn['status'];
   steeringStatus?: FlowUserSteeringItem['status'];
 }
 
@@ -83,7 +86,7 @@ function buildPresentationRerunPayload(presentation: ComposerPresentation): {
 }
 
 export const UserMessageItem = React.memo<UserMessageItemProps>(
-  ({ message, turnId, steeringStatus }) => {
+  ({ message, turnId, absoluteTurnIndex, turnStatus, steeringStatus }) => {
     const { t, formatDate } = useI18n('flow-chat');
     const {
       config,
@@ -137,19 +140,15 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       ?? activeSessionFromStore;
     const turnIndex = currentSession?.dialogTurns.findIndex(t => t.id === turnId) ?? -1;
     const dialogTurn = turnIndex >= 0 ? currentSession?.dialogTurns[turnIndex] : null;
-    const isFailed = dialogTurn?.status === 'error';
+    const resolvedTurnStatus = dialogTurn?.status ?? turnStatus;
+    const isFailed = resolvedTurnStatus === 'error';
     const resolvedSessionId = sessionId ?? currentSession?.sessionId;
-    const catalogTurnOrdinal = currentSession?.turnCatalog?.entries.find(
-      entry => entry.turnId === turnId,
-    )?.ordinal;
-    const partialTurnOffset = currentSession?.isPartial === true
-      ? Math.max(
-          0,
-          (currentSession.totalTurnCount ?? currentSession.dialogTurns.length)
-            - currentSession.dialogTurns.length,
-        )
-      : 0;
-    const actionTurnIndex = catalogTurnOrdinal ?? partialTurnOffset + turnIndex;
+    const resolvedAbsoluteTurnIndex = absoluteTurnIndex ?? (
+      currentSession ? absoluteSessionTurnIndexForId(currentSession, turnId) : undefined
+    );
+    const actionTurnIndex = resolvedAbsoluteTurnIndex !== undefined
+      ? resolvedAbsoluteTurnIndex - 1
+      : -1;
     const isRemoteSession = isRemoteWorkspaceSession(currentSession ?? undefined, null);
     const isSystemTriggered = Boolean(
       message?.metadata?.triggerSource && message.metadata.triggerSource !== 'desktop_ui',
@@ -158,14 +157,14 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       !steeringStatus &&
       canShowRollbackAction &&
       !!resolvedSessionId &&
-      turnIndex >= 0 &&
+      actionTurnIndex >= 0 &&
       !isRemoteSession &&
       !isRollingBack &&
       !isEditSubmitting;
     const canEditBase =
       allowUserMessageEdit &&
       !!resolvedSessionId &&
-      turnIndex >= 0 &&
+      actionTurnIndex >= 0 &&
       !isRemoteSession &&
       !isThreadGoalSystemMessage &&
       !isSystemTriggered &&
@@ -178,7 +177,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         ? t('message.cannotEdit')
         : steeringStatus
           ? t('message.cannotEdit')
-          : !resolvedSessionId || turnIndex < 0
+          : !resolvedSessionId || actionTurnIndex < 0
               ? t('message.editDisabledHistoryNotReady')
               : t('message.cannotEdit');
     const rollbackTooltip = canRollback
@@ -331,7 +330,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     }, [beginEdit, canEdit, messageContent, turnId]);
 
     const handleSubmitEdit = useCallback(async (submittedPresentation?: ComposerPresentation) => {
-      if (!resolvedSessionId || turnIndex < 0 || isEditSubmitting) return;
+      if (!resolvedSessionId || actionTurnIndex < 0 || isEditSubmitting) return;
 
       const editedPresentation = submittedPresentation ?? composerPresentation;
       const editedContent = editedPresentation
@@ -422,7 +421,6 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       setEditSubmitting,
       t,
       turnId,
-      turnIndex,
     ]);
     
     // Toggle expanded state.
@@ -513,7 +511,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         className={`user-message-item ${expanded ? 'user-message-item--expanded' : ''}${isFailed ? ' user-message-item--failed' : ''}`}
         data-testid="chat-user-message"
         data-turn-id={turnId}
-        data-status={dialogTurn?.status || ''}
+        data-status={resolvedTurnStatus || ''}
         data-failed={isFailed ? 'true' : 'false'}
       >
         {config?.showTimestamps && (
