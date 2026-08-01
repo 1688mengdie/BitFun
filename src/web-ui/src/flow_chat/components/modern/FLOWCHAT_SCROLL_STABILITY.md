@@ -448,6 +448,10 @@ these ownership rules intact:
   toward the soft budget. The live tail, active presentation, pending target,
   and in-flight request intervals are protected; merged cached ranges may be
   sliced, but the active presentation is never trimmed by cache eviction.
+- Passive live-tail updates remain hidden while the user reads a history
+  window. An explicit `send-message` Turn-pin request first restores the tail
+  presentation, then lets the existing sticky-latest pin materialize the newly
+  submitted Turn.
 - Search, edit, rollback, and compatibility fallback are explicit full-history
   consumers. Their shared ensure operation deduplicates an existing request and
   applies the completed projection only after the caller asks for it.

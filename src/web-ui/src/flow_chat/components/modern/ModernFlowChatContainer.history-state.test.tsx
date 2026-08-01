@@ -62,6 +62,9 @@ const headerPropsMock = vi.hoisted(() => ({
 const virtualListPropsMock = vi.hoisted(() => ({
   latest: null as Record<string, unknown> | null,
 }));
+const navigationOptionsMock = vi.hoisted(() => ({
+  latest: null as Record<string, unknown> | null,
+}));
 const agentApiMock = vi.hoisted(() => ({
   listBackgroundCommandActivities: vi.fn(() => Promise.resolve({ activities: [] })),
   onPermissionRequestEvent: vi.fn(() => vi.fn()),
@@ -184,7 +187,9 @@ vi.mock('./useFlowChatFileActions', () => ({
 }));
 
 vi.mock('./useFlowChatNavigation', () => ({
-  useFlowChatNavigation: vi.fn(),
+  useFlowChatNavigation: (options: Record<string, unknown>) => {
+    navigationOptionsMock.latest = options;
+  },
 }));
 
 vi.mock('./useFlowChatCopyDialog', () => ({
@@ -338,6 +343,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     searchStateMock.clearSearch.mockReset();
     headerPropsMock.latest = null;
     virtualListPropsMock.latest = null;
+    navigationOptionsMock.latest = null;
     clearHistorySessionOpenTransition();
   });
 
@@ -1584,13 +1590,49 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.scrollToTurnEndAndClearPin.mock.calls.length).toBe(latestTailEndCallCount);
 
     const restoreTailSpy = vi.spyOn(flowChatStore, 'restoreSessionTailPresentation');
+    const latestEndCallCountBeforeSend = virtualListMock.scrollToLatestEndPosition.mock.calls.length;
+    await act(async () => {
+      const onBeforeTurnPinRequest = navigationOptionsMock.latest?.onBeforeTurnPinRequest as (
+        request: {
+          sessionId: string;
+          turnId: string;
+          source: 'send-message';
+          behavior: 'auto';
+          pinMode: 'sticky-latest';
+        },
+      ) => void;
+      onBeforeTurnPinRequest({
+        sessionId: 'session-1',
+        turnId: 'turn-11',
+        source: 'send-message',
+        behavior: 'auto',
+        pinMode: 'sticky-latest',
+      });
+    });
+    expect(restoreTailSpy).toHaveBeenCalledTimes(1);
+    expect(restoreTailSpy).toHaveBeenLastCalledWith('session-1');
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
+    expect((virtualListPropsMock.latest?.items as Array<{ turnId: string }>).map(item => item.turnId)).toEqual([
+      'turn-9',
+      'turn-10',
+      'turn-11',
+    ]);
+    expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCountBeforeSend);
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-turn-id="turn-5"]')?.click();
+      await Promise.resolve();
+    });
+    expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
+
     await act(async () => {
       (virtualListPropsMock.latest?.onRequestJumpToLatest as (() => void) | undefined)?.();
     });
     flushAnimationFrame();
-    expect(restoreTailSpy).toHaveBeenCalledWith('session-1');
+    expect(restoreTailSpy).toHaveBeenCalledTimes(2);
+    expect(restoreTailSpy).toHaveBeenLastCalledWith('session-1');
     expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'tail' });
-    expect(virtualListMock.scrollToLatestEndPosition).toHaveBeenCalledOnce();
+    expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCountBeforeSend + 1);
 
     restoreTailSpy.mockRestore();
     loadSpy.mockRestore();
