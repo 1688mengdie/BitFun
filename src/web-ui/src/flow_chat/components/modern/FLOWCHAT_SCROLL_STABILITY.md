@@ -443,6 +443,9 @@ these ownership rules intact:
   Prepending or trimming above it must retain the existing element-anchor
   transaction until the same user message returns to its captured viewport
   offset.
+- A rejected or failed adjacent-window request must release only the element
+  anchor lease created for that request. A stale completion must never release
+  a newer navigation or layout-preservation transaction.
 - The non-tail loaded Turn cache uses a 48-Turn soft budget and a 64-Turn hard
   budget. Crossing the hard budget evicts least-recently-used ordinals back
   toward the soft budget. The live tail, active presentation, pending target,
