@@ -44,6 +44,7 @@ import {
 } from '../../utils/flowChatTurnScrollPolicy';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { startupTrace } from '@/shared/utils/startupTrace';
+import { createLogger } from '@/shared/utils/logger';
 import { flowChatDiagnostics } from '@/infrastructure/diagnostics/flowChatDiagnostics';
 import {
   estimateVirtualMessageItemHeight,
@@ -104,6 +105,8 @@ import {
   FLOWCHAT_COLLAPSE_INTENT_TTL_MS,
 } from './flowChatCollapseMotion';
 import './VirtualMessageList.scss';
+
+const log = createLogger('VirtualMessageList');
 
 const PINNED_TURN_VIEWPORT_OFFSET_PX = 57; // Keep in sync with `.message-list-header`.
 const TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX = 6;
@@ -254,7 +257,9 @@ export interface VirtualMessageListProps {
   historyWindow?: ActiveTurnRenderRange | null;
   presentationRevision?: number;
   historyBoundaryState?: Record<SessionHistoryWindowDirection, 'idle' | 'loading' | 'error'>;
-  onHistoryWindowBoundaryIntent?: (direction: SessionHistoryWindowDirection) => void;
+  onHistoryWindowBoundaryIntent?: (
+    direction: SessionHistoryWindowDirection,
+  ) => boolean | void | Promise<boolean | void>;
   onRequestJumpToLatest?: () => void;
   onUserScrollIntent?: () => void;
 }
@@ -519,6 +524,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     reason: string;
   } | null>(null);
   const historyPagingRetryTimerRef = useRef<number | null>(null);
+  const catalogHistoryWindowRequestRef = useRef<Promise<boolean | void> | null>(null);
   const pendingStaticTurnPinRef = useRef<PendingStaticTurnPinState | null>(null);
   const pendingStaticLatestScrollBehaviorRef = useRef<('auto' | 'smooth') | null>(null);
   const staticHistoryBottomReturnIntentUntilMsRef = useRef(0);
@@ -3364,6 +3370,42 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
     setHistoryPagingLoading(true);
 
+    if (
+      activeSession.turnCatalog?.sessionId === sessionId
+      && onHistoryWindowBoundaryIntent
+    ) {
+      if (catalogHistoryWindowRequestRef.current) {
+        return;
+      }
+      const request = Promise.resolve(onHistoryWindowBoundaryIntent('before'))
+        .then(handled => {
+          if (handled || activeSessionIdRef.current !== sessionId) {
+            return handled;
+          }
+          setHistoryPagingLoading(false);
+          showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
+          return handled;
+        })
+        .catch(error => {
+          if (activeSessionIdRef.current === sessionId) {
+            setHistoryPagingLoading(false);
+            showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
+          }
+          log.warn('Failed to request an older catalog Turn window', {
+            sessionId,
+            error,
+          });
+          return false;
+        })
+        .finally(() => {
+          if (catalogHistoryWindowRequestRef.current === request) {
+            catalogHistoryWindowRequestRef.current = null;
+          }
+        });
+      catalogHistoryWindowRequestRef.current = request;
+      return;
+    }
+
     if (!flowChatStore.hasDeferredSessionHistoryProjection(sessionId)) {
       if (flowChatStore.hasPendingSessionHistoryCompletion(sessionId)) {
         const released = flowChatStore.releaseSessionHistoryCompletionAfterInitialPaint(sessionId, {
@@ -3415,10 +3457,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     activeSession?.historyState,
     activeSession?.isPartial,
     activeSession?.sessionId,
+    activeSession?.turnCatalog,
     captureHistoryPrependAnchor,
     clearPreviousHistoryBoundaryStatus,
     showPreviousHistoryBoundaryStatus,
     presentationMode,
+    onHistoryWindowBoundaryIntent,
     virtualItems.length,
   ]);
 
@@ -3544,6 +3588,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       window.clearTimeout(historyPagingRetryTimerRef.current);
       historyPagingRetryTimerRef.current = null;
     }
+    catalogHistoryWindowRequestRef.current = null;
     pendingHistoryPrependAnchorRef.current = null;
     setHistoryPagingActive(false);
     setHistoryPagingLoading(false);

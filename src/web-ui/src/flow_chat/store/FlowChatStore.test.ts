@@ -1187,6 +1187,9 @@ describe('FlowChatStore session model selection', () => {
 describe('FlowChatStore historical session hydration state', () => {
   beforeEach(() => {
     peerModeFlagMock.active = false;
+    apiMocks.restoreSessionView.mockReset();
+    apiMocks.restoreSessionWithTurns.mockReset();
+    apiMocks.loadSessionTurnWindow.mockReset();
     apiMocks.accountFetchSessionTurns.mockResolvedValue(false);
     vi.stubGlobal('CustomEvent', class {
       type: string;
@@ -2448,7 +2451,7 @@ describe('FlowChatStore historical session hydration state', () => {
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['latest prompt']);
 
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'test')).toBe(true);
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'test')).toBe(true);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['older prompt', 'latest prompt']);
@@ -2546,7 +2549,7 @@ describe('FlowChatStore historical session hydration state', () => {
 
       expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(2);
       expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(true);
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'test')).toBe(true);
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'test')).toBe(true);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['older prompt', 'latest prompt', 'new prompt']);
@@ -2556,7 +2559,7 @@ describe('FlowChatStore historical session hydration state', () => {
     }
   });
 
-  it('reveals a bounded previous history window from deferred cache without applying the full projection', async () => {
+  it('skips automatic full hydration for catalog-capable restores and hydrates on demand', async () => {
     vi.useFakeTimers();
     const turnData = (turnIndex: number) => ({
       turnId: `turn-${turnIndex}`,
@@ -2639,53 +2642,36 @@ describe('FlowChatStore historical session hydration state', () => {
 
     try {
       await flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun');
-      flowChatStore.releaseSessionHistoryCompletionAfterInitialPaint('history-1');
-      await advanceReleasedLocalFullHistoryCompletion();
+      expect(flowChatStore.hasPendingSessionHistoryCompletion('history-1')).toBe(false);
+      expect(flowChatStore.releaseSessionHistoryCompletionAfterInitialPaint('history-1')).toBe(false);
+      await vi.runOnlyPendingTimersAsync();
+      await flushAsyncWork();
 
-      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(true);
+      expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(1);
+      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(false);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.id)
       ).toEqual(['turn-5']);
+      expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toMatchObject({
+        revision: 'partial-catalog',
+        complete: false,
+        totalTurnCount: 5,
+      });
+
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'search')).toBe(true);
+      expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(2);
+      expect(
+        flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.id)
+      ).toEqual(['turn-1', 'turn-2', 'turn-3', 'turn-4', 'turn-5']);
       expect(flowChatStore.getState().sessions.get('history-1')?.turnCatalog).toMatchObject({
         revision: 'complete-catalog',
         complete: true,
         totalTurnCount: 5,
       });
-
-      expect(flowChatStore.revealPreviousSessionHistoryWindow('history-1', 'wheel-up', 2)).toBe(true);
-
-      const session = flowChatStore.getState().sessions.get('history-1');
-      expect(session?.dialogTurns.map(turn => turn.id)).toEqual(['turn-3', 'turn-4', 'turn-5']);
-      expect(session).toMatchObject({
-        isPartial: true,
-        loadedTurnCount: 3,
-        totalTurnCount: 5,
-      });
-      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(true);
-
-      const newTurn = {
-        id: 'turn-6',
-        sessionId: 'history-1',
-        userMessage: { id: 'user-6', content: 'new prompt', timestamp: 6 },
-        modelRounds: [],
-        status: 'processing',
-        startTime: 6,
-      } as any;
-      flowChatStore.addDialogTurn('history-1', newTurn);
-      expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
-        loadedTurnCount: 4,
-        totalTurnCount: 6,
-      });
-
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'search')).toBe(true);
-      expect(
-        flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.id)
-      ).toEqual(['turn-1', 'turn-2', 'turn-3', 'turn-4', 'turn-5', 'turn-6']);
-      expect(flowChatStore.getState().sessions.get('history-1')?.dialogTurns[5]).toBe(newTurn);
       expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
         isPartial: false,
-        loadedTurnCount: 6,
-        totalTurnCount: 6,
+        loadedTurnCount: 5,
+        totalTurnCount: 5,
       });
       expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(false);
     } finally {
@@ -2844,7 +2830,7 @@ describe('FlowChatStore historical session hydration state', () => {
 
       expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(1);
       expect(flowChatStore.hasDeferredSessionHistoryProjection('history-1')).toBe(true);
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'test')).toBe(true);
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'test')).toBe(true);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['older prompt', 'latest prompt']);
@@ -3141,7 +3127,7 @@ describe('FlowChatStore historical session hydration state', () => {
     );
   });
 
-  it('defers remote idle full history completion instead of replacing the visible tail', async () => {
+  it('lets an explicit full-history consumer bypass remote idle deferral', async () => {
     vi.useFakeTimers();
     let idleCallback: (() => void) | null = null;
     const originalRequestIdleCallback = (globalThis as any).requestIdleCallback;
@@ -3234,25 +3220,22 @@ describe('FlowChatStore historical session hydration state', () => {
         immediate: true,
         reason: 'test',
       })).toBe(false);
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-remote', 'search-before-idle')).toBe(false);
-      expect(
-        ((flowChatStore as any).fullHistoryProjectionApplyRequests as Set<string>).has('history-remote')
-      ).toBe(false);
-
-      idleCallback?.();
+      expect(await flowChatStore.ensureSessionFullHistory(
+        'history-remote',
+        'search-before-idle',
+      )).toBe(true);
       await hydrationPromise;
 
       expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(2);
-      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-remote')).toBe(true);
+      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-remote')).toBe(false);
       expect(
         flowChatStore.getState().sessions.get('history-remote')?.dialogTurns.map(turn => turn.userMessage.content)
-      ).toEqual(['latest prompt']);
+      ).toEqual(['older prompt', 'latest prompt']);
+      expect(flowChatStore.getState().sessions.get('history-remote')?.isPartial).toBe(false);
 
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-remote', 'search')).toBe(false);
-      expect(flowChatStore.hasDeferredSessionHistoryProjection('history-remote')).toBe(true);
-      expect(
-        flowChatStore.getState().sessions.get('history-remote')?.dialogTurns.map(turn => turn.userMessage.content)
-      ).toEqual(['latest prompt']);
+      idleCallback?.();
+      await flushAsyncWork();
+      expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(2);
     } finally {
       (globalThis as any).requestIdleCallback = originalRequestIdleCallback;
       (globalThis as any).cancelIdleCallback = originalCancelIdleCallback;
@@ -3355,7 +3338,7 @@ describe('FlowChatStore historical session hydration state', () => {
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['latest prompt']);
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'test')).toBe(true);
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'test')).toBe(true);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['older prompt', 'latest prompt']);
@@ -3461,7 +3444,7 @@ describe('FlowChatStore historical session hydration state', () => {
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['latest prompt']);
-      expect(flowChatStore.requestSessionFullHistoryProjection('history-1', 'test')).toBe(true);
+      expect(await flowChatStore.ensureSessionFullHistory('history-1', 'test')).toBe(true);
       expect(
         flowChatStore.getState().sessions.get('history-1')?.dialogTurns.map(turn => turn.userMessage.content)
       ).toEqual(['older prompt', 'latest prompt']);
@@ -3961,6 +3944,69 @@ describe('FlowChatStore historical session hydration state', () => {
     ).toEqual(['turn-12', 'turn-13', 'turn-14']);
   });
 
+  it('activates an adjacent catalog window from the restored tail without hydrating the session', async () => {
+    const catalog = createTurnCatalog(15);
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: {
+        sessionId: 'history-1',
+        sessionName: 'History 1',
+        agentType: 'agentic',
+        state: 'Idle',
+        turnCount: 15,
+        createdAt: 1,
+      },
+      turns: [12, 13, 14].map(index => createPersistedTurn(index)),
+      turnCatalog: catalog,
+      contextRestoreState: 'pending',
+      isPartial: true,
+      loadedTurnCount: 3,
+      totalTurnCount: 15,
+    });
+    apiMocks.loadSessionTurnWindow.mockResolvedValueOnce({
+      status: 'ready',
+      catalogRevision: catalog.revision,
+      totalTurnCount: 15,
+      startOrdinal: 0,
+      endOrdinalExclusive: 12,
+      targetTurnId: 'turn-11',
+      turns: Array.from({ length: 12 }, (_, index) => createPersistedTurn(index)),
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+
+    await flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun');
+    const loaded = await flowChatStore.loadSessionTurnWindow('history-1', 11, {
+      source: 'prefetch',
+      before: 12,
+      after: 1,
+    });
+    expect(loaded).toMatchObject({ status: 'ready', isCurrent: true });
+
+    const presentation = flowChatStore.activateSessionHistoryWindowFromTail('history-1', 11);
+    expect(presentation?.range).toMatchObject({
+      startOrdinal: 0,
+      endOrdinalExclusive: 15,
+      targetTurnId: null,
+      mode: 'history-window',
+    });
+    expect(presentation?.turns).toHaveLength(15);
+    expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
+      isPartial: true,
+      loadedTurnCount: 3,
+      totalTurnCount: 15,
+    });
+    expect(apiMocks.restoreSessionView).toHaveBeenCalledTimes(1);
+  });
+
   it('caches an older response without letting it remain the current navigation intent', async () => {
     const catalog = createTurnCatalog(10);
     flowChatStore.setState(() => ({
@@ -4215,14 +4261,14 @@ describe('FlowChatStore historical session hydration state', () => {
       ]]),
       activeSessionId: 'history-1',
     }));
-    const releaseFallback = vi.fn();
+    const startFallback = vi.fn();
     ((flowChatStore as any).fullHistoryHydrationRequests as Map<string, unknown>).set('fallback', {
       sessionId: 'history-1',
       remote: false,
       requireActiveSession: true,
       sessionTraceId: 'fallback',
       promise: Promise.resolve(),
-      releaseAfterInitialPaint: releaseFallback,
+      startNow: startFallback,
     });
     apiMocks.loadSessionTurnWindow.mockRejectedValueOnce(
       new Error('unknown command load_session_turn_window'),
@@ -4232,10 +4278,7 @@ describe('FlowChatStore historical session hydration state', () => {
       status: 'unsupported',
       fallbackRequested: true,
     });
-    expect(releaseFallback).toHaveBeenCalledWith({
-      immediate: true,
-      reason: 'turn-window-unsupported',
-    });
+    expect(startFallback).toHaveBeenCalledTimes(1);
     await expect(flowChatStore.loadSessionTurnWindow('history-1', 1)).resolves.toMatchObject({
       status: 'unsupported',
     });

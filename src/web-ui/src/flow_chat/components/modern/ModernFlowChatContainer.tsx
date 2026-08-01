@@ -283,7 +283,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     IDLE_HISTORY_BOUNDARY_STATE,
   );
   const historyPresentationRef = useRef<FlowChatHistoryPresentationState | null>(null);
-  const historyBoundaryRequestsRef = useRef<Record<SessionHistoryWindowDirection, Promise<void> | null>>({
+  const historyBoundaryRequestsRef = useRef<Record<SessionHistoryWindowDirection, Promise<boolean> | null>>({
     before: null,
     after: null,
   });
@@ -331,6 +331,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const turnSummariesRef = useRef<FlowChatTurnSummary[]>([]);
   const turnRailTurnIdsRef = useRef<Set<string>>(new Set());
   const requestTurnPinRef = useRef<((turnId: string, behavior?: ScrollBehavior) => FlowChatTurnPinRequestStatus) | null>(null);
+  const searchFullHistorySessionIdRef = useRef<string | null>(null);
   const virtualListRef = useRef<VirtualMessageListRef>(null);
   const chatScopeRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
@@ -381,7 +382,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [activeSession?.workspacePath, workspacePath]);
   const {
     searchQuery,
-    onSearchChange,
+    onSearchChange: setSearchQuery,
     matches: searchMatches,
     matchIndices: searchMatchIndices,
     currentMatchIndex: searchCurrentMatchIndex,
@@ -998,6 +999,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useLayoutEffect(() => {
     autoPinnedTurnKeyRef.current = null;
     releasedHistoryCompletionKeyRef.current = null;
+    searchFullHistorySessionIdRef.current = null;
   }, [activeSession?.sessionId]);
 
   useEffect(() => {
@@ -1329,6 +1331,28 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     return true;
   }, [activeSession?.sessionId]);
 
+  const handleSearchChange = useCallback((query: string) => {
+    setSearchQuery(query);
+    const sessionId = activeSession?.sessionId;
+    if (
+      !query.trim()
+      || !sessionId
+      || activeSession.isPartial !== true
+      || searchFullHistorySessionIdRef.current === sessionId
+    ) {
+      return;
+    }
+
+    searchFullHistorySessionIdRef.current = sessionId;
+    void flowChatStore.ensureSessionFullHistory(sessionId, 'flowchat-search').then(ready => {
+      if (ready && activeSessionIdRef.current === sessionId) {
+        restoreTailPresentation();
+      } else if (activeSessionIdRef.current === sessionId) {
+        searchFullHistorySessionIdRef.current = null;
+      }
+    });
+  }, [activeSession?.isPartial, activeSession?.sessionId, restoreTailPresentation, setSearchQuery]);
+
   const handleJumpToTurn = useCallback(async (target: FlowChatTurnRailItem | string) => {
     const targetItem = typeof target === 'string'
       ? turnRailItems.find(turn => turn.turnId === target)
@@ -1408,12 +1432,12 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     }
 
     if (result.status === 'unsupported' || result.status === 'not-found') {
-      const historyRequested = flowChatStore.requestSessionFullHistoryProjection(
+      const historyReady = await flowChatStore.ensureSessionFullHistory(
         sessionId,
         'turn-rail-navigation',
       );
-      const historyPending = flowChatStore.hasPendingSessionHistoryCompletion(sessionId);
-      if (historyRequested || historyPending || result.fallbackRequested) {
+      if (historyReady && activeSessionIdRef.current === sessionId) {
+        restoreTailPresentation();
         setQueuedTurnNavigation({
           ordinal: targetItem.ordinal,
           turnId: targetItem.turnId,
@@ -1444,31 +1468,54 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeSessionIdRef.current = activeSession?.sessionId ?? null;
   }, [activeSession?.sessionId]);
 
-  const handleHistoryWindowBoundaryIntent = useCallback((direction: SessionHistoryWindowDirection) => {
-    const presentation = historyPresentationRef.current;
-    const sessionId = activeSessionIdRef.current;
-    if (
-      !presentation
-      || !sessionId
-      || presentation.sessionId !== sessionId
-      || historyBoundaryRequestsRef.current[direction]
-    ) {
-      return;
+  const handleHistoryWindowBoundaryIntent = useCallback((
+    direction: SessionHistoryWindowDirection,
+  ): Promise<boolean> => {
+    const existingRequest = historyBoundaryRequestsRef.current[direction];
+    if (existingRequest) {
+      return existingRequest;
     }
 
-    const totalTurnCount = Math.max(
-      flowChatStore.getSessionHistoryViewState(sessionId)?.catalog?.totalTurnCount ?? 0,
-      flowChatStore.getState().sessions.get(sessionId)?.totalTurnCount ?? 0,
-    );
-    const targetOrdinal = direction === 'before'
-      ? presentation.range.startOrdinal - 1
-      : presentation.range.endOrdinalExclusive;
-    if (targetOrdinal < 0 || targetOrdinal >= totalTurnCount) {
-      return;
-    }
-
-    setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
     const request = (async () => {
+      const presentation = historyPresentationRef.current;
+      const sessionId = activeSessionIdRef.current;
+      if (!sessionId || (presentation && presentation.sessionId !== sessionId)) {
+        return false;
+      }
+
+      const session = flowChatStore.getState().sessions.get(sessionId);
+      const historyView = flowChatStore.getSessionHistoryViewState(sessionId);
+      const totalTurnCount = Math.max(
+        historyView?.catalog?.totalTurnCount ?? 0,
+        session?.totalTurnCount ?? 0,
+      );
+      let targetOrdinal: number;
+      if (presentation) {
+        targetOrdinal = direction === 'before'
+          ? presentation.range.startOrdinal - 1
+          : presentation.range.endOrdinalExclusive;
+      } else {
+        if (
+          direction !== 'before'
+          || session?.isPartial !== true
+          || session.turnCatalog?.sessionId !== sessionId
+        ) {
+          return false;
+        }
+        const tailOrdinal = totalTurnCount - 1;
+        const tailRange = historyView?.loadedRanges.find(range =>
+          range.startOrdinal <= tailOrdinal && range.endOrdinalExclusive > tailOrdinal
+        );
+        if (!tailRange) {
+          return false;
+        }
+        targetOrdinal = tailRange.startOrdinal - 1;
+      }
+      if (targetOrdinal < 0 || targetOrdinal >= totalTurnCount) {
+        return false;
+      }
+
+      setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
       try {
         const result = await flowChatStore.loadSessionTurnWindow(sessionId, targetOrdinal, {
           source: 'prefetch',
@@ -1476,19 +1523,32 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           after: direction === 'after' ? 12 : 1,
         });
         if (!result.isCurrent || activeSessionIdRef.current !== sessionId) {
-          return;
+          return false;
         }
         if (result.status !== 'ready') {
+          if (result.status === 'unsupported') {
+            const historyReady = await flowChatStore.ensureSessionFullHistory(
+              sessionId,
+              'sequential-history-navigation',
+            );
+            if (historyReady && activeSessionIdRef.current === sessionId) {
+              setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
+              return true;
+            }
+          }
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
-          return;
+          return false;
         }
 
-        const extended = flowChatStore.extendSessionHistoryWindow(sessionId, direction);
-        if (!extended) {
+        const nextPresentation = presentation
+          ? flowChatStore.extendSessionHistoryWindow(sessionId, direction)
+          : flowChatStore.activateSessionHistoryWindowFromTail(sessionId, targetOrdinal);
+        if (!nextPresentation) {
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
-          return;
+          return false;
         }
-        applyHistoryPresentation(sessionId, extended, { completedBoundary: direction });
+        applyHistoryPresentation(sessionId, nextPresentation, { completedBoundary: direction });
+        return true;
       } catch (error) {
         if (activeSessionIdRef.current === sessionId) {
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
@@ -1499,11 +1559,13 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           targetOrdinal,
           error,
         });
-      } finally {
-        historyBoundaryRequestsRef.current[direction] = null;
+        return false;
       }
-    })();
+    })().finally(() => {
+      historyBoundaryRequestsRef.current[direction] = null;
+    });
     historyBoundaryRequestsRef.current[direction] = request;
+    return request;
   }, [applyHistoryPresentation]);
 
   useEffect(() => {
@@ -1904,7 +1966,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             if (turnId) handleJumpToTurn(turnId);
           }}
           searchQuery={searchQuery}
-          onSearchChange={onSearchChange}
+          onSearchChange={handleSearchChange}
           searchMatchCount={searchMatches.length}
           searchCurrentMatch={searchMatches.length > 0 ? searchCurrentMatchIndex + 1 : 0}
           onSearchNext={handleSearchNext}
