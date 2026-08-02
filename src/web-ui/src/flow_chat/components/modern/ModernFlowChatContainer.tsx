@@ -328,8 +328,20 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const activeViewportIntent = viewportIntent?.sessionId === activeSession?.sessionId
     ? viewportIntent
     : null;
+  const activeSessionKnownTurnCount = activeSession
+    ? Math.max(
+      activeSession.totalTurnCount ?? 0,
+      activeSession.turnCatalog?.totalTurnCount ?? 0,
+      activeSession.dialogTurns.length,
+    )
+    : 0;
+  const activeHistoryPresentationFitsSession = Boolean(
+    activeHistoryPresentation
+    && activeHistoryPresentation.range.endOrdinalExclusive <= activeSessionKnownTurnCount
+  );
   const isShowingHistoryPresentation = Boolean(
     activeHistoryPresentation
+    && activeHistoryPresentationFitsSession
     && activeViewportIntent?.kind === 'turn'
     && activeViewportIntent.source === 'history-range'
   );
@@ -418,6 +430,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     isRenderingContinuousHistoryProjection,
     renderedHistoryPresentation,
   ]);
+
   const {
     requests: permissionRequests,
     activeBatch: activePermissionBatch,
@@ -600,6 +613,31 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeViewportIntent?.kind,
     continuousHistoryProjectionEligible,
     continuousProjectionSessionId,
+  ]);
+
+  useEffect(() => {
+    if (!activeHistoryPresentation || activeHistoryPresentationFitsSession) {
+      return;
+    }
+    historyPresentationOwnerGenerationRef.current += 1;
+    historyPresentationRef.current = null;
+    setHistoryPresentation(null);
+    setContinuousProjectionSessionId(null);
+    if (
+      activeViewportIntent?.kind === 'turn'
+      && activeViewportIntent.source === 'history-range'
+    ) {
+      updateViewportIntent(activeSession?.sessionId
+        ? { kind: 'live-tail', sessionId: activeSession.sessionId }
+        : null);
+    }
+    setHistoryBoundaryState(IDLE_HISTORY_BOUNDARY_STATE);
+  }, [
+    activeHistoryPresentation,
+    activeHistoryPresentationFitsSession,
+    activeSession?.sessionId,
+    activeViewportIntent,
+    updateViewportIntent,
   ]);
 
   useEffect(() => {
