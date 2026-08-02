@@ -1095,6 +1095,21 @@ export const requiredContentRules = [
     ],
   },
   {
+    path: 'src/crates/execution/agent-runtime/src/subagent_task.rs',
+    reason:
+      'agent-runtime must own provider-neutral subagent Task completion presentation shared by ordinary Task and product command delegation',
+    patterns: [
+      {
+        regex: /\bpub struct SubagentTaskCompletionResultInput\b/,
+        message: 'missing provider-neutral subagent Task completion input',
+      },
+      {
+        regex: /\bpub fn subagent_task_completion_result\b/,
+        message: 'missing provider-neutral subagent Task completion formatter',
+      },
+    ],
+  },
+  {
     path: 'src/crates/execution/agent-runtime/src/deep_review/mod.rs',
     reason:
       'agent-runtime must own provider-neutral DeepReview policy, manifest, budget, queue, report, and shared-context runtime state',
@@ -1180,7 +1195,11 @@ export const requiredContentRules = [
       },
       {
         regex: /\bpub fn deep_review_task_completion_result\b/,
-        message: 'missing DeepReview task completion result presentation owner function',
+        message: 'missing DeepReview task completion result compatibility wrapper',
+      },
+      {
+        regex: /crate::subagent_task::subagent_task_completion_result/,
+        message: 'missing DeepReview delegation to the provider-neutral Task formatter',
       },
       {
         regex: /\bpub fn deep_review_cancelled_reviewer_result\b/,
@@ -2521,10 +2540,6 @@ export const requiredContentRules = [
         message: 'missing DeepReview reviewer admission queue runtime delegation',
       },
       {
-        regex: /runtime_task_execution::deep_review_task_completion_result/,
-        message: 'missing DeepReview task completion result runtime delegation',
-      },
-      {
         regex: /runtime_task_execution::deep_review_cancelled_reviewer_result/,
         message: 'missing DeepReview cancelled reviewer result runtime delegation',
       },
@@ -2579,8 +2594,8 @@ export const requiredContentRules = [
         message: 'missing TaskTool DeepReview retry guidance facade call',
       },
       {
-        regex: /deep_review_task_adapter::deep_review_task_completion_result/,
-        message: 'missing TaskTool DeepReview completion result facade call',
+        regex: /bitfun_agent_runtime::subagent_task::subagent_task_completion_result/,
+        message: 'missing TaskTool provider-neutral completion result owner call',
       },
       {
         regex: /DeepReviewProviderCapacityRetryRuntime::default/,
@@ -3865,6 +3880,10 @@ export const requiredContentRules = [
         message: 'agentic runtime must stay behind product-full for no-default builds',
       },
       {
+        regex: /#\[cfg\(feature = "product-full"\)\]\s*mod external_subagents\b/s,
+        message: 'external subagent product assembly must stay behind product-full',
+      },
+      {
         regex: /#\[cfg\(feature = "product-domains"\)\]\s*pub mod function_agents\b/s,
         message: 'function-agent product domain facade must stay behind product-domains',
       },
@@ -3873,8 +3892,30 @@ export const requiredContentRules = [
         message: 'MiniApp product domain facade must stay behind product-domains',
       },
       {
-        regex: /#\[cfg\(feature = "service-integrations"\)\]\s*pub\(crate\) mod service_agent_runtime\b/s,
-        message: 'service agent runtime owner assembly must stay behind service-integrations',
+        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub\(crate\) mod service_agent_runtime\b/s,
+        message: 'service agent runtime owner assembly must stay behind product-full',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/assembly/core/src/service/dispatch/mod.rs',
+    reason:
+      'no-default dispatch cleanup must retain claimed records when the product worktree owner is unavailable',
+    patterns: [
+      {
+        regex:
+          /#\[cfg\(feature = "product-full"\)\]\s*mod baseline;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod controller;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod device_controller;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod preparation;/s,
+        message: 'Dispatch product controllers must stay behind product-full',
+      },
+      {
+        regex:
+          /#\[cfg\(feature = "product-full"\)\]\s*async fn release_baseline_claim\b/s,
+        message: 'worktree-backed dispatch claim release must stay behind product-full',
+      },
+      {
+        regex:
+          /#\[cfg\(not\(feature = "product-full"\)\)\]\s*async fn release_baseline_claim\([^)]*\)\s*->\s*Result<\(\), DispatchStoreError>\s*\{\s*Err\(\s*DispatchStoreError::ClaimRelease\([\s\S]*?\)\s*\)\s*\}/s,
+        message: 'no-default dispatch claim release must fail closed',
       },
     ],
   },
@@ -3916,20 +3957,28 @@ export const requiredContentRules = [
       'service integration and agent-runtime surfaces must not compile in no-default core builds',
     patterns: [
       {
-        regex: /#\[cfg\(feature = "service-integrations"\)\]\s*pub mod git\b/s,
-        message: 'git service facade must stay behind service-integrations',
+        regex: /#\[cfg\(feature = "announcement"\)\]\s*pub mod announcement\b/s,
+        message: 'announcement facade must stay behind its exact feature',
       },
       {
-        regex: /#\[cfg\(feature = "service-integrations"\)\]\s*pub mod mcp\b/s,
-        message: 'MCP service facade must stay behind service-integrations',
+        regex: /#\[cfg\(feature = "file-watch"\)\]\s*pub use bitfun_services_integrations::file_watch\b/s,
+        message: 'file-watch facade must stay behind its exact feature',
       },
       {
-        regex: /#\[cfg\(feature = "service-integrations"\)\]\s*pub mod remote_connect\b/s,
-        message: 'remote-connect service facade must stay behind service-integrations',
+        regex: /#\[cfg\(feature = "git"\)\]\s*pub mod git\b/s,
+        message: 'git service facade must stay behind its exact feature',
       },
       {
-        regex: /#\[cfg\(feature = "service-integrations"\)\]\s*pub mod review_platform\b/s,
-        message: 'review platform facade must stay behind service-integrations',
+        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod mcp\b/s,
+        message: 'Core MCP product bridge must stay behind product-full',
+      },
+      {
+        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod remote_connect\b/s,
+        message: 'Core Remote Connect product bridge must stay behind product-full',
+      },
+      {
+        regex: /#\[cfg\(feature = "review-platform"\)\]\s*pub mod review_platform\b/s,
+        message: 'review platform facade must stay behind its exact feature',
       },
       {
         regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod search\b/s,
@@ -3963,11 +4012,11 @@ export const requiredContentRules = [
     patterns: [
       {
         regex:
-          /#\[cfg\(feature = "service-integrations"\)\]\s*use super::worktree_topology::global_worktree_topology_service\b/s,
+          /#\[cfg\(feature = "git"\)\]\s*use super::worktree_topology::global_worktree_topology_service\b/s,
         message: 'worktree topology owner import must stay gated for no-default builds',
       },
       {
-        regex: /#\[cfg\(not\(feature = "service-integrations"\)\)\]\s*\{\s*let _ = workspace_root;\s*return None;\s*\}/s,
+        regex: /#\[cfg\(not\(feature = "git"\)\)\]\s*\{\s*let _ = \(workspace_root, freshness\);\s*return None;\s*\}/s,
         message: 'no-default worktree enrichment fallback must remain explicit',
       },
     ],
@@ -5708,6 +5757,10 @@ export const requiredContentRules = [
         regex: /pub use bitfun_runtime_ports::DialogTriggerSource;/,
         message: 'missing dialog trigger source compatibility re-export',
       },
+      {
+        regex: /bitfun_agent_runtime::subagent_task::subagent_task_completion_result/,
+        message: 'missing delegated command provider-neutral Task result formatting',
+      },
     ],
   },
   {
@@ -6656,8 +6709,8 @@ export const requiredContentRules = [
         message: 'missing remote chat history assembly shape/order test',
       },
       {
-        regex: /\bremote_chat_history_assembly_skips_in_progress_assistant_history\b/,
-        message: 'missing remote chat history in-progress guard test',
+        regex: /\bremote_chat_history_assembly_preserves_in_progress_assistant_history\b/,
+        message: 'missing remote chat history in-progress preservation test',
       },
       {
         regex: /\bremote_connect_file_transfer_policy_preserves_limits_and_chunk_ranges\b/,

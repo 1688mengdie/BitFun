@@ -1,8 +1,10 @@
+mod external_editor;
 /// Chat mode implementation
 ///
 /// Interactive chat mode with TUI interface.
 /// Events are observed through an independent runtime broadcast subscription.
 mod resize;
+mod transcript;
 
 use anyhow::{anyhow, Result};
 use arboard::Clipboard;
@@ -27,7 +29,8 @@ use resize::ResizeRedrawState;
 use crate::actions::{
     action_by_id, action_conflict_behavior_version, action_for_alias,
     removed_management_command_hint, slash_actions, ActionContext, ActionHandler, ActionSpec,
-    ActionState, ResolvedKeymap, SHARED_TUI_EMBEDDED_HANDOFF, SHARED_TUI_HELP_NOTE,
+    ActionState, ResolvedKeymap, IMAGE_ATTACHMENTS_REQUIRE_MESSAGE, SHARED_TUI_EMBEDDED_HANDOFF,
+    SHARED_TUI_HELP_NOTE,
 };
 use crate::agent::context_reload_client::CliContextReloadClient;
 use crate::agent::runtime_client::{CliAgentRuntimeClient, SessionOperationError};
@@ -38,12 +41,14 @@ use crate::ui::chat::{session_status_text, ChatView, MouseGestureOutcome};
 use crate::ui::command_menu::{ExternalCommandProjection, NativeCommandCollisionProjection};
 use crate::ui::command_palette::PaletteAction;
 use crate::ui::fork_selector::{ForkAction, ForkTarget};
+use crate::ui::image_paste::{self, ImagePaste};
 use crate::ui::login_form::LoginFormAction;
 use crate::ui::mcp_add_dialog::McpAddAction;
 use crate::ui::mcp_selector::{McpItem, McpItemAction};
 use crate::ui::model_config_form::{ModelFormAction, ModelFormResult};
 use crate::ui::model_selector::ModelItem;
 use crate::ui::permission::PermissionAction;
+use crate::ui::prompt_command_shell_review::PromptCommandShellReviewAction;
 use crate::ui::provider_selector::ProviderSelection;
 use crate::ui::question::QuestionAction;
 use crate::ui::session_selector::{SessionAction, SessionItem};
@@ -75,15 +80,19 @@ use bitfun_core::external_sources::{
     expand_external_prompt_command, external_source_conflict_choices, external_source_snapshot,
     get_external_source_control_snapshot, native_prompt_command_conflict_key,
     sanitize_external_source_operation_error, set_external_prompt_command_conflict_choice,
-    set_external_subagent_activation, set_external_tool_conflict_choice,
-    set_external_tool_target_decision, set_native_prompt_command_conflict_choice,
-    subscribe_external_source_updates, ExternalSourceAssetKind, ExternalSourceCatalogSnapshot,
-    ExternalSourceControlActionV1, ExternalSourceControlRequestV1,
-    ExternalSourceDiagnosticSeverity, ExternalSourceHostCapabilities, ExternalSourceOperationError,
-    ExternalSourceOperationErrorCode, ExternalSubagentActivationState,
-    ExternalSubagentCompatibilityState, ExternalToolActivationState, ExternalToolCapability,
-    ExternalToolCatalogEntry, ExternalToolRuntimeKind, NativePromptCommandDescriptor,
-    PromptCommandAvailability, EXTERNAL_SOURCE_CONTROL_SCHEMA_V1,
+    set_external_subagent_activation, set_external_subagent_model_binding,
+    set_external_tool_conflict_choice, set_external_tool_target_decision,
+    set_native_prompt_command_conflict_choice, subscribe_external_source_updates,
+    ExternalSourceAssetKind, ExternalSourceCatalogSnapshot, ExternalSourceControlActionV1,
+    ExternalSourceControlRequestV1, ExternalSourceDiagnosticSeverity,
+    ExternalSourceHostCapabilities, ExternalSourceOperationError, ExternalSourceOperationErrorCode,
+    ExternalSubagentActivationState, ExternalSubagentCompatibilityState,
+    ExternalSubagentModelBindingMethod, ExternalSubagentModelBindingTarget,
+    ExternalSubagentModelProfileRequest, ExternalSubagentModelRequest, ExternalToolActivationState,
+    ExternalToolCapability, ExternalToolCatalogEntry, ExternalToolRuntimeKind,
+    NativePromptCommandDescriptor, PromptCommandAvailability, PromptCommandExecutionTarget,
+    PromptCommandInvocationOutcome, PromptCommandShellReviewDecision, PromptCommandShellReviewMode,
+    PromptCommandShellReviewPlan, EXTERNAL_SOURCE_CONTROL_SCHEMA_V1,
 };
 use bitfun_core::native_hooks::{
     overview as native_hook_overview, NativeHookOverview, NativeHookRuleView,
@@ -217,6 +226,54 @@ struct PendingSessionOperation {
     handle: tokio::task::JoinHandle<std::result::Result<(), SessionOperationError>>,
 }
 
+struct PendingWorkspaceReferenceSearch {
+    generation: u64,
+    query: String,
+    handle: tokio::task::JoinHandle<
+        std::result::Result<bitfun_agent_runtime::sdk::AgentWorkspaceReferenceSearchResult, String>,
+    >,
+}
+
+struct PendingWorkspaceDiff {
+    handle: tokio::task::JoinHandle<
+        std::result::Result<bitfun_agent_runtime::sdk::WorkspaceDiffSnapshot, String>,
+    >,
+}
+
+#[derive(Debug, Clone)]
+struct ExternalPromptCommandInvocation {
+    command_name: String,
+    arguments: String,
+    native_commands: Vec<NativePromptCommandDescriptor>,
+    candidate_id: Option<String>,
+    content_version: Option<String>,
+    native_conflict_key: Option<String>,
+    expected_preference_revision: Option<u64>,
+}
+
+struct PendingPromptCommandShellInvocation {
+    invocation: ExternalPromptCommandInvocation,
+    review: PromptCommandShellReviewPlan,
+}
+
+enum PendingLocalEffect {
+    EditComposer {
+        command: external_editor::EditorCommand,
+        draft: crate::ui::composer::ComposerDraft,
+    },
+    ExportTranscript {
+        markdown: String,
+        target: Option<std::path::PathBuf>,
+        editor_command: Option<external_editor::EditorCommand>,
+        editor_error: Option<String>,
+        overwrite_confirmed: bool,
+    },
+}
+
+fn terminal_event_allowed_while_local_effect_pending(event: &Event) -> bool {
+    matches!(event, Event::Resize(_, _))
+}
+
 const SESSION_OPERATION_SLOW_NOTICE: Duration = Duration::from_secs(15);
 const SHARED_TUI_CHAT_STATUS: &str = "Shared TUI preview: this view controls sessions, including deleting an idle Session, turns, the current Session name, current Session Agent mode, current Session model, and declarative context via /reload [skills|instructions]; model management remains Embedded, along with local extension, MCP, account-sync, and Agent/Subagent management.";
 
@@ -242,6 +299,7 @@ pub(crate) struct ChatMode {
     /// Current agent type (e.g. "agentic", "plan", "debug")
     agent_type: String,
     workspace: Option<String>,
+    local_cwd: std::path::PathBuf,
     agent: Arc<CliAgentRuntimeClient>,
     context_reload: CliContextReloadClient,
     compatibility: Option<CoreAgentRuntimeCompatibility>,
@@ -252,7 +310,7 @@ pub(crate) struct ChatMode {
     /// If set, restore this existing session instead of creating a new one
     restore_session_id: Option<String>,
     /// If set, send this prompt automatically when the session starts
-    initial_prompt: Option<String>,
+    initial_prompt: Option<crate::ui::composer::ComposerDraft>,
     /// Pending MCP operation — set in key handler, executed after one render frame
     pending_mcp_op: Option<PendingMcpOp>,
     /// Running MCP tasks (non-blocking, polled in main loop)
@@ -260,8 +318,14 @@ pub(crate) struct ChatMode {
     /// One Session operation in flight. The event loop remains responsive while
     /// the Runtime owner updates or deletes Session state.
     pending_session_operation: Option<PendingSessionOperation>,
+    pending_workspace_diff: Option<PendingWorkspaceDiff>,
+    pending_local_effect: Option<PendingLocalEffect>,
+    pending_workspace_reference_search: Option<PendingWorkspaceReferenceSearch>,
+    workspace_reference_search_generation: u64,
+    last_workspace_reference_query: Option<String>,
     /// One explicit native slash-menu choice waiting for its parameterized submission.
     selected_native_command_once: Option<String>,
+    pending_prompt_command_shell_invocation: Option<PendingPromptCommandShellInvocation>,
     external_source_snapshot: Option<ExternalSourceCatalogSnapshot>,
     external_source_conflict_choices: BTreeMap<String, String>,
     external_source_conflict_lineage_current_keys: BTreeMap<String, String>,
@@ -308,6 +372,7 @@ impl ChatMode {
             keymap,
             agent_type,
             workspace,
+            local_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             agent,
             context_reload,
             compatibility,
@@ -318,7 +383,13 @@ impl ChatMode {
             pending_mcp_op: None,
             pending_mcp_tasks: Vec::new(),
             pending_session_operation: None,
+            pending_workspace_diff: None,
+            pending_local_effect: None,
+            pending_workspace_reference_search: None,
+            workspace_reference_search_generation: 0,
+            last_workspace_reference_query: None,
             selected_native_command_once: None,
+            pending_prompt_command_shell_invocation: None,
             external_source_snapshot: None,
             external_source_conflict_choices: BTreeMap::new(),
             external_source_conflict_lineage_current_keys: BTreeMap::new(),
@@ -343,7 +414,10 @@ impl ChatMode {
     }
 
     /// Set an initial prompt to send automatically when the session starts
-    pub(crate) fn with_initial_prompt(mut self, prompt: String) -> Self {
+    pub(crate) fn with_initial_prompt(
+        mut self,
+        prompt: crate::ui::composer::ComposerDraft,
+    ) -> Self {
         self.initial_prompt = Some(prompt);
         self
     }
@@ -361,6 +435,7 @@ include!("chat/worktree.rs");
 include!("chat/selection.rs");
 include!("chat/mcp.rs");
 include!("chat/sessions.rs");
+include!("chat/workspace_references.rs");
 include!("chat/capabilities.rs");
 include!("chat/provider_models.rs");
 include!("chat/tests.rs");

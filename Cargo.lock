@@ -912,6 +912,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "hex",
+ "image 0.25.10",
  "libc",
  "minisign-verify",
  "once_cell",
@@ -923,18 +924,22 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "shlex 1.3.0",
  "similar",
  "syntect",
  "syntect-tui",
  "tar",
  "tempfile",
+ "thiserror 2.0.19",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "unicode-width 0.2.0",
+ "url",
  "uuid",
  "windows 0.61.3",
+ "winsplit",
 ]
 
 [[package]]
@@ -958,7 +963,6 @@ dependencies = [
 name = "bitfun-core"
 version = "0.2.15"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
@@ -989,15 +993,11 @@ dependencies = [
  "dashmap",
  "dirs 6.0.0",
  "dunce",
- "eventsource-stream",
  "filetime",
  "flate2",
  "fluent-bundle",
  "fs2",
  "futures",
- "git2",
- "glob",
- "globset",
  "hex",
  "image 0.25.10",
  "include_dir",
@@ -1005,21 +1005,15 @@ dependencies = [
  "log",
  "md5",
  "notify",
- "rand 0.8.7",
  "regex",
  "reqwest",
  "rmcp",
  "rusqlite",
- "russh",
- "rustls",
- "rustls-native-certs",
- "schannel",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
  "similar",
- "sse-stream",
  "tempfile",
  "terminal-core",
  "thiserror 2.0.19",
@@ -1032,7 +1026,6 @@ dependencies = [
  "unic-langid",
  "urlencoding",
  "uuid",
- "win32job",
 ]
 
 [[package]]
@@ -1424,7 +1417,6 @@ dependencies = [
  "chrono",
  "dunce",
  "filetime",
- "flate2",
  "fs2",
  "git2",
  "globset",
@@ -1439,7 +1431,6 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "similar",
- "tar",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
@@ -12204,6 +12195,12 @@ dependencies = [
  "cfg-if",
  "windows-sys 0.59.0",
 ]
+
+[[package]]
+name = "winsplit"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ab703352da6a72f35c39a533526393725640575bb211f61987a2748323ad956"
 
 [[package]]
 name = "wit-bindgen"

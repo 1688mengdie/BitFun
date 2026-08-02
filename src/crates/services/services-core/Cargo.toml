@@ -15,7 +15,7 @@ async-trait = { workspace = true, optional = true }
 bitfun-core-types = { path = "../../contracts/core-types" }
 bitfun-events = { path = "../../contracts/events" }
 bitfun-runtime-ports = { path = "../../contracts/runtime-ports", optional = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util", "process", "rt", "sync", "time"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true, optional = true }
@@ -31,8 +31,6 @@ notify = { workspace = true, optional = true }
 ignore = { workspace = true }
 globset = { workspace = true }
 sha2 = { workspace = true }
-flate2 = { workspace = true, optional = true }
-tar = { workspace = true, optional = true }
 which = { workspace = true }
 similar = { workspace = true }
 regex = { workspace = true }
@@ -61,11 +59,12 @@ markdown = ["dep:serde_yaml"]
 workspace-runtime = ["dep:anyhow", "dep:async-trait", "dep:bitfun-runtime-ports", "dep:dunce"]
 runtime-ownership = ["dep:dunce"]
 permission = ["dep:async-trait", "dep:bitfun-runtime-ports", "dep:rusqlite", "bitfun-runtime-ports/permission"]
-dispatch-workspace = ["dep:anyhow", "dep:flate2", "dep:tar"]
+dispatch-workspace = ["dep:anyhow"]
 
 [dev-dependencies]
 filetime = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["macros"] }
 
 [[test]]
 name = "markdown_owner_contracts"
@@ -78,6 +77,18 @@ required-features = ["lsp"]
 [[test]]
 name = "runtime_ownership_contracts"
 required-features = ["runtime-ownership"]
+
+[[test]]
+name = "local_runtime_ports"
+required-features = ["workspace-runtime"]
+
+[[test]]
+name = "permission_store_contracts"
+required-features = ["permission"]
+
+[[test]]
+name = "workspace_instruction_contracts"
+required-features = ["workspace-runtime"]
 
 [[test]]
 name = "session_write_lock_contracts"

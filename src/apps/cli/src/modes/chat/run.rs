@@ -129,6 +129,191 @@ fn context_compression_tool_event(
 }
 
 impl ChatMode {
+    fn execute_pending_local_effect(
+        &mut self,
+        terminal: &mut TerminalGuard,
+        chat_view: &mut ChatView,
+        rt_handle: &tokio::runtime::Handle,
+    ) -> Result<bool> {
+        let Some(effect) = self.pending_local_effect.take() else {
+            return Ok(false);
+        };
+        match effect {
+            PendingLocalEffect::EditComposer { command, mut draft } => {
+                let cwd = self.local_cwd.clone();
+                let result = terminal.with_restored(|| {
+                    external_editor::run_external_editor(&command, &draft.text, Some(&cwd))
+                })?;
+                match result {
+                    Ok(edit) => {
+                        let warning = edit
+                            .cleanup_warning
+                            .map(|warning| format!("; warning: {warning}"))
+                            .unwrap_or_default();
+                        match edit.outcome {
+                            external_editor::ExternalEditOutcome::Changed(text) => {
+                                let reconcile = draft.replace_text_from_external_editor(text);
+                                chat_view.set_draft(draft);
+                                let references_dropped = reconcile.workspace_references.dropped;
+                                let images_dropped = reconcile.images.dropped;
+                                chat_view.set_status(Some(if references_dropped == 0
+                                    && images_dropped == 0
+                                {
+                                    format!("Draft updated from external editor{warning}")
+                                } else {
+                                    format!(
+                                        "Draft updated; dropped metadata for {references_dropped} workspace reference(s) and {images_dropped} image(s) removed or made ambiguous by the edit{warning}"
+                                    )
+                                }));
+                            }
+                            external_editor::ExternalEditOutcome::Unchanged => {
+                                chat_view.set_draft(draft);
+                                chat_view.set_status(Some(format!(
+                                    "Editor closed without changes. If it returned immediately, add its wait flag to VISUAL or EDITOR{warning}"
+                                )));
+                            }
+                            external_editor::ExternalEditOutcome::Empty => {
+                                chat_view.set_draft(draft);
+                                chat_view.set_status(Some(format!(
+                                    "Editor returned an empty file; the existing draft was preserved{warning}"
+                                )));
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        chat_view.set_draft(draft);
+                        chat_view.set_status(Some(format!(
+                            "External editor failed; the draft was preserved: {error}"
+                        )));
+                    }
+                }
+            }
+            PendingLocalEffect::ExportTranscript {
+                markdown,
+                target,
+                editor_command,
+                editor_error,
+                overwrite_confirmed,
+            } => {
+                let store = bitfun_services_core::json_store::JsonFileStore;
+                if let Some(path) = target.as_deref() {
+                    let write_result = tokio::task::block_in_place(|| {
+                        if overwrite_confirmed {
+                            rt_handle.block_on(store.write_text_atomic_strict(path, &markdown))
+                        } else {
+                            rt_handle.block_on(store.write_text_atomic_create_new(path, &markdown))
+                        }
+                    });
+                    if let Err(error) = write_result {
+                        if !overwrite_confirmed && error.is_already_exists() {
+                            chat_view.export_dialog_confirm_overwrite(path.display().to_string());
+                            chat_view.set_status(Some(format!(
+                                "{} appeared before the export was written; confirm before overwriting it",
+                                path.display()
+                            )));
+                        } else {
+                            let message = format!(
+                                "Could not export the transcript to {}: {error}",
+                                path.display()
+                            );
+                            chat_view.export_dialog_set_error(message.clone());
+                            chat_view.set_status(Some(message));
+                        }
+                        return Ok(true);
+                    }
+                }
+
+                self.close_all_popups(chat_view);
+
+                if let Some(error) = editor_error {
+                    let saved = target
+                        .as_deref()
+                        .map(|path| format!("Transcript saved to {}", path.display()))
+                        .unwrap_or_else(|| "Transcript was not saved".to_string());
+                    chat_view.set_status(Some(format!("{saved}; editor unavailable: {error}")));
+                    return Ok(true);
+                }
+
+                if let Some(command) = editor_command {
+                    let cwd = self.local_cwd.clone();
+                    let edit = terminal.with_restored(|| {
+                        external_editor::run_external_editor(&command, &markdown, Some(&cwd))
+                    })?;
+                    match edit {
+                        Ok(edit) => {
+                            let warning = edit
+                                .cleanup_warning
+                                .map(|warning| format!("; warning: {warning}"))
+                                .unwrap_or_default();
+                            match edit.outcome {
+                                external_editor::ExternalEditOutcome::Changed(edited) => {
+                                    if let Some(path) = target.as_deref() {
+                                        match tokio::task::block_in_place(|| {
+                                            rt_handle.block_on(
+                                                store.write_text_atomic_strict(path, &edited),
+                                            )
+                                        }) {
+                                            Ok(()) => chat_view.set_status(Some(format!(
+                                                "Transcript exported and editor changes saved to {}{warning}",
+                                                path.display()
+                                            ))),
+                                            Err(error) => chat_view.set_status(Some(format!(
+                                                "The original transcript remains at {}; editor changes could not be saved atomically: {error}{warning}",
+                                                path.display()
+                                            ))),
+                                        }
+                                    } else {
+                                        chat_view.set_status(Some(format!(
+                                            "Unsaved transcript editor closed; no file was created{warning}"
+                                        )));
+                                    }
+                                }
+                                external_editor::ExternalEditOutcome::Unchanged => {
+                                    let saved = target
+                                        .as_deref()
+                                        .map(|path| {
+                                            format!("Transcript saved to {}", path.display())
+                                        })
+                                        .unwrap_or_else(|| "No file was created".to_string());
+                                    chat_view.set_status(Some(format!(
+                                        "{saved}; editor closed without changes. Add its wait flag to VISUAL or EDITOR if it returned immediately{warning}"
+                                    )));
+                                }
+                                external_editor::ExternalEditOutcome::Empty => {
+                                    let saved = target
+                                        .as_deref()
+                                        .map(|path| {
+                                            format!(
+                                                "The original export remains at {}",
+                                                path.display()
+                                            )
+                                        })
+                                        .unwrap_or_else(|| "No file was created".to_string());
+                                    chat_view.set_status(Some(format!(
+                                        "{saved}; empty editor content was ignored{warning}"
+                                    )));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            let saved = target
+                                .as_deref()
+                                .map(|path| format!("Transcript saved to {}", path.display()))
+                                .unwrap_or_else(|| "No file was created".to_string());
+                            chat_view.set_status(Some(format!(
+                                "{saved}; external editor failed: {error}"
+                            )));
+                        }
+                    }
+                } else if let Some(path) = target.as_deref() {
+                    chat_view
+                        .set_status(Some(format!("Transcript exported to {}", path.display())));
+                }
+            }
+        }
+        Ok(true)
+    }
+
     pub(crate) fn run(
         &mut self,
         existing_terminal: Option<TerminalGuard>,
@@ -156,6 +341,7 @@ impl ChatMode {
         let theme = self.resolve_configured_theme(base, appearance, scheme);
         let shortcut_hints = self.keymap.compact_hints(self.action_state(false, false));
         let mut chat_view = ChatView::new(theme, shortcut_hints);
+        chat_view.apply_presentation_config(&self.config.ui);
 
         // Create or restore core session
         let rt_handle = tokio::runtime::Handle::current();
@@ -335,34 +521,19 @@ impl ChatMode {
         }
 
         // Send initial prompt if provided (from startup page input)
-        if let Some(prompt) = self.initial_prompt.take() {
+        if let Some(draft) = self.initial_prompt.take() {
             if !migration_notices.is_empty() {
-                chat_view.text_input.set_text(&prompt);
+                chat_view.set_draft(draft);
                 chat_view.set_status(Some(
                     "The restored session uses fallback settings. Review them, then send the preserved input explicitly."
                         .to_string(),
                 ));
-            } else if prompt.starts_with('/') {
+            } else if draft.text.starts_with('/') {
                 // Slash commands will be handled in the main loop
-                chat_view.text_input.set_text(&prompt);
+                chat_view.set_draft(draft);
             } else {
-                tracing::info!("Sending initial prompt: {}", prompt);
-                let display_name = agent_display_name(&self.agent_type);
-                chat_view.set_status(Some(format!("{} is thinking...", display_name)));
-
-                let agent = self.agent.clone();
-                let agent_type = self.agent_type.clone();
-                match tokio::task::block_in_place(|| {
-                    rt_handle.block_on(agent.send_message(prompt, &agent_type))
-                }) {
-                    Ok(turn_id) => {
-                        tracing::info!("Started initial turn: {}", turn_id);
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to send initial prompt: {}", e);
-                        chat_view.set_status(Some(format!("Error: {}", e)));
-                    }
-                }
+                tracing::info!("Sending initial prompt: {}", draft.text);
+                self.send_draft_to_agent(draft, &mut chat_view, &mut chat_state, &rt_handle);
             }
         }
 
@@ -378,6 +549,15 @@ impl ChatMode {
         let mut resize_redraw = ResizeRedrawState::new(resize_redraw_debounce);
 
         while !should_quit {
+            if self.refresh_workspace_reference_search(&mut chat_view) {
+                needs_redraw = true;
+            }
+            if self.poll_workspace_reference_search(&mut chat_view) {
+                needs_redraw = true;
+            }
+            if self.poll_workspace_diff(&mut chat_view) {
+                needs_redraw = true;
+            }
             chat_view.set_action_state(
                 self.action_state(chat_state.is_processing, false),
                 &self.keymap,
@@ -601,6 +781,10 @@ impl ChatMode {
 
             // 1.5. Execute pending MCP operations (after render so loading state is visible)
             if resize_redraw.can_render() {
+                if self.execute_pending_local_effect(&mut terminal, &mut chat_view, &rt_handle)? {
+                    needs_redraw = true;
+                    did_render_this_loop = true;
+                }
                 if let Some(op) = self.pending_mcp_op.take() {
                     if !did_render_this_loop {
                         terminal.draw(|frame| {
@@ -896,6 +1080,11 @@ impl ChatMode {
             // 3. Process terminal input
             if let Some(events) = event_reader.read_event_batch(Duration::from_millis(16))? {
                 for event in events {
+                    if self.pending_local_effect.is_some()
+                        && !terminal_event_allowed_while_local_effect_pending(&event)
+                    {
+                        continue;
+                    }
                     match event {
                         Event::Key(key) => {
                             if let Some(reason) = self.handle_key_event(

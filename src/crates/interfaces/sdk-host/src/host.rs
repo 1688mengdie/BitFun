@@ -984,6 +984,7 @@ impl SdkHostConnection {
                 message: params.prompt,
                 original_message: None,
                 turn_id: None,
+                execution: Default::default(),
                 agent_type,
                 workspace_path: Some(session.workspace_path.clone()),
                 remote_connection_id: session.remote_connection_id.clone(),
@@ -2203,6 +2204,7 @@ fn runtime_error_kind(error: &RuntimeError) -> &'static str {
         | RuntimeError::MissingSessionManagementPort
         | RuntimeError::MissingSessionRestorePort
         | RuntimeError::MissingLocalCommandTurnPort
+        | RuntimeError::MissingWorkspaceReferencePort
         | RuntimeError::MissingSessionTranscriptReader
         | RuntimeError::MissingThreadGoalManagementPort
         | RuntimeError::MissingInteractionResponsePort
@@ -2245,5 +2247,16 @@ mod runtime_error_tests {
             (ErrorCode::ActionRequired, false, None)
         );
         assert_eq!(runtime_error_kind(&error), "outcome_unknown");
+    }
+
+    #[test]
+    fn missing_workspace_reference_port_uses_capability_unavailable_contract() {
+        let error = RuntimeError::MissingWorkspaceReferencePort;
+
+        assert_eq!(
+            runtime_error_facts(&error),
+            (ErrorCode::CapabilityUnavailable, false, None)
+        );
+        assert_eq!(runtime_error_kind(&error), "capability_unavailable");
     }
 }

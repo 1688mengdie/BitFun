@@ -22,34 +22,30 @@ export const optionalDependencyFeatureOwnerRules = [
     reason:
       'bitfun-core product/runtime optional dependencies must stay owned by explicit feature gates',
     dependencies: [
-      { depName: 'aes-gcm', ownerFeatures: ['service-integrations'] },
-      { depName: 'axum', ownerFeatures: ['service-integrations'] },
+      { depName: 'axum', ownerFeatures: ['product-full'] },
       { depName: 'bitfun-ai-adapters', ownerFeatures: ['ai-adapter-runtime'] },
+      { depName: 'bitfun-agent-runtime', ownerFeatures: ['product-full'] },
+      { depName: 'bitfun-agent-stream', ownerFeatures: ['product-full'] },
+      { depName: 'bitfun-harness', ownerFeatures: ['product-full'] },
       { depName: 'bitfun-product-capabilities', ownerFeatures: ['product-capabilities'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['product-domains'] },
+      { depName: 'bitfun-runtime-services', ownerFeatures: ['runtime-services'] },
       { depName: 'bitfun-tool-packs', ownerFeatures: ['tool-packs'] },
       { depName: 'chrono-tz', ownerFeatures: ['product-full'] },
       { depName: 'cron', ownerFeatures: ['product-full'] },
       { depName: 'dashmap', ownerFeatures: ['product-full'] },
-      { depName: 'eventsource-stream', ownerFeatures: ['product-full'] },
       { depName: 'filetime', ownerFeatures: ['product-full'] },
       { depName: 'flate2', ownerFeatures: ['product-full'] },
       { depName: 'fs2', ownerFeatures: ['product-full'] },
-      { depName: 'git2', ownerFeatures: ['service-integrations'] },
-      { depName: 'glob', ownerFeatures: ['product-full'] },
-      { depName: 'globset', ownerFeatures: ['product-full'] },
-      { depName: 'image', ownerFeatures: ['service-integrations', 'tool-packs'] },
+      { depName: 'image', ownerFeatures: ['product-full', 'tool-packs'] },
       { depName: 'include_dir', ownerFeatures: ['product-full'] },
       { depName: 'indexmap', ownerFeatures: ['product-full'] },
-      { depName: 'md5', ownerFeatures: ['product-full', 'service-integrations'] },
-      { depName: 'rand', ownerFeatures: ['service-integrations'] },
-      { depName: 'reqwest', ownerFeatures: ['ai-adapter-runtime', 'service-integrations'] },
-      { depName: 'rmcp', ownerFeatures: ['service-integrations'] },
-      { depName: 'russh', ownerFeatures: ['ssh-remote'] },
+      { depName: 'md5', ownerFeatures: ['product-full'] },
+      { depName: 'reqwest', ownerFeatures: ['ai-adapter-runtime', 'product-full'] },
+      { depName: 'rmcp', ownerFeatures: ['product-full'] },
       { depName: 'similar', ownerFeatures: ['product-full'] },
-      { depName: 'sse-stream', ownerFeatures: ['service-integrations'] },
-      { depName: 'tokio-tungstenite', ownerFeatures: ['service-integrations'] },
-      { depName: 'tower-http', ownerFeatures: ['service-integrations'] },
+      { depName: 'tokio-tungstenite', ownerFeatures: ['product-full'] },
+      { depName: 'tower-http', ownerFeatures: ['product-full'] },
       { depName: 'tool-runtime', ownerFeatures: ['product-full'] },
     ],
   },
@@ -63,7 +59,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'anyhow', ownerFeatures: ['browser-control', 'debug-log', 'mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete'] },
       {
         depName: 'async-trait',
-        ownerFeatures: ['mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'script-tool-runtime', 'speech', 'workspace-search'],
+        ownerFeatures: ['git', 'mcp', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'review-platform', 'script-tool-runtime', 'speech', 'workspace-search'],
       },
       {
         depName: 'base64',
@@ -72,7 +68,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'bitfun-agent-runtime', ownerFeatures: ['deep-research', 'hook-import'] },
       { depName: 'bitfun-core-types', ownerFeatures: ['speech'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['canvas-runtime', 'function-agents', 'hook-import', 'miniapp-runtime', 'plugin-source'] },
-      { depName: 'bitfun-runtime-ports', ownerFeatures: ['remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime'] },
+      { depName: 'bitfun-runtime-ports', ownerFeatures: ['git', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime'] },
       {
         depName: 'bitfun-services-core',
         ownerFeatures: ['browser-control', 'git', 'hook-import', 'mcp', 'miniapp-runtime', 'process-tree', 'remote-connect', 'remote-ssh-concrete', 'review-platform', 'workspace-search'],
@@ -138,56 +134,69 @@ export const optionalDependencyFeatureOwnerRules = [
   },
 ];
 
-export const productCoreFeatureAssemblyRules = [
-  {
-    manifestPath: 'src/apps/desktop/Cargo.toml',
-    dependencyName: 'bitfun-core',
-    requiredFeatures: ['product-full'],
-    reason: 'desktop must explicitly assemble the full bitfun-core product runtime',
-  },
-  {
-    manifestPath: 'src/apps/cli/Cargo.toml',
-    dependencyName: 'bitfun-core',
-    requiredFeatures: ['product-full'],
-    reason: 'CLI must explicitly assemble the full bitfun-core product runtime',
-  },
-  {
-    manifestPath: 'src/apps/sdk-host/Cargo.toml',
-    dependencyName: 'bitfun-core',
-    requiredFeatures: ['product-full'],
-    reason: 'SDK Host must explicitly assemble the full bitfun-core product runtime',
-  },
-  {
-    manifestPath: 'src/apps/server/Cargo.toml',
-    dependencyName: 'bitfun-core',
-    requiredFeatures: ['product-full'],
-    reason: 'Server must explicitly assemble the full bitfun-core product runtime',
-  },
-  {
-    manifestPath: 'src/crates/interfaces/acp/Cargo.toml',
-    dependencyName: 'bitfun-core',
-    requiredFeatures: ['product-full'],
-    reason: 'ACP must explicitly assemble the full bitfun-core product runtime',
-  },
-];
-
-export const productCoreFeatureAssemblyScanRoots = [
-  'src/apps',
-  'src/crates/interfaces/acp',
-];
-
 export const coreProductFullFeatureAssemblyRule = {
   manifestPath: 'src/crates/assembly/core/Cargo.toml',
   featureName: 'product-full',
   requiredFeatureRefs: [
+    'announcement',
+    'file-watch',
+    'git',
+    'review-platform',
     'ssh-remote',
     'product-capabilities',
     'product-domains',
-    'service-integrations',
     'tool-packs',
   ],
   reason: 'bitfun-core product-full must explicitly assemble current owner feature groups',
 };
+
+export const coreClosedFeatureProfileRules = [
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'announcement',
+    requiredFeatureRefs: ['bitfun-services-integrations/announcement'],
+    exact: true,
+    reason: 'bitfun-core announcement must select only the announcement owner capability',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'file-watch',
+    requiredFeatureRefs: ['bitfun-services-integrations/file-watch'],
+    exact: true,
+    reason: 'bitfun-core file-watch must select only the file-watch owner capability',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'git',
+    requiredFeatureRefs: ['bitfun-services-integrations/git'],
+    exact: true,
+    reason: 'bitfun-core git must select only the Git owner capability',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'review-platform',
+    requiredFeatureRefs: ['bitfun-services-integrations/review-platform'],
+    exact: true,
+    reason:
+      'bitfun-core review-platform must select only the review platform owner capability',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'service-integrations',
+    requiredFeatureRefs: ['announcement', 'file-watch', 'git', 'review-platform'],
+    exact: true,
+    reason:
+      'bitfun-core service-integrations is a compatibility facade group, not a product capability umbrella',
+  },
+  {
+    manifestPath: 'src/crates/assembly/core/Cargo.toml',
+    featureName: 'ssh-remote',
+    requiredFeatureRefs: ['bitfun-services-integrations/remote-ssh-concrete'],
+    exact: true,
+    reason:
+      'bitfun-core ssh-remote must select only the concrete SSH capability and must not pull product Dispatch assembly',
+  },
+];
 
 export const ownerCrateFeatureAssemblyRules = [
   {

@@ -1174,7 +1174,13 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
         </div>
       );
     }
-    return null;
+    return (
+      <div className="bitfun-nav-panel__inline-list">
+        <div className="bitfun-nav-panel__inline-empty" aria-disabled="true">
+          {t('nav.sessions.noSessions')}
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -1235,9 +1241,6 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           const dispatchTransport = session.config.dispatchJobId
             ? dispatchTransportByJobId[session.config.dispatchJobId]
             : undefined;
-          const dispatchTransportError =
-            dispatchTransport?.lastTransportError?.trim()
-            || t('nav.sessions.dispatchTransportErrorFallback');
           const dispatchPresentation = isDispatched
             ? resolveDispatchNavPresentation({
                 targetLabel: dispatchTargetLabel,
@@ -1250,7 +1253,6 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
                 unreachableLabel: t('nav.sessions.dispatchUnreachable'),
                 unreachableSummary: t('nav.sessions.dispatchUnreachableDetails', {
                   target: dispatchTargetLabel,
-                  error: dispatchTransportError,
                 }),
               })
             : null;

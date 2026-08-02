@@ -6,7 +6,7 @@ export const forbiddenContentRules = [
     reason: 'agent-runtime-ipc operation scope is frozen to the reviewed Shared TUI slice',
     patterns: [
       {
-        regex: /^\s+(?!(?:Health|ListSessions|CreateSession|RestoreSession|DeleteSession|ForkSession|RenameSession|UpdateSessionMode|UpdateSessionModel|ReloadSessionContext|CompactSession|UndoSession|RedoSession|SubmitTurn|CancelTurn|PendingPermissions|RespondPermission|SubmitUserAnswers|Unit|Sessions|SessionCreated|SessionRestored|SessionForked|SessionReverted|TurnAccepted|TurnCancelled|None|CurrentController|AttachExisting|UncontrolledTarget|Self|RuntimeIpcSessionRequirement|RuntimeIpcOperationRules|RuntimeSessionForkRequest|AgentContextReloadRequest|AgentDialogTurnRequest|AgentSessionCompactionRequest|AgentSessionCreateRequest|AgentSessionCreateResult|AgentSessionListRequest|AgentSessionModeUpdateRequest|AgentSessionModelUpdateRequest|AgentSessionRevertRequest|AgentSessionRevertResult|AgentSessionSummary|AgentTurnCancellationRequest|AgentTurnCancellationResult|SessionTranscript)\b)[A-Z][A-Za-z0-9_]*\b/,
+        regex: /^\s+(?!(?:Health|ListSessions|CreateSession|RestoreSession|DeleteSession|ForkSession|RenameSession|UpdateSessionMode|UpdateSessionModel|ReloadSessionContext|CompactSession|UndoSession|RedoSession|SearchWorkspaceReferences|WorkspaceReferencesForMessage|WorkspaceDiff|SubmitTurn|RunUserShellCommand|CancelTurn|PendingPermissions|RespondPermission|SubmitUserAnswers|Unit|Sessions|SessionCreated|SessionRestored|SessionForked|SessionReverted|WorkspaceReferenceSearch|WorkspaceReferences|TurnAccepted|TurnCancelled|None|CurrentController|AttachExisting|UncontrolledTarget|Self|RuntimeIpcSessionRequirement|RuntimeIpcOperationRules|RuntimeSessionForkRequest|AgentContextReloadRequest|AgentDialogTurnRequest|AgentMessageWorkspaceReferencesRequest|AgentSessionCompactionRequest|AgentSessionCreateRequest|AgentSessionCreateResult|AgentSessionListRequest|AgentSessionModeUpdateRequest|AgentSessionModelUpdateRequest|AgentSessionRevertRequest|AgentSessionRevertResult|AgentSessionSummary|AgentTurnCancellationRequest|AgentTurnCancellationResult|AgentUserShellCommandRequest|AgentWorkspaceReference|AgentWorkspaceReferenceSearchRequest|AgentWorkspaceReferenceSearchResult|SessionTranscript|WorkspaceDiffSnapshot)\b)[A-Z][A-Za-z0-9_]*\b/,
         message:
           'agent-runtime-ipc may not add archive, replay, observer, general controller-transfer, or other operations beyond the reviewed Shared TUI slice',
       },
@@ -4119,6 +4119,7 @@ export const forbiddenContentUnderRules = [
           'src/crates/adapters/opencode-adapter/tests/opencode_source_adapter.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_command_adapter.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_skill_roots.rs',
+          'src/crates/adapters/opencode-adapter/tests/opencode_workspace_references.rs',
           'src/crates/adapters/opencode-adapter/tests/tool_source_contracts.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_subagent_adapter.rs',
           'src/crates/adapters/opencode-adapter/tests/opencode_mcp_adapter.rs',

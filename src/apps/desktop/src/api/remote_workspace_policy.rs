@@ -350,10 +350,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
-        "dispatch_install_cli_source_start",
-        RemoteWorkspacePolicy::WorkspaceAgnostic,
-    ),
-    (
         "dispatch_install_cli_start",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
@@ -362,11 +358,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
-        "dispatch_apply_result",
-        RemoteWorkspacePolicy::WorkspaceAgnostic,
-    ),
-    (
-        "dispatch_pull_result",
+        "dispatch_sync_result",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
@@ -384,6 +376,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("dispatch_answer", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("dispatch_append", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (
+        "dispatch_continue",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "dispatch_load_transcript",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
@@ -392,6 +388,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("dispatch_status", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    ("dispatch_query", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("dispatch_submit", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (
         "dismiss_announcement",
@@ -547,6 +544,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "get_external_source_snapshot",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
+        "get_workspace_reference_snapshot",
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
@@ -1680,6 +1681,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
+        "set_external_subagent_model_binding_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
         "set_global_skill_disabled",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
@@ -2035,6 +2040,15 @@ mod tests {
                 "{command} must never fall back to the controller's local MCP config"
             );
         }
+    }
+
+    #[test]
+    fn workspace_reference_snapshot_explicitly_rejects_remote_workspaces() {
+        assert_eq!(
+            remote_workspace_policy("get_workspace_reference_snapshot"),
+            Some(RemoteWorkspacePolicy::RemoteUnsupported),
+            "workspace references must never scan controller-local OpenCode config for a remote workspace"
+        );
     }
 
     #[test]

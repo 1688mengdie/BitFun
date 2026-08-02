@@ -47,6 +47,7 @@ import {
   type SlashActionId,
 } from '../utils/slashActionSelection';
 import { parseReloadCommand, supportsLocalReloadContext } from '../utils/reloadCommand';
+import { reviewPromptCommandShell } from '../utils/promptCommandShellReview';
 import { notificationService } from '@/shared/notification-system';
 import { useI18n } from '@/infrastructure/i18n';
 import { inputReducer, initialInputState, type InputAction } from '../reducers/inputReducer';
@@ -65,7 +66,6 @@ import {
   successfulRetryCleanupTarget,
 } from './chatInputDraftRecovery';
 import { startBtwThread } from '../services/BtwThreadService';
-import { runUsageReportCommand } from '../services/usageReportService';
 import { buildImagePayload } from '../utils/imagePayload';
 import { isGoalSlashCommand, parseGoalCommand } from '../services/goalService';
 import {
@@ -133,7 +133,7 @@ import {
 import type { DispatchSelection, DispatchTarget } from '@/features/dispatch/types';
 import { isNonLocalDispatchTarget } from '@/features/dispatch/types';
 import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
-import { useRuntimeStatusStore } from '../store/runtimeStatusStore';
+import { useComposerCapabilities } from '../session-drivers/useComposerCapabilities';
 import { ComposerVoiceInputButton } from './voice/ComposerVoiceInputButton';
 import { useComposerVoiceInput } from './voice/useComposerVoiceInput';
 import { expandWidgetPromptReferenceTokens } from '@/tools/generative-widget/widgetPromptReference';
@@ -504,25 +504,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const effectiveTargetSession = effectiveTargetSessionId
     ? flowChatState.sessions.get(effectiveTargetSessionId)
     : undefined;
-  const isDispatchInputSession = isNonLocalDispatchTarget(
-    effectiveTargetSession?.config.dispatchTarget,
-  );
-  const usesDispatchTransport = !registration && isDispatchInputSession;
-  const dispatchSubmissionInFlight = useRuntimeStatusStore(state => {
-    const status = effectiveTargetSessionId
-      ? state.bySessionId.get(effectiveTargetSessionId)
-      : undefined;
-    return usesDispatchTransport
-      && status?.roundId.startsWith('dispatch-transfer:') === true;
+  const dispatchObserverJob = dispatchJobStore(state => {
+    const jobId = effectiveTargetSession?.config.dispatchJobId;
+    return jobId ? state.jobs[jobId] : undefined;
+  });
+  const effectiveTargetRelationship = resolveSessionRelationship(effectiveTargetSession);
+  const isBtwSession = effectiveTargetRelationship.displayAsChild;
+  const isSubagentInputTarget = effectiveTargetRelationship.isSubagent;
+  const caps = useComposerCapabilities({
+    sessionId: effectiveTargetSessionId,
+    session: effectiveTargetSession,
+    hostMasksDispatch: !!registration,
+    displayAsChild: isBtwSession,
   });
   const historySessionOpenTransition = useSyncExternalStore(
     subscribeHistorySessionOpenTransition,
     getHistorySessionOpenTransitionSnapshot,
     getHistorySessionOpenTransitionSnapshot,
   );
-  const effectiveTargetRelationship = resolveSessionRelationship(effectiveTargetSession);
-  const isBtwSession = effectiveTargetRelationship.displayAsChild;
-  const isSubagentInputTarget = effectiveTargetRelationship.isSubagent;
   const acpSessionForInput = useMemo(
     () => acpSessionRef(effectiveTargetSession),
     [effectiveTargetSession],
@@ -532,7 +531,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const reloadContextSupported = supportsLocalReloadContext({
     desktopRuntime: isTauriRuntime(),
     acpSession: isAcpInputSession,
-    dispatchTransport: usesDispatchTransport,
+    dispatchTransport: caps.dispatchTransport,
   });
   const canReloadContext = reloadContextSupported && Boolean(effectiveTargetSessionId);
   const { entries: acpPlanEntries } = useAcpPlan(acpSessionForInput?.sessionId ?? null);
@@ -2010,12 +2009,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       : effectiveTargetSession?.config.dispatchApprovalPolicy === 'reject-and-report'
         ? 'reject'
         : 'ask';
-  const dispatchSubmissionOptionsLocked =
-    dispatchSubmissionInFlight
-    || (
-      effectiveTargetSession?.config.dispatchJobState !== 'submitting'
-      && effectiveTargetSession?.config.dispatchJobState !== 'submission_unknown'
-    );
+  const dispatchSubmissionOptionsLocked = caps.submissionOptionsLocked;
   const handleDispatchPermissionModeChange = useCallback((
     nextMode: Exclude<ChatInputPermissionMode, 'acp'>,
   ) => {
@@ -2052,8 +2046,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const worktreeControl = useMemo(() => {
     if (!effectiveTargetSessionId || !effectiveTargetSession) return undefined;
     if (remoteWorkspaceSession) return undefined;
-    if (usesDispatchTransport) return undefined;
     if (isSubagentInputTarget || isAcpTargetSession) return undefined;
+    // A dispatch always executes against a managed worktree baseline of this
+    // repository, so the chip reports that state instead of disappearing. It is
+    // never togglable: the baseline is chosen with the target, not after.
+    if (caps.worktreeBaselineLocked) {
+      return {
+        enabled: true,
+        locked: true,
+        lockedReason: 'dispatch' as const,
+        onChange: () => {},
+      };
+    }
 
     const locked = isSessionWorktreeBindingLocked(
       effectiveTargetSession,
@@ -2089,7 +2093,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     isSubagentInputTarget,
     remoteWorkspaceSession,
     tWorktrees,
-    usesDispatchTransport,
+    caps.worktreeBaselineLocked,
   ]);
 
   const handleSelectDispatchTarget = useCallback(async (selection: DispatchSelection) => {
@@ -2100,7 +2104,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           dispatchTargetRequest: selection.request,
           dispatchTarget: selection.target,
           dispatchApprovalPolicy: selection.approvalPolicy,
-          dispatchWorkspaceDelivery: selection.workspaceDelivery,
+          dispatchIncludeUncommitted: selection.includeUncommitted,
+          dispatchBaseRef: selection.baseRef,
           // Undefined is intentional: the target's probed default model wins
           // unless a future preflight selector records an explicit choice.
           dispatchModel: selection.model,
@@ -2127,18 +2132,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
     const target: DispatchTarget =
       effectiveTargetSession?.config.dispatchTarget ?? { kind: 'local' };
-    // Results only exist for a snapshot-delivered job that has finished: an
-    // "existing directory" job never took a snapshot to diff against, and a
-    // running one has no terminal tree yet.
+    // Syncing is available as soon as the target has a worktree to commit —
+    // that is, from the moment the job starts running. Waiting for a terminal
+    // state would block the common "let me see what it has so far" case.
     const jobId = effectiveTargetSession?.config.dispatchJobId;
     const jobState = effectiveTargetSession?.config.dispatchJobState;
-    const completedSnapshotJobId =
-      (
-        effectiveTargetSession?.config.dispatchWorkspaceDelivery?.kind === 'snapshot-source'
-        || effectiveTargetSession?.config.dispatchWorkspaceDelivery?.kind === 'snapshot-exact'
-      ) &&
-      (jobState === 'succeeded' || jobState === 'failed') &&
-      jobId
+    const syncableJobId =
+      isNonLocalDispatchTarget(target)
+      && jobId
+      && (jobState === 'running'
+        || jobState === 'succeeded'
+        || jobState === 'failed'
+        || jobState === 'cancelled')
         ? jobId
         : undefined;
     return {
@@ -2149,15 +2154,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         (effectiveTargetSession?.dialogTurns.length ?? 0) > 0 ||
         !!derivedState?.isProcessing,
       onSelectTarget: handleSelectDispatchTarget,
-      completedSnapshotJobId,
+      syncableJobId,
+      branch: dispatchObserverJob?.branch,
+      baselineWorktreePath: dispatchObserverJob?.baselineWorktreePath,
+      baselineMissing: dispatchObserverJob?.baselineWorktreeMissing,
     };
   }, [
     derivedState?.isProcessing,
     effectiveTargetSession?.config.dispatchJobId,
     effectiveTargetSession?.config.dispatchJobState,
     effectiveTargetSession?.config.dispatchTarget,
-    effectiveTargetSession?.config.dispatchWorkspaceDelivery?.kind,
     effectiveTargetSession?.dialogTurns.length,
+    dispatchObserverJob?.baselineWorktreeMissing,
+    dispatchObserverJob?.baselineWorktreePath,
+    dispatchObserverJob?.branch,
     handleSelectDispatchTarget,
     isAcpInputSession,
     isBtwSession,
@@ -2168,7 +2178,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   ]);
 
   const dispatchModelSelection = useMemo(() => {
-    if (!usesDispatchTransport || !effectiveTargetSession) {
+    if (!caps.targetModelSelection || !effectiveTargetSession) {
       return undefined;
     }
     const target = effectiveTargetSession.config.dispatchTarget;
@@ -2178,18 +2188,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         : t('chatInput.dispatch.remoteTarget');
     const sessionId = effectiveTargetSession.sessionId;
     const jobId = effectiveTargetSession.config.dispatchJobId;
-    const state = effectiveTargetSession.config.dispatchJobState;
     return {
       models: effectiveTargetSession.config.dispatchAvailableModels ?? [],
       selectedModelId: effectiveTargetSession.config.dispatchModel,
       defaultModelId: effectiveTargetSession.config.dispatchDefaultModel,
       providerLabel,
-      disabled:
-        dispatchSubmissionInFlight
-        || (
-          state !== 'submitting'
-          && state !== 'submission_unknown'
-        ),
+      disabled: caps.submissionOptionsLocked,
       onSelect: (modelId: string) => {
         FlowChatStore.getInstance().updateSessionDispatchModel(sessionId, modelId);
         if (jobId) {
@@ -2197,7 +2201,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
       },
     };
-  }, [dispatchSubmissionInFlight, effectiveTargetSession, t, usesDispatchTransport]);
+  }, [caps.submissionOptionsLocked, caps.targetModelSelection, effectiveTargetSession, t]);
 
   const handleHidePermissionModeControl = useCallback(async () => {
     try {
@@ -2718,17 +2722,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         : []),
     ];
     const q = (slashCommandState.query || '').trim().toLowerCase();
-    const visibleItems = items.filter(item => isChatInputActionVisibleForTarget({
-      actionId: item.id,
-      isSubagentTarget: isSubagentInputTarget,
-    }));
+    // The picker offers exactly what this session can execute. Without this,
+    // an unsupported command picked from the list falls through the per-op
+    // submit gates and is sent to the agent as literal prompt text.
+    const visibleItems = items.filter(item =>
+      (item.id === 'reload' || caps.ops.has(item.id))
+      && isChatInputActionVisibleForTarget({
+        actionId: item.id,
+        isSubagentTarget: isSubagentInputTarget,
+      }));
     if (!q) return visibleItems;
 
     return visibleItems.filter(i => {
       const cmd = i.command.slice(1).toLowerCase();
       return cmd.includes(q) || i.label.toLowerCase().includes(q);
     });
-  }, [canLaunchReview, canReloadContext, derivedState?.isProcessing, isAcpInputSession, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
+  }, [canLaunchReview, canReloadContext, caps.ops, derivedState?.isProcessing, isAcpInputSession, isBtwSession, isSubagentInputTarget, slashCommandState.query, t]);
 
   const getFilteredMcpPromptCommands = useCallback((): SlashMcpPromptItem[] => {
     if (isAcpInputSession) {
@@ -2907,13 +2916,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     const promptSlashCommandsEnabled = !isAcpInputSession;
-    const localSlashCommandsEnabled = promptSlashCommandsEnabled && !usesDispatchTransport;
+    const localSlashCommandsEnabled = promptSlashCommandsEnabled && caps.localSlashCommands;
     const trimmed = text.trim();
-    const isBtwCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/btw');
-    const isCompactCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/compact');
-    const isGoalCommand = localSlashCommandsEnabled && isGoalSlashCommand(text);
-    const isUsageCommand = localSlashCommandsEnabled && isSlashCommand(trimmed, '/usage');
-    const isReviewCommand = localSlashCommandsEnabled && isReviewSlashCommand(text);
+    const isBtwCommand =
+      promptSlashCommandsEnabled && caps.ops.has('btw') && isSlashCommand(trimmed, '/btw');
+    const isCompactCommand =
+      promptSlashCommandsEnabled && caps.ops.has('compact') && isSlashCommand(trimmed, '/compact');
+    const isGoalCommand =
+      promptSlashCommandsEnabled && caps.ops.has('goal') && isGoalSlashCommand(text);
+    const isUsageCommand =
+      promptSlashCommandsEnabled && caps.ops.has('usage') && isSlashCommand(trimmed, '/usage');
+    const isReviewCommand =
+      promptSlashCommandsEnabled && caps.ops.has('review') && isReviewSlashCommand(text);
     const isProcessing = !!derivedState?.isProcessing;
 
     // Don't queue /btw or /goal while the main session is processing; they have dedicated flows.
@@ -2985,7 +2999,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         selectedIndex: 0,
       });
     }
-  }, [contexts, derivedState, dispatchInput, externalPromptCommands, inputState.isActive, isAcpInputSession, prunePendingLargePastes, removeContext, resolveTypedMcpPromptCommand, selectedExternalPromptCandidateId, selectedNonExternalSlashCommand, setQueuedInput, slashCommandState.isActive, slashCommandState.kind, usesDispatchTransport]);
+  }, [contexts, derivedState, dispatchInput, externalPromptCommands, inputState.isActive, isAcpInputSession, prunePendingLargePastes, removeContext, resolveTypedMcpPromptCommand, selectedExternalPromptCandidateId, selectedNonExternalSlashCommand, setQueuedInput, slashCommandState.isActive, slashCommandState.kind, caps.localSlashCommands, caps.ops]);
 
   const submitBtwFromInput = useCallback(async () => {
     if (!derivedState) return;
@@ -3094,12 +3108,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     setSlashCommandState({ isActive: false, kind: 'modes', query: '', selectedIndex: 0 });
 
     try {
-      await agentAPI.compactSession({
-        sessionId: effectiveTargetSessionId,
-        workspacePath: effectiveTargetSession.workspacePath,
-        remoteConnectionId: effectiveTargetSession.remoteConnectionId,
-        remoteSshHost: effectiveTargetSession.remoteSshHost,
-      });
+      await FlowChatManager.getInstance().compactSession(effectiveTargetSessionId);
     } catch (error) {
       log.error('Failed to trigger /compact', {
         error,
@@ -3134,15 +3143,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     try {
-      const result = await runUsageReportCommand({
-        session: effectiveTargetSession,
-        isProcessing: !!derivedState?.isProcessing,
-        busyMessage: t('chatInput.usageBusy'),
-        noWorkspaceMessage: t('chatInput.usageNoWorkspace'),
-        failedTitle: t('chatInput.usageFailed'),
-        unknownErrorMessage: t('error.unknown'),
-        loadingMarkdown: t('usage.loading.markdown'),
-      });
+      const result = await FlowChatManager.getInstance().runSessionUsageReport(
+        effectiveTargetSessionId,
+        {
+          isProcessing: !!derivedState?.isProcessing,
+          busyMessage: t('chatInput.usageBusy'),
+          noWorkspaceMessage: t('chatInput.usageNoWorkspace'),
+          failedTitle: t('chatInput.usageFailed'),
+          unknownErrorMessage: t('error.unknown'),
+          loadingMarkdown: t('usage.loading.markdown'),
+        },
+      );
 
       if (result.inserted) {
         dispatchInput({ type: 'DEACTIVATE' });
@@ -3770,19 +3781,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         }
         if (!submissionTargetIsCurrent()) return true;
       }
-      const expanded = await externalSourcesAPI.expandPromptCommand(
+      const nativeConflictGuard = nativeConflictKey ? {
+        conflictKey: nativeConflictKey,
+        expectedPreferenceRevision,
+      } : undefined;
+      let expanded = await externalSourcesAPI.expandPromptCommand(
         submissionWorkspacePath || undefined,
         resolution.item.command.slice(1),
         resolution.arguments,
         resolution.item.candidateId,
         resolution.item.contentVersion,
         nativeCommands,
-        nativeConflictKey ? {
-          conflictKey: nativeConflictKey,
-          expectedPreferenceRevision,
-        } : undefined,
+        nativeConflictGuard,
       );
+      let shellReviewCount = 0;
+      while (expanded.state === 'review_required') {
+        if (shellReviewCount >= 2) {
+          throw new Error('Prompt command shell review changed repeatedly');
+        }
+        const decision = await reviewPromptCommandShell(
+          expanded.review,
+          (key, values) => t(key, values),
+        );
+        if (!decision || !submissionTargetIsCurrent()) return true;
+        shellReviewCount += 1;
+        expanded = await externalSourcesAPI.expandPromptCommand(
+          submissionWorkspacePath || undefined,
+          resolution.item.command.slice(1),
+          resolution.arguments,
+          resolution.item.candidateId,
+          resolution.item.contentVersion,
+          nativeCommands,
+          nativeConflictGuard,
+          decision,
+        );
+      }
       if (!submissionTargetIsCurrent()) return true;
+      const executionTarget = expanded.executionTarget;
+      if (executionTarget.kind === 'fresh_external_subagent' && contexts.length > 0) {
+        notificationService.warning(t('chatInput.externalCommandContextUnsupported'));
+        return true;
+      }
       const expandedCharCount = getCharacterCount(expanded.content);
       if (expandedCharCount > CHAT_INPUT_CONFIG.largePaste.maxMessageChars) {
         notificationService.error(
@@ -3816,7 +3855,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         setSelectedNonExternalSlashCommand(undefined);
         setSelectedNonExternalSlashCandidateId(undefined);
       }
-      await sendMessage(expanded.content, { displayMessage: originalMessage });
+      await sendMessage(expanded.content, {
+        displayMessage: originalMessage,
+        ...(executionTarget.kind === 'fresh_external_subagent'
+          ? { execution: executionTarget }
+          : {}),
+      });
       if (!submissionTargetIsCurrent()) return true;
       if (composerCleared && inputValueRef.current === '') {
         dispatchInput({ type: 'DEACTIVATE' });
@@ -3860,7 +3904,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       );
     }
     return true;
-  }, [addToHistory, clearPendingLargePastes, confirmPromptCacheGuardIfNeeded, dispatchInput, effectiveTargetSessionId, externalPromptCommands, externalPromptCommandsIssue, externalPromptCommandsLoading, externalPromptCommandsPending, getSlashPickerItems, refreshExternalPromptCommands, replacePendingLargePastes, selectedExternalPromptCandidateId, selectedNonExternalSlashCandidateId, selectedNonExternalSlashCommand, sendMessage, sessionBoundWorkspacePath, setQueuedInput, t]);
+  }, [addToHistory, clearPendingLargePastes, confirmPromptCacheGuardIfNeeded, contexts, dispatchInput, effectiveTargetSessionId, externalPromptCommands, externalPromptCommandsIssue, externalPromptCommandsLoading, externalPromptCommandsPending, getSlashPickerItems, refreshExternalPromptCommands, replacePendingLargePastes, selectedExternalPromptCandidateId, selectedNonExternalSlashCandidateId, selectedNonExternalSlashCommand, sendMessage, sessionBoundWorkspacePath, setQueuedInput, t]);
 
   const handleCancelCurrentTask = useCallback(async () => {
     if (effectiveTargetSessionId) {
@@ -3876,7 +3920,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   
   const handleSendOrCancel = useCallback(async (messageOverride?: string) => {
     if (!derivedState) return;
-    if (dispatchSubmissionInFlight) return;
+    if (caps.transferInFlight) return;
     
     const { sendButtonMode } = derivedState;
     const draftTrimmed = (messageOverride ?? inputState.value).trim();
@@ -3922,7 +3966,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       messageOverride === undefined;
     const localSlashCommandsEnabled =
       promptSlashCommandsEnabled &&
-      !usesDispatchTransport;
+      caps.localSlashCommands;
     const parsedReload = messageOverride === undefined
       ? parseReloadCommand(message)
       : null;
@@ -3935,33 +3979,33 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    if (localSlashCommandsEnabled && isSlashCommand(message, '/btw')) {
+    if (promptSlashCommandsEnabled && caps.ops.has('btw') && isSlashCommand(message, '/btw')) {
       // When idle, /btw can be sent via the normal send button.
       await submitBtwFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && isGoalSlashCommand(message)) {
+    if (promptSlashCommandsEnabled && caps.ops.has('goal') && isGoalSlashCommand(message)) {
       await submitGoalFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && /^\/compact\s*$/i.test(message)) {
+    if (promptSlashCommandsEnabled && caps.ops.has('compact') && /^\/compact\s*$/i.test(message)) {
       await submitCompactFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && /^\/usage\s*$/i.test(message)) {
+    if (promptSlashCommandsEnabled && caps.ops.has('usage') && /^\/usage\s*$/i.test(message)) {
       await submitUsageFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && /^\/init\s*$/i.test(message)) {
+    if (promptSlashCommandsEnabled && caps.ops.has('init') && /^\/init\s*$/i.test(message)) {
       await submitInitFromInput();
       return;
     }
 
-    if (localSlashCommandsEnabled && isReviewSlashCommand(message)) {
+    if (promptSlashCommandsEnabled && caps.ops.has('review') && isReviewSlashCommand(message)) {
       await submitReviewFromInput();
       return;
     }
@@ -3980,21 +4024,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       return;
     }
 
-    if (localSlashCommandsEnabled && isSlashCommand(message, '/compact')) {
+    if (promptSlashCommandsEnabled && caps.ops.has('compact') && isSlashCommand(message, '/compact')) {
       notificationService.warning(
         t('chatInput.compactUsage')
       );
       return;
     }
 
-    if (localSlashCommandsEnabled && isSlashCommand(message, '/usage')) {
+    if (promptSlashCommandsEnabled && caps.ops.has('usage') && isSlashCommand(message, '/usage')) {
       notificationService.warning(
         t('chatInput.usageCommandUsage')
       );
       return;
     }
 
-    if (localSlashCommandsEnabled && isSlashCommand(message, '/init')) {
+    if (promptSlashCommandsEnabled && caps.ops.has('init') && isSlashCommand(message, '/init')) {
       notificationService.warning(
         t('chatInput.initUsage')
       );
@@ -4086,7 +4130,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [
     isModelSwitching,
-    dispatchSubmissionInFlight,
+    caps.transferInFlight,
     inputState.value,
     derivedState,
     dispatchInput,
@@ -4119,7 +4163,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     t,
     resolveTypedMcpPromptCommand,
     submitExternalPromptCommandFromInput,
-    usesDispatchTransport,
+    caps.localSlashCommands,
+    caps.ops,
     composerMutationRevision,
   ]);
   
@@ -4958,7 +5003,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <IconButton
           className="bitfun-chat-input__send-button bitfun-chat-input__send-button--retry"
           onClick={() => void handleSendOrCancel()}
-          disabled={isModelSwitching || dispatchSubmissionInFlight}
+          disabled={isModelSwitching || caps.transferInFlight}
           tooltip={t('input.retry')}
           size="small"
         >
@@ -4984,7 +5029,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           <IconButton
             className="bitfun-chat-input__send-button"
             onClick={() => void handleSendOrCancel()}
-            disabled={!inputState.value.trim() || isModelSwitching || dispatchSubmissionInFlight}
+            disabled={!inputState.value.trim() || isModelSwitching || caps.transferInFlight}
             data-testid="chat-input-send-btn"
             tooltip={t('input.sendShortcut')}
             size="small"
@@ -4999,7 +5044,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       <IconButton
         className="bitfun-chat-input__send-button"
         onClick={() => void handleSendOrCancel()}
-        disabled={!inputState.value.trim() || isModelSwitching || dispatchSubmissionInFlight}
+        disabled={!inputState.value.trim() || isModelSwitching || caps.transferInFlight}
         data-testid="chat-input-send-btn"
         tooltip={t('input.sendShortcut')}
         size="small"
@@ -5036,9 +5081,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       >
         <div 
           ref={containerRef}
-          className={`bitfun-chat-input ${isMultiLine ? 'bitfun-chat-input--multi-line' : 'bitfun-chat-input--capsule'} ${derivedState?.isProcessing || dispatchSubmissionInFlight ? 'bitfun-chat-input--processing' : ''} ${className}`}
+          className={`bitfun-chat-input ${isMultiLine ? 'bitfun-chat-input--multi-line' : 'bitfun-chat-input--capsule'} ${derivedState?.isProcessing || caps.transferInFlight ? 'bitfun-chat-input--processing' : ''} ${className}`}
           data-testid="chat-input-container"
-          aria-busy={dispatchSubmissionInFlight}
+          aria-busy={caps.transferInFlight}
         >
         {recommendationContext && (
           <SmartRecommendations
@@ -5136,7 +5181,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 onCompositionStart={handleImeCompositionStart}
                 onCompositionEnd={handleImeCompositionEnd}
                 placeholder=""
-                disabled={dispatchSubmissionInFlight}
+                disabled={caps.transferInFlight}
                 contexts={contexts}
                 onRemoveContext={removeContext}
                 onMentionStateChange={setMentionState}
@@ -5149,6 +5194,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 isOpen={mentionState.isActive}
                 searchQuery={mentionState.query}
                 workspacePath={sessionBoundWorkspacePath}
+                workspaceId={hasRegisteredWorkspace
+                  ? undefined
+                  : effectiveTargetSession?.workspaceId || workspace?.id}
                 excludeSessionId={effectiveTargetSessionId || undefined}
                 onSelect={(context: FileContext | DirectoryContext | SessionReferenceContext) => {
                   addContext(context);
@@ -5710,7 +5758,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                   </div>
                 ) : null}
 
-                {!dispatchSubmissionInFlight ? (
+                {!caps.transferInFlight ? (
                   <ComposerVoiceInputButton controller={voiceInput} />
                 ) : null}
                 {voiceInput.phase === 'idle' ? renderActionButton() : null}
@@ -5727,7 +5775,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         worktreeControl={worktreeControl}
         deferPassiveGitRefresh={deferChatStripPassiveGitRefresh}
         permissionControl={showPermissionModeControl
-          ? usesDispatchTransport
+          ? caps.sessionScopedApproval
             ? {
                 mode: dispatchPermissionMode,
                 disabled: dispatchSubmissionOptionsLocked,
@@ -5744,15 +5792,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               }
           : undefined}
         usageReport={
-          effectiveTargetSessionId && effectiveTargetSession && !usesDispatchTransport
+          effectiveTargetSessionId && effectiveTargetSession && caps.usageReport
             ? { visible: true, onOpen: handleToolbarUsageReport }
             : undefined
         }
         threadGoal={
           effectiveTargetSessionId &&
           effectiveTargetSession &&
-          !isBtwSession &&
-          !usesDispatchTransport
+          caps.threadGoal
             ? {
                 visible: true,
                 goal: threadGoalController.goal,
@@ -5763,7 +5810,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             : undefined
         }
       />
-      {effectiveTargetSession && !isBtwSession && !usesDispatchTransport ? (
+      {effectiveTargetSession && caps.threadGoal ? (
         <ThreadGoalDialogs
           controller={threadGoalController}
           disabled={!effectiveTargetSession.workspacePath}

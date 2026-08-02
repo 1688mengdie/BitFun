@@ -12,25 +12,28 @@ use bitfun_harness::HarnessRegistry;
 use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentDialogTurnPort, AgentDialogTurnRequest,
     AgentInputAttachment, AgentLifecycleDeliveryPort, AgentLocalCommandTurnPort,
-    AgentLocalCommandTurnRecordRequest, AgentSessionArchiveRequest,
-    AgentSessionArchiveStateRequest, AgentSessionClosePort, AgentSessionCompactionPort,
-    AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionCreateRequest,
-    AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest,
-    AgentSessionForkBeforeTurnRequest, AgentSessionForkPort, AgentSessionForkRequest,
-    AgentSessionForkResult, AgentSessionListRequest, AgentSessionManagementPort,
-    AgentSessionModePort, AgentSessionModeUpdateRequest, AgentSessionModelPort,
-    AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentSessionRevertPort,
-    AgentSessionRevertRequest, AgentSessionRevertResult, AgentSessionSummary,
-    AgentSessionUsagePort, AgentSessionUsageRequest, AgentSessionWorkspaceBinding,
-    AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
-    AgentSubmissionResult, AgentSubmissionSource, AgentThreadGoalCreateRequest,
-    AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
-    AgentThreadGoalUpdateStatusRequest, AgentTransientSessionDiscardRequest,
-    AgentTurnCancellationPort, AgentTurnCancellationRequest, AgentTurnCancellationResult,
-    AgentTurnSettlementPort, AgentTurnSettlementRequest, DialogSubmitOutcome,
-    PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PluginRuntimeBinding, PortError,
-    PortErrorKind, PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
-    SessionTranscriptRequest, ThreadGoal,
+    AgentLocalCommandTurnRecordRequest, AgentMessageWorkspaceReferencesRequest,
+    AgentSessionArchiveRequest, AgentSessionArchiveStateRequest, AgentSessionClosePort,
+    AgentSessionCompactionPort, AgentSessionCompactionRequest, AgentSessionCompactionResult,
+    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionDeleteRequest,
+    AgentSessionForkAtTurnRequest, AgentSessionForkBeforeTurnRequest, AgentSessionForkPort,
+    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
+    AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
+    AgentSessionModelPort, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
+    AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
+    AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
+    AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
+    AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
+    AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest,
+    AgentTransientSessionDiscardRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
+    AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest,
+    AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
+    AgentWorkspaceReference, AgentWorkspaceReferencePort, AgentWorkspaceReferenceSearchRequest,
+    AgentWorkspaceReferenceSearchResult, DialogSubmitOutcome, PermissionAuditRecord,
+    PermissionGrant, PermissionGrantKey, PluginRuntimeBinding, PortError, PortErrorKind,
+    PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
+    SessionTranscriptRequest, ThreadGoal, WorkspaceDiffSnapshot,
 };
 use bitfun_runtime_services::RuntimeServices;
 
@@ -59,6 +62,8 @@ pub enum RuntimeError {
     MissingCancellationPort,
     #[error("agent session management port is not registered")]
     MissingSessionManagementPort,
+    #[error("agent workspace reference port is not registered")]
+    MissingWorkspaceReferencePort,
     #[error("agent session restore port is not registered")]
     MissingSessionRestorePort,
     #[error("agent local command turn port is not registered")]
@@ -187,6 +192,7 @@ pub trait RuntimeAgentRegistry: Send + Sync {
 pub struct AgentRuntime {
     submission: Arc<dyn AgentSubmissionPort>,
     session_management: Option<Arc<dyn AgentSessionManagementPort>>,
+    workspace_references: Option<Arc<dyn AgentWorkspaceReferencePort>>,
     session_close: Option<Arc<dyn AgentSessionClosePort>>,
     session_mode: Option<Arc<dyn AgentSessionModePort>>,
     session_model: Option<Arc<dyn AgentSessionModelPort>>,
@@ -197,6 +203,7 @@ pub struct AgentRuntime {
     turn_settlement: Option<Arc<dyn AgentTurnSettlementPort>>,
     session_restore: Option<Arc<dyn AgentSessionRestorePort>>,
     local_command_turn: Option<Arc<dyn AgentLocalCommandTurnPort>>,
+    user_shell_command: Option<Arc<dyn AgentUserShellCommandPort>>,
     session_transcript_reader: Option<Arc<dyn SessionTranscriptReader>>,
     thread_goal_management: Option<Arc<dyn AgentThreadGoalManagementPort>>,
     dialog_turn: Option<Arc<dyn AgentDialogTurnPort>>,
@@ -224,6 +231,13 @@ impl std::fmt::Debug for AgentRuntime {
                     .session_management
                     .as_ref()
                     .map(|_| "<dyn AgentSessionManagementPort>"),
+            )
+            .field(
+                "workspace_references",
+                &self
+                    .workspace_references
+                    .as_ref()
+                    .map(|_| "<dyn AgentWorkspaceReferencePort>"),
             )
             .field(
                 "session_close",
@@ -294,6 +308,13 @@ impl std::fmt::Debug for AgentRuntime {
                     .local_command_turn
                     .as_ref()
                     .map(|_| "<dyn AgentLocalCommandTurnPort>"),
+            )
+            .field(
+                "user_shell_command",
+                &self
+                    .user_shell_command
+                    .as_ref()
+                    .map(|_| "<dyn AgentUserShellCommandPort>"),
             )
             .field(
                 "session_transcript_reader",
@@ -387,6 +408,7 @@ where
 pub struct AgentRuntimeBuilder {
     submission: Option<Arc<dyn AgentSubmissionPort>>,
     session_management: Option<Arc<dyn AgentSessionManagementPort>>,
+    workspace_references: Option<Arc<dyn AgentWorkspaceReferencePort>>,
     session_close: Option<Arc<dyn AgentSessionClosePort>>,
     session_mode: Option<Arc<dyn AgentSessionModePort>>,
     session_model: Option<Arc<dyn AgentSessionModelPort>>,
@@ -397,6 +419,7 @@ pub struct AgentRuntimeBuilder {
     turn_settlement: Option<Arc<dyn AgentTurnSettlementPort>>,
     session_restore: Option<Arc<dyn AgentSessionRestorePort>>,
     local_command_turn: Option<Arc<dyn AgentLocalCommandTurnPort>>,
+    user_shell_command: Option<Arc<dyn AgentUserShellCommandPort>>,
     session_transcript_reader: Option<Arc<dyn SessionTranscriptReader>>,
     thread_goal_management: Option<Arc<dyn AgentThreadGoalManagementPort>>,
     dialog_turn: Option<Arc<dyn AgentDialogTurnPort>>,
@@ -429,6 +452,14 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentSessionManagementPort>,
     ) -> Self {
         self.session_management = Some(port);
+        self
+    }
+
+    pub fn with_workspace_reference_port(
+        mut self,
+        port: Arc<dyn AgentWorkspaceReferencePort>,
+    ) -> Self {
+        self.workspace_references = Some(port);
         self
     }
 
@@ -485,6 +516,14 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentLocalCommandTurnPort>,
     ) -> Self {
         self.local_command_turn = Some(port);
+        self
+    }
+
+    pub fn with_user_shell_command_port(
+        mut self,
+        port: Arc<dyn AgentUserShellCommandPort>,
+    ) -> Self {
+        self.user_shell_command = Some(port);
         self
     }
 
@@ -582,6 +621,7 @@ impl AgentRuntimeBuilder {
         let Self {
             submission,
             session_management,
+            workspace_references,
             session_close,
             session_mode,
             session_model,
@@ -592,6 +632,7 @@ impl AgentRuntimeBuilder {
             turn_settlement,
             session_restore,
             local_command_turn,
+            user_shell_command,
             session_transcript_reader,
             thread_goal_management,
             dialog_turn,
@@ -616,6 +657,7 @@ impl AgentRuntimeBuilder {
         Ok(AgentRuntime {
             submission: submission.ok_or(RuntimeBuildError::MissingSubmissionPort)?,
             session_management,
+            workspace_references,
             session_close,
             session_mode,
             session_model,
@@ -626,6 +668,7 @@ impl AgentRuntimeBuilder {
             turn_settlement,
             session_restore,
             local_command_turn,
+            user_shell_command,
             session_transcript_reader,
             thread_goal_management,
             dialog_turn,
@@ -867,6 +910,22 @@ impl AgentRuntime {
         self.services.as_ref()
     }
 
+    pub async fn workspace_diff(&self) -> Result<WorkspaceDiffSnapshot, RuntimeError> {
+        let services = self.services.as_ref().ok_or_else(|| {
+            PortError::new(
+                PortErrorKind::NotAvailable,
+                "runtime services are not registered",
+            )
+        })?;
+        let git = services.git.as_ref().ok_or_else(|| {
+            PortError::new(
+                PortErrorKind::NotAvailable,
+                "Git runtime service is not registered",
+            )
+        })?;
+        git.workspace_diff().await.map_err(RuntimeError::from)
+    }
+
     pub fn registered_tool_names(&self) -> Vec<String> {
         self.tool_registry
             .as_ref()
@@ -1064,6 +1123,35 @@ impl AgentRuntime {
             .map_err(RuntimeError::from)
     }
 
+    pub async fn run_user_shell_command(
+        &self,
+        request: AgentUserShellCommandRequest,
+    ) -> Result<AgentUserShellCommandResult, RuntimeError> {
+        let requested_session_id = request.session_id.clone();
+        let requested_turn_id = request.turn_id.clone();
+        let port = self.user_shell_command.as_ref().ok_or_else(|| {
+            RuntimeError::Port(PortError::new(
+                PortErrorKind::NotAvailable,
+                "agent user shell command port is not registered",
+            ))
+        })?;
+        let result = port
+            .run_user_shell_command(request)
+            .await
+            .map_err(RuntimeError::from)?;
+        if result.session_id != requested_session_id || result.turn_id != requested_turn_id {
+            return Err(PortError::new(
+                PortErrorKind::Backend,
+                format!(
+                    "agent user shell provider returned identity '{}/{}' for requested identity '{}/{}'",
+                    result.session_id, result.turn_id, requested_session_id, requested_turn_id
+                ),
+            )
+            .into());
+        }
+        Ok(result)
+    }
+
     pub async fn update_session_model(
         &self,
         request: AgentSessionModelUpdateRequest,
@@ -1248,6 +1336,30 @@ impl AgentRuntime {
             .ok_or(RuntimeError::MissingSessionManagementPort)?;
         session_management
             .resolve_session_workspace_binding(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
+    pub async fn search_workspace_references(
+        &self,
+        request: AgentWorkspaceReferenceSearchRequest,
+    ) -> Result<AgentWorkspaceReferenceSearchResult, RuntimeError> {
+        self.workspace_references
+            .as_ref()
+            .ok_or(RuntimeError::MissingWorkspaceReferencePort)?
+            .search_workspace_references(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
+    pub async fn workspace_references_for_message(
+        &self,
+        request: AgentMessageWorkspaceReferencesRequest,
+    ) -> Result<Vec<AgentWorkspaceReference>, RuntimeError> {
+        self.workspace_references
+            .as_ref()
+            .ok_or(RuntimeError::MissingWorkspaceReferencePort)?
+            .workspace_references_for_message(request)
             .await
             .map_err(RuntimeError::from)
     }
@@ -1468,7 +1580,8 @@ mod tests {
         AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
         AgentSessionSummary, AgentSessionWorkspaceRequest, AgentSubmissionResult,
         AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest, AgentThreadGoalManagementPort,
-        AgentTurnCancellationResult, ClockPort, DialogQueuePriority, DialogSubmissionPolicy,
+        AgentTurnCancellationResult, AgentUserShellCommandPort, AgentUserShellCommandRequest,
+        AgentUserShellCommandResult, ClockPort, DialogQueuePriority, DialogSubmissionPolicy,
         DialogSubmitOutcome, FileSystemPort, PluginDispatchEnvelope, PluginResponseEnvelope,
         PluginRuntimeAvailability, PluginRuntimeClient, PluginRuntimeUnavailableReason,
         PortErrorKind, PortResult, RuntimeEventSink, RuntimeEventType, RuntimeServiceCapability,
@@ -1491,6 +1604,7 @@ mod tests {
         archived_sessions: Mutex<Vec<AgentSessionArchiveRequest>>,
         archive_state_updates: Mutex<Vec<AgentSessionArchiveStateRequest>>,
         local_command_turns: Mutex<Vec<AgentLocalCommandTurnRecordRequest>>,
+        user_shell_commands: Mutex<Vec<AgentUserShellCommandRequest>>,
         restored_sessions: Mutex<Vec<AgentSessionRestoreRequest>>,
         mode_updates: Mutex<Vec<AgentSessionModeUpdateRequest>>,
         undo_requests: Mutex<Vec<AgentSessionRevertRequest>>,
@@ -1718,6 +1832,23 @@ mod tests {
         ) -> PortResult<()> {
             self.local_command_turns.lock().unwrap().push(request);
             Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgentUserShellCommandPort for FakeAgentRuntimePorts {
+        async fn run_user_shell_command(
+            &self,
+            request: AgentUserShellCommandRequest,
+        ) -> PortResult<AgentUserShellCommandResult> {
+            self.user_shell_commands
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(AgentUserShellCommandResult {
+                session_id: request.session_id,
+                turn_id: request.turn_id,
+            })
         }
     }
 
@@ -2440,6 +2571,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn user_shell_command_requires_registered_port() {
+        let ports = Arc::new(FakeAgentRuntimePorts::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(ports)
+            .build()
+            .expect("runtime");
+
+        let error = runtime
+            .run_user_shell_command(AgentUserShellCommandRequest {
+                session_id: "session_1".to_string(),
+                turn_id: "turn_1".to_string(),
+                command: "git status".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            RuntimeError::Port(PortError {
+                kind: PortErrorKind::NotAvailable,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn user_shell_command_delegates_exact_request_and_identity() {
+        let ports = Arc::new(FakeAgentRuntimePorts::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(ports.clone())
+            .with_user_shell_command_port(ports.clone())
+            .build()
+            .expect("runtime");
+        let request = AgentUserShellCommandRequest {
+            session_id: "session_1".to_string(),
+            turn_id: "turn_1".to_string(),
+            command: "git status --short".to_string(),
+        };
+
+        let result = runtime
+            .run_user_shell_command(request.clone())
+            .await
+            .expect("run user shell command");
+
+        assert_eq!(
+            result,
+            AgentUserShellCommandResult {
+                session_id: "session_1".to_string(),
+                turn_id: "turn_1".to_string(),
+            }
+        );
+        assert_eq!(
+            ports.user_shell_commands.lock().unwrap().as_slice(),
+            [request]
+        );
+    }
+
+    #[tokio::test]
     async fn thread_goal_management_requires_registered_port() {
         let ports = Arc::new(FakeAgentRuntimePorts::default());
         let runtime = AgentRuntimeBuilder::new()
@@ -2718,6 +2907,7 @@ mod tests {
                 message: "hello".to_string(),
                 original_message: None,
                 turn_id: Some("turn_1".to_string()),
+                execution: Default::default(),
                 agent_type: "agentic".to_string(),
                 workspace_path: Some("/workspace/project".to_string()),
                 remote_connection_id: None,
@@ -2772,6 +2962,7 @@ mod tests {
                 message: "hello".to_string(),
                 original_message: Some("hello".to_string()),
                 turn_id: Some("turn_1".to_string()),
+                execution: Default::default(),
                 agent_type: "agentic".to_string(),
                 workspace_path: Some("/workspace/project".to_string()),
                 remote_connection_id: None,
@@ -2842,6 +3033,7 @@ mod tests {
                 message: "hello".to_string(),
                 original_message: None,
                 turn_id: Some("turn-1".to_string()),
+                execution: Default::default(),
                 agent_type: "agentic".to_string(),
                 workspace_path: Some("/workspace/project".to_string()),
                 remote_connection_id: None,

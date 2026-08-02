@@ -436,10 +436,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeBatch: activePermissionBatch,
     respond: respondPermission,
     respondBatch: respondPermissionBatch,
-  } = usePermissionRequests(
-    activeSession?.sessionId,
-    activeSession?.config.dispatchJobId,
-  );
+  } = usePermissionRequests(activeSession?.sessionId);
   const visibleTurnInfo = useVisibleTurnInfo();
   const [queuedTurnNavigation, setQueuedTurnNavigation] = useState<QueuedTurnNavigation | null>(null);
   const [pendingHistoryOpenSession, setPendingHistoryOpenSession] = useState<HistorySessionOpenIntentDetail | null>(null);

@@ -38,7 +38,7 @@ describe('flowChatTurnRailWindow', () => {
       currentScrollTop: 0,
       clientHeight: 40,
       totalOrdinalCount: 4,
-    })).toBe(19);
+    })).toBe(11);
     expect(getFlowChatTurnRailScrollTopForOrdinal({
       ordinal: 0,
       currentScrollTop: 50,
@@ -53,7 +53,7 @@ describe('flowChatTurnRailWindow', () => {
       currentScrollTop: 999,
       clientHeight: 40,
       totalOrdinalCount: 4,
-    })).toBe(22);
+    })).toBe(14);
     expect(getFlowChatTurnRailWindowRange({
       scrollTop: 999,
       clientHeight: 40,

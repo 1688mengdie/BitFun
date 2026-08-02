@@ -534,6 +534,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
             onCancel={cancelEdit}
             presentation={composerPresentation}
             workspacePath={currentSession?.workspacePath}
+            workspaceId={currentSession?.workspaceId}
             excludeSessionId={resolvedSessionId}
           />
         ) : (

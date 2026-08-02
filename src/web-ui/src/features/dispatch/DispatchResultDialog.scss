@@ -1,6 +1,6 @@
 @use '../../component-library/styles/tokens' as *;
 
-// Same type scale and shell as DispatchInstallDialog, so the two dispatch
+// Same type scale and shell as the dispatch target setup dialog, so the two
 // dialogs read as one feature.
 .dispatch-result-dialog {
   display: flex;
@@ -72,6 +72,32 @@
     font-weight: 600;
   }
 
+  &__details {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+
+    summary {
+      width: fit-content;
+      cursor: pointer;
+      user-select: none;
+
+      &:hover,
+      &:focus-visible {
+        color: var(--color-text-primary);
+      }
+    }
+  }
+
+  &__details-body {
+    display: grid;
+    gap: $size-gap-2;
+    margin-top: $size-gap-2;
+    padding: $size-gap-3;
+    border: 1px solid var(--border-subtle);
+    border-radius: $size-radius-base;
+    background: var(--element-bg-subtle);
+  }
+
   &__group {
     display: flex;
     flex-direction: column;
@@ -121,6 +147,16 @@
       color: var(--color-text-secondary);
       font-family: var(--font-family-mono);
       font-size: var(--font-size-xs);
+
+      > strong {
+        min-width: 2ch;
+        color: var(--color-text-muted);
+        font-weight: 600;
+      }
+
+      > span {
+        overflow-wrap: anywhere;
+      }
     }
 
     // Deletions read as removals, not as ordinary paths.
@@ -138,6 +174,12 @@
       font-style: normal;
       white-space: nowrap;
     }
+  }
+
+  &__empty {
+    padding: $size-gap-3;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
   }
 
   &__actions {

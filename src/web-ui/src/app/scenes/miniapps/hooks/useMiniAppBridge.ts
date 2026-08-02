@@ -333,9 +333,7 @@ export function useMiniAppBridge(
               sessionId: params.sessionId as string | undefined,
               sessionName: params.sessionName as string | undefined,
               appDataWorkspace: String(params.appDataWorkspace ?? ''),
-              enableTools: strictRuntimeRef.current
-                ? false
-                : params.enableTools as boolean | undefined,
+              enableTools: params.enableTools as boolean | undefined,
               model: typeof params.model === 'string' ? params.model : undefined,
             });
             agentSessionIdsRef.current.add(result.sessionId);
@@ -414,9 +412,7 @@ export function useMiniAppBridge(
                 sessionName: params.sessionName as string | undefined,
                 displayText:
                   typeof params.displayText === 'string' ? params.displayText : undefined,
-                enableTools: strictRuntimeRef.current
-                  ? false
-                  : params.enableTools as boolean | undefined,
+                enableTools: params.enableTools as boolean | undefined,
                 sessionId: params.sessionId as string | undefined,
                 appDataWorkspace: params.appDataWorkspace as string | undefined,
                 model: typeof params.model === 'string' ? params.model : undefined,
@@ -498,7 +494,11 @@ export function useMiniAppBridge(
             }
             window.dispatchEvent(
               new CustomEvent(MINIAPP_COMPOSER_DRAFT_EVENT, {
-                detail: { token: composerTokenRef.current, text: String(params.text ?? '') },
+                detail: {
+                  token: composerTokenRef.current,
+                  text: String(params.text ?? ''),
+                  sessionId: claim.sessionId,
+                },
               }),
             );
             reply(null);
