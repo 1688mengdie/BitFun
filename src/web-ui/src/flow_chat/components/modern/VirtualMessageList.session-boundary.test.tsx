@@ -72,6 +72,9 @@ const flowDiagnosticsMocks = vi.hoisted(() => ({
   enabled: false,
   trace: vi.fn(),
 }));
+const resizeObserverMocks = vi.hoisted(() => ({
+  callbacks: [] as Array<() => void>,
+}));
 
 vi.mock('@/infrastructure/diagnostics/flowChatDiagnostics', () => ({
   flowChatDiagnostics: {
@@ -390,6 +393,11 @@ describe('VirtualMessageList session boundary', () => {
     }));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) {
+        resizeObserverMocks.callbacks.push(() => {
+          callback([], this as unknown as ResizeObserver);
+        });
+      }
       observe = vi.fn();
       unobserve = vi.fn();
       disconnect = vi.fn();
@@ -420,6 +428,7 @@ describe('VirtualMessageList session boundary', () => {
     activeSessionStateMocks.isProcessing = false;
     flowDiagnosticsMocks.enabled = false;
     flowDiagnosticsMocks.trace.mockReset();
+    resizeObserverMocks.callbacks = [];
   });
 
   it('keeps Virtuoso absolute indexes stable across prepend and remote-side trimming', () => {
@@ -460,6 +469,199 @@ describe('VirtualMessageList session boundary', () => {
     expect(container.querySelector('.message-list-footer')).toBe(firstFooter);
     expect(firstFooter.style.height).toBe('900px');
     expect(firstFooter.style.minHeight).toBe('900px');
+  });
+
+  it('rebases retained viewport geometry without converting inactive zero size into footer space', () => {
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a', 'turn-b']);
+    stateMocks.virtualItems = ['turn-a', 'turn-b'].flatMap(turnId => [
+      createItem(turnId),
+      createModelItem(turnId),
+    ]);
+
+    act(() => {
+      root.render(<VirtualMessageList isViewportActive />);
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]');
+    const footer = container.querySelector<HTMLElement>('.message-list-footer');
+    expect(scroller).not.toBeNull();
+    expect(footer).not.toBeNull();
+    if (!scroller || !footer) {
+      return;
+    }
+
+    let hidden = false;
+    let naturalContentHeight = 36_000;
+    let scrollTop = 34_500;
+    Object.defineProperties(scroller, {
+      clientHeight: {
+        configurable: true,
+        get: () => hidden ? 0 : 1_000,
+      },
+      scrollHeight: {
+        configurable: true,
+        get: () => hidden
+          ? 0
+          : naturalContentHeight + (Number.parseFloat(footer.style.height) || 0),
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+    vi.spyOn(scroller, 'getBoundingClientRect').mockImplementation(() => createRect({
+      top: 0,
+      bottom: hidden ? 0 : 1_000,
+      height: hidden ? 0 : 1_000,
+    }));
+
+    act(() => {
+      root.render(<VirtualMessageList isViewportActive />);
+    });
+    const baselineFooterHeight = Number.parseFloat(footer.style.height);
+
+    act(() => {
+      root.render(<VirtualMessageList isViewportActive={false} />);
+    });
+    hidden = true;
+    scrollTop = 0;
+    act(() => {
+      resizeObserverMocks.callbacks.at(-1)?.();
+    });
+    for (let frame = 0; frame < 4; frame += 1) {
+      flushAnimationFrame();
+    }
+
+    expect(Number.parseFloat(footer.style.height)).toBe(baselineFooterHeight);
+
+    naturalContentHeight += 600;
+    hidden = false;
+    act(() => {
+      root.render(<VirtualMessageList isViewportActive />);
+    });
+    for (let frame = 0; frame < 4; frame += 1) {
+      flushAnimationFrame();
+    }
+
+    expect(Number.parseFloat(footer.style.height)).toBeLessThanOrEqual(
+      baselineFooterHeight + 1,
+    );
+    expect(scroller.scrollTop).toBeGreaterThan(0);
+    expect(scroller.scrollHeight).toBeLessThan(40_000);
+  });
+
+  it('reconciles a stream that ends while its viewport is inactive after reactivation', () => {
+    flowDiagnosticsMocks.enabled = true;
+    const listRef = React.createRef<VirtualMessageListRef>();
+    const session = createSession('session-a', 'turn-a');
+    session.dialogTurns[0].status = 'processing';
+    session.dialogTurns[0].modelRounds = [{
+      id: 'round-turn-a',
+      status: 'streaming',
+      isStreaming: true,
+      items: [],
+      startTime: 1,
+    } as typeof session.dialogTurns[number]['modelRounds'][number]];
+    stateMocks.activeSession = session;
+    stateMocks.virtualItems = [createItem('turn-a'), createModelItem('turn-a')];
+
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} isViewportActive />);
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]');
+    const footer = container.querySelector<HTMLElement>('.message-list-footer');
+    const target = container.querySelector<HTMLElement>(
+      '[data-turn-id="turn-a"][data-item-type="user-message"]',
+    );
+    expect(scroller).not.toBeNull();
+    expect(footer).not.toBeNull();
+    expect(target).not.toBeNull();
+    if (!scroller || !footer || !target) {
+      return;
+    }
+
+    let hidden = false;
+    let scrollTop = 200;
+    Object.defineProperties(scroller, {
+      clientHeight: {
+        configurable: true,
+        get: () => hidden ? 0 : 1_000,
+      },
+      scrollHeight: {
+        configurable: true,
+        get: () => hidden
+          ? 0
+          : 1_200 + (Number.parseFloat(footer.style.height) || 0),
+      },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+    vi.spyOn(scroller, 'getBoundingClientRect').mockImplementation(() => createRect({
+      top: 0,
+      bottom: hidden ? 0 : 1_000,
+      height: hidden ? 0 : 1_000,
+    }));
+    vi.spyOn(target, 'getBoundingClientRect').mockImplementation(() => {
+      const top = hidden ? 0 : 700 - scrollTop;
+      return createRect({ top, bottom: top + 40, height: hidden ? 0 : 40 });
+    });
+
+    act(() => {
+      listRef.current?.pinTurnToTopWithStatus('turn-a', {
+        behavior: 'auto',
+        pinMode: 'sticky-latest',
+      });
+    });
+    expect(Number.parseFloat(footer.style.height)).toBeGreaterThan(0);
+
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} isViewportActive={false} />);
+    });
+    hidden = true;
+    scrollTop = 0;
+    stateMocks.activeSession = {
+      ...session,
+      dialogTurns: session.dialogTurns.map(turn => ({
+        ...turn,
+        status: 'completed',
+        modelRounds: turn.modelRounds.map(round => ({
+          ...round,
+          status: 'completed',
+          isStreaming: false,
+        })),
+      })),
+    };
+    flowDiagnosticsMocks.trace.mockClear();
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} isViewportActive={false} />);
+      resizeObserverMocks.callbacks.at(-1)?.();
+    });
+    expect(flowDiagnosticsMocks.trace).not.toHaveBeenCalledWith(expect.objectContaining({
+      location: 'VirtualMessageList.streamEndReconciliation',
+    }));
+
+    hidden = false;
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} isViewportActive />);
+    });
+    for (let frame = 0; frame < 4; frame += 1) {
+      flushAnimationFrame();
+    }
+
+    expect(flowDiagnosticsMocks.trace).toHaveBeenCalledWith(expect.objectContaining({
+      location: 'VirtualMessageList.streamEndReconciliation',
+    }));
+    expect(Number.parseFloat(footer.style.height)).toBeLessThanOrEqual(1_124);
+    expect(scroller.scrollHeight).toBeLessThan(3_000);
   });
 
   it('routes jump-to-latest through the presentation owner while reading a history window', () => {

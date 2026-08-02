@@ -112,6 +112,7 @@ const log = createLogger('ModernFlowChatContainer');
 interface ModernFlowChatContainerProps {
   className?: string;
   config?: Partial<FlowChatConfig>;
+  isViewportActive?: boolean;
   permissionPanelAboveChatInput?: boolean;
   /** Host-owned replacement for the ordinary new-session WelcomePanel. */
   emptyState?: React.ReactNode;
@@ -292,6 +293,7 @@ function backgroundCommandSummaryFromActivity(activity: BackgroundCommandActivit
 export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = ({
   className = '',
   config,
+  isViewportActive = true,
   permissionPanelAboveChatInput = false,
   emptyState,
   onFileViewRequest,
@@ -1124,12 +1126,15 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, [effectiveVisibleTurnInfo?.turnId, effectiveVisibleTurnInfo?.userMessage, renderedTurns, resolveLocalCommandHeaderTitle]);
 
   const requestTurnNavigationPin = useCallback((turnId: string): FlowChatTurnPinRequestStatus => {
+    if (!isViewportActive) {
+      return 'rejected';
+    }
     return virtualListRef.current?.pinTurnToTopWithStatus(turnId, {
       behavior: 'auto',
       pinMode: 'transient',
       alignmentPolicy: 'best-effort',
     }) ?? 'rejected';
-  }, []);
+  }, [isViewportActive]);
   useEffect(() => {
     requestTurnNavigationPinRef.current = requestTurnNavigationPin;
   }, [requestTurnNavigationPin]);
@@ -1138,7 +1143,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   }, []);
 
   useEffect(() => {
-    if (!queuedTurnNavigation) return;
+    if (!isViewportActive || !queuedTurnNavigation) return;
 
     let cancelled = false;
     let frameId: number | null = null;
@@ -1200,6 +1205,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       }
     };
   }, [
+    isViewportActive,
     queuedTurnNavigation,
     renderedTurnSummaries.length,
   ]);
@@ -1222,6 +1228,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       ? `${sessionId}:${latestTurnId}:${turnSummaries.length}`
       : null;
     if (
+      !isViewportActive
+      ||
       !sessionId
       || isReadingTurnViewport
       || !latestTurnId
@@ -1370,6 +1378,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeSession?.remoteConnectionId,
     activeSession?.remoteSshHost,
     hasPendingHistoryCompletion,
+    isViewportActive,
     isReadingTurnViewport,
     latestTurnId,
     latestTurnUsesFollowOutput,
@@ -1381,6 +1390,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   useEffect(() => {
     const sessionId = activeSession?.sessionId;
     if (
+      !isViewportActive ||
       !sessionId ||
       activeSession.historyState !== 'ready' ||
       (
@@ -1460,6 +1470,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     activeSession?.contextRestoreState,
     activeSession?.sessionId,
     hasPendingHistoryCompletion,
+    isViewportActive,
     latestTurnId,
     turnSummaries.length,
   ]);
@@ -2447,6 +2458,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
                 <VirtualMessageList
                   ref={virtualListRef}
                   items={virtualItems}
+                  isViewportActive={isViewportActive}
                   presentationMode={isRenderingHistoryProjection ? 'history-window' : 'tail'}
                   viewportMode={isReadingTurnViewport ? 'history-reading' : 'live-tail'}
                   historyWindow={isShowingHistoryPresentation ? activeHistoryPresentation?.range ?? null : null}
