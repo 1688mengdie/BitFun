@@ -2874,6 +2874,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   }, [
     buildPinReservation,
     applyFooterCompensationNow,
+    canCoordinateViewport,
     getRenderedUserMessageElement,
     isTurnPinRequestCurrent,
     recordScrollerGeometry,
@@ -3052,7 +3053,6 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   }, [
     applyFooterCompensationNow,
     buildPinReservation,
-    canCoordinateViewport,
     getTotalBottomCompensationPx,
     resolveTurnPinMetrics,
     updateBottomReservationState,
