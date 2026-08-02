@@ -32,6 +32,7 @@ const MAX_SEEN_SYNC_EVENTS = 256;
 interface AppearanceSource {
   pkg: AppearancePackage;
   assets: StoredAppearancePackage['assets'];
+  importedAt?: string;
 }
 
 interface ApplySelectionOptions {
@@ -76,6 +77,24 @@ function importedCatalogEntry(value: {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function appearanceCatalogsEqual(
+  left: readonly AppearanceCatalogEntry[],
+  right: readonly AppearanceCatalogEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const candidate = right[index];
+    return entry.id === candidate.id
+      && entry.name === candidate.name
+      && entry.author === candidate.author
+      && entry.description === candidate.description
+      && entry.version === candidate.version
+      && entry.mode === candidate.mode
+      && entry.source === candidate.source
+      && entry.importedAt === candidate.importedAt;
+  });
 }
 
 function createEventId(): string {
@@ -197,7 +216,9 @@ export class AppearanceService {
         await this.storage.put(stored);
         storageCommitted = true;
         const appearances = await this.loadCatalog();
-        if (active && applied) this.activeSource = { pkg: composed, assets: stored.assets };
+        if (active && applied) {
+          this.activeSource = { pkg: composed, assets: stored.assets, importedAt: stored.importedAt };
+        }
         this.setSnapshot({
           ...previousSnapshot,
           status: 'ready',
@@ -237,7 +258,7 @@ export class AppearanceService {
             restoredCurrent = runtimeSnapshot;
             restoredResolvedAppearanceId = runtimeSnapshot?.id ?? null;
             this.activeSource = runtimeSnapshot?.id === id
-              ? { pkg: composed, assets: stored.assets }
+              ? { pkg: composed, assets: stored.assets, importedAt: stored.importedAt }
               : previousSource;
           }
         } else {
@@ -493,7 +514,11 @@ export class AppearanceService {
     const builtin = getBuiltinAppearance(id);
     if (builtin) return { pkg: builtin, assets: {} };
     const stored = await this.storage.get(id);
-    return stored ? { pkg: composeAppearancePackage(stored.manifest), assets: stored.assets } : null;
+    return stored ? {
+      pkg: composeAppearancePackage(stored.manifest),
+      assets: stored.assets,
+      importedAt: stored.importedAt,
+    } : null;
   }
 
   private async loadCatalog(): Promise<readonly AppearanceCatalogEntry[]> {
@@ -559,13 +584,26 @@ export class AppearanceService {
       : SYSTEM_APPEARANCE_ID;
     const appearances = await this.loadCatalog();
     this.persistedSelectionId = selected;
-    this.setSnapshot({ ...this.snapshot, appearances });
+    if (!appearanceCatalogsEqual(this.snapshot.appearances, appearances)) {
+      this.setSnapshot({ ...this.snapshot, appearances });
+    }
 
     const resolvedId = selected === SYSTEM_APPEARANCE_ID ? getSystemAppearanceId() : selected;
     const importedSelection = !getBuiltinAppearance(resolvedId);
+    const importedEntry = importedSelection
+      ? appearances.find(entry => entry.id === resolvedId && entry.source === 'imported')
+      : undefined;
+    const activeSource = this.activeSource;
+    const importedSourceChanged = importedSelection && (
+      !importedEntry
+      || !activeSource
+      || activeSource.pkg.id !== resolvedId
+      || activeSource.pkg.version !== importedEntry.version
+      || activeSource.importedAt !== importedEntry.importedAt
+    );
     const needsApply = this.snapshot.selectedAppearanceId !== selected
       || this.snapshot.resolvedAppearanceId !== resolvedId
-      || importedSelection;
+      || importedSourceChanged;
     if (!needsApply) return;
 
     try {

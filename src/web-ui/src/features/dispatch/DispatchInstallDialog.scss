@@ -113,9 +113,9 @@
     border: 0;
     background: none;
     overflow-wrap: anywhere;
-    color: var(--color-text-secondary);
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-xs);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-family: var(--bf-appearance-token-font-family-mono);
+    font-size: var(--bf-appearance-token-font-size-xs);
   }
 
   &__base-ref {
@@ -126,16 +126,16 @@
       width: 100%;
       min-height: 32px;
       padding: 0 $size-gap-2;
-      border: 1px solid var(--border-subtle);
+      border: 1px solid var(--bf-appearance-token-border-subtle);
       border-radius: $size-radius-base;
-      background: var(--color-bg-primary);
-      color: var(--color-text-primary);
-      font-family: var(--font-family-mono);
-      font-size: var(--font-size-xs);
+      background: var(--bf-appearance-token-color-bg-primary);
+      color: var(--bf-appearance-token-color-text-primary);
+      font-family: var(--bf-appearance-token-font-family-mono);
+      font-size: var(--bf-appearance-token-font-size-xs);
 
       &:focus-visible {
-        border-color: var(--color-accent-500);
-        outline: 2px solid color-mix(in srgb, var(--color-accent-500) 24%, transparent);
+        border-color: var(--bf-appearance-token-color-accent-500);
+        outline: 2px solid color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 24%, transparent);
         outline-offset: 1px;
       }
     }
@@ -148,7 +148,7 @@
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
     gap: $size-gap-2;
-    font-size: var(--font-size-xs);
+    font-size: var(--bf-appearance-token-font-size-xs);
     line-height: 1.4;
     cursor: pointer;
 
@@ -281,7 +281,7 @@
       }
 
       &[data-state='pending'] > strong {
-        color: var(--color-text-secondary);
+        color: var(--bf-appearance-token-color-text-secondary);
       }
     }
   }
@@ -291,8 +291,8 @@
     display: flex;
     align-items: center;
     gap: $size-gap-2;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-font-size-xs);
   }
 
   &__retry {

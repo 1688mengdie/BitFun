@@ -110,6 +110,53 @@ describe('AppearanceRuntime', () => {
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-background');
   });
 
+  it('keeps retired asset URLs alive until the UI releases their revision', async () => {
+    vi.spyOn(URL, 'createObjectURL').mockReturnValueOnce('blob:test-background');
+    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const registry = new AppearanceRegistry()
+      .registerComponent({ id: 'surface', parts: [{ id: 'root' }] })
+      .freeze();
+    const runtime = new AppearanceRuntime(registry);
+    const assetPackage: AppearancePackage = {
+      schema: 'bitfun.appearance',
+      schemaVersion: 1,
+      id: 'test.assets',
+      name: 'Assets',
+      version: '1.0.0',
+      mode: 'dark',
+      assets: {
+        background: {
+          kind: 'image',
+          mimeType: 'image/png',
+          source: { kind: 'package', path: 'assets/background.png' },
+        },
+      },
+      components: {
+        surface: {
+          parts: {
+            root: { base: { backgroundImage: { kind: 'asset', assetId: 'background' } } },
+          },
+        },
+      },
+    };
+    await runtime.initialize(assetPackage, {
+      background: {
+        mimeType: 'image/png',
+        bytes: new Uint8Array([1, 2, 3]).buffer,
+        width: 1,
+        height: 1,
+      },
+    });
+    revokeObjectURL.mockClear();
+    const release = runtime.retainAssetRevision(1);
+
+    await runtime.applyPackage({ ...assetPackage, id: 'test.assets-next', assets: undefined, components: undefined });
+    expect(revokeObjectURL).not.toHaveBeenCalledWith('blob:test-background');
+
+    release();
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:test-background');
+  });
+
   it('resolves video background URLs without exposing the video as a CSS image variable', async () => {
     vi.spyOn(URL, 'createObjectURL')
       .mockReturnValueOnce('blob:test-motion')

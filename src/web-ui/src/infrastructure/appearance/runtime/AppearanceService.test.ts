@@ -53,6 +53,7 @@ function createService() {
   const storage = new MemoryAppearanceStorage();
   return {
     runtime,
+    storage,
     service: new AppearanceService(runtime, parser, storage),
   };
 }
@@ -471,6 +472,81 @@ describe('AppearanceService', () => {
     expect(service.getSnapshot()).toMatchObject({
       status: 'ready',
       resolvedAppearanceId: 'bitfun-dark',
+    });
+  });
+
+  it('does not reapply an unchanged imported appearance when the window regains focus', async () => {
+    let focusListener: (() => void) | undefined;
+    vi.stubGlobal('window', {
+      matchMedia: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'focus') focusListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+    });
+    configMocks.getConfig.mockResolvedValue('sample.dynamic');
+    const { runtime, service, storage } = createService();
+    await storage.put({
+      manifest: {
+        schema: 'bitfun.appearance', schemaVersion: 1, id: 'sample.dynamic', name: 'Dynamic',
+        version: '1.0.0', mode: 'dark',
+      },
+      archive: new ArrayBuffer(1),
+      assets: {},
+      importedAt: '2026-08-01T00:00:00.000Z',
+    });
+    await service.initialize();
+
+    focusListener?.();
+    await vi.waitFor(() => expect(configMocks.getConfig).toHaveBeenCalledTimes(2));
+
+    expect(runtime.applyPackage).not.toHaveBeenCalled();
+    expect(service.getSnapshot().current?.revision).toBe(1);
+  });
+
+  it('reapplies an imported appearance when its stored revision changes', async () => {
+    let focusListener: (() => void) | undefined;
+    vi.stubGlobal('window', {
+      matchMedia: vi.fn(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+      addEventListener: vi.fn((type: string, listener: () => void) => {
+        if (type === 'focus') focusListener = listener;
+      }),
+      removeEventListener: vi.fn(),
+    });
+    configMocks.getConfig.mockResolvedValue('sample.dynamic');
+    const { runtime, service, storage } = createService();
+    const manifest: AppearancePackage = {
+      schema: 'bitfun.appearance', schemaVersion: 1, id: 'sample.dynamic', name: 'Dynamic',
+      version: '1.0.0', mode: 'dark',
+    };
+    await storage.put({
+      manifest,
+      archive: new ArrayBuffer(1),
+      assets: {},
+      importedAt: '2026-08-01T00:00:00.000Z',
+    });
+    await service.initialize();
+    await storage.put({
+      manifest: { ...manifest, name: 'Dynamic Updated' },
+      archive: new ArrayBuffer(2),
+      assets: {},
+      importedAt: '2026-08-02T00:00:00.000Z',
+    });
+
+    focusListener?.();
+    await vi.waitFor(() => expect(runtime.applyPackage).toHaveBeenCalledTimes(1));
+
+    expect(service.getSnapshot()).toMatchObject({
+      status: 'ready',
+      current: expect.objectContaining({ name: 'Dynamic Updated', revision: 2 }),
     });
   });
 });
