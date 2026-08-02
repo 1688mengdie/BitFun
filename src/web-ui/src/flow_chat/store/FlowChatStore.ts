@@ -87,6 +87,7 @@ import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
 
 const log = createLogger('FlowChatStore');
 
+
 function logPersistedDispatchMetadataOverlap(
   metadata: Record<string, unknown>,
   source: 'metadata-page' | 'metadata-list',
@@ -185,6 +186,11 @@ export interface LoadSessionTurnWindowOptions {
 }
 
 export type SessionHistoryWindowDirection = 'before' | 'after';
+
+export interface SessionTurnOrdinalRange {
+  startOrdinal: number;
+  endOrdinalExclusive: number;
+}
 
 export type SessionTurnWindowLoadResult = {
   status: 'ready' | 'stale' | 'not-found' | 'unsupported';
@@ -1358,6 +1364,14 @@ export class FlowChatStore {
     };
   }
 
+  public getSessionCanonicalTailRange(sessionId: string): SessionTurnOrdinalRange | null {
+    const interval = this.getSessionHistoryTailProtectedIntervals(
+      sessionId,
+      this.sessionHistoryViews.get(sessionId),
+    )[0];
+    return interval ? { ...interval } : null;
+  }
+
   public activateSessionHistoryWindow(
     sessionId: string,
     targetOrdinal: number,
@@ -1656,14 +1670,14 @@ export class FlowChatStore {
 
   private getSessionHistoryTailProtectedIntervals(
     sessionId: string,
-    view: SessionHistoryViewState,
+    view?: SessionHistoryViewState,
   ): OrdinalInterval[] {
     const session = this.state.sessions.get(sessionId);
     if (!session || session.dialogTurns.length === 0) {
       return [];
     }
 
-    const catalog = view.catalog?.sessionId === sessionId
+    const catalog = view?.catalog?.sessionId === sessionId
       ? view.catalog
       : session.turnCatalog?.sessionId === sessionId
         ? session.turnCatalog

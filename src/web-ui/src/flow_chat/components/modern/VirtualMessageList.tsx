@@ -105,6 +105,7 @@ import './VirtualMessageList.scss';
 
 const log = createLogger('VirtualMessageList');
 
+
 const PINNED_TURN_VIEWPORT_OFFSET_PX = 57; // Keep in sync with `.message-list-header`.
 const TOUCH_SCROLL_INTENT_EXIT_THRESHOLD_PX = 6;
 const USER_UPWARD_SCROLL_INTENT_WINDOW_MS = 800;
@@ -207,6 +208,17 @@ type InitialHistoryTransitionState = {
  */
 export type FlowChatTurnPinRequestStatus = 'rejected' | 'pending' | 'settled';
 
+export type HistoryWindowBoundaryIntentResult =
+  | 'applied'
+  | 'exhausted'
+  | 'not-ready'
+  | 'cancelled';
+
+type HistoryWindowBoundaryIntentResponse =
+  | HistoryWindowBoundaryIntentResult
+  | boolean
+  | void;
+
 export interface VirtualMessageListRef {
   scrollToTurn: (turnIndex: number) => void;
   scrollToIndex: (index: number) => void;
@@ -246,7 +258,7 @@ export interface VirtualMessageListProps {
   onHistoryWindowBoundaryIntent?: (
     direction: SessionHistoryWindowDirection,
     options?: HistoryWindowBoundaryIntentOptions,
-  ) => boolean | void | Promise<boolean | void>;
+  ) => HistoryWindowBoundaryIntentResponse | Promise<HistoryWindowBoundaryIntentResponse>;
   onRequestJumpToLatest?: () => void;
   onUserScrollIntent?: () => void;
 }
@@ -297,6 +309,18 @@ function createInactiveCollapseIntentState(): PendingCollapseIntentState {
     baseTotalCompensationPx: 0,
     cumulativeShrinkPx: 0,
   };
+}
+
+function normalizeHistoryWindowBoundaryIntentResult(
+  result: HistoryWindowBoundaryIntentResponse,
+): HistoryWindowBoundaryIntentResult {
+  if (result === true) {
+    return 'applied';
+  }
+  if (result === false || result === undefined) {
+    return 'not-ready';
+  }
+  return result;
 }
 
 interface LatestEndAnchorRequestState {
@@ -518,7 +542,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const pendingHistoryPrependAnchorRef = useRef<PendingHistoryPrependAnchorState | null>(null);
   const historyPagingActiveRef = useRef(false);
   const historyPagingRetryTimerRef = useRef<number | null>(null);
-  const catalogHistoryWindowRequestRef = useRef<Promise<boolean | void> | null>(null);
+  const catalogHistoryWindowRequestRef = useRef<Promise<HistoryWindowBoundaryIntentResult> | null>(null);
+  const previousPresentationModeRef = useRef<'tail' | 'history-window'>(presentationMode);
   const lastUserScrollIntentAtMsRef = useRef(Number.NEGATIVE_INFINITY);
   const historyPresentationCommitQuietGenerationRef = useRef(0);
   const historyPresentationCommitQuietWaitersRef = useRef(
@@ -595,6 +620,37 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const previousIsStreamingOutputRef = useRef(false);
   const transientTurnPinStabilizationRef = useRef<PendingTurnPinState | null>(null);
   activeSessionIdRef.current = activeSessionId;
+
+  useEffect(() => {
+    const previousMode = previousPresentationModeRef.current;
+    if (previousMode === 'history-window' && presentationMode === 'tail') {
+      historyPresentationCommitQuietGenerationRef.current += 1;
+      Array.from(historyPresentationCommitQuietWaitersRef.current).forEach(waiter => waiter.cancel());
+      if (historyPagingRetryTimerRef.current !== null) {
+        window.clearTimeout(historyPagingRetryTimerRef.current);
+        historyPagingRetryTimerRef.current = null;
+      }
+      if (fullHistoryProjectionIntentFrameRef.current !== null) {
+        cancelAnimationFrame(fullHistoryProjectionIntentFrameRef.current);
+        fullHistoryProjectionIntentFrameRef.current = null;
+      }
+      if (previousHistoryBoundaryStatusTimerRef.current !== null) {
+        window.clearTimeout(previousHistoryBoundaryStatusTimerRef.current);
+        previousHistoryBoundaryStatusTimerRef.current = null;
+      }
+      pendingFullHistoryProjectionReasonRef.current = null;
+      catalogHistoryWindowRequestRef.current = null;
+      pendingHistoryPrependAnchorRef.current = null;
+      historyPagingActiveRef.current = false;
+      setHistoryPagingActive(false);
+      setHistoryPagingLoading(false);
+      setHistoryPagingAnchorTurnId(null);
+      setPreviousHistoryBoundaryStatus(null);
+    }
+    if (previousMode !== presentationMode) {
+      previousPresentationModeRef.current = presentationMode;
+    }
+  }, [presentationMode]);
 
   const isInputActive = useChatInputState(state => state.isActive);
   const isInputExpanded = useChatInputState(state => state.isExpanded);
@@ -3306,7 +3362,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         return;
       }
       let preparedAnchorState: PendingHistoryPrependAnchorState | null = null;
-      const cancelViewportPresentationCommit = () => {
+      const resetCatalogHistoryPagingState = () => {
         if (
           preparedAnchorState
           && pendingHistoryPrependAnchorRef.current === preparedAnchorState
@@ -3319,6 +3375,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         setHistoryPagingAnchorTurnId(null);
         clearPreviousHistoryBoundaryStatus();
       };
+      const cancelViewportPresentationCommit = resetCatalogHistoryPagingState;
       const prepareViewportForPresentationCommit = async () => {
         const quietReady = await waitForHistoryPresentationCommitQuiet(sessionId);
         if (!quietReady || activeSessionIdRef.current !== sessionId) {
@@ -3342,23 +3399,34 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         cancelViewportPresentationCommit,
       }))
         .then(handled => {
-          if (handled || activeSessionIdRef.current !== sessionId) {
-            return handled;
+          const result = normalizeHistoryWindowBoundaryIntentResult(handled);
+          if (activeSessionIdRef.current !== sessionId) {
+            return result;
           }
-          setHistoryPagingLoading(false);
+          if (result === 'applied') {
+            if (!preparedAnchorState) {
+              resetCatalogHistoryPagingState();
+            }
+            return result;
+          }
+          if (result === 'exhausted' || result === 'cancelled') {
+            resetCatalogHistoryPagingState();
+            return result;
+          }
+          resetCatalogHistoryPagingState();
           showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
-          return handled;
+          return result;
         })
         .catch(error => {
           if (activeSessionIdRef.current === sessionId) {
-            setHistoryPagingLoading(false);
+            resetCatalogHistoryPagingState();
             showPreviousHistoryBoundaryStatus(sessionId, reason, 'not-ready');
           }
           log.warn('Failed to request an older catalog Turn window', {
             sessionId,
             error,
           });
-          return false;
+          return 'not-ready' as const;
         })
         .finally(() => {
           if (catalogHistoryWindowRequestRef.current === request) {
@@ -6210,6 +6278,13 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     const previousState = previousInitialHistoryTransitionStateRef.current;
     previousInitialHistoryTransitionStateRef.current = initialHistoryTransitionState;
 
+    if (presentationMode === 'history-window') {
+      if (historyProjectionHandoffRef.current) {
+        clearHistoryProjectionHandoffRef.current('history-window-presentation');
+      }
+      return;
+    }
+
     const shouldProtectTransition = Boolean(
       previousState &&
       initialHistoryTransitionState &&
@@ -6261,6 +6336,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     footerHeightPx,
     initialHistoryTransitionState,
     latestTurnId,
+    presentationMode,
     scheduleHistoryProjectionHandoffRelease,
     virtualItems.length,
   ]);
@@ -6441,10 +6517,11 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   useLayoutEffect(() => {
     previousActiveSessionIdForOpenHandoffRef.current = activeSessionId;
   }, [activeSessionId]);
-  const activeHistoryProjectionHandoff =
-    activeSessionHistoryProjectionHandoff(historyProjectionHandoff, activeSessionId) ??
-    activeSessionHistoryProjectionHandoff(sessionOpenProjectionHandoff, activeSessionId) ??
-    activeSessionHistoryProjectionHandoff(initialHistorySnapshot, activeSessionId);
+  const activeHistoryProjectionHandoff = presentationMode === 'history-window'
+    ? null
+    : activeSessionHistoryProjectionHandoff(historyProjectionHandoff, activeSessionId) ??
+      activeSessionHistoryProjectionHandoff(sessionOpenProjectionHandoff, activeSessionId) ??
+      activeSessionHistoryProjectionHandoff(initialHistorySnapshot, activeSessionId);
   const hasCompactHistoricalProjection = virtualItems.length >= 6 && virtualItems
     .slice(-16)
     .every(item =>

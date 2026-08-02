@@ -3984,6 +3984,10 @@ describe('FlowChatStore historical session hydration state', () => {
     }));
 
     await flowChatStore.loadSessionHistory('history-1', 'D:/workspace/BitFun');
+    expect(flowChatStore.getSessionCanonicalTailRange('history-1')).toEqual({
+      startOrdinal: 12,
+      endOrdinalExclusive: 15,
+    });
     const loaded = await flowChatStore.loadSessionTurnWindow('history-1', 11, {
       source: 'prefetch',
       before: 12,
