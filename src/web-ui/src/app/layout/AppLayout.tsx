@@ -36,7 +36,7 @@ import { useSessionModeStore } from '../stores/sessionModeStore';
 import { isMacOSDesktopRuntime } from '@/infrastructure/runtime';
 import { flowChatSessionConfigForWorkspace } from '../utils/projectSessionWorkspace';
 import { notificationService } from '@/shared/notification-system';
-import { AppearanceBackgroundMediaLayer, useAppearance } from '@/infrastructure/appearance';
+import { AppearanceBackgroundMediaLayer, appearanceRuntime, useAppearance } from '@/infrastructure/appearance';
 import './AppLayout.scss';
 
 type TransitionDirection = 'entering' | 'returning' | null;
@@ -79,7 +79,8 @@ interface WindowModeHint {
 const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
   const { t } = useI18n('components');
   const { t: tCommon } = useI18n('common');
-  const backgroundMedia = useAppearance().current?.backgroundMedia;
+  const currentAppearance = useAppearance().current;
+  const backgroundMedia = currentAppearance?.backgroundMedia;
   usePermissionRequestNotify();
   const {
     currentWorkspace,
@@ -712,7 +713,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
           data-bf-state="toolbar"
           data-bf-background-media={backgroundMedia?.url ? 'video' : undefined}
         >
-          <AppearanceBackgroundMediaLayer media={backgroundMedia} />
+          <AppearanceBackgroundMediaLayer
+            media={backgroundMedia}
+            revision={currentAppearance?.revision}
+            retainRevision={appearanceRuntime.retainAssetRevision}
+          />
           <Suspense fallback={null}>
             <ToolbarMode />
           </Suspense>
@@ -732,7 +737,11 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
         data-bf-state={isFullscreen ? 'fullscreen' : undefined}
         data-bf-background-media={backgroundMedia?.url ? 'video' : undefined}
       >
-        <AppearanceBackgroundMediaLayer media={backgroundMedia} />
+        <AppearanceBackgroundMediaLayer
+          media={backgroundMedia}
+          revision={currentAppearance?.revision}
+          retainRevision={appearanceRuntime.retainAssetRevision}
+        />
         {windowModeHint && (
           <div
             key={windowModeHint.id}

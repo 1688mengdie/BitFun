@@ -20,13 +20,20 @@ interface PreparedRendererTransaction {
   rollback(): void | Promise<void>;
 }
 
+interface AssetGeneration {
+  urls: Map<string, string>;
+  references: number;
+  retired: boolean;
+}
+
 export class AppearanceRuntime {
   private readonly compiler: AppearanceCompiler;
   private snapshot: ResolvedAppearance | null = null;
   private revision = 0;
   private listeners = new Set<() => void>();
   private applyQueue: Promise<ResolvedAppearance | null> = Promise.resolve(null);
-  private activeAssetUrls = new Map<string, string>();
+  private readonly assetGenerations = new Map<number, AssetGeneration>();
+  private activeAssetRevision: number | null = null;
 
   constructor(private readonly registry: AppearanceRegistry) {
     this.compiler = new AppearanceCompiler(registry);
@@ -72,6 +79,19 @@ export class AppearanceRuntime {
     return () => this.listeners.delete(listener);
   };
 
+  retainAssetRevision = (revision: number): (() => void) => {
+    const generation = this.assetGenerations.get(revision);
+    if (!generation) return () => undefined;
+    generation.references += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      generation.references = Math.max(0, generation.references - 1);
+      this.collectAssetGeneration(revision);
+    };
+  };
+
   async dispose(): Promise<void> {
     const previous = this.snapshot;
     if (previous) {
@@ -91,8 +111,9 @@ export class AppearanceRuntime {
       }
     }
     document.querySelectorAll<HTMLStyleElement>(`style[${STYLE_ATTRIBUTE}]`).forEach(node => node.remove());
-    this.revokeAssetUrls(this.activeAssetUrls);
-    this.activeAssetUrls = new Map();
+    this.assetGenerations.forEach(generation => this.revokeAssetUrls(generation.urls));
+    this.assetGenerations.clear();
+    this.activeAssetRevision = null;
     const root = document.documentElement;
     root.removeAttribute('data-bf-appearance');
     root.removeAttribute('data-bf-appearance-mode');
@@ -156,12 +177,22 @@ export class AppearanceRuntime {
     document.querySelectorAll<HTMLStyleElement>(`style[${STYLE_ATTRIBUTE}]`).forEach(node => {
       if (node !== nextStyle) node.remove();
     });
-    this.revokeAssetUrls(this.activeAssetUrls);
-    this.activeAssetUrls = preparedAssets.urls;
+    const previousAssetRevision = this.activeAssetRevision;
+    this.assetGenerations.set(nextRevision, {
+      urls: preparedAssets.urls,
+      references: 0,
+      retired: false,
+    });
+    this.activeAssetRevision = nextRevision;
+    if (previousAssetRevision !== null) {
+      const previousGeneration = this.assetGenerations.get(previousAssetRevision);
+      if (previousGeneration) previousGeneration.retired = true;
+    }
 
     this.revision = nextRevision;
     this.snapshot = next;
     this.emit();
+    if (previousAssetRevision !== null) this.collectAssetGeneration(previousAssetRevision);
     if (next.diagnostics.length > 0) {
       log.warn('Appearance applied with diagnostics', {
         appearanceId: next.id,
@@ -278,6 +309,13 @@ export class AppearanceRuntime {
 
   private revokeAssetUrls(urls: ReadonlyMap<string, string>): void {
     urls.forEach(url => URL.revokeObjectURL(url));
+  }
+
+  private collectAssetGeneration(revision: number): void {
+    const generation = this.assetGenerations.get(revision);
+    if (!generation || !generation.retired || generation.references > 0) return;
+    this.revokeAssetUrls(generation.urls);
+    this.assetGenerations.delete(revision);
   }
 
   private emit(): void {

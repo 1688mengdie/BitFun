@@ -142,7 +142,12 @@ html, body {
   display: block;
   width: 100%;
   height: 100%;
+  opacity: 0;
   pointer-events: none;
+
+  &[data-media-ready='true'] {
+    opacity: 1;
+  }
 }
 
 .bitfun-window-mode-hint {
