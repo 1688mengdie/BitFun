@@ -4,6 +4,7 @@ import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import { ModernFlowChatContainer } from './ModernFlowChatContainer';
+import type { HistoryWindowBoundaryIntentResult } from './VirtualMessageList';
 import type { Session } from '../../types/flow-chat';
 import { flowChatStore } from '../../store/FlowChatStore';
 import {
@@ -1905,6 +1906,10 @@ describe('ModernFlowChatContainer historical empty state', () => {
       { length: 8 },
       (_, index) => createTurn(`turn-${index + 3}`, `Prompt ${index + 3}`),
     );
+    const cachedTurns = Array.from(
+      { length: 10 },
+      (_, index) => createTurn(`turn-${index + 1}`, `Prompt ${index + 1}`),
+    );
     vi.spyOn(flowChatStore, 'getState').mockReturnValue({
       sessions: new Map([['session-1', stateMocks.activeSession]]),
       activeSessionId: 'session-1',
@@ -1912,15 +1917,19 @@ describe('ModernFlowChatContainer historical empty state', () => {
     vi.spyOn(flowChatStore, 'getSessionHistoryViewState').mockReturnValue({
       catalog,
       loadedRanges: [{
-        startOrdinal: 8,
+        startOrdinal: 0,
         endOrdinalExclusive: 10,
-        turns: stateMocks.activeSession.dialogTurns,
+        turns: cachedTurns,
         lastAccessedAt: 1,
-        source: 'initial-tail',
+        source: 'prefetch',
       }],
       activeRange: null,
       pendingTargetOrdinal: null,
       navigationGeneration: 0,
+    });
+    vi.spyOn(flowChatStore, 'getSessionCanonicalTailRange').mockReturnValue({
+      startOrdinal: 8,
+      endOrdinalExclusive: 10,
     });
     const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
       status: 'ready',
@@ -1929,7 +1938,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
       targetTurnId: 'turn-8',
       navigationGeneration: 0,
       isCurrent: true,
-      cacheHit: false,
+      cacheHit: true,
       catalog,
     });
     const activateSpy = vi.spyOn(
@@ -1954,7 +1963,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     await act(async () => {
       root.render(<ModernFlowChatContainer />);
     });
-    let boundaryIntent: Promise<boolean> | undefined;
+    let boundaryIntent: Promise<HistoryWindowBoundaryIntentResult> | undefined;
     await act(async () => {
       boundaryIntent = (
         virtualListPropsMock.latest?.onHistoryWindowBoundaryIntent as
@@ -1966,7 +1975,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
               );
               cancelViewportPresentationCommit?: () => void;
             },
-          ) => Promise<boolean>)
+          ) => Promise<HistoryWindowBoundaryIntentResult>)
           | undefined
       )?.('before', {
         prepareViewportForPresentationCommit,
@@ -1982,7 +1991,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     await act(async () => {
       resolveViewportPreparation?.(true);
-      expect(await boundaryIntent).toBe(true);
+      expect(await boundaryIntent).toBe('applied');
     });
 
     expect(loadSpy).toHaveBeenCalledWith('session-1', 7, {

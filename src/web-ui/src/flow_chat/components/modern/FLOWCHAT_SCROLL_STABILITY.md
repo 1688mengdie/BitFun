@@ -457,6 +457,11 @@ these ownership rules intact:
   prepend commit out of an active wheel gesture while still allowing the data
   request itself to prefetch in parallel. Never expose a later cached range
   across an unloaded gap.
+- Derive the restored-tail boundary from the canonical `Session.dialogTurns`
+  ordinal interval, never from the start of a merged `loadedRanges` entry.
+  Cache residency may extend to the first Turn while the canonical tail still
+  renders only recent Turns. Reaching ordinal zero is an exhausted boundary,
+  not a not-ready or failed load.
 - Appending below the current presentation does not require compensation.
   Prepending or trimming above it must retain the existing element-anchor
   transaction until the same user message returns to its captured viewport

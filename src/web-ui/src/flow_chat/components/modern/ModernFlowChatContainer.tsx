@@ -11,6 +11,7 @@ import { useSessionModeStore } from '@/app/stores/sessionModeStore';
 import {
   VirtualMessageList,
   type FlowChatTurnPinRequestStatus,
+  type HistoryWindowBoundaryIntentResult,
   type HistoryWindowBoundaryIntentOptions,
   type VirtualMessageListRef,
 } from './VirtualMessageList';
@@ -102,6 +103,7 @@ import { pendingPermissionToolCallIdsForSession } from './permissionRequestRouti
 import { usePermissionRequests } from './usePermissionRequests';
 
 const log = createLogger('ModernFlowChatContainer');
+
 
 interface ModernFlowChatContainerProps {
   className?: string;
@@ -307,7 +309,10 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     viewportIntentRef.current = next;
     setViewportIntent(next);
   }, []);
-  const historyBoundaryRequestsRef = useRef<Record<SessionHistoryWindowDirection, Promise<boolean> | null>>({
+  const historyBoundaryRequestsRef = useRef<Record<
+    SessionHistoryWindowDirection,
+    Promise<HistoryWindowBoundaryIntentResult> | null
+  >>({
     before: null,
     after: null,
   });
@@ -1682,7 +1687,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
   const handleHistoryWindowBoundaryIntent = useCallback((
     direction: SessionHistoryWindowDirection,
     options?: HistoryWindowBoundaryIntentOptions,
-  ): Promise<boolean> => {
+  ): Promise<HistoryWindowBoundaryIntentResult> => {
     const existingRequest = historyBoundaryRequestsRef.current[direction];
     if (existingRequest) {
       return existingRequest;
@@ -1697,7 +1702,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       const sessionId = activeSessionIdRef.current;
       const presentationOwnerGeneration = historyPresentationOwnerGenerationRef.current;
       if (!sessionId || (presentation && presentation.sessionId !== sessionId)) {
-        return false;
+        return 'cancelled';
       }
 
       const session = flowChatStore.getState().sessions.get(sessionId);
@@ -1717,19 +1722,16 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           || session?.isPartial !== true
           || session.turnCatalog?.sessionId !== sessionId
         ) {
-          return false;
+          return 'cancelled';
         }
-        const tailOrdinal = totalTurnCount - 1;
-        const tailRange = historyView?.loadedRanges.find(range =>
-          range.startOrdinal <= tailOrdinal && range.endOrdinalExclusive > tailOrdinal
-        );
-        if (!tailRange) {
-          return false;
+        const canonicalTailRange = flowChatStore.getSessionCanonicalTailRange(sessionId);
+        if (!canonicalTailRange) {
+          return 'not-ready';
         }
-        targetOrdinal = tailRange.startOrdinal - 1;
+        targetOrdinal = canonicalTailRange.startOrdinal - 1;
       }
       if (targetOrdinal < 0 || targetOrdinal >= totalTurnCount) {
-        return false;
+        return 'exhausted';
       }
 
       setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'loading' }));
@@ -1741,7 +1743,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           after: direction === 'after' ? 12 : 1,
         });
         if (!result.isCurrent || activeSessionIdRef.current !== sessionId) {
-          return false;
+          return 'cancelled';
         }
         if (result.status !== 'ready') {
           if (result.status === 'unsupported') {
@@ -1751,11 +1753,11 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             );
             if (historyReady && activeSessionIdRef.current === sessionId) {
               setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
-              return true;
+              return 'applied';
             }
           }
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
-          return false;
+          return 'not-ready';
         }
 
         viewportPreparationStarted = Boolean(options?.prepareViewportForPresentationCommit);
@@ -1775,7 +1777,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           if (activeSessionIsCurrent) {
             setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'idle' }));
           }
-          return activeSessionIsCurrent;
+          return 'cancelled';
         }
 
         const nextPresentation = presentation
@@ -1786,7 +1788,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             options?.cancelViewportPresentationCommit?.();
           }
           setHistoryBoundaryState(previous => ({ ...previous, [direction]: 'error' }));
-          return false;
+          return 'not-ready';
         }
         applyHistoryPresentation(sessionId, nextPresentation, {
           completedBoundary: direction,
@@ -1799,7 +1801,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
             },
           } : {}),
         });
-        return true;
+        return 'applied';
       } catch (error) {
         if (viewportPreparationStarted) {
           options?.cancelViewportPresentationCommit?.();
@@ -1813,7 +1815,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           targetOrdinal,
           error,
         });
-        return false;
+        return 'not-ready';
       }
     })().finally(() => {
       historyBoundaryRequestsRef.current[direction] = null;

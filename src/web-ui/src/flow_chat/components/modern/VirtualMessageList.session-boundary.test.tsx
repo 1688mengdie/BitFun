@@ -2046,6 +2046,46 @@ describe('VirtualMessageList session boundary', () => {
     expect(container.querySelector('[data-testid="virtuoso"]')).not.toBeNull();
   });
 
+  it('does not render an initial projection handoff over a history-window presentation', () => {
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a', 'turn-b'], {
+      contextRestoreState: 'pending',
+      isPartial: true,
+      historyState: 'ready',
+    });
+    const tailItems = [createItem('turn-a'), createItem('turn-b')];
+    stateMocks.virtualItems = tailItems;
+
+    act(() => {
+      root.render(<VirtualMessageList items={tailItems} />);
+    });
+    expect(container.querySelector('[data-history-projection-handoff="true"]')).not.toBeNull();
+
+    const historyItems = [
+      createItem('turn-a'),
+      createModelItem('turn-a'),
+      createItem('turn-b'),
+      createModelItem('turn-b'),
+    ];
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={historyItems}
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 0,
+            endOrdinalExclusive: 2,
+            targetTurnId: 'turn-a',
+            mode: 'history-window',
+          }}
+          presentationRevision={1}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[data-history-projection-handoff="true"]')).toBeNull();
+    expect(container.querySelector('[data-testid="virtuoso"]')).not.toBeNull();
+  });
+
   it('does not let a canceled pending sticky pin RAF restore provisional footer space', () => {
     const listRef = React.createRef<VirtualMessageListRef>();
     const turnIds = Array.from(
@@ -2749,7 +2789,7 @@ describe('VirtualMessageList session boundary', () => {
 
   it('does not request full history projection for ordinary upward reading scroll', () => {
     flowStoreMocks.hasDeferredSessionHistoryProjection.mockReturnValue(true);
-    stateMocks.activeSession = createSession('session-a', 'turn-a', {
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a'], {
       isHistorical: false,
       historyState: 'ready',
       contextRestoreState: 'ready',
@@ -3029,6 +3069,138 @@ describe('VirtualMessageList session boundary', () => {
     }));
     expect(flowStoreMocks.revealPreviousSessionHistoryWindow).not.toHaveBeenCalled();
     expect(flowStoreMocks.releaseSessionHistoryCompletionAfterInitialPaint).not.toHaveBeenCalled();
+  });
+
+  it('treats an exhausted catalog boundary as complete without showing a not-ready error', async () => {
+    const onHistoryWindowBoundaryIntent = vi.fn(async () => 'exhausted' as const);
+    stateMocks.activeSession = createSession('session-a', 'turn-a', {
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'ready',
+      isPartial: true,
+      loadedTurnCount: 1,
+      totalTurnCount: 1,
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'session-a',
+        revision: 'catalog-1',
+        totalTurnCount: 1,
+        complete: true,
+        entries: [{
+          ordinal: 0,
+          storageTurnIndex: 0,
+          turnId: 'turn-a',
+          preview: 'Prompt 1',
+          previewTruncated: false,
+        }],
+      },
+    });
+    stateMocks.virtualItems = [createItem('turn-a')];
+
+    act(() => {
+      root.render(
+        <VirtualMessageList onHistoryWindowBoundaryIntent={onHistoryWindowBoundaryIntent} />,
+      );
+    });
+
+    const scroller = container.querySelector('[data-virtuoso-scroller="true"]');
+    expect(scroller).not.toBeNull();
+    act(() => {
+      scroller?.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -120,
+        bubbles: true,
+      }));
+    });
+    flushAnimationFrame();
+    flushAnimationFrame();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(onHistoryWindowBoundaryIntent).toHaveBeenCalledOnce();
+    expect(container.querySelector('[data-history-boundary-status]')).toBeNull();
+  });
+
+  it('releases a pending catalog boundary transaction when returning from history to tail', () => {
+    const pendingBoundary = new Promise<'applied'>(() => {});
+    const onHistoryWindowBoundaryIntent = vi.fn(() => pendingBoundary);
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a'], {
+      isHistorical: false,
+      historyState: 'ready',
+      contextRestoreState: 'ready',
+      isPartial: true,
+      loadedTurnCount: 1,
+      totalTurnCount: 2,
+      turnCatalog: {
+        schemaVersion: 1,
+        sessionId: 'session-a',
+        revision: 'catalog-1',
+        totalTurnCount: 2,
+        complete: true,
+        entries: Array.from({ length: 2 }, (_, ordinal) => ({
+          ordinal,
+          storageTurnIndex: ordinal,
+          turnId: `turn-${ordinal + 1}`,
+          preview: `Prompt ${ordinal + 1}`,
+          previewTruncated: false,
+        })),
+      },
+    });
+    stateMocks.virtualItems = [createItem('turn-a')];
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          presentationMode="tail"
+          onHistoryWindowBoundaryIntent={onHistoryWindowBoundaryIntent}
+        />,
+      );
+    });
+
+    const scroller = container.querySelector('[data-virtuoso-scroller="true"]');
+    expect(scroller).not.toBeNull();
+    act(() => {
+      scroller?.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -120,
+        bubbles: true,
+      }));
+    });
+    flushAnimationFrame();
+    flushAnimationFrame();
+    expect(onHistoryWindowBoundaryIntent).toHaveBeenCalledOnce();
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          presentationMode="history-window"
+          historyWindow={{
+            startOrdinal: 0,
+            endOrdinalExclusive: 2,
+            targetTurnId: null,
+            mode: 'history-window',
+          }}
+          onHistoryWindowBoundaryIntent={onHistoryWindowBoundaryIntent}
+        />,
+      );
+    });
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          presentationMode="tail"
+          onHistoryWindowBoundaryIntent={onHistoryWindowBoundaryIntent}
+        />,
+      );
+    });
+
+    act(() => {
+      scroller?.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: -120,
+        bubbles: true,
+      }));
+    });
+    flushAnimationFrame();
+    flushAnimationFrame();
+    expect(onHistoryWindowBoundaryIntent).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces a not-ready boundary state when a deferred history window cannot be revealed', () => {
