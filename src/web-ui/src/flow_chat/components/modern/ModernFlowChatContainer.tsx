@@ -1130,6 +1130,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     return virtualListRef.current?.pinTurnToTopWithStatus(turnId, {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     }) ?? 'rejected';
   }, []);
   useEffect(() => {
@@ -1641,6 +1642,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
         const preparedPin = virtualListRef.current?.prepareTurnPinToTop(recentHistoryTurn.id, {
           behavior: 'auto',
           pinMode: 'transient',
+          alignmentPolicy: 'best-effort',
         }) ?? 'rejected';
         if (preparedPin !== 'rejected') {
           applyHistoryPresentation(sessionId, reactivatedPresentation, {
@@ -1681,6 +1683,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
       const preparedPin = virtualListRef.current?.prepareTurnPinToTop(targetTurnId, {
         behavior: 'auto',
         pinMode: 'transient',
+        alignmentPolicy: 'best-effort',
       }) ?? 'rejected';
       if (preparedPin === 'rejected') {
         return false;

@@ -265,10 +265,18 @@ new request exits tail follow, but it does not remove the previous established
 pin reservation before the target DOM exists. That reservation remains only as
 physical scroll range; the active request prevents the old sticky target from
 reconciling it. Once the requested user message is rendered, the shared pin
-resolver replaces the old reservation, aligns the message to the 57px viewport
-offset, and starts bounded transient stabilization. An expired request releases
-semantic ownership while preserving the current physical range, so failure
-cannot silently clamp the pane to the bottom.
+resolver applies the request's alignment policy. Exact requests replace the old
+reservation, align the message to the 57px viewport offset, and start bounded
+transient stabilization. Turn-rail requests use best-effort alignment: they
+still align exactly when the natural range is sufficient, but when the target
+cannot reach the 57px offset without synthetic tail space, they remove the
+transient pin reservation, clamp to the natural maximum, and release
+`pinned-item` ownership immediately. The natural boundary is an expected
+content limit, not a pending transaction, so it must not retry until TTL expiry.
+`sticky-latest` always uses the exact policy because streaming follow-output
+depends on its protected pin range. An expired request releases semantic
+ownership while preserving the current physical range, so failure cannot
+silently clamp the pane to the bottom.
 
 `rangeChanged` is a target-materialization signal, not a source of turn
 identity. It retries the active generation against real DOM geometry. RAF

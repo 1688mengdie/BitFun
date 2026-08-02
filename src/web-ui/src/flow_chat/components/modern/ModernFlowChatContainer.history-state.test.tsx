@@ -1020,6 +1020,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-99', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
 
   });
@@ -1074,6 +1075,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-2', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(restoreTailSpy).not.toHaveBeenCalled();
     expect(virtualListMock.scrollToLatestEndPosition.mock.calls.length).toBe(latestEndCallCount);
@@ -1159,6 +1161,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-10', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(restoreTailSpy).not.toHaveBeenCalled();
     expect(virtualListPropsMock.latest).toMatchObject({ presentationMode: 'history-window' });
@@ -1403,6 +1406,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(headerPropsMock.latest).toMatchObject({
       currentTurn: 2,
@@ -1422,6 +1426,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(headerPropsMock.latest).toMatchObject({
       currentTurn: 2,
@@ -1474,6 +1479,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(headerPropsMock.latest).toMatchObject({
       currentTurn: 2,
@@ -1533,6 +1539,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-1', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     const pendingCallCount = virtualListMock.pinTurnToTopWithStatus.mock.calls.length;
     flushAnimationFrame();
@@ -1613,6 +1620,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.pinTurnToTopWithStatus).toHaveBeenLastCalledWith('turn-7', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
 
     flushAnimationFrame();
@@ -1904,6 +1912,7 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(virtualListMock.prepareTurnPinToTop).toHaveBeenCalledWith('turn-5', {
       behavior: 'auto',
       pinMode: 'transient',
+      alignmentPolicy: 'best-effort',
     });
     expect(activateSpy).toHaveBeenCalledWith('session-1', 4, 7);
     expect(virtualListPropsMock.latest).toMatchObject({

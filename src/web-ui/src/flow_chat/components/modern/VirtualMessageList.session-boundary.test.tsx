@@ -1962,6 +1962,120 @@ describe('VirtualMessageList session boundary', () => {
     )).not.toBeNull();
   });
 
+  it('settles best-effort navigation at the natural maximum without pin footer space', () => {
+    const listRef = React.createRef<VirtualMessageListRef>();
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a', 'turn-b']);
+    stateMocks.virtualItems = [createItem('turn-a'), createItem('turn-b')];
+
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} />);
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]');
+    const footer = container.querySelector<HTMLElement>('.message-list-footer');
+    const target = container.querySelector<HTMLElement>(
+      '[data-turn-id="turn-b"][data-item-type="user-message"]',
+    );
+    expect(scroller).not.toBeNull();
+    expect(footer).not.toBeNull();
+    expect(target).not.toBeNull();
+    if (!scroller || !footer || !target) {
+      return;
+    }
+
+    setScrollerGeometry(scroller, {
+      scrollHeight: 1_200,
+      clientHeight: 1_000,
+      scrollTop: 0,
+    });
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(createRect({
+      top: 0,
+      bottom: 1_000,
+      height: 1_000,
+    }));
+    vi.spyOn(target, 'getBoundingClientRect').mockImplementation(() => {
+      const top = 900 - scroller.scrollTop;
+      return createRect({ top, bottom: top + 40, height: 40 });
+    });
+    const footerHeightBefore = footer.style.height;
+
+    let status: ReturnType<VirtualMessageListRef['pinTurnToTopWithStatus']> = 'rejected';
+    act(() => {
+      status = listRef.current?.pinTurnToTopWithStatus('turn-b', {
+        behavior: 'auto',
+        pinMode: 'transient',
+        alignmentPolicy: 'best-effort',
+      }) ?? 'rejected';
+    });
+
+    expect(status).toBe('settled');
+    expect(scroller.scrollTop).toBe(200);
+    expect(footer.style.height).toBe(footerHeightBefore);
+    expect(target.getBoundingClientRect().top).toBeGreaterThan(57);
+  });
+
+  it('keeps sticky-latest exact even when a best-effort policy is supplied', () => {
+    const listRef = React.createRef<VirtualMessageListRef>();
+    stateMocks.activeSession = createSessionWithTurns('session-a', ['turn-a', 'turn-b']);
+    const latestTurn = stateMocks.activeSession.dialogTurns[1];
+    latestTurn.status = 'processing';
+    latestTurn.modelRounds = [{
+      id: 'round-turn-b',
+      status: 'streaming',
+      isStreaming: true,
+      items: [],
+      startTime: 1,
+    } as typeof latestTurn.modelRounds[number]];
+    stateMocks.virtualItems = [createItem('turn-a'), createItem('turn-b')];
+
+    act(() => {
+      root.render(<VirtualMessageList ref={listRef} />);
+    });
+
+    const scroller = container.querySelector<HTMLElement>('[data-virtuoso-scroller="true"]');
+    const footer = container.querySelector<HTMLElement>('.message-list-footer');
+    const target = container.querySelector<HTMLElement>(
+      '[data-turn-id="turn-b"][data-item-type="user-message"]',
+    );
+    expect(scroller).not.toBeNull();
+    expect(footer).not.toBeNull();
+    expect(target).not.toBeNull();
+    if (!scroller || !footer || !target) {
+      return;
+    }
+
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 1_000 },
+      scrollHeight: {
+        configurable: true,
+        get: () => 1_200 + (Number.parseFloat(footer.style.height) || 0),
+      },
+      scrollTop: { configurable: true, writable: true, value: 200 },
+    });
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue(createRect({
+      top: 0,
+      bottom: 1_000,
+      height: 1_000,
+    }));
+    vi.spyOn(target, 'getBoundingClientRect').mockImplementation(() => {
+      const top = 700 - scroller.scrollTop;
+      return createRect({ top, bottom: top + 40, height: 40 });
+    });
+
+    let status: ReturnType<VirtualMessageListRef['pinTurnToTopWithStatus']> = 'rejected';
+    act(() => {
+      status = listRef.current?.pinTurnToTopWithStatus('turn-b', {
+        behavior: 'auto',
+        pinMode: 'sticky-latest',
+        alignmentPolicy: 'best-effort',
+      }) ?? 'rejected';
+    });
+
+    expect(status).toBe('settled');
+    expect(Number.parseFloat(footer.style.height)).toBeGreaterThan(0);
+    expect(target.getBoundingClientRect().top).toBe(57);
+  });
+
   it('uses a prepared turn only for the initial Virtuoso mount', () => {
     const listRef = React.createRef<VirtualMessageListRef>();
     const turnIds = ['turn-01', 'turn-02', 'turn-03'];
