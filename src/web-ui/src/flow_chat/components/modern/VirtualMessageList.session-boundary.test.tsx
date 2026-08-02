@@ -515,6 +515,44 @@ describe('VirtualMessageList session boundary', () => {
     )).toBe('false');
   });
 
+  it('allows live-tail follow while retaining a history-window projection', () => {
+    activeSessionStateMocks.isProcessing = true;
+    stateMocks.activeSession = createSession('session-a', 'turn-10', {
+      dialogTurns: [{
+        ...createSession('session-a', 'turn-10').dialogTurns[0],
+        status: 'processing',
+      }],
+    });
+    const historyItems = ['turn-3', 'turn-4', 'turn-5'].map(createItem);
+    stateMocks.virtualItems = historyItems;
+    const onRequestJumpToLatest = vi.fn();
+
+    act(() => {
+      root.render(
+        <VirtualMessageList
+          items={historyItems}
+          presentationMode="history-window"
+          viewportMode="live-tail"
+          historyWindow={null}
+          presentationRevision={1}
+          onRequestJumpToLatest={onRequestJumpToLatest}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="flowchat-message-list"]')?.getAttribute(
+      'data-viewport-mode',
+    )).toBe('live-tail');
+    expect(container.querySelector('[data-testid="flowchat-message-list"]')?.getAttribute(
+      'data-streaming-output',
+    )).toBe('true');
+
+    const jumpButton = container.querySelector<HTMLButtonElement>('[data-testid="scroll-to-latest"]');
+    expect(jumpButton).not.toBeNull();
+    act(() => jumpButton?.click());
+    expect(onRequestJumpToLatest).not.toHaveBeenCalled();
+  });
+
   it('waits for quiet scroll input before capturing an adjacent history anchor', async () => {
     let prepareViewportForPresentationCommit:
       | (() => boolean | void | Promise<boolean | void>)

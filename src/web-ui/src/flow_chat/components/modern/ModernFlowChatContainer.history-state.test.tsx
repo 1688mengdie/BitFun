@@ -1244,6 +1244,131 @@ describe('ModernFlowChatContainer historical empty state', () => {
     activateSpy.mockRestore();
   });
 
+  it('retains a complete small history projection when jumping to the latest Turn', async () => {
+    const presentationTurns = Array.from(
+      { length: 10 },
+      (_, index) => createTurn(`turn-${index + 1}`, `Prompt ${index + 1}`),
+    );
+    const catalog = {
+      schemaVersion: 1,
+      sessionId: 'session-1',
+      revision: 'catalog-complete-v1',
+      totalTurnCount: 10,
+      complete: true,
+      entries: Array.from({ length: 10 }, (_, ordinal) => ({
+        ordinal,
+        storageTurnIndex: ordinal,
+        turnId: `turn-${ordinal + 1}`,
+        preview: `Prompt ${ordinal + 1}`,
+        previewTruncated: false,
+      })),
+    };
+    const loadSpy = vi.spyOn(flowChatStore, 'loadSessionTurnWindow').mockResolvedValue({
+      status: 'ready',
+      sessionId: 'session-1',
+      targetOrdinal: 4,
+      targetTurnId: 'turn-5',
+      navigationGeneration: 8,
+      isCurrent: true,
+      cacheHit: true,
+      catalog,
+      range: {
+        startOrdinal: 0,
+        endOrdinalExclusive: 10,
+        turns: presentationTurns,
+        lastAccessedAt: 1,
+        source: 'target',
+      },
+    });
+    const activateSpy = vi.spyOn(flowChatStore, 'activateSessionHistoryWindow').mockReturnValue({
+      range: {
+        startOrdinal: 0,
+        endOrdinalExclusive: 10,
+        targetTurnId: 'turn-5',
+        mode: 'history-window',
+      },
+      turns: presentationTurns,
+    });
+    stateMocks.activeSession = createSession({
+      historyState: 'ready',
+      isPartial: true,
+      totalTurnCount: 10,
+      turnCatalog: catalog,
+      dialogTurns: [
+        createTurn('turn-9', 'Recent prompt'),
+        createTurn('turn-10', 'Latest prompt'),
+      ],
+    } as Partial<Session>);
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-turn-id="turn-5"]')?.click();
+      await Promise.resolve();
+    });
+
+    expect(loadSpy).toHaveBeenCalledWith('session-1', 4, { source: 'target' });
+    expect(virtualListPropsMock.latest).toMatchObject({
+      presentationMode: 'history-window',
+      viewportMode: 'history-reading',
+    });
+    expect((virtualListPropsMock.latest?.items as Array<{ turnId: string }>).map(item => item.turnId))
+      .toEqual(presentationTurns.map(turn => turn.id));
+
+    const restoreTailSpy = vi.spyOn(flowChatStore, 'restoreSessionTailPresentation');
+    const initialItems = virtualListPropsMock.latest?.items;
+    await act(async () => {
+      (virtualListPropsMock.latest?.onRequestJumpToLatest as (() => void) | undefined)?.();
+    });
+
+    expect(restoreTailSpy).not.toHaveBeenCalled();
+    expect(virtualListPropsMock.latest).toMatchObject({
+      presentationMode: 'history-window',
+      viewportMode: 'live-tail',
+      historyWindow: null,
+    });
+    expect(virtualListPropsMock.latest?.items).toBe(initialItems);
+
+    stateMocks.activeSession = {
+      ...stateMocks.activeSession,
+      totalTurnCount: 11,
+      dialogTurns: [
+        createTurn('turn-10', 'Latest live update', 'processing'),
+        createTurn('turn-11', 'New live prompt', 'processing'),
+      ],
+    };
+    stateMocks.virtualItems = stateMocks.activeSession.dialogTurns.map(turn => ({
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }));
+    await act(async () => {
+      root.render(<ModernFlowChatContainer />);
+    });
+
+    expect(virtualListPropsMock.latest).toMatchObject({
+      presentationMode: 'history-window',
+      viewportMode: 'live-tail',
+    });
+    expect((virtualListPropsMock.latest?.items as Array<{ turnId: string }>).map(item => item.turnId))
+      .toEqual([...presentationTurns.map(turn => turn.id), 'turn-11']);
+    const liveLatestItem = (virtualListPropsMock.latest?.items as Array<{
+      turnId: string;
+      data?: { content?: string };
+    }>).find(item => item.turnId === 'turn-10');
+    expect(liveLatestItem?.data?.content).toBe('Latest live update');
+
+    restoreTailSpy.mockRestore();
+    loadSpy.mockRestore();
+    activateSpy.mockRestore();
+  });
+
   it('retries turn-rail selection without advancing visible-turn state until the virtual list accepts it', async () => {
     stateMocks.activeSession = createSession({
       isHistorical: false,

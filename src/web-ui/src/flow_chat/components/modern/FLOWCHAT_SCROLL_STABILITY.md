@@ -438,11 +438,20 @@ these ownership rules intact:
   full-history consumer calls `ensureSessionFullHistory`.
 - Data residency, viewport intent, and follow-output ownership are independent.
   A cached history presentation may remain resident after the viewport returns
-  to the canonical tail, but it must not keep the UI in history-window mode,
+  to the live tail, but it must not keep the UI in history-reading mode,
   suppress live-tail anchoring, or imply that follow-output is active.
-- Explicit jump-to-latest clears the Store's `activeRange` and restores the
-  canonical tail viewport while retaining the most recent component
-  presentation as a reactivation hint. The Store LRU remains authoritative:
+- For a small session whose cached presentation is contiguous from ordinal zero
+  through the current total (`[0, totalTurnCount)`) and stays within the
+  continuous projection budgets (24 Turns and 200 virtual items), explicit
+  jump-to-latest changes only the viewport intent and follow-output ownership.
+  The rendered projection and its stable virtual-item keys remain unchanged;
+  `historyWindow` is disabled so boundary loading cannot start while following
+  the tail. Canonical overlapping Turns are still overlaid by stable id, and a
+  newly appended canonical Turn extends the projection at the end.
+- Incomplete, discontinuous, or over-budget presentations retain the fallback
+  behavior: explicit jump-to-latest clears the Store's `activeRange`, restores
+  the canonical tail data source, and keeps the most recent component
+  presentation only as a reactivation hint. The Store LRU remains authoritative:
   reactivation must find the complete range in `loadedRanges`, touch it as MRU,
   and otherwise fall back to the ordinary window-load transaction.
 - Turn-rail navigation and sequential boundary loading use
