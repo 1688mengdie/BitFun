@@ -372,6 +372,34 @@ describe('ModernFlowChatContainer historical empty state', () => {
     expect(container.querySelector('[data-testid="welcome-panel"]')).toBeNull();
   });
 
+  it('defers viewport anchoring while the host scene is inactive', () => {
+    const turn = createTurn('turn-1', 'One');
+    stateMocks.activeSession = createSession({
+      dialogTurns: [turn],
+      historyState: 'ready',
+      contextRestoreState: 'ready',
+    });
+    stateMocks.virtualItems = [{
+      type: 'user-message',
+      turnId: turn.id,
+      data: turn.userMessage,
+    }];
+
+    act(() => {
+      root.render(<ModernFlowChatContainer isViewportActive={false} />);
+    });
+
+    expect(virtualListPropsMock.latest).toMatchObject({ isViewportActive: false });
+    expect(virtualListMock.scrollToTurnEndAndClearPin).not.toHaveBeenCalled();
+
+    act(() => {
+      root.render(<ModernFlowChatContainer isViewportActive />);
+    });
+
+    expect(virtualListPropsMock.latest).toMatchObject({ isViewportActive: true });
+    expect(virtualListMock.scrollToTurnEndAndClearPin).toHaveBeenCalledWith(turn.id);
+  });
+
   it('keeps the loading shell while historical sessions are hydrating', () => {
     stateMocks.activeSession = createSession({ historyState: 'hydrating' } as Partial<Session>);
 
