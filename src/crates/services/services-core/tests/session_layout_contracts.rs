@@ -59,6 +59,13 @@ fn session_layout_preserves_legacy_file_names() {
             .join("prompt_cache.json")
     );
     assert_eq!(
+        layout.turn_catalog_path("session-1"),
+        root.path()
+            .join("sessions")
+            .join("session-1")
+            .join("turn-catalog.json")
+    );
+    assert_eq!(
         layout.request_trace_path("session-1", 7),
         root.path()
             .join("sessions")

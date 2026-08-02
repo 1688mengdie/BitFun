@@ -153,6 +153,23 @@ export interface SessionList {
   version: string;
 }
 
+export interface SessionTurnCatalogEntry {
+  ordinal: number;
+  storageTurnIndex: number;
+  turnId?: string;
+  preview?: string;
+  previewTruncated: boolean;
+}
+
+export interface SessionTurnCatalog {
+  schemaVersion: number;
+  sessionId: string;
+  revision: string;
+  totalTurnCount: number;
+  complete: boolean;
+  entries: SessionTurnCatalogEntry[];
+}
+
 export interface DialogTurnData {
   turnId: string;
   turnIndex: number;

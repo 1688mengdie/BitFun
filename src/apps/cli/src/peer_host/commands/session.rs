@@ -14,7 +14,7 @@ use bitfun_core::util::errors::BitFunError;
 use bitfun_runtime_ports::{
     AgentSessionArchiveRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentThreadGoalGetRequest,
-    SessionStoragePathRequest,
+    SessionStoragePathRequest, SessionTurnWindowRequest,
 };
 
 use crate::diagnostics::{OUTCOME_UNKNOWN_ERROR_CODE, SESSION_IN_USE_ERROR_CODE};
@@ -200,6 +200,37 @@ pub(crate) async fn load_session_turns(
     serde_json::to_value(turns).map_err(|e| format!("serialize turns: {e}"))
 }
 
+pub(crate) async fn load_session_turn_window(
+    state: &PeerHostState,
+    args: &Value,
+) -> Result<Value, String> {
+    let request = request_value(args);
+    let session_id = validated_session_id(request)?;
+    let workspace_path = resolved_session_storage_path(state, request).await?;
+    let response = state
+        .compatibility
+        .load_session_turn_window_from_storage_path(
+            &workspace_path,
+            SessionTurnWindowRequest {
+                workspace_path: workspace_path.clone(),
+                session_id,
+                include_internal: optional_bool(request, "includeInternal").unwrap_or(false),
+                target_storage_turn_index: request
+                    .get("targetStorageTurnIndex")
+                    .and_then(Value::as_u64)
+                    .ok_or_else(|| "targetStorageTurnIndex is required".to_string())?
+                    as usize,
+                expected_turn_id: optional_string(request, "expectedTurnId"),
+                expected_catalog_revision: optional_string(request, "expectedCatalogRevision"),
+                before: request.get("before").and_then(Value::as_u64).unwrap_or(4) as usize,
+                after: request.get("after").and_then(Value::as_u64).unwrap_or(12) as usize,
+            },
+        )
+        .await
+        .map_err(|e| format!("Failed to load session Turn window: {e}"))?;
+    serde_json::to_value(response).map_err(|e| format!("serialize Turn window: {e}"))
+}
+
 pub(crate) async fn restore_session_view(
     state: &PeerHostState,
     args: &Value,
@@ -218,7 +249,7 @@ pub(crate) async fn restore_session_view(
         .filter(|n| *n > 0)
         .map(|n| n.min(16));
 
-    let (mut session, turns, total_turn_count, timings) = state
+    let (mut session, turns, total_turn_count, turn_catalog, timings) = state
         .compatibility
         .restore_session_view_for_workspace(
             storage_request,
@@ -239,6 +270,7 @@ pub(crate) async fn restore_session_view(
     Ok(json!({
         "session": session_to_json(session, total_turn_count),
         "turns": turns,
+        "turnCatalog": turn_catalog,
         "contextRestoreState": "pending",
         "isPartial": is_partial,
         "loadedTurnCount": loaded_turn_count,

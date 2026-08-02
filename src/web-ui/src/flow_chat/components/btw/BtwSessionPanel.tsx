@@ -931,6 +931,7 @@ export const BtwSessionPanel: React.FC<BtwSessionPanelProps> = ({
     const requestId = btwOrigin?.requestId;
     const request: FlowChatFocusItemRequest = {
       sessionId: resolvedParentSessionId,
+      turnId: btwOrigin?.parentDialogTurnId,
       turnIndex: btwOrigin?.parentTurnIndex,
       itemId: requestId ? `btw_marker_${requestId}` : undefined,
       source: 'btw-back',

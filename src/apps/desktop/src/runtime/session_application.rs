@@ -19,17 +19,19 @@ use bitfun_core::agentic::core::Session;
 use bitfun_core::agentic::persistence::{SessionBranchResult, SessionMetadataPage};
 use bitfun_core::agentic::session::SessionViewRestoreTiming;
 use bitfun_core::product_runtime::{CoreAgentRuntimeCompatibility, CoreProductAgentRuntime};
-use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
+use bitfun_core::service::remote_ssh::workspace_state::{
+    get_effective_session_path, LOCAL_WORKSPACE_SSH_HOST,
+};
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
 use bitfun_core::service::session::{
     DialogTurnData, DialogTurnKind, SessionMetadata, SessionStatus, SessionTranscriptExport,
-    SessionTranscriptExportOptions,
+    SessionTranscriptExportOptions, SessionTurnCatalog, SessionTurnWindowResponse,
 };
 use bitfun_core::service::session_usage::SessionUsageReport;
 use bitfun_core::service::token_usage::TokenUsageService;
 use bitfun_core::service::workspace::WorkspaceService;
 use bitfun_core::util::errors::BitFunError;
-use bitfun_runtime_ports::AgentContextReloadRequest;
+use bitfun_runtime_ports::{AgentContextReloadRequest, SessionTurnWindowRequest};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -122,6 +124,7 @@ pub(crate) struct DesktopSessionViewRestore {
     pub session: Session,
     pub turns: Vec<DialogTurnData>,
     pub total_turn_count: usize,
+    pub turn_catalog: SessionTurnCatalog,
     pub timings: SessionViewRestoreTiming,
 }
 
@@ -165,7 +168,10 @@ struct DesktopSessionScopeResolver {
 impl DesktopSessionScopeResolver {
     async fn resolve(&self, request: DesktopSessionScopeRequest) -> ResolvedDesktopSessionScope {
         let remote_connection_id = normalized_optional(request.remote_connection_id.as_deref());
-        let requested_remote_ssh_host = normalized_optional(request.remote_ssh_host.as_deref());
+        let requested_remote_ssh_host = normalized_remote_ssh_host(
+            remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        );
         let registered_remote_ssh_host =
             if let Some(connection_id) = remote_connection_id.as_deref() {
                 self.workspace_service
@@ -221,6 +227,28 @@ fn normalized_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn normalized_remote_ssh_host(
+    remote_connection_id: Option<&str>,
+    remote_ssh_host: Option<&str>,
+) -> Option<String> {
+    let host = normalized_optional(remote_ssh_host)?;
+    if remote_connection_id.is_none() && is_local_workspace_host(&host) {
+        return None;
+    }
+    Some(host)
+}
+
+fn is_local_workspace_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == LOCAL_WORKSPACE_SSH_HOST
+        || host.starts_with("localhost:")
+        || host == "127.0.0.1"
+        || host.starts_with("127.0.0.1:")
+        || host == "::1"
+        || host == "[::1]"
+        || host.starts_with("[::1]:")
 }
 
 fn choose_remote_ssh_host(
@@ -399,6 +427,20 @@ impl DesktopSessionApplication {
         let storage_path = self.storage_path(&scope);
         self.compatibility
             .load_persisted_session_turns(&storage_path, session_id, limit)
+            .await
+            .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
+    }
+
+    pub(crate) async fn load_session_turn_window(
+        &self,
+        scope_request: DesktopSessionScopeRequest,
+        mut request: SessionTurnWindowRequest,
+    ) -> DesktopSessionApplicationResult<SessionTurnWindowResponse> {
+        let scope = self.resolved_scope(scope_request).await;
+        let storage_path = self.storage_path(&scope);
+        request.workspace_path = storage_path.clone();
+        self.compatibility
+            .load_session_turn_window_from_storage_path(&storage_path, request)
             .await
             .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
     }
@@ -689,7 +731,7 @@ impl DesktopSessionApplication {
         let resolve_storage_path_duration_ms =
             path_started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
         on_storage_path_resolved(resolve_storage_path_duration_ms);
-        let (mut session, turns, total_turn_count, mut timings) = self
+        let (mut session, turns, total_turn_count, turn_catalog, mut timings) = self
             .compatibility
             .restore_session_view_from_storage_path(
                 &storage_path,
@@ -709,6 +751,7 @@ impl DesktopSessionApplication {
             session,
             turns,
             total_turn_count,
+            turn_catalog,
             timings,
         })
     }
@@ -1016,6 +1059,29 @@ mod tests {
         );
         assert_eq!(normalized_optional(Some("  ")), None);
         assert_eq!(normalized_optional(None), None);
+    }
+
+    #[test]
+    fn local_host_sentinels_require_a_remote_connection_id() {
+        for host in [
+            "localhost",
+            "LOCALHOST:22",
+            "127.0.0.1",
+            "127.0.0.1:22",
+            "::1",
+            "[::1]:22",
+        ] {
+            assert_eq!(normalized_remote_ssh_host(None, Some(host)), None);
+        }
+
+        assert_eq!(
+            normalized_remote_ssh_host(Some("connection-1"), Some(" localhost ")),
+            Some("localhost".to_string())
+        );
+        assert_eq!(
+            normalized_remote_ssh_host(None, Some(" legacy.example ")),
+            Some("legacy.example".to_string())
+        );
     }
 
     #[test]

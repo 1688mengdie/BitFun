@@ -33,6 +33,7 @@ import type { SessionUsagePanelTab } from '../usage/sessionUsagePanelTypes';
 import { coerceSessionUsageReport } from '../usage/usageReportUtils';
 import { resolveSessionRelationship } from '../../utils/sessionMetadata';
 import { isRemoteWorkspaceSession } from '../../utils/sessionWorkspace';
+import { absoluteSessionTurnIndexForId } from '../../utils/flowChatTurnOrdinal';
 import {
   composerPresentationToAccessibleText,
   composerPresentationContexts,
@@ -51,6 +52,8 @@ const log = createLogger('UserMessageItem');
 interface UserMessageItemProps {
   message: DialogTurn['userMessage'];
   turnId: string;
+  absoluteTurnIndex?: number;
+  turnStatus?: DialogTurn['status'];
   steeringStatus?: FlowUserSteeringItem['status'];
 }
 
@@ -83,7 +86,7 @@ function buildPresentationRerunPayload(presentation: ComposerPresentation): {
 }
 
 export const UserMessageItem = React.memo<UserMessageItemProps>(
-  ({ message, turnId, steeringStatus }) => {
+  ({ message, turnId, absoluteTurnIndex, turnStatus, steeringStatus }) => {
     const { t, formatDate } = useI18n('flow-chat');
     const {
       config,
@@ -137,9 +140,15 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       ?? activeSessionFromStore;
     const turnIndex = currentSession?.dialogTurns.findIndex(t => t.id === turnId) ?? -1;
     const dialogTurn = turnIndex >= 0 ? currentSession?.dialogTurns[turnIndex] : null;
-    const isFailed = dialogTurn?.status === 'error';
+    const resolvedTurnStatus = dialogTurn?.status ?? turnStatus;
+    const isFailed = resolvedTurnStatus === 'error';
     const resolvedSessionId = sessionId ?? currentSession?.sessionId;
-    const historyActionsBlockedByPartialRestore = currentSession?.isPartial === true;
+    const resolvedAbsoluteTurnIndex = absoluteTurnIndex ?? (
+      currentSession ? absoluteSessionTurnIndexForId(currentSession, turnId) : undefined
+    );
+    const actionTurnIndex = resolvedAbsoluteTurnIndex !== undefined
+      ? resolvedAbsoluteTurnIndex - 1
+      : -1;
     const isRemoteSession = isRemoteWorkspaceSession(currentSession ?? undefined, null);
     const isSystemTriggered = Boolean(
       message?.metadata?.triggerSource && message.metadata.triggerSource !== 'desktop_ui',
@@ -148,16 +157,14 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       !steeringStatus &&
       canShowRollbackAction &&
       !!resolvedSessionId &&
-      turnIndex >= 0 &&
-      !historyActionsBlockedByPartialRestore &&
+      actionTurnIndex >= 0 &&
       !isRemoteSession &&
       !isRollingBack &&
       !isEditSubmitting;
     const canEditBase =
       allowUserMessageEdit &&
       !!resolvedSessionId &&
-      turnIndex >= 0 &&
-      !historyActionsBlockedByPartialRestore &&
+      actionTurnIndex >= 0 &&
       !isRemoteSession &&
       !isThreadGoalSystemMessage &&
       !isSystemTriggered &&
@@ -170,13 +177,11 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         ? t('message.cannotEdit')
         : steeringStatus
           ? t('message.cannotEdit')
-          : historyActionsBlockedByPartialRestore
-            ? t('message.editDisabledHistoryNotReady')
-            : !resolvedSessionId || turnIndex < 0
+          : !resolvedSessionId || actionTurnIndex < 0
               ? t('message.editDisabledHistoryNotReady')
               : t('message.cannotEdit');
     const rollbackTooltip = canRollback
-      ? t('message.rollbackTo', { index: turnIndex + 1 })
+      ? t('message.rollbackTo', { index: actionTurnIndex + 1 })
       : isRemoteSession
         ? t('message.rollbackDisabledRemote')
         : t('message.cannotRollback');
@@ -253,7 +258,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       e.stopPropagation();
       if (!canRollback || !resolvedSessionId) return;
 
-      const index = turnIndex + 1;
+      const index = actionTurnIndex + 1;
       const confirmed = await confirmDanger(
         t('message.rollbackDialogTitle', { index }),
         (
@@ -270,10 +275,27 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
 
       setIsRollingBack(true);
       try {
-        const restoredFiles = await snapshotAPI.rollbackToTurn(resolvedSessionId, turnIndex, true);
+        const historyReady = await flowChatStore.ensureSessionFullHistory(
+          resolvedSessionId,
+          'user-message-rollback',
+        );
+        const hydratedTurnIndex = flowChatStore
+          .getState()
+          .sessions
+          .get(resolvedSessionId)
+          ?.dialogTurns.findIndex(turn => turn.id === turnId) ?? -1;
+        if (!historyReady || hydratedTurnIndex < 0) {
+          throw new Error(t('message.cannotRollback'));
+        }
+
+        const restoredFiles = await snapshotAPI.rollbackToTurn(
+          resolvedSessionId,
+          hydratedTurnIndex,
+          true,
+        );
 
         // 1) Truncate local dialog turns from this index.
-        flowChatStore.truncateDialogTurnsFrom(resolvedSessionId, turnIndex);
+        flowChatStore.truncateDialogTurnsFrom(resolvedSessionId, hydratedTurnIndex);
 
         // 2) Refresh file tree and open editors.
         const { globalEventBus } = await import('@/infrastructure/event-bus');
@@ -299,7 +321,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       } finally {
         setIsRollingBack(false);
       }
-    }, [canRollback, composerPresentation, resolvedSessionId, t, turnIndex, messageContent]);
+    }, [actionTurnIndex, canRollback, composerPresentation, resolvedSessionId, t, turnId, messageContent]);
 
     const handleBeginEdit = useCallback((e: React.MouseEvent) => {
       e.stopPropagation();
@@ -308,7 +330,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     }, [beginEdit, canEdit, messageContent, turnId]);
 
     const handleSubmitEdit = useCallback(async (submittedPresentation?: ComposerPresentation) => {
-      if (!resolvedSessionId || turnIndex < 0 || isEditSubmitting) return;
+      if (!resolvedSessionId || actionTurnIndex < 0 || isEditSubmitting) return;
 
       const editedPresentation = submittedPresentation ?? composerPresentation;
       const editedContent = editedPresentation
@@ -321,7 +343,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
 
       const impact = describeUserMessageEditImpact(resolvedSessionId);
       const confirmed = await confirmDanger(
-        t('message.editDialogTitle', { index: turnIndex + 1 }),
+        t('message.editDialogTitle', { index: actionTurnIndex + 1 }),
         (
           <>
             <p className="confirm-dialog__message-intro">{t('message.editDialogIntro')}</p>
@@ -338,10 +360,23 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
 
       setEditSubmitting(true);
       try {
+        const historyReady = await flowChatStore.ensureSessionFullHistory(
+          resolvedSessionId,
+          'user-message-edit',
+        );
+        const hydratedTurnIndex = flowChatStore
+          .getState()
+          .sessions
+          .get(resolvedSessionId)
+          ?.dialogTurns.findIndex(turn => turn.id === turnId) ?? -1;
+        if (!historyReady || hydratedTurnIndex < 0) {
+          throw new Error(t('message.editDisabledHistoryNotReady'));
+        }
+
         await editAndRerunUserMessage({
           sessionId: resolvedSessionId,
           turnId,
-          turnIndex,
+          turnIndex: hydratedTurnIndex,
           originalContent: messageContent,
           editedContent,
           agentType: currentSession?.mode,
@@ -376,6 +411,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       }
     }, [
       cancelEdit,
+      actionTurnIndex,
       composerPresentation,
       currentSession?.mode,
       editDraft,
@@ -385,7 +421,6 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       setEditSubmitting,
       t,
       turnId,
-      turnIndex,
     ]);
     
     // Toggle expanded state.
@@ -476,7 +511,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         className={`user-message-item ${expanded ? 'user-message-item--expanded' : ''}${isFailed ? ' user-message-item--failed' : ''}`}
         data-testid="chat-user-message"
         data-turn-id={turnId}
-        data-status={dialogTurn?.status || ''}
+        data-status={resolvedTurnStatus || ''}
         data-failed={isFailed ? 'true' : 'false'}
       >
         {config?.showTimestamps && (

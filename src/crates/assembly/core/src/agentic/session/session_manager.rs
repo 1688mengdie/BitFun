@@ -4751,6 +4751,7 @@ impl SessionManager {
             visibility_metadata_duration_ms,
             load_session_with_turns_duration_ms,
             normalize_turn_ids_duration_ms,
+            turn_catalog_duration_ms: 0,
             total_duration_ms,
             turn_load,
         };
