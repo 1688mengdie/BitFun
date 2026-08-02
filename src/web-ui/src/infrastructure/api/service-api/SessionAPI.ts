@@ -2,6 +2,7 @@
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
 import type { SessionMetadata, DialogTurnData } from '@/shared/types/session-history';
+import { normalizeRemoteSessionScope } from '@/shared/utils/remoteSessionScope';
 
 export type UiSessionMetadataField =
   | 'sessionName'
@@ -192,12 +193,13 @@ function remoteSessionFields(
   remoteConnectionId?: string,
   remoteSshHost?: string
 ): Record<string, string> {
+  const scope = normalizeRemoteSessionScope(remoteConnectionId, remoteSshHost);
   const o: Record<string, string> = {};
-  if (remoteConnectionId) {
-    o.remote_connection_id = remoteConnectionId;
+  if (scope.remoteConnectionId) {
+    o.remote_connection_id = scope.remoteConnectionId;
   }
-  if (remoteSshHost) {
-    o.remote_ssh_host = remoteSshHost;
+  if (scope.remoteSshHost) {
+    o.remote_ssh_host = scope.remoteSshHost;
   }
   return o;
 }
@@ -224,12 +226,13 @@ export class SessionAPI {
     remoteSshHost?: string
   ): Promise<{ sessionId: string; sessionName: string; agentType: string }> {
     try {
+      const normalizedRemoteFields = remoteSessionFields(remoteConnectionId, remoteSshHost);
       return await api.invoke('fork_session', {
         request: {
           source_session_id: sourceSessionId,
           source_turn_id: sourceTurnId,
           workspace_path: workspacePath,
-          ...remoteSessionFields(remoteConnectionId, remoteSshHost),
+          ...normalizedRemoteFields,
         }
       });
     } catch (error) {

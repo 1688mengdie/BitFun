@@ -416,6 +416,9 @@ export interface Session {
   /** SSH config host for `~/.bitfun/remote_ssh/{host}/...` session paths when disconnected. */
   remoteSshHost?: string;
 
+  /** Persisted workspace identity host; `localhost` is the local-workspace sentinel. */
+  workspaceHostname?: string;
+
   /**
    * Optional parent session id for hierarchical sessions.
    * Used by /btw "side threads" and potentially other derived sessions.

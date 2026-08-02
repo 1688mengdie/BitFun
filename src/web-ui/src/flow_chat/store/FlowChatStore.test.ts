@@ -1238,6 +1238,64 @@ describe('FlowChatStore historical session hydration state', () => {
     });
   });
 
+  it('keeps persisted workspace identity separate from remote execution scope', async () => {
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'local-history',
+        title: 'Local session',
+        agentType: 'agentic',
+        createdAt: 10,
+        lastActiveAt: 20,
+        workspaceHostname: 'localhost',
+      },
+      {
+        sessionId: 'legacy-remote-history',
+        title: 'Legacy remote session',
+        agentType: 'agentic',
+        createdAt: 11,
+        lastActiveAt: 21,
+        remoteSshHost: 'localhost',
+        workspaceHostname: 'legacy.example',
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    const local = flowChatStore.getState().sessions.get('local-history');
+    expect(local?.workspaceHostname).toBe('localhost');
+    expect(local?.remoteConnectionId).toBeUndefined();
+    expect(local?.remoteSshHost).toBeUndefined();
+
+    const legacyRemote = flowChatStore.getState().sessions.get('legacy-remote-history');
+    expect(legacyRemote?.workspaceHostname).toBe('legacy.example');
+    expect(legacyRemote?.remoteSshHost).toBe('legacy.example');
+  });
+
+  it('preserves a localhost SSH target when a remote connection id is present', async () => {
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'remote-loopback-history',
+        title: 'Remote loopback session',
+        agentType: 'agentic',
+        createdAt: 10,
+        lastActiveAt: 20,
+        workspaceHostname: 'localhost',
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk(
+      '/srv/project',
+      'connection-1',
+      'localhost',
+    );
+
+    expect(flowChatStore.getState().sessions.get('remote-loopback-history')).toMatchObject({
+      remoteConnectionId: 'connection-1',
+      remoteSshHost: 'localhost',
+      workspaceHostname: 'localhost',
+    });
+  });
+
   it('checks relay history completeness before restoring Core context', async () => {
     const order: string[] = [];
     apiMocks.accountFetchSessionTurns.mockImplementationOnce(async () => {
@@ -1881,6 +1939,7 @@ describe('FlowChatStore historical session hydration state', () => {
           modelName: 'auto',
           createdAt: 10,
           lastActiveAt: 20,
+          workspaceHostname: 'localhost',
         },
       ],
       totalTopLevelCount: 12,
@@ -1914,7 +1973,9 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
       sessionId: 'history-1',
       historyState: 'metadata-only',
+      workspaceHostname: 'localhost',
     });
+    expect(flowChatStore.getState().sessions.get('history-1')?.remoteSshHost).toBeUndefined();
   });
 
   it('starts model config lookup while a paged metadata request is in flight', async () => {
