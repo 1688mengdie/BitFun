@@ -254,6 +254,27 @@ describe('FlowChatViewportCoordinator', () => {
     expect(coordinator.restoreElementAnchor(scroller)).toBe(false);
   });
 
+  it('retains logical pin ownership while Virtuoso rematerializes a disconnected item', () => {
+    const scroller = document.createElement('div');
+    scroller.dataset.virtuosoScroller = 'true';
+    const item = document.createElement('div');
+    scroller.append(item);
+    document.body.append(scroller);
+    setScrollerGeometry(scroller, 700);
+    setRect(scroller, 0);
+    setRect(item, 57);
+
+    const coordinator = new FlowChatViewportCoordinator();
+    expect(coordinator.pinElement(item)).toBe(true);
+
+    item.remove();
+    expect(coordinator.ownsElementAnchor()).toBe(false);
+    expect(coordinator.getMode()).toBe('pinned-item');
+
+    coordinator.release('test-cleanup');
+    expect(coordinator.getMode()).toBe('idle');
+  });
+
   it('does not let a tool-card collapse replace an active pinned-item anchor', () => {
     const scroller = document.createElement('div');
     scroller.dataset.virtuosoScroller = 'true';

@@ -273,6 +273,14 @@ cannot silently clamp the pane to the bottom.
 `rangeChanged` is a target-materialization signal, not a source of turn
 identity. It retries the active generation against real DOM geometry. RAF
 retries remain as a bounded fallback for browsers that coalesce range updates.
+Transient navigation remains pending until the requested turn stays aligned for
+two consecutive geometry samples. During that bounded transaction, Virtuoso's
+materialization range expands to two viewport heights in both directions so
+height-estimate reconciliation cannot immediately evict the target. If the
+pinned DOM element still disconnects, the coordinator drops the stale element
+anchor but retains logical `pinned-item` ownership while the active generation
+rematerializes it. User intent, replacement, expiry, and explicit handoff still
+release that ownership.
 Virtuoso mounts on the first initial-history commit. A target prepared before
 its ref is available becomes `initialTopMostItemIndex`; targets selected after
 mount enter the normal immediate materialize-then-align transaction. The
