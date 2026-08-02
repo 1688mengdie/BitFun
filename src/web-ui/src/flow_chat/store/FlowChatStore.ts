@@ -854,6 +854,21 @@ function selectPreferredTurnCatalog(
   return restored;
 }
 
+function truncateTurnCatalog(
+  catalog: SessionTurnCatalog,
+  endOrdinalExclusive: number,
+  revision: string,
+): SessionTurnCatalog {
+  return {
+    ...catalog,
+    revision,
+    totalTurnCount: endOrdinalExclusive,
+    entries: catalog.entries
+      .filter(entry => entry.ordinal < endOrdinalExclusive)
+      .map(entry => ({ ...entry })),
+  };
+}
+
 function mergeLoadedTurnRanges(
   ranges: readonly LoadedTurnRange[],
   incoming: LoadedTurnRange,
@@ -4544,7 +4559,7 @@ export class FlowChatStore {
             updatedDialogTurns.length,
             previousTotalTurnCount + (catalogAlreadyCountsTurn ? 0 : 1),
           )
-          : session.totalTurnCount,
+          : Math.max(session.totalTurnCount ?? 0, updatedDialogTurns.length),
         lastUserDialogMode: this.deriveLastUserDialogMode(updatedDialogTurns),
         lastActiveAt: Date.now()
       };
@@ -4570,7 +4585,7 @@ export class FlowChatStore {
         )
       );
       const ordinal = catalogEntry?.ordinal
-        ?? Math.max(0, (updatedSession.totalTurnCount ?? updatedSession.dialogTurns.length) - 1);
+        ?? Math.max(0, updatedSession.dialogTurns.length - 1);
       this.cacheSessionLoadedTurnRange(sessionId, {
         startOrdinal: ordinal,
         endOrdinalExclusive: ordinal + 1,
@@ -4681,15 +4696,67 @@ export class FlowChatStore {
 
       const clampedIndex = Math.max(0, Math.min(turnIndex, session.dialogTurns.length));
       const updatedDialogTurns = session.dialogTurns.slice(0, clampedIndex);
+      const hasCompleteHistory = session.isPartial !== true;
+      const historyView = this.sessionHistoryViews.get(sessionId);
+      const currentCatalog = session.turnCatalog?.sessionId === sessionId
+        ? session.turnCatalog
+        : historyView?.catalog?.sessionId === sessionId
+          ? historyView.catalog
+          : undefined;
+      const truncatedCatalog = hasCompleteHistory && currentCatalog
+        ? truncateTurnCatalog(
+          currentCatalog,
+          clampedIndex,
+          `${currentCatalog.revision}:rollback:${clampedIndex}:${Date.now()}`,
+        )
+        : undefined;
       const updatedSession = {
         ...session,
         dialogTurns: updatedDialogTurns,
+        ...(hasCompleteHistory ? {
+          loadedTurnCount: updatedDialogTurns.length,
+          totalTurnCount: updatedDialogTurns.length,
+          turnCatalog: truncatedCatalog,
+        } : {}),
         lastUserDialogMode: this.deriveLastUserDialogMode(updatedDialogTurns),
         lastActiveAt: Date.now()
       };
 
       const newSessions = new Map(prev.sessions);
       newSessions.set(sessionId, updatedSession);
+
+      if (hasCompleteHistory) {
+        if (historyView) {
+          historyView.navigationGeneration += 1;
+          historyView.pendingTargetOrdinal = null;
+          historyView.activeRange = null;
+          historyView.catalog = truncatedCatalog ?? null;
+          historyView.loadedRanges = historyView.loadedRanges.flatMap(range => {
+            if (range.startOrdinal >= clampedIndex) {
+              return [];
+            }
+            const endOrdinalExclusive = Math.min(range.endOrdinalExclusive, clampedIndex);
+            return [{
+              ...range,
+              endOrdinalExclusive,
+              turns: range.turns.slice(0, endOrdinalExclusive - range.startOrdinal),
+            }];
+          });
+        }
+        const accessTimes = this.sessionHistoryTurnAccessTimes.get(sessionId);
+        if (accessTimes) {
+          for (const ordinal of accessTimes.keys()) {
+            if (ordinal >= clampedIndex) {
+              accessTimes.delete(ordinal);
+            }
+          }
+          if (accessTimes.size === 0) {
+            this.sessionHistoryTurnAccessTimes.delete(sessionId);
+          }
+        }
+        this.deferredFullHistoryProjections.delete(sessionId);
+        this.fullHistoryProjectionApplyRequests.delete(sessionId);
+      }
 
       return {
         ...prev,

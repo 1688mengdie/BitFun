@@ -4024,6 +4024,83 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(apiMocks.loadSessionTurnWindow).toHaveBeenCalledTimes(1);
   });
 
+  it('invalidates cached history and catalog entries after truncating a complete session', async () => {
+    const catalog = createTurnCatalog(10);
+    const dialogTurns = Array.from({ length: 10 }, (_, index) => createPersistedTurn(index));
+    flowChatStore.setState(() => ({
+      sessions: new Map([[
+        'history-1',
+        createSession({
+          sessionId: 'history-1',
+          historyState: 'ready',
+          isPartial: false,
+          loadedTurnCount: 10,
+          totalTurnCount: 10,
+          turnCatalog: catalog,
+          dialogTurns,
+        }),
+      ]]),
+      activeSessionId: 'history-1',
+    }));
+    apiMocks.loadSessionTurnWindow.mockResolvedValueOnce({
+      status: 'ready',
+      catalogRevision: catalog.revision,
+      totalTurnCount: 10,
+      startOrdinal: 0,
+      endOrdinalExclusive: 10,
+      targetTurnId: 'turn-9',
+      turns: dialogTurns,
+    });
+
+    const loaded = await flowChatStore.loadSessionTurnWindow('history-1', 9);
+    expect(loaded).toMatchObject({ status: 'ready', isCurrent: true });
+    const activated = flowChatStore.activateSessionHistoryWindow(
+      'history-1',
+      loaded.targetOrdinal,
+      loaded.navigationGeneration,
+    );
+    expect(activated?.range.endOrdinalExclusive).toBe(10);
+
+    flowChatStore.truncateDialogTurnsFrom('history-1', 9);
+
+    const truncatedSession = flowChatStore.getState().sessions.get('history-1');
+    expect(truncatedSession?.dialogTurns.map(turn => turn.id)).toEqual(
+      dialogTurns.slice(0, 9).map(turn => turn.id),
+    );
+    expect(truncatedSession).toMatchObject({
+      isPartial: false,
+      loadedTurnCount: 9,
+      totalTurnCount: 9,
+      turnCatalog: {
+        totalTurnCount: 9,
+        entries: Array.from({ length: 9 }, (_, ordinal) => ({ ordinal })),
+      },
+    });
+    expect(flowChatStore.getSessionHistoryViewState('history-1')).toMatchObject({
+      activeRange: null,
+      catalog: { totalTurnCount: 9 },
+      loadedRanges: [{ startOrdinal: 0, endOrdinalExclusive: 9 }],
+    });
+
+    await expect(flowChatStore.loadSessionTurnWindow('history-1', 9)).resolves.toMatchObject({
+      status: 'not-found',
+      cacheHit: false,
+    });
+
+    flowChatStore.addDialogTurn('history-1', {
+      ...createPersistedTurn(9),
+      id: 'turn-new',
+      turnId: 'turn-new',
+    });
+    expect(flowChatStore.getState().sessions.get('history-1')).toMatchObject({
+      totalTurnCount: 10,
+      dialogTurns: [...dialogTurns.slice(0, 9), expect.objectContaining({ turnId: 'turn-new' })],
+    });
+    const postAppendRange = flowChatStore.getSessionHistoryViewState('history-1')?.loadedRanges
+      .find(range => range.startOrdinal <= 9 && range.endOrdinalExclusive > 9);
+    expect(postAppendRange?.turns.at(-1)?.id).toBe('turn-new');
+  });
+
   it('caches an older response without letting it remain the current navigation intent', async () => {
     const catalog = createTurnCatalog(10);
     flowChatStore.setState(() => ({
