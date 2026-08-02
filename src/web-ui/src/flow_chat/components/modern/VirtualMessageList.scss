@@ -127,6 +127,7 @@
     inset: 0;
     z-index: 2;
     overflow: hidden;
+    scrollbar-gutter: stable;
     pointer-events: none;
     background: var(--color-bg-scene);
     contain: paint;
