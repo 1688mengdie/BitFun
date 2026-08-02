@@ -414,6 +414,11 @@ export class FlowChatViewportCoordinator {
   private validateElementAnchor(source: string): void {
     const anchor = this.elementAnchor;
     if (anchor && (!anchor.element.isConnected || !anchor.scroller.isConnected)) {
+      if (this.mode === 'pinned-item' && anchor.scroller.isConnected) {
+        this.cancelElementAnchorRestoreWork();
+        this.elementAnchor = null;
+        return;
+      }
       this.release(`element-anchor-disconnected:${source}`);
     }
   }
