@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FlowChatTurnRail, type FlowChatTurnRailItem } from './FlowChatTurnRail';
+import { FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX } from './flowChatTurnRailWindow';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -225,7 +226,7 @@ describe('FlowChatTurnRail', () => {
       );
     });
 
-    expect(list.scrollTop).toBe(19);
+    expect(list.scrollTop).toBe(11);
   });
 
   it('moves keyboard focus through the vertical turn list', () => {
@@ -279,7 +280,7 @@ describe('FlowChatTurnRail', () => {
     if (!list) return;
 
     Object.defineProperty(list, 'clientHeight', { configurable: true, value: 56 });
-    list.scrollTop = 50 * 14;
+    list.scrollTop = 50 * FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX;
     act(() => {
       list.dispatchEvent(new Event('scroll', { bubbles: true }));
     });

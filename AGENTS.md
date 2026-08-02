@@ -12,6 +12,11 @@ Repository rule: **keep product logic platform-agnostic, then expose it through 
 2. For desktop development, prefer `pnpm run desktop:dev` — it provides full hot-reload (Vite HMR + Rust auto-rebuild & restart). Use `pnpm run desktop:preview:debug` only when you need a faster cold-start for frontend-only iteration (Rust changes are not auto-rebuilt).
 3. After Rust file changes, prefer `pnpm run fmt:rs` to format only changed or staged `.rs` files. Use `cargo fmt` only when you intentionally want broader formatting coverage.
 4. After changes, run the smallest matching verification from the table below.
+5. Workspace Rust dependencies own compatible versions, not broad capability
+   unions. Each crate must select the dependency features it actually uses;
+   keep test-only features in dev-dependencies and attach feature-gated service
+   capabilities to the owning crate feature. `tokio/full` is forbidden in the
+   root workspace and workspace members.
 
 ## Layered Module Index
 
@@ -202,9 +207,11 @@ await api.invoke('your_command', { request: { ... } });
 ### Product architecture guardrails
 
 For any `bitfun-core` decomposition, feature-boundary, dependency-boundary, or
-Rust build-speed refactor, read
+Rust build-speed refactor, read both
 [`docs/architecture/product-architecture.md`](docs/architecture/product-architecture.md)
-before editing. Keep this file as an entry point; put module-specific ownership
+and
+[`docs/architecture/rust-build-dependency-boundaries.md`](docs/architecture/rust-build-dependency-boundaries.md)
+before editing. Keep these files as entry points; put module-specific ownership
 details in the nearest module `AGENTS.md`.
 
 Repository-level decomposition rules:
@@ -291,6 +298,7 @@ change directly affects build, packaging, or CI cannot protect the path.
 | Web UI i18n runtime, namespace loading, or direct `i18nService.t(...)` usage | `pnpm run i18n:contract:test && pnpm run type-check:web && pnpm --dir src/web-ui run test:run src/infrastructure/i18n/core/I18nService.test.ts` |
 | Mobile web UI, state, pairing, disconnect, or reconnect behavior | `pnpm --dir src/mobile-web run type-check`; include manual pairing / reconnect notes when behavior changes |
 | Product definition, schema, resolver, or Desktop/CLI product build adapter | `pnpm run product:test`, plus `pnpm run product:check` for the default definition |
+| Cargo manifests, features, test targets, or crate dependency boundaries | `pnpm run check:core-boundaries:test && pnpm run check:core-boundaries`; add the smallest affected `cargo check -p <owner> --no-default-features --features <feature>` or focused target test when the compiled path changes |
 | Shared Rust logic in `core`, `transport`, adapters, or services | `cargo check --workspace`, plus the nearest focused `cargo test` when behavior changed |
 | Desktop integration, Tauri APIs, browser/computer-use, or desktop-only behavior | `cargo check -p bitfun-desktop`, plus focused desktop tests when behavior changed |
 | Behavior covered by desktop smoke/functional flows | Prefer the nearest focused E2E/smoke check; rely on CI for broad build/test coverage unless build behavior changed |
@@ -298,6 +306,7 @@ change directly affects build, packaging, or CI cannot protect the path.
 | Installer frontend or i18n runtime without packaging changes | `pnpm --dir BitFun-Installer run type-check` |
 | Installer Tauri/Rust changes | `cargo check --manifest-path BitFun-Installer/src-tauri/Cargo.toml` |
 | Installer packaging, payload, install/uninstall flow, or native bundling | `pnpm run installer:build` |
+| Build scripts or prerequisite changes | `pnpm run check:build-prereqs`, plus `node --test scripts/check-build-prereqs.test.mjs` when the check logic changed |
 
 ## Agent-doc priority
 

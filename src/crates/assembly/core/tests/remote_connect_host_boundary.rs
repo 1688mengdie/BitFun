@@ -1,3 +1,5 @@
+#![cfg(feature = "product-full")]
+
 use bitfun_core::service::remote_connect::embedded_relay_host::EmbeddedRelayHost;
 use bitfun_core::service::remote_connect::{
     ConnectionMethod, RemoteConnectConfig, RemoteConnectService,

@@ -52,6 +52,34 @@ fn pending_session_operation_blocks_runtime_action(
             ))
 }
 
+pub(crate) fn pending_workspace_diff_blocks_runtime_action(
+    shared_tui: bool,
+    pending_workspace_diff: bool,
+    handler: ActionHandler,
+) -> bool {
+    shared_tui
+        && pending_workspace_diff
+        && matches!(
+            handler,
+            ActionHandler::OpenAgentSelector
+                | ActionHandler::SwitchAgent
+                | ActionHandler::SwitchAgentReverse
+                | ActionHandler::SelectModel
+                | ActionHandler::NewSession
+                | ActionHandler::Sessions
+                | ActionHandler::ForkSession
+                | ActionHandler::UndoSession
+                | ActionHandler::RedoSession
+                | ActionHandler::RenameSession
+                | ActionHandler::Reload
+                | ActionHandler::Init
+                | ActionHandler::WorkspaceDiff
+                | ActionHandler::CompactSession
+                | ActionHandler::SubmitInput
+                | ActionHandler::Interrupt
+        )
+}
+
 fn requested_session_name(arguments: &str) -> Option<String> {
     let session_name = arguments.trim();
     (!session_name.is_empty()).then(|| session_name.to_string())
@@ -97,8 +125,15 @@ fn builtin_arguments_error(
     match handler {
         ActionHandler::CompactSession => Some("Usage: /compact"),
         ActionHandler::ForkSession => Some("Usage: /fork"),
+        ActionHandler::Timeline => Some("Usage: /timeline"),
         ActionHandler::UndoSession => Some("Usage: /undo"),
         ActionHandler::RedoSession => Some("Usage: /redo"),
+        ActionHandler::WorkspaceDiff => Some("Usage: /diff"),
+        ActionHandler::Editor => Some("Usage: /editor"),
+        ActionHandler::ToggleTimestamps => Some("Usage: /timestamps"),
+        ActionHandler::ToggleThinking => Some("Usage: /thinking"),
+        ActionHandler::CopyTranscript => Some("Usage: /copy"),
+        ActionHandler::ExportTranscript => Some("Usage: /export"),
         _ => None,
     }
 }
@@ -156,13 +191,15 @@ fn session_command_help_note() -> String {
         .expect("current session rename action must remain registered");
     let fork = action_for_alias("/fork", ActionContext::Chat)
         .expect("current session fork action must remain registered");
+    let timeline = action_for_alias("/timeline", ActionContext::Chat)
+        .expect("current session timeline action must remain registered");
     let undo = action_for_alias("/undo", ActionContext::Chat)
         .expect("current session undo action must remain registered");
     let redo = action_for_alias("/redo", ActionContext::Chat)
         .expect("current session redo action must remain registered");
     format!(
-        "Session Commands\n  /fork - {}\n  /rename <name> - {}\n  /undo - {}\n  /redo - {}",
-        fork.description, rename.description, undo.description, redo.description
+        "Session Commands\n  /timeline - {}\n  /fork - {}\n  /rename <name> - {}\n  /undo - {}\n  /redo - {}",
+        timeline.description, fork.description, rename.description, undo.description, redo.description
     )
 }
 
@@ -823,7 +860,6 @@ impl ChatMode {
             ));
             return Ok(None);
         }
-        let workspace = self.agent.workspace_path_buf();
         let native_commands = cli_native_prompt_command_descriptors(command_name);
         let native_conflict_key = expected
             .and_then(|command| command.native_collision.as_ref())
@@ -831,30 +867,104 @@ impl ChatMode {
         let expected_preference_revision = native_conflict_key
             .and(self.external_source_snapshot.as_ref())
             .map(|snapshot| snapshot.preference_revision);
+        self.invoke_external_prompt_command(
+            ExternalPromptCommandInvocation {
+                command_name: command_name.to_string(),
+                arguments: arguments.to_string(),
+                native_commands,
+                candidate_id: expected.map(|command| command.candidate_id.clone()),
+                content_version: expected.map(|command| command.content_version.clone()),
+                native_conflict_key: native_conflict_key.map(str::to_string),
+                expected_preference_revision,
+            },
+            None,
+            chat_view,
+            chat_state,
+            rt_handle,
+        )
+    }
+
+    fn invoke_external_prompt_command(
+        &mut self,
+        invocation: ExternalPromptCommandInvocation,
+        shell_review_decision: Option<PromptCommandShellReviewDecision>,
+        chat_view: &mut ChatView,
+        chat_state: &mut ChatState,
+        rt_handle: &tokio::runtime::Handle,
+    ) -> Result<Option<ChatExitReason>> {
+        let workspace = self.agent.workspace_path_buf();
         let expanded = tokio::task::block_in_place(|| {
             rt_handle.block_on(expand_external_prompt_command(
                 Some(&workspace),
-                command_name,
-                arguments,
-                native_commands,
-                expected.map(|command| command.candidate_id.as_str()),
-                expected.map(|command| command.content_version.as_str()),
-                native_conflict_key,
-                expected_preference_revision,
+                &invocation.command_name,
+                &invocation.arguments,
+                invocation.native_commands.clone(),
+                invocation.candidate_id.as_deref(),
+                invocation.content_version.as_deref(),
+                invocation.native_conflict_key.as_deref(),
+                invocation.expected_preference_revision,
+                shell_review_decision.as_ref(),
             ))
         });
         match expanded {
-            Ok(expanded) => {
-                self.send_message_to_agent(expanded.content, chat_view, chat_state, rt_handle);
+            Ok(PromptCommandInvocationOutcome::Ready {
+                content,
+                execution_target,
+            }) => {
+                match execution_target {
+                    PromptCommandExecutionTarget::Inline => {
+                        self.send_message_to_agent(content, chat_view, chat_state, rt_handle);
+                    }
+                    PromptCommandExecutionTarget::FreshExternalSubagent {
+                        ecosystem_id,
+                        logical_id,
+                    } => {
+                        let original_command = if invocation.arguments.trim().is_empty() {
+                            format!("/{}", invocation.command_name)
+                        } else {
+                            format!("/{} {}", invocation.command_name, invocation.arguments)
+                        };
+                        self.send_external_subagent_command_to_agent(
+                            content,
+                            original_command,
+                            ecosystem_id.to_string(),
+                            logical_id,
+                            chat_view,
+                            chat_state,
+                            rt_handle,
+                        );
+                    }
+                }
+                Ok(None)
+            }
+            Ok(PromptCommandInvocationOutcome::ReviewRequired { review }) => {
+                chat_view.show_prompt_command_shell_review(review.clone());
+                self.pending_prompt_command_shell_invocation =
+                    Some(PendingPromptCommandShellInvocation { invocation, review });
                 Ok(None)
             }
             Err(error) if error.contains("command not found") => Err(anyhow!(error)),
             Err(error) => {
                 chat_state.add_system_message(format!(
-                    "External command /{command_name} is unavailable: {error}"
+                    "External command /{} is unavailable: {error}",
+                    invocation.command_name
                 ));
                 Ok(None)
             }
+        }
+    }
+
+    fn persist_presentation_preference(
+        &mut self,
+        chat_view: &mut ChatView,
+        status: &str,
+        update: impl FnOnce(&mut crate::config::CliConfig),
+    ) {
+        match self.config.update(update) {
+            Ok(()) => chat_view.set_status(Some(status.to_string())),
+            Err(error) => chat_view.set_status(Some(format!(
+                "{status} for this run, but the preference could not be saved: {error}"
+            ))),
         }
     }
 
@@ -868,6 +978,17 @@ impl ChatMode {
     ) -> Result<Option<ChatExitReason>> {
         if !action.available(state) {
             chat_view.set_status(Some(action.unavailable_message(state)));
+            return Ok(None);
+        }
+        if pending_workspace_diff_blocks_runtime_action(
+            self.agent.is_shared(),
+            self.pending_workspace_diff.is_some(),
+            action.handler,
+        ) {
+            chat_view.set_status(Some(
+                "Waiting for the workspace diff to finish before using the Runtime again."
+                    .to_string(),
+            ));
             return Ok(None);
         }
         let pending_for_current_session = self
@@ -923,6 +1044,16 @@ impl ChatMode {
             ActionHandler::Sessions => {
                 self.show_session_selector(chat_view, chat_state, rt_handle);
             }
+            ActionHandler::Timeline => {
+                let points = chat_state.session_timeline_points();
+                if points.is_empty() {
+                    chat_view.set_status(Some(
+                        "No user messages are available in the current timeline".to_string(),
+                    ));
+                } else {
+                    chat_view.show_timeline_selector(points);
+                }
+            }
             ActionHandler::ForkSession => {
                 self.show_fork_selector(chat_view, chat_state);
             }
@@ -976,10 +1107,105 @@ impl ChatMode {
             ActionHandler::Status => {
                 chat_view.show_info_popup(session_status_text(chat_state, self.agent.is_shared()));
             }
+            ActionHandler::WorkspaceDiff => {
+                if self.pending_workspace_diff.is_some() {
+                    chat_view.set_status(Some(
+                        "Workspace diff is already loading. Please wait.".to_string(),
+                    ));
+                    return Ok(None);
+                }
+                chat_view.set_status(Some("Loading workspace diff...".to_string()));
+                let agent = self.agent.clone();
+                let handle = rt_handle.spawn(async move {
+                    agent
+                        .workspace_diff()
+                        .await
+                        .map_err(|error| error.to_string())
+                });
+                self.pending_workspace_diff = Some(PendingWorkspaceDiff { handle });
+            }
             ActionHandler::CompactSession => {
                 self.start_session_compaction(chat_view, chat_state, rt_handle);
             }
             ActionHandler::Usage => self.show_usage_report(chat_view, chat_state, rt_handle),
+            ActionHandler::Editor => match external_editor::resolve_editor_command() {
+                Ok(command) => {
+                    self.pending_local_effect = Some(PendingLocalEffect::EditComposer {
+                        command,
+                        draft: chat_view.draft_snapshot(),
+                    });
+                    chat_view.set_status(Some("Opening external editor...".to_string()));
+                }
+                Err(error) => chat_view.set_status(Some(format!("Editor unavailable: {error}"))),
+            },
+            ActionHandler::ToggleTimestamps => {
+                let visible = chat_view.toggle_timestamps();
+                self.persist_presentation_preference(
+                    chat_view,
+                    if visible {
+                        "Message timestamps shown"
+                    } else {
+                        "Message timestamps hidden"
+                    },
+                    |config| config.ui.timestamps = visible,
+                );
+            }
+            ActionHandler::ToggleThinking => {
+                let mode = chat_view.toggle_thinking();
+                self.persist_presentation_preference(
+                    chat_view,
+                    match mode {
+                        crate::config::ThinkingMode::Show => "Thinking blocks shown",
+                        crate::config::ThinkingMode::Hide => "Thinking blocks hidden",
+                    },
+                    |config| config.ui.thinking = mode,
+                );
+            }
+            ActionHandler::ToggleToolDetails => {
+                let visible = chat_view.toggle_tool_details();
+                self.persist_presentation_preference(
+                    chat_view,
+                    if visible {
+                        "Tool details shown"
+                    } else {
+                        "Tool details hidden"
+                    },
+                    |config| config.ui.tool_details = visible,
+                );
+            }
+            ActionHandler::CopyTranscript => {
+                let markdown = transcript::render_session_markdown(
+                    chat_state,
+                    transcript::MarkdownTranscriptOptions::default(),
+                );
+                let provider = bitfun_services_core::system::LocalSystemProvider::new();
+                match tokio::task::block_in_place(|| {
+                    rt_handle.block_on(provider.clipboard_write_text(&markdown))
+                }) {
+                    Ok(()) => chat_view.set_status(Some(
+                        "Copied the current session transcript as Markdown".to_string(),
+                    )),
+                    Err(error) => {
+                        let hints = if error.hints().is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", error.hints().join("; "))
+                        };
+                        chat_view.set_status(Some(format!(
+                            "Could not copy the transcript: {}{hints}",
+                            error.message()
+                        )));
+                    }
+                }
+            }
+            ActionHandler::ExportTranscript => {
+                chat_view.show_export_dialog(transcript::default_export_filename(
+                    &chat_state.core_session_id,
+                ));
+                chat_view.set_status(Some(
+                    "Choose what to include in the Markdown export".to_string(),
+                ));
+            }
             ActionHandler::ToggleAutoApprove => {}
             ActionHandler::ToggleWorktree => {
                 return self.handle_worktree_command("", chat_view, chat_state, rt_handle);
@@ -1068,6 +1294,69 @@ impl ChatMode {
         Ok(None)
     }
 
+    fn prepare_transcript_export(
+        &mut self,
+        request: crate::ui::export_dialog::ExportDialogRequest,
+        overwrite_confirmed: bool,
+        chat_view: &mut ChatView,
+        chat_state: &ChatState,
+    ) {
+        let target = if request.save_to_file {
+            let target = match transcript::resolve_export_target(&self.local_cwd, &request.filename)
+            {
+                Ok(target) => target,
+                Err(error) => {
+                    chat_view.export_dialog_set_error(error.to_string());
+                    return;
+                }
+            };
+            if target.is_dir() {
+                chat_view.export_dialog_set_error(format!(
+                    "Export target is a directory: {}",
+                    target.display()
+                ));
+                return;
+            }
+            if target.exists() && !overwrite_confirmed {
+                chat_view.export_dialog_confirm_overwrite(target.display().to_string());
+                return;
+            }
+            Some(target)
+        } else {
+            None
+        };
+
+        let (editor_command, editor_error) = if request.open_in_editor {
+            match external_editor::resolve_editor_command() {
+                Ok(command) => (Some(command), None),
+                Err(error) if request.save_to_file => (None, Some(error.to_string())),
+                Err(error) => {
+                    chat_view
+                        .export_dialog_set_error(format!("Cannot open an unsaved export: {error}"));
+                    return;
+                }
+            }
+        } else {
+            (None, None)
+        };
+
+        let markdown = transcript::render_session_markdown(
+            chat_state,
+            transcript::MarkdownTranscriptOptions {
+                include_reasoning: request.include_reasoning,
+                include_tool_details: request.include_tool_details,
+            },
+        );
+        chat_view.set_status(Some("Exporting session transcript...".to_string()));
+        self.pending_local_effect = Some(PendingLocalEffect::ExportTranscript {
+            markdown,
+            target,
+            editor_command,
+            editor_error,
+            overwrite_confirmed,
+        });
+    }
+
     fn start_session_compaction(
         &self,
         chat_view: &mut ChatView,
@@ -1095,6 +1384,28 @@ impl ChatMode {
         let operation = if undo { "Undo" } else { "Redo" };
         chat_view.set_status(Some(format!("{operation}ing session...")));
         let agent = self.agent.clone();
+        let restored_workspace_references = if undo {
+            if let Some(message_id) = chat_state.latest_user_message_id() {
+                let session_id = chat_state.core_session_id.clone();
+                match tokio::task::block_in_place(|| {
+                    rt_handle
+                        .block_on(agent.workspace_references_for_message(session_id, message_id))
+                }) {
+                    Ok(references) => Some(references),
+                    Err(error) => {
+                        chat_view.set_status(Some(format!(
+                            "Could not prepare undo composer metadata: {error}"
+                        )));
+                        return;
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let agent = self.agent.clone();
         let result = tokio::task::block_in_place(|| {
             rt_handle.block_on(async move { agent.revert_current_session(undo).await })
         });
@@ -1113,9 +1424,24 @@ impl ChatMode {
             &reverted.transcript,
             &reverted.retired_turn_ids,
         );
+        if !undo && reverted.changed {
+            chat_view.note_session_redo(&chat_state.core_session_id);
+        }
         match reverted.composer {
             AgentSessionComposerUpdate::Preserve => {}
-            AgentSessionComposerUpdate::Replace { text } => chat_view.set_input(&text),
+            AgentSessionComposerUpdate::Replace { text } => {
+                let references = restored_workspace_references.unwrap_or_default();
+                let draft = if undo && reverted.changed {
+                    chat_view.restore_undo_draft(&chat_state.core_session_id, text, references)
+                } else {
+                    crate::ui::composer::ComposerDraft {
+                        text,
+                        workspace_references: references,
+                        ..crate::ui::composer::ComposerDraft::default()
+                    }
+                };
+                chat_view.set_draft(draft)
+            }
             AgentSessionComposerUpdate::Clear => chat_view.clear_input(),
         }
         self.selected_native_command_once = None;
@@ -1140,6 +1466,35 @@ impl ChatMode {
         } else {
             "Nothing to redo.".to_string()
         }));
+    }
+
+    fn poll_workspace_diff(&mut self, chat_view: &mut ChatView) -> bool {
+        let Some(pending) = self.pending_workspace_diff.as_ref() else {
+            return false;
+        };
+        if !pending.handle.is_finished() {
+            return false;
+        }
+        let pending = self
+            .pending_workspace_diff
+            .take()
+            .expect("workspace diff task was checked above");
+        match tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(pending.handle)
+        }) {
+            Ok(Ok(snapshot)) => {
+                self.close_all_popups(chat_view);
+                chat_view.show_workspace_diff(snapshot);
+                chat_view.set_status(None);
+            }
+            Ok(Err(error)) => {
+                chat_view.set_status(Some(format!("Unable to load workspace diff: {error}")));
+            }
+            Err(error) => {
+                chat_view.set_status(Some(format!("Workspace diff loading stopped: {error}")));
+            }
+        }
+        true
     }
 
     fn start_session_rename(
@@ -1193,6 +1548,12 @@ impl ChatMode {
         chat_state: &mut ChatState,
         rt_handle: &tokio::runtime::Handle,
     ) -> Result<Option<ChatExitReason>> {
+        let shell_mode = chat_view.is_shell_mode();
+        let draft_has_images = chat_view.draft_snapshot().has_images();
+        if draft_has_images && chat_view.command_menu_visible() {
+            chat_view.set_status(Some(IMAGE_ATTACHMENTS_REQUIRE_MESSAGE.to_string()));
+            return Ok(None);
+        }
         if let Some(selection) = chat_view.apply_command_menu_selection() {
             return self.handle_action_id(
                 &selection.action_id,
@@ -1204,14 +1565,24 @@ impl ChatMode {
         }
 
         let trimmed = chat_view.input_text().trim();
-        if !trimmed.starts_with('/') {
+        if shell_mode && draft_has_images {
+            chat_view.set_status(Some("Images are unavailable in Shell mode".to_string()));
+            return Ok(None);
+        }
+        if !shell_mode && draft_has_images && trimmed.starts_with('/') {
+            chat_view.set_status(Some(IMAGE_ATTACHMENTS_REQUIRE_MESSAGE.to_string()));
+            return Ok(None);
+        }
+        if shell_mode || !trimmed.starts_with('/') {
             self.selected_native_command_once = None;
         }
         let pending_for_current_session = self
             .pending_session_operation
             .as_ref()
             .is_some_and(|pending| pending.session_id == chat_state.core_session_id);
-        if session_update_blocks_typed_submission(pending_for_current_session, trimmed) {
+        if (shell_mode && pending_for_current_session)
+            || session_update_blocks_typed_submission(pending_for_current_session, trimmed)
+        {
             chat_view.set_status(Some(
                 "Waiting for the pending Session operation to finish before sending.".to_string(),
             ));
@@ -1219,27 +1590,67 @@ impl ChatMode {
         }
 
         if chat_state.is_processing {
-            if trimmed.starts_with('/') {
+            if !shell_mode && trimmed.starts_with('/') {
                 if let Some(input) = chat_view.send_input() {
-                    return self.handle_command(&input, chat_view, chat_state, rt_handle);
+                    return self.handle_command(&input.text, chat_view, chat_state, rt_handle);
                 }
             } else if !trimmed.is_empty() {
-                chat_view.set_status(Some(
+                chat_view.set_status(Some(if shell_mode {
+                    "Currently processing. Wait for the turn to finish or interrupt it.".to_string()
+                } else {
                     "Currently processing. Type a /command, or use the interrupt shortcut."
-                        .to_string(),
-                ));
+                        .to_string()
+                }));
             }
             return Ok(None);
         }
 
         if let Some(input) = chat_view.send_input() {
-            tracing::info!("User input: {}", input);
-            if input.starts_with('/') {
-                return self.handle_command(&input, chat_view, chat_state, rt_handle);
+            if shell_mode {
+                self.send_shell_command(input, chat_view, chat_state, rt_handle);
+                return Ok(None);
             }
-            self.send_message_to_agent(input, chat_view, chat_state, rt_handle);
+            tracing::info!("User input: {}", input.text);
+            if input.text.starts_with('/') {
+                return self.handle_command(&input.text, chat_view, chat_state, rt_handle);
+            }
+            self.send_draft_to_agent(input, chat_view, chat_state, rt_handle);
         }
         Ok(None)
+    }
+
+    fn send_shell_command(
+        &mut self,
+        draft: crate::ui::composer::ComposerDraft,
+        chat_view: &mut ChatView,
+        chat_state: &mut ChatState,
+        rt_handle: &tokio::runtime::Handle,
+    ) {
+        if let Err(error) = self.materialize_requested_worktree(chat_view, chat_state, rt_handle) {
+            tracing::error!("Failed to prepare worktree for Shell command: {error}");
+            chat_view.set_status(Some(format!("Error: {error}")));
+            chat_state.add_system_message(error);
+            chat_view.set_draft(draft);
+            return;
+        }
+
+        chat_view.set_status(Some("Running Shell command...".to_string()));
+        let agent = self.agent.clone();
+        let agent_type = self.agent_type.clone();
+        match tokio::task::block_in_place(|| {
+            rt_handle.block_on(agent.run_user_shell_command(draft.text.clone(), &agent_type))
+        }) {
+            Ok(turn_id) => {
+                tracing::info!("Started Shell turn: {}", turn_id);
+                chat_view.remember_submitted_shell_command(&chat_state.core_session_id, &draft);
+                chat_view.exit_shell_mode();
+            }
+            Err(error) => {
+                tracing::error!("Failed to start Shell command: {error}");
+                chat_view.set_status(Some(format!("Error: {error}")));
+                chat_view.set_draft(draft);
+            }
+        }
     }
 
     fn cancel_active_turn(
@@ -1268,10 +1679,41 @@ impl ChatMode {
     }
 
     fn paste_clipboard(&mut self, chat_view: &mut ChatView) {
-        if let Ok(text) = Clipboard::new().and_then(|mut clipboard| clipboard.get_text()) {
-            chat_view.insert_paste(&text);
-            self.sync_selected_native_command(chat_view);
+        match image_paste::read_clipboard(&self.local_cwd) {
+            Ok(Some(paste)) => self.apply_composer_paste(paste, chat_view),
+            Ok(None) => {}
+            Err(error) => chat_view.set_status(Some(error.to_string())),
         }
+    }
+
+    fn paste_terminal_text(&mut self, text: &str, chat_view: &mut ChatView) {
+        match image_paste::classify_pasted_text(text, &self.local_cwd) {
+            Ok(paste) => self.apply_composer_paste(paste, chat_view),
+            Err(error) => chat_view.set_status(Some(error.to_string())),
+        }
+    }
+
+    fn apply_composer_paste(&mut self, paste: ImagePaste, chat_view: &mut ChatView) {
+        match paste {
+            ImagePaste::Text(text) => chat_view.insert_paste(&text),
+            ImagePaste::Image(_) if chat_view.is_shell_mode() => {
+                chat_view.set_status(Some("Images are unavailable in Shell mode".to_string()));
+                return;
+            }
+            ImagePaste::Image(_image) if self.agent.is_shared() => {
+                chat_view.set_status(Some(crate::actions::shared_tui_image_attachment_error()));
+                return;
+            }
+            ImagePaste::Image(image) => {
+                let name = image.name.clone();
+                if let Err(error) = chat_view.insert_image(image) {
+                    chat_view.set_status(Some(error.to_string()));
+                    return;
+                }
+                chat_view.set_status(Some(format!("Attached image: {name}")));
+            }
+        }
+        self.sync_selected_native_command(chat_view);
     }
 }
 

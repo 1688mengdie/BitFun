@@ -85,6 +85,7 @@ export interface StartDialogTurnRequest {
   userInput: string;
   originalUserInput?: string;
   turnId?: string; 
+  execution?: AgentDialogTurnExecution;
   agentType: string; 
   /** Concrete root where this session executes. */
   workspacePath?: string;
@@ -96,6 +97,14 @@ export interface StartDialogTurnRequest {
   imageContexts?: ImageInputContextData[];
   userMessageMetadata?: Record<string, unknown>;
 }
+
+export type AgentDialogTurnExecution =
+  | { kind: 'standard' }
+  | {
+      kind: 'fresh_external_subagent';
+      ecosystemId: string;
+      logicalId: string;
+    };
 
 export interface StartDialogTurnResponse {
   success: boolean;
@@ -513,9 +522,9 @@ export interface ModelRoundCompletedEvent extends AgenticEvent {
   durationMs?: number;
   providerId?: string;
   /** Resolved AI model configuration ID. */
-  modelConfigId: string;
+  modelConfigId?: string;
   /** Provider model name sent on the request. */
-  effectiveModelName: string;
+  effectiveModelName?: string;
   firstChunkMs?: number;
   firstVisibleOutputMs?: number;
   streamDurationMs?: number;
@@ -536,9 +545,9 @@ export interface ModelRoundStartedEvent extends AgenticEvent {
   roundGroupId?: string;
   roundIndex: number;
   /** Resolved AI model configuration ID. */
-  modelConfigId: string;
+  modelConfigId?: string;
   /** Provider model name sent on the request. */
-  effectiveModelName: string;
+  effectiveModelName?: string;
 }
 
 export interface AcpContextUsageUpdatedEvent extends AgenticEvent {

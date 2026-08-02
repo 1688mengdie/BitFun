@@ -3441,6 +3441,50 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Update whether a session runs its tool loop.
+    ///
+    /// `enable_tools` is persisted per session, so a session created while the
+    /// caller disabled tools stays tool-less forever on reuse. Hosts that later
+    /// change their mind (for example MiniApp runs that moved from a frontend
+    /// switch to a backend allowlist) call this to repair existing sessions.
+    pub async fn update_session_tool_enablement(
+        &self,
+        session_id: &str,
+        enable_tools: bool,
+    ) -> BitFunResult<bool> {
+        let _mutation_guard = self.acquire_session_mutation(session_id).await?;
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            if session.config.enable_tools == enable_tools {
+                return Ok(false);
+            }
+            session.config.enable_tools = enable_tools;
+            session.updated_at = SystemTime::now();
+            session.last_activity_at = SystemTime::now();
+        } else {
+            return Err(BitFunError::NotFound(format!(
+                "Session not found: {}",
+                session_id
+            )));
+        }
+
+        if self.should_persist_session_id(session_id) {
+            let effective_path = self.effective_session_storage_path(session_id).await;
+            let session_snapshot = self.sessions.get(session_id).map(|s| s.clone());
+            if let (Some(workspace_path), Some(session)) = (effective_path, session_snapshot) {
+                self.persistence_manager
+                    .save_session(&workspace_path, &session)
+                    .await?;
+            }
+        }
+
+        debug!(
+            "Session tool enablement updated: session_id={}, enable_tools={}",
+            session_id, enable_tools
+        );
+
+        Ok(true)
+    }
+
     /// Inherit parent dialog mode state when creating forked child sessions.
     ///
     /// `last_user_dialog_agent_type` drives first-entry mode reminders, while
@@ -6033,6 +6077,32 @@ impl SessionManager {
         Ok(turn_id)
     }
 
+    /// Starts a normal user dialog while the caller owns the Session mutation
+    /// lock. This keeps staged-revert commit and new-turn admission atomic for
+    /// non-model Runtime operations that still produce standard dialog turns.
+    pub(crate) async fn start_dialog_turn_locked(
+        &self,
+        session_id: &str,
+        agent_type: String,
+        user_input: String,
+        turn_id: Option<String>,
+        user_message_metadata: Option<serde_json::Value>,
+    ) -> BitFunResult<String> {
+        let user_message = Message::user(user_input.clone())
+            .with_semantic_kind(MessageSemanticKind::ActualUserInput);
+        self.start_persisted_turn_locked(
+            session_id,
+            DialogTurnKind::UserDialog,
+            Some(agent_type),
+            user_input,
+            turn_id,
+            vec![user_message],
+            ProcessingPhase::Starting,
+            user_message_metadata,
+        )
+        .await
+    }
+
     pub async fn start_dialog_turn_with_prepended_messages(
         &self,
         session_id: &str,
@@ -6286,7 +6356,7 @@ impl SessionManager {
     /// host surface (e.g. CLI) does not persist rounds itself. This ensures
     /// turn files contain rich conversation data (text, tools, thinking) that
     /// other surfaces (e.g. Desktop) can render.
-    fn build_model_rounds_from_messages(
+    pub(crate) fn build_model_rounds_from_messages(
         messages: &[Message],
         turn_id: &str,
         timestamp: u64,
@@ -6750,9 +6820,44 @@ impl SessionManager {
         model_rounds: Vec<ModelRoundData>,
         duration_ms: u64,
     ) -> BitFunResult<()> {
+        self.complete_turn_with_model_rounds(
+            session_id,
+            turn_id,
+            model_rounds,
+            duration_ms,
+            "maintenance_turn_completed",
+        )
+        .await
+    }
+
+    pub(crate) async fn complete_synthetic_dialog_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        model_rounds: Vec<ModelRoundData>,
+        duration_ms: u64,
+    ) -> BitFunResult<()> {
+        self.complete_turn_with_model_rounds(
+            session_id,
+            turn_id,
+            model_rounds,
+            duration_ms,
+            "synthetic_dialog_turn_completed",
+        )
+        .await
+    }
+
+    async fn complete_turn_with_model_rounds(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        model_rounds: Vec<ModelRoundData>,
+        duration_ms: u64,
+        snapshot_reason: &str,
+    ) -> BitFunResult<()> {
         if !self.should_persist_session_id(session_id) {
             debug!(
-                "Skipping maintenance turn persistence for transient session completion: session_id={}, turn_id={}, rounds={}, duration_ms={}",
+                "Skipping turn persistence for transient session completion: session_id={}, turn_id={}, rounds={}, duration_ms={}",
                 session_id,
                 turn_id,
                 model_rounds.len(),
@@ -6793,7 +6898,7 @@ impl SessionManager {
         self.persist_context_snapshot_for_turn_best_effort(
             session_id,
             turn.turn_index,
-            "maintenance_turn_completed",
+            snapshot_reason,
         )
         .await;
 
@@ -6814,9 +6919,44 @@ impl SessionManager {
         error: String,
         model_rounds: Vec<ModelRoundData>,
     ) -> BitFunResult<()> {
+        self.fail_turn_with_model_rounds(
+            session_id,
+            turn_id,
+            error,
+            model_rounds,
+            "maintenance_turn_failed",
+        )
+        .await
+    }
+
+    pub(crate) async fn fail_synthetic_dialog_turn(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        error: String,
+        model_rounds: Vec<ModelRoundData>,
+    ) -> BitFunResult<()> {
+        self.fail_turn_with_model_rounds(
+            session_id,
+            turn_id,
+            error,
+            model_rounds,
+            "synthetic_dialog_turn_failed",
+        )
+        .await
+    }
+
+    async fn fail_turn_with_model_rounds(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        error: String,
+        model_rounds: Vec<ModelRoundData>,
+        snapshot_reason: &str,
+    ) -> BitFunResult<()> {
         if !self.should_persist_session_id(session_id) {
             debug!(
-                "Skipping maintenance turn persistence for transient session failure: session_id={}, turn_id={}, rounds={}, error={}",
+                "Skipping turn persistence for transient session failure: session_id={}, turn_id={}, rounds={}, error={}",
                 session_id,
                 turn_id,
                 model_rounds.len(),
@@ -6858,7 +6998,7 @@ impl SessionManager {
         self.persist_context_snapshot_for_turn_best_effort(
             session_id,
             turn.turn_index,
-            "maintenance_turn_failed",
+            snapshot_reason,
         )
         .await;
 
@@ -6869,7 +7009,7 @@ impl SessionManager {
         }
 
         debug!(
-            "Maintenance turn marked as failed: turn_id={}, turn_index={}, error={}",
+            "Turn marked as failed: turn_id={}, turn_index={}, error={}",
             turn_id, turn.turn_index, error
         );
 

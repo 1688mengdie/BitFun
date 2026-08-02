@@ -1,10 +1,12 @@
 use bitfun_product_domains::tool_permissions::{PermissionReply, PermissionRequest};
 use bitfun_runtime_ports::{
-    AgentContextReloadRequest, AgentDialogTurnRequest, AgentSessionCompactionRequest,
-    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionListRequest,
-    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRevertRequest,
-    AgentSessionRevertResult, AgentSessionSummary, AgentTurnCancellationRequest,
-    AgentTurnCancellationResult, SessionTranscript,
+    AgentContextReloadRequest, AgentDialogTurnRequest, AgentMessageWorkspaceReferencesRequest,
+    AgentSessionCompactionRequest, AgentSessionCreateRequest, AgentSessionCreateResult,
+    AgentSessionListRequest, AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRevertRequest, AgentSessionRevertResult, AgentSessionSummary,
+    AgentTurnCancellationRequest, AgentTurnCancellationResult, AgentUserShellCommandRequest,
+    AgentWorkspaceReference, AgentWorkspaceReferenceSearchRequest,
+    AgentWorkspaceReferenceSearchResult, SessionTranscript, WorkspaceDiffSnapshot,
 };
 use serde::{Deserialize, Serialize};
 
@@ -85,8 +87,18 @@ pub enum RuntimeIpcOperation {
     RedoSession {
         request: AgentSessionRevertRequest,
     },
+    SearchWorkspaceReferences {
+        request: AgentWorkspaceReferenceSearchRequest,
+    },
+    WorkspaceReferencesForMessage {
+        request: AgentMessageWorkspaceReferencesRequest,
+    },
+    WorkspaceDiff,
     SubmitTurn {
         request: AgentDialogTurnRequest,
+    },
+    RunUserShellCommand {
+        request: AgentUserShellCommandRequest,
     },
     CancelTurn {
         request: AgentTurnCancellationRequest,
@@ -117,12 +129,18 @@ impl RuntimeIpcOperation {
             Self::CompactSession { request } => Some(&request.session_id),
             Self::UndoSession { request } => Some(&request.session_id),
             Self::RedoSession { request } => Some(&request.session_id),
+            Self::SearchWorkspaceReferences { request } => Some(&request.session_id),
+            Self::WorkspaceReferencesForMessage { request } => Some(&request.session_id),
             Self::SubmitTurn { request } => Some(&request.session_id),
+            Self::RunUserShellCommand { request } => Some(&request.session_id),
             Self::CancelTurn { request } => Some(&request.session_id),
             Self::PendingPermissions { session_id }
             | Self::RespondPermission { session_id, .. } => Some(session_id),
             Self::SubmitUserAnswers { request } => Some(&request.session_id),
-            Self::Health | Self::ListSessions { .. } | Self::CreateSession { .. } => None,
+            Self::Health
+            | Self::ListSessions { .. }
+            | Self::CreateSession { .. }
+            | Self::WorkspaceDiff => None,
         }
     }
 
@@ -135,6 +153,7 @@ impl RuntimeIpcOperation {
             Self::Health | Self::ListSessions { .. } => {
                 RuntimeIpcOperationRules::new(None, false, false, false)
             }
+            Self::WorkspaceDiff => RuntimeIpcOperationRules::new(None, true, false, false),
             Self::CreateSession { .. } => RuntimeIpcOperationRules::new(None, true, true, true),
             Self::RestoreSession { .. } => {
                 RuntimeIpcOperationRules::new(AttachExisting, true, true, true)
@@ -146,7 +165,8 @@ impl RuntimeIpcOperation {
             | Self::UpdateSessionModel { .. }
             | Self::RenameSession { .. }
             | Self::CompactSession { .. }
-            | Self::SubmitTurn { .. } => {
+            | Self::SubmitTurn { .. }
+            | Self::RunUserShellCommand { .. } => {
                 RuntimeIpcOperationRules::new(CurrentController, true, false, true)
             }
             Self::ForkSession { .. } => {
@@ -161,6 +181,9 @@ impl RuntimeIpcOperation {
                 RuntimeIpcOperationRules::new(CurrentController, false, false, true)
             }
             Self::PendingPermissions { .. } => {
+                RuntimeIpcOperationRules::new(CurrentController, false, false, false)
+            }
+            Self::SearchWorkspaceReferences { .. } | Self::WorkspaceReferencesForMessage { .. } => {
                 RuntimeIpcOperationRules::new(CurrentController, false, false, false)
             }
         }
@@ -239,6 +262,15 @@ pub enum RuntimeIpcOperationResult {
     },
     PendingPermissions {
         requests: Vec<PermissionRequest>,
+    },
+    WorkspaceReferenceSearch {
+        search: AgentWorkspaceReferenceSearchResult,
+    },
+    WorkspaceReferences {
+        references: Vec<AgentWorkspaceReference>,
+    },
+    WorkspaceDiff {
+        snapshot: WorkspaceDiffSnapshot,
     },
 }
 

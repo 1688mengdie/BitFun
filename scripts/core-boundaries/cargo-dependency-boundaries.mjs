@@ -1,4 +1,4 @@
-import { readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -55,6 +55,143 @@ function dependencyDescription(dependency) {
   const optional = dependency.optional ? ' optional' : '';
   const target = dependency.target ? ` for ${dependency.target}` : '';
   return `${kind}${optional} dependency${target}`;
+}
+
+const SERVICES_INTEGRATIONS_TOKIO_FEATURES = new Map([
+  ['announcement', ['fs', 'sync']],
+  ['browser-control', ['time']],
+  ['canvas-runtime', ['fs']],
+  ['debug-log', ['rt']],
+  ['deep-research', ['fs']],
+  ['git', ['fs', 'io-util', 'macros', 'rt', 'time']],
+  ['file-watch', ['rt', 'sync']],
+  ['function-agents', ['fs', 'io-util', 'macros', 'rt', 'time']],
+  ['mcp', ['fs', 'io-util', 'net', 'process', 'rt', 'sync', 'time']],
+  ['miniapp-runtime', ['fs', 'io-util', 'net', 'process', 'rt', 'sync', 'time']],
+  ['miniapp-market', ['fs', 'io-util', 'net', 'process', 'rt', 'sync', 'time']],
+  ['plugin-source', ['fs', 'rt', 'sync', 'time']],
+  ['hook-import', ['fs', 'sync']],
+  ['remote-connect', ['fs', 'io-util', 'net', 'process', 'rt', 'sync', 'time']],
+  ['remote-ssh', ['fs', 'io-util', 'macros', 'net', 'process', 'rt', 'sync', 'time']],
+  ['remote-ssh-concrete', ['fs', 'io-util', 'macros', 'net', 'process', 'rt', 'sync', 'time']],
+  ['review-platform', ['fs', 'io-util', 'sync']],
+  ['speech', ['fs', 'io-util', 'macros', 'rt', 'sync']],
+  ['workspace-search', ['io-util', 'rt', 'sync', 'time']],
+  ['script-tool-runtime', ['io-util', 'process', 'rt', 'sync', 'time']],
+]);
+
+// The installer is an excluded standalone workspace with its own Rust checks
+// and packaging lifecycle; this policy governs the root product workspace.
+const TOKIO_DEPENDENCY_POLICY_EXCLUDED_PACKAGES = new Set(['bitfun-installer']);
+
+function effectiveTokioCapabilities(feature, featureGraph, visiting = new Set()) {
+  if (visiting.has(feature)) {
+    return new Set();
+  }
+  visiting.add(feature);
+
+  const capabilities = new Set();
+  for (const value of featureGraph[feature] ?? []) {
+    if (value.startsWith('tokio/')) {
+      capabilities.add(value.slice('tokio/'.length));
+    } else if (Object.hasOwn(featureGraph, value)) {
+      for (const capability of effectiveTokioCapabilities(value, featureGraph, visiting)) {
+        capabilities.add(capability);
+      }
+    }
+  }
+
+  visiting.delete(feature);
+  return capabilities;
+}
+
+export function findServicesIntegrationsTokioFeatureViolations(pkg) {
+  const violations = [];
+  const featureGraph = pkg.features ?? {};
+
+  for (const [feature, expectedCapabilities] of SERVICES_INTEGRATIONS_TOKIO_FEATURES) {
+    if (!Object.hasOwn(featureGraph, feature)) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${feature} governed Tokio feature is missing`,
+      });
+      continue;
+    }
+
+    const actualCapabilities = [...effectiveTokioCapabilities(feature, featureGraph)].sort();
+    const expected = [...expectedCapabilities].sort();
+    const missing = expected.filter((capability) => !actualCapabilities.includes(capability));
+    const unexpected = actualCapabilities.filter((capability) => !expected.includes(capability));
+    if (missing.length > 0) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${feature} missing effective Tokio capabilities: ${missing.join(', ')}`,
+      });
+    }
+    if (unexpected.length > 0) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${feature} has unexpected effective Tokio capabilities: ${unexpected.join(', ')}`,
+      });
+    }
+  }
+
+  for (const [feature, values] of Object.entries(featureGraph)) {
+    if (SERVICES_INTEGRATIONS_TOKIO_FEATURES.has(feature)) {
+      continue;
+    }
+    if (values.some((value) => value.startsWith('tokio/'))) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${feature} Tokio capabilities require an explicit owner contract`,
+      });
+    }
+  }
+
+  return violations;
+}
+
+export function findTokioDependencyFeatureViolations(packages) {
+  const violations = [];
+
+  for (const pkg of packages) {
+    if (TOKIO_DEPENDENCY_POLICY_EXCLUDED_PACKAGES.has(pkg.name)) {
+      continue;
+    }
+    for (const dependency of pkg.dependencies ?? []) {
+      if (dependency.name !== 'tokio') {
+        continue;
+      }
+      const features = dependency.features ?? [];
+      if (features.includes('full')) {
+        violations.push({
+          path: pkg.manifest_path,
+          line: 1,
+          message: `${pkg.name} must not enable tokio/full for its ${dependencyDescription(dependency)}`,
+        });
+      }
+      const featureOwnedIntegrationRuntime =
+        pkg.name === 'bitfun-services-integrations'
+        && (dependency.kind ?? null) === null;
+      if (features.length === 0 && !featureOwnedIntegrationRuntime) {
+        violations.push({
+          path: pkg.manifest_path,
+          line: 1,
+          message: `${pkg.name} must declare explicit Tokio capabilities for its ${dependencyDescription(dependency)}`,
+        });
+      }
+    }
+
+    if (pkg.name === 'bitfun-services-integrations') {
+      violations.push(...findServicesIntegrationsTokioFeatureViolations(pkg));
+    }
+  }
+
+  return violations;
 }
 
 export function findCargoLayerViolations(
@@ -155,6 +292,246 @@ export function findCargoLayerViolations(
   return violations;
 }
 
+export function findProductEntrypointCoreFeatureViolations(
+  packages,
+  { root, crateLayoutRules },
+) {
+  const packageByManifest = new Map(
+    packages.map((pkg) => [normalizedPath(pkg.manifest_path), pkg]),
+  );
+  const violations = [];
+
+  for (const sourcePackage of packages) {
+    const sourceLayer = layerForManifest(sourcePackage.manifest_path, {
+      root,
+      crateLayoutRules,
+    });
+    if (sourceLayer !== 'apps' && sourceLayer !== 'interfaces') {
+      continue;
+    }
+
+    for (const dependency of sourcePackage.dependencies ?? []) {
+      if (!dependency.path || repositoryPath(root, dependency.path) === null) {
+        continue;
+      }
+      const targetPackage = packageByManifest.get(
+        normalizedPath(join(dependency.path, 'Cargo.toml')),
+      );
+      if (targetPackage?.name !== 'bitfun-core') {
+        continue;
+      }
+      if (dependency.uses_default_features !== false) {
+        violations.push({
+          path: sourcePackage.manifest_path,
+          line: 1,
+          message: `product entrypoint ${sourcePackage.name} must set default-features = false for its bitfun-core ${dependencyDescription(dependency)}`,
+        });
+      }
+      if (!Array.isArray(dependency.features) || dependency.features.length === 0) {
+        violations.push({
+          path: sourcePackage.manifest_path,
+          line: 1,
+          message: `product entrypoint ${sourcePackage.name} must select at least one explicit feature for its bitfun-core ${dependencyDescription(dependency)}`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
+function matchingClosingDelimiter(
+  source,
+  openingIndex,
+  openingCharacter,
+  closingCharacter,
+) {
+  let depth = 0;
+  let quote = null;
+  let escaped = false;
+
+  for (let index = openingIndex; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote !== null) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === '\\') {
+        escaped = true;
+      } else if (character === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === openingCharacter) {
+      depth += 1;
+    } else if (character === closingCharacter) {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function matchingClosingParenthesis(source, openingIndex) {
+  return matchingClosingDelimiter(source, openingIndex, '(', ')');
+}
+
+function crateCfgBodies(source) {
+  const bodies = [];
+  let index = source.charCodeAt(0) === 0xFEFF ? 1 : 0;
+
+  while (index < source.length) {
+    if (/\s/.test(source[index])) {
+      index += 1;
+      continue;
+    }
+    if (source.startsWith('//', index)) {
+      const lineEnd = source.indexOf('\n', index + 2);
+      index = lineEnd === -1 ? source.length : lineEnd + 1;
+      continue;
+    }
+    if (source.startsWith('/*', index)) {
+      let depth = 1;
+      index += 2;
+      while (index < source.length && depth > 0) {
+        if (source.startsWith('/*', index)) {
+          depth += 1;
+          index += 2;
+        } else if (source.startsWith('*/', index)) {
+          depth -= 1;
+          index += 2;
+        } else {
+          index += 1;
+        }
+      }
+      continue;
+    }
+    if (!source.startsWith('#![', index)) {
+      break;
+    }
+
+    const closingBracket = matchingClosingDelimiter(source, index + 2, '[', ']');
+    if (closingBracket === -1) {
+      break;
+    }
+    const attribute = source.slice(index, closingBracket + 1);
+    const cfgStart = /^#!\s*\[\s*cfg\s*\(/.exec(attribute);
+    if (cfgStart !== null) {
+      const openingIndex = cfgStart[0].length - 1;
+      const closingIndex = matchingClosingParenthesis(attribute, openingIndex);
+      if (closingIndex !== -1) {
+        bodies.push(attribute.slice(openingIndex + 1, closingIndex));
+      }
+    }
+    index = closingBracket + 1;
+  }
+
+  return bodies;
+}
+
+function removeCfgBranches(expression, branchName) {
+  const branchStart = new RegExp(`\\b${branchName}\\s*\\(`, 'g');
+  let result = expression;
+  for (let match = branchStart.exec(result); match !== null; match = branchStart.exec(result)) {
+    const openingIndex = branchStart.lastIndex - 1;
+    const closingIndex = matchingClosingParenthesis(result, openingIndex);
+    if (closingIndex === -1) {
+      break;
+    }
+    result = `${result.slice(0, match.index)}${' '.repeat(closingIndex + 1 - match.index)}${result.slice(closingIndex + 1)}`;
+    branchStart.lastIndex = match.index;
+  }
+  return result;
+}
+
+function containsFeatureAny(expression) {
+  const anyStart = /\bany\s*\(/g;
+  for (let match = anyStart.exec(expression); match !== null; match = anyStart.exec(expression)) {
+    const openingIndex = anyStart.lastIndex - 1;
+    const closingIndex = matchingClosingParenthesis(expression, openingIndex);
+    if (closingIndex === -1) {
+      return false;
+    }
+    const body = expression.slice(openingIndex + 1, closingIndex);
+    if (/\bfeature\s*=\s*"[^"]+"/.test(body)) {
+      return true;
+    }
+    anyStart.lastIndex = closingIndex + 1;
+  }
+  return false;
+}
+
+function crateFeatureCfgFacts(source) {
+  const positiveFeatures = new Set();
+  let unsupportedAny = false;
+
+  for (const body of crateCfgBodies(source)) {
+    const positiveExpression = removeCfgBranches(body, 'not');
+    unsupportedAny ||= containsFeatureAny(positiveExpression);
+    for (const match of positiveExpression.matchAll(/\bfeature\s*=\s*"([^"]+)"/g)) {
+      positiveFeatures.add(match[1]);
+    }
+  }
+
+  return { positiveFeatures, unsupportedAny };
+}
+
+export function findFeatureGatedTestTargetViolations(
+  packages,
+  { readSource = (path) => readFileSync(path, 'utf8') } = {},
+) {
+  const violations = [];
+
+  for (const pkg of packages) {
+    for (const target of pkg.targets ?? []) {
+      if (!(target.kind ?? []).includes('test')) {
+        continue;
+      }
+      const cfgFacts = crateFeatureCfgFacts(readSource(target.src_path));
+      if (cfgFacts.unsupportedAny) {
+        violations.push({
+          path: target.src_path,
+          line: 1,
+          message: `integration test target ${pkg.name}:${target.name} uses feature any(...), which Cargo required-features cannot express; split the target`,
+        });
+        continue;
+      }
+      const declared = new Set(target['required-features'] ?? []);
+      const missing = [...cfgFacts.positiveFeatures]
+        .filter((feature) => !declared.has(feature));
+      const unexpected = cfgFacts.positiveFeatures.size === 0
+        ? []
+        : [...declared].filter((feature) => !cfgFacts.positiveFeatures.has(feature));
+      if (missing.length > 0 && unexpected.length > 0) {
+        violations.push({
+          path: target.src_path,
+          line: 1,
+          message: `feature-gated integration test target ${pkg.name}:${target.name} must align required-features with crate-level cfg; missing: ${missing.join(', ')}; unexpected: ${unexpected.join(', ')}`,
+        });
+      } else if (missing.length > 0) {
+        violations.push({
+          path: target.src_path,
+          line: 1,
+          message: `feature-gated integration test target ${pkg.name}:${target.name} must declare required-features for: ${missing.join(', ')}`,
+        });
+      } else if (unexpected.length > 0) {
+        violations.push({
+          path: target.src_path,
+          line: 1,
+          message: `feature-gated integration test target ${pkg.name}:${target.name} has unexpected required-features: ${unexpected.join(', ')}`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 export function discoverCargoManifestPaths(root) {
   const manifests = [];
 
@@ -185,10 +562,15 @@ export function discoverCargoManifestPaths(root) {
   });
 }
 
-function loadCargoMetadata(manifestPath, root) {
+function loadCargoMetadata(manifestPath, root, { noDeps = false } = {}) {
+  const args = ['metadata', '--format-version', '1', '--all-features'];
+  if (noDeps) {
+    args.push('--no-deps');
+  }
+  args.push('--manifest-path', manifestPath);
   const result = spawnSync(
     'cargo',
-    ['metadata', '--format-version', '1', '--all-features', '--manifest-path', manifestPath],
+    args,
     {
       cwd: root,
       encoding: 'utf8',
@@ -252,7 +634,7 @@ function resolvedDependencyRecords(metadata, root) {
 export function collectCargoMetadataGraph({
   root,
   manifestPaths = discoverCargoManifestPaths(root),
-  loadMetadata = (manifestPath) => loadCargoMetadata(manifestPath, root),
+  loadMetadata = (manifestPath, options) => loadCargoMetadata(manifestPath, root, options),
 }) {
   const packagesByManifest = new Map();
   const dependenciesByKey = new Map();
@@ -274,7 +656,9 @@ export function collectCargoMetadataGraph({
       continue;
     }
 
-    const metadata = loadMetadata(manifestPath);
+    const metadata = loadMetadata(manifestPath, {
+      noDeps: manifestKey !== workspaceManifest,
+    });
     const workspaceMemberIds = new Set(metadata.workspace_members ?? []);
     for (const pkg of metadata.packages ?? []) {
       if (repositoryPath(root, pkg.manifest_path) === null) {
@@ -326,6 +710,35 @@ export function checkCargoDependencyLayersSafely({ root, crateLayoutRules }) {
       path: join(root, 'Cargo.toml'),
       line: 1,
       message: `cargo dependency layer check failed to run: ${error.message}`,
+    }];
+  }
+}
+
+export function checkCargoDependencyBoundaries({ root, crateLayoutRules }) {
+  const { packages, resolvedDependencies } = collectCargoMetadataGraph({ root });
+  return [
+    ...findCargoLayerViolations(
+      packages,
+      { root, crateLayoutRules },
+      resolvedDependencies,
+    ),
+    ...findProductEntrypointCoreFeatureViolations(
+      packages,
+      { root, crateLayoutRules },
+    ),
+    ...findFeatureGatedTestTargetViolations(packages),
+    ...findTokioDependencyFeatureViolations(packages),
+  ];
+}
+
+export function checkCargoDependencyBoundariesSafely({ root, crateLayoutRules }) {
+  try {
+    return checkCargoDependencyBoundaries({ root, crateLayoutRules });
+  } catch (error) {
+    return [{
+      path: join(root, 'Cargo.toml'),
+      line: 1,
+      message: `cargo dependency boundary check failed to run: ${error.message}`,
     }];
   }
 }

@@ -13,6 +13,7 @@ import {
   Loader2,
   MonitorSmartphone,
   Plus,
+  RefreshCw,
   Server,
 } from 'lucide-react';
 import { Tooltip } from '@/component-library';
@@ -199,9 +200,20 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
             {t('chatInput.dispatch.loading')}
           </div>
         ) : null}
-        {!loading && sshTargets.length === 0 ? (
+        {!loading && error ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="dispatch-target-picker__footer-action"
+            onClick={() => void refresh()}
+          >
+            <RefreshCw size={14} aria-hidden />
+            <span>{t('chatInput.dispatch.targetLoadFailed')}</span>
+          </button>
+        ) : null}
+        {!loading && !error && sshTargets.length === 0 ? (
           <div className="dispatch-target-picker__status">
-            {error || t('chatInput.dispatch.noSshTargets')}
+            {t('chatInput.dispatch.noSshTargets')}
           </div>
         ) : null}
         {sshTargets.map(option => {
@@ -221,7 +233,7 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
               <Server size={15} aria-hidden />
               <span>
                 <strong>{option.displayName}</strong>
-                <small>{option.description || option.defaultWorkspace || t('chatInput.dispatch.sshDescription')}</small>
+                <small>{option.description || t('chatInput.dispatch.sshDescription')}</small>
               </span>
               {selected ? <Check size={14} aria-hidden /> : null}
             </button>

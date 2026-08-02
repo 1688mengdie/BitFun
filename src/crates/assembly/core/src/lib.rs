@@ -21,6 +21,7 @@ pub mod external_mcp_import;
 mod external_mcp_tests;
 #[cfg(feature = "product-full")]
 pub mod external_sources;
+#[cfg(feature = "product-full")]
 mod external_subagents;
 #[cfg(feature = "product-full")]
 mod external_tools;
@@ -50,7 +51,7 @@ pub mod runtime_ownership;
 #[cfg(all(test, feature = "product-full"))]
 mod runtime_ownership_tests;
 pub mod service; // Workspace, Config, FileSystem, Terminal, Git
-#[cfg(feature = "service-integrations")]
+#[cfg(feature = "product-full")]
 pub(crate) mod service_agent_runtime;
 pub mod util; // General types, errors, helper functions
 
@@ -72,6 +73,7 @@ pub use service::{
 // Export infrastructure components
 #[cfg(feature = "ai-adapter-runtime")]
 pub use infrastructure::ai::AIClient;
+#[cfg(feature = "runtime-services")]
 pub use infrastructure::events::BackendEventManager;
 
 // Export Agentic service core types

@@ -366,6 +366,24 @@ impl RuntimeIpcRequestHandler for SharedRuntimeHandler {
                 .await
                 .map(|revert| RuntimeIpcOperationResult::SessionReverted { revert })
                 .map_err(runtime_ipc_error),
+            RuntimeIpcOperation::SearchWorkspaceReferences { request } => self
+                .runtime
+                .search_workspace_references(request)
+                .await
+                .map(|search| RuntimeIpcOperationResult::WorkspaceReferenceSearch { search })
+                .map_err(runtime_ipc_error),
+            RuntimeIpcOperation::WorkspaceReferencesForMessage { request } => self
+                .runtime
+                .workspace_references_for_message(request)
+                .await
+                .map(|references| RuntimeIpcOperationResult::WorkspaceReferences { references })
+                .map_err(runtime_ipc_error),
+            RuntimeIpcOperation::WorkspaceDiff => self
+                .runtime
+                .workspace_diff()
+                .await
+                .map(|snapshot| RuntimeIpcOperationResult::WorkspaceDiff { snapshot })
+                .map_err(runtime_ipc_error),
             RuntimeIpcOperation::SubmitTurn { request } => {
                 let outcome = self
                     .runtime
@@ -387,6 +405,15 @@ impl RuntimeIpcRequestHandler for SharedRuntimeHandler {
                     turn_id,
                 })
             }
+            RuntimeIpcOperation::RunUserShellCommand { request } => self
+                .runtime
+                .run_user_shell_command(request)
+                .await
+                .map(|result| RuntimeIpcOperationResult::TurnAccepted {
+                    session_id: result.session_id,
+                    turn_id: result.turn_id,
+                })
+                .map_err(runtime_ipc_error),
             RuntimeIpcOperation::CancelTurn { request } => self
                 .runtime
                 .cancel_turn(request)

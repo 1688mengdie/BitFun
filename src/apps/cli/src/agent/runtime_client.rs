@@ -12,15 +12,18 @@ use std::sync::{Arc, RwLock};
 use tokio::sync::{broadcast, Mutex};
 
 use bitfun_agent_runtime::sdk::{
-    AgentDialogTurnRequest, AgentEventReceiver, AgentLocalCommandTurnRecordRequest, AgentRuntime,
+    AgentDialogTurnExecution, AgentDialogTurnRequest, AgentEventReceiver, AgentInputAttachment,
+    AgentLocalCommandTurnRecordRequest, AgentMessageWorkspaceReferencesRequest, AgentRuntime,
     AgentSessionCompactionRequest, AgentSessionCreateRequest, AgentSessionDeleteRequest,
     AgentSessionForkBeforeTurnRequest, AgentSessionForkRequest, AgentSessionForkResult,
     AgentSessionListRequest, AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest,
     AgentSessionRenameRequest, AgentSessionRestoreRequest, AgentSessionRevertRequest,
     AgentSessionRevertResult, AgentSessionUsageRequest, AgentTurnCancellationRequest,
-    AgentTurnSettlementRequest, AgentUserAnswersRequest, PermissionReply, PermissionRequest,
+    AgentTurnSettlementRequest, AgentUserAnswersRequest, AgentUserShellCommandRequest,
+    AgentWorkspaceReference, AgentWorkspaceReferenceSearchRequest,
+    AgentWorkspaceReferenceSearchResult, PermissionReply, PermissionRequest,
     PermissionRequestEventReceiver, PortError, PortErrorKind, RuntimeError, SessionTranscript,
-    SessionTranscriptRequest, SessionUsageReport,
+    SessionTranscriptRequest, SessionUsageReport, WorkspaceDiffSnapshot,
 };
 use bitfun_agent_runtime_ipc::{
     RuntimeIpcClient, RuntimeIpcClientError, RuntimeIpcClientEvent, RuntimeIpcErrorCode,
@@ -30,8 +33,9 @@ use bitfun_agent_runtime_ipc::{
 };
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope};
 use bitfun_runtime_ports::{
-    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
-    AgentSubmissionSource, DialogSubmissionPolicy, SessionExecutionTarget,
+    put_agent_workspace_references, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest, AgentSubmissionSource, DialogSubmissionPolicy,
+    SessionExecutionTarget,
 };
 
 use crate::actions::SHARED_TUI_EMBEDDED_HANDOFF;
@@ -184,6 +188,7 @@ struct CliWorkspacePaths {
     project: Option<PathBuf>,
     execution: Option<PathBuf>,
     execution_target: Option<SessionExecutionTarget>,
+    remote: bool,
 }
 
 impl CliWorkspacePaths {
@@ -192,6 +197,7 @@ impl CliWorkspacePaths {
             project: workspace_path.clone(),
             execution: workspace_path,
             execution_target: None,
+            remote: false,
         }
     }
 
@@ -222,6 +228,7 @@ impl CliWorkspacePaths {
         self.execution = Some(execution);
         self.project = Some(project);
         self.execution_target = binding.execution_target.clone();
+        self.remote = binding.remote_connection_id.is_some() || binding.remote_ssh_host.is_some();
     }
 
     fn reset_execution_to_project(&mut self) -> PathBuf {
@@ -230,8 +237,31 @@ impl CliWorkspacePaths {
         self.execution_target = Some(SessionExecutionTarget::local(
             project.to_string_lossy().to_string(),
         ));
+        self.remote = false;
         project
     }
+
+    fn workspace_diff_unavailable_reason(&self) -> Option<&'static str> {
+        if self.remote {
+            return Some("Workspace diff is unavailable for remote Sessions");
+        }
+        let execution = self.execution();
+        let project = self.project();
+        if !same_workspace_location(&execution, &project) {
+            return Some(
+                "Workspace diff is unavailable when the Session uses a different worktree",
+            );
+        }
+        None
+    }
+}
+
+fn same_workspace_location(left: &Path, right: &Path) -> bool {
+    left == right
+        || dunce::canonicalize(left)
+            .ok()
+            .zip(dunce::canonicalize(right).ok())
+            .is_some_and(|(left, right)| left == right)
 }
 
 /// CLI-owned client for the portable Agent Runtime SDK.
@@ -865,6 +895,29 @@ impl CliAgentRuntimeClient {
         Ok(reverted)
     }
 
+    pub(crate) async fn workspace_diff(&self) -> Result<WorkspaceDiffSnapshot> {
+        if let Some(reason) = self
+            .workspace_paths
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .workspace_diff_unavailable_reason()
+        {
+            return Err(anyhow::anyhow!(reason));
+        }
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => runtime
+                .workspace_diff()
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message())),
+            CliAgentRuntimeBackend::Shared(client) => {
+                match client.request(RuntimeIpcOperation::WorkspaceDiff).await? {
+                    RuntimeIpcOperationResult::WorkspaceDiff { snapshot } => Ok(snapshot),
+                    _ => Err(unexpected_shared_result("workspace_diff")),
+                }
+            }
+        }
+    }
+
     pub(crate) async fn generate_session_usage_report(
         &self,
         request: AgentSessionUsageRequest,
@@ -1117,7 +1170,75 @@ impl CliAgentRuntimeClient {
     }
 
     pub(crate) async fn send_message(&self, message: String, agent_type: &str) -> Result<String> {
+        self.send_message_with_context(message, Vec::new(), Vec::new(), agent_type)
+            .await
+    }
+
+    pub(crate) async fn send_message_with_context(
+        &self,
+        message: String,
+        workspace_references: Vec<AgentWorkspaceReference>,
+        attachments: Vec<AgentInputAttachment>,
+        agent_type: &str,
+    ) -> Result<String> {
+        if !attachments.is_empty() && self.is_shared() {
+            return Err(anyhow::anyhow!(
+                crate::actions::shared_tui_image_attachment_error()
+            ));
+        }
         let session_id = self.ensure_session(agent_type).await?;
+        self.submit_dialog_turn_request(
+            session_id,
+            message,
+            None,
+            workspace_references,
+            attachments,
+            AgentDialogTurnExecution::Standard,
+            agent_type,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_external_subagent_command(
+        &self,
+        prompt: String,
+        original_command: String,
+        ecosystem_id: String,
+        logical_id: String,
+        agent_type: &str,
+    ) -> Result<String> {
+        if self.is_shared() {
+            return Err(anyhow::anyhow!(
+                "External subagent commands require Embedded TUI; Shared TUI does not transport delegated command submissions"
+            ));
+        }
+        let session_id = self.ensure_session(agent_type).await?;
+        self.submit_dialog_turn_request(
+            session_id,
+            prompt,
+            Some(original_command),
+            Vec::new(),
+            Vec::new(),
+            AgentDialogTurnExecution::FreshExternalSubagent {
+                ecosystem_id,
+                logical_id,
+            },
+            agent_type,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn submit_dialog_turn_request(
+        &self,
+        session_id: String,
+        message: String,
+        original_message: Option<String>,
+        workspace_references: Vec<AgentWorkspaceReference>,
+        attachments: Vec<AgentInputAttachment>,
+        execution: AgentDialogTurnExecution,
+        agent_type: &str,
+    ) -> Result<String> {
         tracing::info!("Sending message to session {}: {}", session_id, message);
 
         // Generate a turn_id
@@ -1130,12 +1251,15 @@ impl CliAgentRuntimeClient {
         }
 
         // Start the dialog turn; events arrive through the shared broadcast source.
-        let metadata = approval_metadata(self.approval_policy());
+        let mut metadata = approval_metadata(self.approval_policy());
+        put_agent_workspace_references(&mut metadata, &workspace_references)
+            .map_err(|error| anyhow::anyhow!(error.message))?;
         let request = AgentDialogTurnRequest {
             session_id: session_id.clone(),
             message: message.clone(),
-            original_message: None,
+            original_message,
             turn_id: Some(turn_id.clone()),
+            execution,
             agent_type: agent_type.to_string(),
             // Dialog submission uses this path to locate persisted session
             // state. Execution still comes from the session's resolved binding.
@@ -1145,7 +1269,7 @@ impl CliAgentRuntimeClient {
             policy: DialogSubmissionPolicy::for_source(AgentSubmissionSource::Cli),
             reply_route: None,
             prepended_reminders: Vec::new(),
-            attachments: Vec::new(),
+            attachments,
             metadata,
         };
         let submission: Result<String> = async {
@@ -1193,6 +1317,123 @@ impl CliAgentRuntimeClient {
             *self.current_turn_id.lock().await = None;
         }
         submission
+    }
+
+    pub(crate) async fn run_user_shell_command(
+        &self,
+        command: String,
+        agent_type: &str,
+    ) -> Result<String> {
+        let session_id = self.ensure_session(agent_type).await?;
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let request = AgentUserShellCommandRequest {
+            session_id: session_id.clone(),
+            turn_id: turn_id.clone(),
+            command,
+        };
+        *self.current_turn_id.lock().await = Some(turn_id.clone());
+
+        let submission: Result<String> = async {
+            match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => {
+                let accepted = match runtime.run_user_shell_command(request.clone()).await {
+                    Ok(accepted) => accepted,
+                    Err(error) if Self::is_session_not_found_error(&error) => {
+                        tracing::warn!(
+                            "Session missing when starting Shell turn, attempting recovery and retry: session_id={}",
+                            session_id
+                        );
+                        self.ensure_backend_session_alive(&session_id, agent_type)
+                            .await?;
+                        runtime
+                            .run_user_shell_command(request)
+                            .await
+                            .map_err(|error| anyhow::anyhow!(error.into_message()))?
+                    }
+                    Err(error) => return Err(anyhow::anyhow!(error.into_message())),
+                };
+                if accepted.session_id == session_id && accepted.turn_id == turn_id {
+                    Ok(accepted.turn_id)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "Runtime accepted a Shell command with an unexpected identity"
+                    ))
+                }
+            }
+            CliAgentRuntimeBackend::Shared(client) => match client
+                .request(RuntimeIpcOperation::RunUserShellCommand { request })
+                .await
+            {
+                Ok(RuntimeIpcOperationResult::TurnAccepted {
+                    session_id: accepted_session,
+                    turn_id: accepted_turn,
+                }) if accepted_session == session_id && accepted_turn == turn_id => {
+                    Ok(accepted_turn)
+                }
+                Ok(_) => Err(unexpected_shared_result("run_user_shell_command")),
+                Err(error) => Err(anyhow::Error::new(error)),
+            },
+            }
+        }
+        .await;
+        if submission.is_err() {
+            *self.current_turn_id.lock().await = None;
+        }
+        submission
+    }
+
+    pub(crate) async fn search_workspace_references(
+        &self,
+        query: String,
+    ) -> Result<AgentWorkspaceReferenceSearchResult> {
+        let session_id = self
+            .session_id
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("No active session"))?;
+        let request = AgentWorkspaceReferenceSearchRequest {
+            session_id,
+            query,
+            limit: 20,
+        };
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => runtime
+                .search_workspace_references(request)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message())),
+            CliAgentRuntimeBackend::Shared(client) => match client
+                .request(RuntimeIpcOperation::SearchWorkspaceReferences { request })
+                .await?
+            {
+                RuntimeIpcOperationResult::WorkspaceReferenceSearch { search } => Ok(search),
+                _ => Err(unexpected_shared_result("search_workspace_references")),
+            },
+        }
+    }
+
+    pub(crate) async fn workspace_references_for_message(
+        &self,
+        session_id: String,
+        message_id: String,
+    ) -> Result<Vec<AgentWorkspaceReference>> {
+        let request = AgentMessageWorkspaceReferencesRequest {
+            session_id,
+            message_id,
+        };
+        match &self.backend {
+            CliAgentRuntimeBackend::Embedded(runtime) => runtime
+                .workspace_references_for_message(request)
+                .await
+                .map_err(|error| anyhow::anyhow!(error.into_message())),
+            CliAgentRuntimeBackend::Shared(client) => match client
+                .request(RuntimeIpcOperation::WorkspaceReferencesForMessage { request })
+                .await?
+            {
+                RuntimeIpcOperationResult::WorkspaceReferences { references } => Ok(references),
+                _ => Err(unexpected_shared_result("workspace_references_for_message")),
+            },
+        }
     }
 
     pub(crate) async fn cancel_current_turn(&self) -> Result<()> {
@@ -1637,6 +1878,44 @@ mod tests {
     }
 
     #[test]
+    fn workspace_diff_fails_closed_for_other_worktrees_and_remote_sessions() {
+        let mut paths = CliWorkspacePaths::new(Some("/project".into()));
+        assert_eq!(paths.workspace_diff_unavailable_reason(), None);
+
+        paths.apply_binding(&AgentSessionWorkspaceBinding {
+            workspace_id: Some("workspace-1".to_string()),
+            workspace_path: "/managed-worktree".to_string(),
+            project_workspace_path: Some("/project".to_string()),
+            execution_target: Some(SessionExecutionTarget {
+                kind: SessionExecutionTargetKind::ManagedWorktree,
+                worktree_id: Some("worktree-1".to_string()),
+                root_path: "/managed-worktree".to_string(),
+                base_ref: Some("main".to_string()),
+                base_commit: Some("123456789abcdef".to_string()),
+                branch: None,
+                lifecycle: Some(WorktreeLifecycle::Managed),
+            }),
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        });
+        assert!(paths
+            .workspace_diff_unavailable_reason()
+            .is_some_and(|reason| reason.contains("different worktree")));
+
+        paths.apply_binding(&AgentSessionWorkspaceBinding {
+            workspace_id: None,
+            workspace_path: "/project".to_string(),
+            project_workspace_path: Some("/project".to_string()),
+            execution_target: Some(SessionExecutionTarget::local("/project")),
+            remote_connection_id: Some("remote-1".to_string()),
+            remote_ssh_host: Some("example.test".to_string()),
+        });
+        assert!(paths
+            .workspace_diff_unavailable_reason()
+            .is_some_and(|reason| reason.contains("remote Sessions")));
+    }
+
+    #[test]
     fn model_updates_use_the_runtime_sdk_without_the_core_compatibility_facade() {
         let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
         let compatibility_update =
@@ -1688,6 +1967,50 @@ mod tests {
     }
 
     #[test]
+    fn image_attachments_use_the_runtime_contract_and_fail_before_shared_ipc() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let submission = source
+            .split_once("pub(crate) async fn send_message_with_context(")
+            .expect("context submission method")
+            .1
+            .split_once("pub(crate) async fn search_workspace_references(")
+            .expect("context submission method boundary")
+            .0;
+
+        let shared_rejection = submission
+            .find("if !attachments.is_empty() && self.is_shared()")
+            .expect("shared attachment rejection");
+        let session_creation = submission
+            .find("let session_id = self.ensure_session")
+            .expect("session creation");
+        assert!(shared_rejection < session_creation);
+        assert!(submission.contains("attachments,"));
+        assert!(!submission.contains("imagePath"));
+    }
+
+    #[test]
+    fn delegated_external_commands_fail_before_shared_ipc() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let submission = source
+            .split_once("pub(crate) async fn send_external_subagent_command(")
+            .expect("delegated command submission method")
+            .1
+            .split_once("async fn submit_dialog_turn_request(")
+            .expect("delegated command submission boundary")
+            .0;
+
+        let shared_rejection = submission
+            .find("if self.is_shared()")
+            .expect("shared runtime rejection");
+        let session_creation = submission
+            .find("let session_id = self.ensure_session")
+            .expect("session creation");
+        assert!(shared_rejection < session_creation);
+        assert!(submission.contains("AgentDialogTurnExecution::FreshExternalSubagent"));
+        assert!(!submission.contains("RuntimeIpcOperation::SubmitTurn"));
+    }
+
+    #[test]
     fn interactive_session_fork_uses_the_same_runtime_boundary_in_both_deployments() {
         let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
         let fork = source
@@ -1704,6 +2027,25 @@ mod tests {
         assert!(fork.contains("CliAgentRuntimeBackend::Shared(client)"));
         assert!(fork.contains("RuntimeIpcOperation::ForkSession"));
         assert!(fork.contains("RuntimeIpcOperationResult::SessionForked"));
+    }
+
+    #[test]
+    fn workspace_diff_uses_the_same_runtime_boundary_in_both_deployments() {
+        let source = include_str!("runtime_client.rs").replace("\r\n", "\n");
+        let workspace_diff = source
+            .split_once("pub(crate) async fn workspace_diff(")
+            .expect("workspace diff method")
+            .1
+            .split_once("pub(crate) async fn generate_session_usage_report(")
+            .expect("workspace diff method boundary")
+            .0;
+
+        assert!(workspace_diff.contains("workspace_diff_unavailable_reason"));
+        assert!(workspace_diff.contains("CliAgentRuntimeBackend::Embedded(runtime)"));
+        assert!(workspace_diff.contains(".workspace_diff()"));
+        assert!(workspace_diff.contains("CliAgentRuntimeBackend::Shared(client)"));
+        assert!(workspace_diff.contains("RuntimeIpcOperation::WorkspaceDiff"));
+        assert!(workspace_diff.contains("RuntimeIpcOperationResult::WorkspaceDiff"));
     }
 
     #[test]

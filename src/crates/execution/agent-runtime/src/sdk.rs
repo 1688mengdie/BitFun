@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 2;
+pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -58,9 +58,10 @@ pub use bitfun_harness::{
     HarnessRegistry, HarnessWorkflow,
 };
 pub use bitfun_runtime_ports::{
-    AgentBackgroundResultRequest, AgentDialogTurnPort, AgentDialogTurnRequest,
-    AgentInputAttachment, AgentLifecycleDeliveryPort, AgentLocalCommandTurnPort,
-    AgentLocalCommandTurnRecordRequest, AgentSessionArchiveRequest,
+    AgentBackgroundResultRequest, AgentDialogTurnExecution, AgentDialogTurnPort,
+    AgentDialogTurnRequest, AgentInputAttachment, AgentLifecycleDeliveryPort,
+    AgentLocalCommandTurnPort, AgentLocalCommandTurnRecordRequest,
+    AgentMessageWorkspaceReferencesRequest, AgentSessionArchiveRequest,
     AgentSessionArchiveStateRequest, AgentSessionClosePort, AgentSessionCompactionPort,
     AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionComposerUpdate,
     AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionDeleteRequest,
@@ -75,7 +76,11 @@ pub use bitfun_runtime_ports::{
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest,
     AgentTransientSessionDiscardRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
-    AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest, ClockPort,
+    AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest,
+    AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
+    AgentWorkspaceReference, AgentWorkspaceReferenceKind, AgentWorkspaceReferencePort,
+    AgentWorkspaceReferenceSearchEntry, AgentWorkspaceReferenceSearchRequest,
+    AgentWorkspaceReferenceSearchResult, AgentWorkspaceReferenceSourceRange, ClockPort,
     DialogSubmissionPolicy, DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort,
     NetworkPort, PermissionAuditRecord, PermissionDelegationContext, PermissionGrant,
     PermissionGrantKey, PermissionReply, PermissionReplySource, PermissionRequest,
@@ -87,7 +92,8 @@ pub use bitfun_runtime_ports::{
     RuntimeEventType, RuntimeServiceCapability, RuntimeServicePort, SessionStorageKind,
     SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SessionTranscript,
     SessionTranscriptReader, SessionTranscriptRequest, TerminalPort, ThreadGoal, ThreadGoalStatus,
-    TranscriptContent, TranscriptMessage, TranscriptToolCall, WorkspacePort,
+    TranscriptContent, TranscriptMessage, TranscriptToolCall, WorkspaceDiffContent,
+    WorkspaceDiffFile, WorkspaceDiffFileStatus, WorkspaceDiffSnapshot, WorkspacePort,
 };
 pub use bitfun_runtime_services::{
     CapabilityAvailability, RuntimeServices, RuntimeServicesBuilder, RuntimeServicesError,
@@ -127,6 +133,14 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentSessionManagementPort>,
     ) -> Self {
         self.inner = self.inner.with_session_management_port(port);
+        self
+    }
+
+    pub fn with_workspace_reference_port(
+        mut self,
+        port: Arc<dyn AgentWorkspaceReferencePort>,
+    ) -> Self {
+        self.inner = self.inner.with_workspace_reference_port(port);
         self
     }
 
@@ -183,6 +197,14 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentLocalCommandTurnPort>,
     ) -> Self {
         self.inner = self.inner.with_local_command_turn_port(port);
+        self
+    }
+
+    pub fn with_user_shell_command_port(
+        mut self,
+        port: Arc<dyn AgentUserShellCommandPort>,
+    ) -> Self {
+        self.inner = self.inner.with_user_shell_command_port(port);
         self
     }
 
@@ -368,6 +390,10 @@ impl AgentRuntime {
         self.inner.services()
     }
 
+    pub async fn workspace_diff(&self) -> Result<WorkspaceDiffSnapshot, RuntimeError> {
+        self.inner.workspace_diff().await
+    }
+
     pub fn registered_tool_names(&self) -> Vec<String> {
         self.inner.registered_tool_names()
     }
@@ -463,6 +489,13 @@ impl AgentRuntime {
             .await
     }
 
+    pub async fn run_user_shell_command(
+        &self,
+        request: AgentUserShellCommandRequest,
+    ) -> Result<AgentUserShellCommandResult, RuntimeError> {
+        self.inner.run_user_shell_command(request).await
+    }
+
     pub async fn update_session_model(
         &self,
         request: AgentSessionModelUpdateRequest,
@@ -552,6 +585,20 @@ impl AgentRuntime {
         request: AgentSessionWorkspaceRequest,
     ) -> Result<Option<AgentSessionWorkspaceBinding>, RuntimeError> {
         self.inner.resolve_session_workspace_binding(request).await
+    }
+
+    pub async fn search_workspace_references(
+        &self,
+        request: AgentWorkspaceReferenceSearchRequest,
+    ) -> Result<AgentWorkspaceReferenceSearchResult, RuntimeError> {
+        self.inner.search_workspace_references(request).await
+    }
+
+    pub async fn workspace_references_for_message(
+        &self,
+        request: AgentMessageWorkspaceReferencesRequest,
+    ) -> Result<Vec<AgentWorkspaceReference>, RuntimeError> {
+        self.inner.workspace_references_for_message(request).await
     }
 
     pub async fn submit_turn(

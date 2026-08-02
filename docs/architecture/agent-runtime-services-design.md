@@ -68,7 +68,7 @@ Agent Runtime API 的逻辑归属与物理部署分离：相同归属模块可�
 私有 SDK Host 或目标机器 Runtime 中。任何 Rust 部署都只管理自己进程树内的服务与 Node/Bun Plugin Host；不能因为多个
 GUI/TUI/Remote Client 连接就复制 Runtime 状态模块，或按 Client/Workspace 创建 Plugin Host。
 
-Rust Runtime SDK 以 `AGENT_RUNTIME_SDK_API_VERSION` 标记兼容边界。当前接口版本为 v2 preview：
+Rust Runtime SDK 以 `AGENT_RUNTIME_SDK_API_VERSION` 标记兼容边界。当前接口版本为 v3 preview：
 小版本更新允许增加可选 builder hook、有默认实现的端口方法或注册表查询能力，但不得向外部可用
 Rust 结构体字面量（struct literal）构造的 DTO 直接增加字段，也不得改变既有端口语义、错误分类、session / turn 标识含义或
 默认 feature 依赖。任何需要调用方改写现有嵌入代码的变更，必须提升接口版本并提供兼容迁移路径。
@@ -76,6 +76,9 @@ Rust 结构体字面量（struct literal）构造的 DTO 直接增加字段，�
 v2 的迁移只涉及 Rust 错误名词治理：调用方把
 `RuntimeBuildError::UnsupportedPluginRuntimeHostBinding` 替换为
 `RuntimeBuildError::UnsupportedPluginRuntimeClientAvailability`；错误分类和 builder 行为不变。
+
+v3 为 `AgentDialogTurnRequest` 增加来源无关的 `execution` 事实。现有 Rust struct literal 调用方迁移时增加
+`execution: AgentDialogTurnExecution::Standard`（或 `Default::default()`）；旧 wire payload 缺省为标准执行。
 
 只要外部调用方仍必须导入 `bitfun-core`、启用 `product-full`、持有具体服务管理器、读取产品命令
 注册表、理解 ACP/内部端口或依赖全局可变状态，公开 SDK 发布边界就不成立。公开 SDK 的完整
@@ -420,7 +423,7 @@ impl AgentRuntime {
 该 Rust 接口是内部产品入口复用的当前形态，不是公开 Python/TypeScript SDK 的目标 API。它必须只接收
 已组装的类型化部件，不负责创建
 文件系统、终端、MCP、AI 客户端、Remote 提供方或产品命令。
-当前 v2 preview 接口以 message / attachment / metadata 作为最小输入形态；若把
+当前 v3 preview 接口以 message / attachment / metadata 和默认标准执行目标作为最小输入形态；若把
 model-round cancellation token、结构化 AgentInput 或更复杂的事件游标纳入公开 SDK，
 必须分别评审 Rust Runtime SDK、SDK Host protocol 和公开 SDK API 的版本，并保留旧路径兼容。
 
@@ -728,7 +731,7 @@ SDK profile 当前从共享产品事实获得与 Headless CLI 相同的能力集
 Rust Runtime SDK，不注册未实现的 `RuntimeServices` 能力，也不宣称完整 Desktop profile 可用。CLI 通过
 一个调用级上下文把该 Rust 接口、Harness、能力注册、调用级权限和 Agentic 事件广播交给 TUI、Exec、Session、Usage 与
 交互模式下的 Peer Host。Rust Runtime SDK 已承接会话创建/列举/删除/基础恢复、重命名/归档、会话模型更新、thread-goal 查询、类型化转录读取、本地分支、用量生成、
-轮次提交/取消与精确结算，以及 CLI/TUI 的工具确认、拒绝和用户问题回答；固定 ID 创建使用独立的
+轮次提交/取消与精确结算、用户显式 Shell 命令，以及 CLI/TUI 的工具确认、拒绝和用户问题回答；Shell 命令通过窄端口回到 Core 的正常 ToolPipeline、权限、工作区路由和持久化 owner，不构成通用 Tool 或进程执行 API。固定 ID 创建使用独立的
 `create_session_with_id` 方法，普通创建 DTO 只增加可选工作区 ID 与模型 ID 事实，不承载调用方指定的会话 ID。
 未实现该能力的提供方返回类型化不支持错误；实现成功时 Runtime 必须校验返回 ID 与请求完全一致，不能
 替换为自动生成的 ID。`SessionSelector::Create` 仍保持自动生成。Peer Host 通过同一 Rust Runtime SDK 处理对话提交、精确取消、
@@ -1129,7 +1132,7 @@ Product 测试：
   turn、处理基础会话控制、更新会话模型并处理工具确认/拒绝；本地工作区快照准备、文件清单、统计和文件回滚通过独立 owner port 复用 Core 实现，
   富历史和其余持久化维护缺口仍通过单一 Core 兼容接口处理，不再构造独立调度器、持久化 manager 或事件队列；
   wire schema、Relay ACK/重放和重连协议未在该切换中扩张。
-- CLI 主会话客户端通过 Rust Runtime SDK 处理 session、transcript、fork、本地 Session undo/redo、usage report、用量卡片完成态本地命令轮次、turn、cancel 与 settlement；undo/redo 使用独立窄 port，由 Core 统一暂存 transcript、模型上下文与工作区边界，不扩展 `RuntimeServices` 为 service locator；其他 preview 缺口仍通过一个 Core 兼容接口处理；
+- CLI 主会话客户端通过 Rust Runtime SDK 处理 session、transcript、fork、本地 Session undo/redo、usage report、用量卡片完成态本地命令轮次、用户显式 Shell 命令、turn、cancel 与 settlement；Shell 命令复用正常 ToolPipeline 和远程工作区路由，undo/redo 使用独立窄 port，由 Core 统一暂存 transcript、模型上下文与工作区边界，不扩展 `RuntimeServices` 为 service locator；其他 preview 缺口仍通过一个 Core 兼容接口处理；
   该接口复用现有归属模块，不建立第二套状态或事件格式。
 - CLI 托管的 ACP 服务端已以 `DeliveryProfile::Acp` 构造真实 Runtime Parts；会话创建/列举、轮次、取消、会话模型更新、工具确认/拒绝和
   Agent 事件订阅复用同一 Agent Runtime API 语义，ACP stdio、连接与协议转换保持不变。Agentic Event Queue 仍是唯一事件归属模块；

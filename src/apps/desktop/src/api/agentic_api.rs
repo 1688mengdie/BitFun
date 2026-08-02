@@ -16,9 +16,10 @@ use crate::runtime::{
 use crate::startup_trace::DesktopStartupTrace;
 use bitfun_agent_runtime::deep_review::sanitize_focused_review_public_metadata;
 use bitfun_agent_runtime::sdk::{
-    AgentDialogTurnRequest, AgentInputAttachment, AgentSessionCreateResult,
-    AgentSessionModelUpdateRequest, AgentSubmissionSource, AgentTurnCancellationRequest,
-    PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PermissionReply, PermissionRequest,
+    AgentDialogTurnExecution, AgentDialogTurnRequest, AgentInputAttachment,
+    AgentSessionCreateResult, AgentSessionModelUpdateRequest, AgentSubmissionSource,
+    AgentTurnCancellationRequest, PermissionAuditRecord, PermissionGrant, PermissionGrantKey,
+    PermissionReply, PermissionRequest,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -262,6 +263,8 @@ pub struct StartDialogTurnRequest {
     pub remote_connection_id: Option<String>,
     pub remote_ssh_host: Option<String>,
     pub turn_id: Option<String>,
+    #[serde(default)]
+    pub execution: AgentDialogTurnExecution,
     #[serde(default)]
     pub image_contexts: Option<Vec<ImageContextData>>,
     #[serde(default)]
@@ -1349,6 +1352,9 @@ pub async fn create_session(
                 source_workspace_path: Some(source_workspace_path.clone()),
                 base_ref,
                 copy_local_changes,
+                // A user-created worktree is claimed by the sessions bound to
+                // it, which already block automatic removal.
+                claimed_by: None,
             })
             .await
             .map_err(|error| serde_json::to_string(&error).unwrap_or_else(|_| error.to_string()))?;
@@ -1823,6 +1829,7 @@ fn desktop_dialog_turn_request(
         remote_connection_id,
         remote_ssh_host,
         turn_id,
+        execution,
         image_contexts,
         user_message_metadata,
     } = request;
@@ -1842,6 +1849,7 @@ fn desktop_dialog_turn_request(
         message: user_input,
         original_message: original_user_input,
         turn_id,
+        execution,
         agent_type,
         workspace_path: project_workspace_path.or(workspace_path),
         remote_connection_id,
