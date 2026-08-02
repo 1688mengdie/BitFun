@@ -339,6 +339,71 @@ describe('subagent parent helpers', () => {
       FlowChatStore.getInstance().getState().sessions.get('review-child')?.focusedReviewDisplayLabel,
     ).toBe('Authentication boundary');
   });
+
+  it('stores an absolute parent Turn index when linking from a partial restored tail', () => {
+    const task = makeTaskTool('task-tail');
+    FlowChatStore.getInstance().setState(() => ({
+      sessions: new Map([[
+        'parent-session',
+        {
+          sessionId: 'parent-session',
+          title: 'Parent Session',
+          dialogTurns: [{
+            id: 'parent-turn-100',
+            sessionId: 'parent-session',
+            backendTurnIndex: 99,
+            userMessage: { id: 'user-100', content: 'Delegate work', timestamp: 900 },
+            modelRounds: [makeRound('round-100', [task])],
+            status: 'processing',
+            startTime: 900,
+          }],
+          status: 'idle',
+          config: { agentType: 'agentic' },
+          createdAt: 800,
+          lastActiveAt: 1000,
+          error: null,
+          sessionKind: 'normal',
+          isPartial: true,
+          loadedTurnCount: 1,
+          totalTurnCount: 100,
+          turnCatalog: {
+            schemaVersion: 1,
+            sessionId: 'parent-session',
+            revision: 'catalog-1',
+            totalTurnCount: 100,
+            complete: false,
+            entries: [{
+              ordinal: 99,
+              storageTurnIndex: 99,
+              turnId: 'parent-turn-100',
+              preview: 'Delegate work',
+              previewTruncated: false,
+            }],
+          },
+        } as Session,
+      ]]),
+      activeSessionId: 'parent-session',
+    }));
+
+    __test_only__.handleSubagentSessionLinked(
+      { currentWorkspacePath: 'D:\\workspace\\repo' } as FlowChatContext,
+      {
+        sessionId: 'child-session',
+        parentSessionId: 'parent-session',
+        parentDialogTurnId: 'parent-turn-100',
+        parentToolCallId: 'task-tail',
+        agentType: 'Explore',
+      },
+    );
+
+    expect(
+      FlowChatStore.getInstance().getState().sessions.get('child-session')?.btwOrigin,
+    ).toMatchObject({
+      parentSessionId: 'parent-session',
+      parentDialogTurnId: 'parent-turn-100',
+      parentTurnIndex: 100,
+    });
+  });
 });
 
 describe('shouldProcessEvent', () => {

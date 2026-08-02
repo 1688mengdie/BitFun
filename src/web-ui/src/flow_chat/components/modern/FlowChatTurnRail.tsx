@@ -2,19 +2,33 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useTranslation } from 'react-i18next';
 import { Tooltip } from '@/component-library';
 import { observeElementResize } from '@/shared/utils/sharedResizeObserver';
+import {
+  FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX,
+  FLOWCHAT_TURN_RAIL_VERTICAL_PADDING_PX,
+  getFlowChatTurnRailScrollTopForOrdinal,
+  getFlowChatTurnRailTotalHeight,
+  getFlowChatTurnRailWindowRange,
+} from './flowChatTurnRailWindow';
 import './FlowChatTurnRail.scss';
 
 export interface FlowChatTurnRailItem {
-  turnId: string;
+  itemKey: string;
+  turnId: string | null;
+  ordinal: number;
   turnIndex: number;
-  content: string;
+  content: string | null;
 }
 
 interface FlowChatTurnRailProps {
   turns: readonly FlowChatTurnRailItem[];
   currentTurnId: string | null;
   visibleTurnIds: readonly string[];
-  onNavigate: (turnId: string) => void;
+  onNavigate: (turn: FlowChatTurnRailItem) => void;
+}
+
+interface FlowChatTurnRailViewportMetrics {
+  scrollTop: number;
+  clientHeight: number;
 }
 
 export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
@@ -26,46 +40,114 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
   const { t } = useTranslation('flow-chat');
   const railRef = useRef<HTMLElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const itemRefs = useRef(new Map<string, HTMLButtonElement>());
-  const [focusTurnId, setFocusTurnId] = useState<string | null>(
-    currentTurnId ?? turns[0]?.turnId ?? null,
+  const itemRefs = useRef(new Map<number, HTMLButtonElement>());
+  const pendingFocusOrdinalRef = useRef<number | null>(null);
+  const currentTurnOrdinal = useMemo(
+    () => turns.find(turn => turn.turnId === currentTurnId)?.ordinal ?? null,
+    [currentTurnId, turns],
   );
+  const totalOrdinalCount = useMemo(() => turns.reduce(
+    (count, turn) => Math.max(count, turn.ordinal + 1),
+    turns.length,
+  ), [turns]);
+  const turnByOrdinal = useMemo(
+    () => new Map(turns.map(turn => [turn.ordinal, turn])),
+    [turns],
+  );
+  const turnArrayIndexByOrdinal = useMemo(
+    () => new Map(turns.map((turn, index) => [turn.ordinal, index])),
+    [turns],
+  );
+  const initialFocusOrdinal = currentTurnOrdinal ?? turns[0]?.ordinal ?? null;
+  const [focusOrdinal, setFocusOrdinal] = useState<number | null>(initialFocusOrdinal);
+  const [viewportMetrics, setViewportMetrics] = useState<FlowChatTurnRailViewportMetrics>(() => ({
+    scrollTop: initialFocusOrdinal === null
+      ? 0
+      : initialFocusOrdinal * FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX,
+    clientHeight: FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX,
+  }));
   const visibleTurnIdSet = useMemo(() => new Set(visibleTurnIds), [visibleTurnIds]);
+  const renderedRange = useMemo(() => getFlowChatTurnRailWindowRange({
+    ...viewportMetrics,
+    totalOrdinalCount,
+  }), [totalOrdinalCount, viewportMetrics]);
+  const renderedTurns = useMemo(() => {
+    const windowTurns: FlowChatTurnRailItem[] = [];
+    for (
+      let ordinal = renderedRange.startOrdinal;
+      ordinal < renderedRange.endOrdinalExclusive;
+      ordinal += 1
+    ) {
+      const turn = turnByOrdinal.get(ordinal);
+      if (turn) {
+        windowTurns.push(turn);
+      }
+    }
+    return windowTurns;
+  }, [renderedRange.endOrdinalExclusive, renderedRange.startOrdinal, turnByOrdinal]);
+  const tabStopOrdinal = focusOrdinal !== null
+    && focusOrdinal >= renderedRange.startOrdinal
+    && focusOrdinal < renderedRange.endOrdinalExclusive
+    && turnByOrdinal.has(focusOrdinal)
+    ? focusOrdinal
+    : renderedTurns[0]?.ordinal ?? null;
+
+  const updateViewportMetrics = useCallback((list: HTMLDivElement) => {
+    if (list.clientHeight <= 0) {
+      return;
+    }
+    const nextMetrics = {
+      scrollTop: list.scrollTop,
+      clientHeight: list.clientHeight,
+    };
+    setViewportMetrics(previous => (
+      previous.scrollTop === nextMetrics.scrollTop
+      && previous.clientHeight === nextMetrics.clientHeight
+        ? previous
+        : nextMetrics
+    ));
+  }, []);
+
+  const scrollOrdinalIntoView = useCallback((ordinal: number) => {
+    const list = listRef.current;
+    if (!list || list.clientHeight <= 0) {
+      return;
+    }
+
+    const nextScrollTop = getFlowChatTurnRailScrollTopForOrdinal({
+      ordinal,
+      currentScrollTop: list.scrollTop,
+      clientHeight: list.clientHeight,
+      totalOrdinalCount,
+    });
+    if (nextScrollTop !== list.scrollTop) {
+      list.scrollTop = nextScrollTop;
+    }
+    updateViewportMetrics(list);
+  }, [totalOrdinalCount, updateViewportMetrics]);
 
   useEffect(() => {
-    const focusTurnStillExists = focusTurnId !== null && turns.some(turn => turn.turnId === focusTurnId);
-    if (!focusTurnStillExists) {
-      setFocusTurnId(currentTurnId ?? turns[0]?.turnId ?? null);
+    const focusOrdinalStillExists = focusOrdinal !== null && turnByOrdinal.has(focusOrdinal);
+    if (!focusOrdinalStillExists) {
+      setFocusOrdinal(currentTurnOrdinal ?? turns[0]?.ordinal ?? null);
       return;
     }
 
     if (
-      currentTurnId &&
-      railRef.current &&
-      !railRef.current.contains(document.activeElement)
+      currentTurnOrdinal !== null
+      && railRef.current
+      && !railRef.current.contains(document.activeElement)
     ) {
-      setFocusTurnId(currentTurnId);
+      setFocusOrdinal(currentTurnOrdinal);
     }
-  }, [currentTurnId, focusTurnId, turns]);
+  }, [currentTurnOrdinal, focusOrdinal, turnByOrdinal, turns]);
 
   const keepCurrentTurnVisible = useCallback(() => {
-    if (!currentTurnId) return;
-
-    const list = listRef.current;
-    const activeItem = itemRefs.current.get(currentTurnId);
-    if (!list || !activeItem || list.clientHeight <= 0) return;
-
-    const itemTop = activeItem.offsetTop;
-    const itemBottom = itemTop + activeItem.offsetHeight;
-    const visibleTop = list.scrollTop;
-    const visibleBottom = visibleTop + list.clientHeight;
-
-    if (itemTop < visibleTop) {
-      list.scrollTop = itemTop;
-    } else if (itemBottom > visibleBottom) {
-      list.scrollTop = itemBottom - list.clientHeight;
+    if (currentTurnOrdinal === null) {
+      return;
     }
-  }, [currentTurnId]);
+    scrollOrdinalIntoView(currentTurnOrdinal);
+  }, [currentTurnOrdinal, scrollOrdinalIntoView]);
 
   useLayoutEffect(() => {
     keepCurrentTurnVisible();
@@ -75,16 +157,40 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     const list = listRef.current;
     if (!list) return;
 
-    return observeElementResize(list, keepCurrentTurnVisible);
-  }, [keepCurrentTurnVisible]);
+    updateViewportMetrics(list);
+    return observeElementResize(list, () => {
+      keepCurrentTurnVisible();
+      updateViewportMetrics(list);
+    });
+  }, [keepCurrentTurnVisible, updateViewportMetrics]);
 
   const focusTurnAt = useCallback((index: number) => {
     const turn = turns[index];
     if (!turn) return;
 
-    setFocusTurnId(turn.turnId);
-    itemRefs.current.get(turn.turnId)?.focus();
-  }, [turns]);
+    pendingFocusOrdinalRef.current = turn.ordinal;
+    setFocusOrdinal(turn.ordinal);
+    scrollOrdinalIntoView(turn.ordinal);
+    const renderedItem = itemRefs.current.get(turn.ordinal);
+    if (renderedItem) {
+      renderedItem.focus();
+      pendingFocusOrdinalRef.current = null;
+    }
+  }, [scrollOrdinalIntoView, turns]);
+
+  useLayoutEffect(() => {
+    const pendingFocusOrdinal = pendingFocusOrdinalRef.current;
+    if (pendingFocusOrdinal === null || pendingFocusOrdinal !== focusOrdinal) {
+      return;
+    }
+
+    const item = itemRefs.current.get(pendingFocusOrdinal);
+    if (!item) {
+      return;
+    }
+    item.focus();
+    pendingFocusOrdinalRef.current = null;
+  }, [focusOrdinal, renderedRange.endOrdinalExclusive, renderedRange.startOrdinal]);
 
   const handleKeyDown = useCallback((event: React.KeyboardEvent, index: number) => {
     let nextIndex: number | null = null;
@@ -111,6 +217,13 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
     focusTurnAt(nextIndex);
   }, [focusTurnAt, turns.length]);
 
+  const handleScroll = useCallback(() => {
+    const list = listRef.current;
+    if (list) {
+      updateViewportMetrics(list);
+    }
+  }, [updateViewportMetrics]);
+
   if (turns.length === 0) return null;
 
   const navigationLabel = t('flowChatTurnRail.label');
@@ -122,51 +235,77 @@ export const FlowChatTurnRail: React.FC<FlowChatTurnRailProps> = ({
       className="flowchat-turn-rail"
       aria-label={navigationLabel}
       data-testid="flowchat-turn-rail"
+      data-rendered-start-ordinal={renderedRange.startOrdinal}
+      data-rendered-end-ordinal={renderedRange.endOrdinalExclusive}
+      data-total-turn-count={totalOrdinalCount}
     >
-      <div ref={listRef} className="flowchat-turn-rail__list">
-        {turns.map((turn, index) => {
-          const isCurrent = turn.turnId === currentTurnId;
-          const isVisible = visibleTurnIdSet.has(turn.turnId);
-          const turnLabel = t('flowChatHeader.turnBadge', { current: turn.turnIndex });
-          const content = turn.content.trim() || untitledTurnLabel;
+      <div
+        ref={listRef}
+        className="flowchat-turn-rail__list"
+        onScroll={handleScroll}
+      >
+        <div
+          className="flowchat-turn-rail__track"
+          style={{ height: `${getFlowChatTurnRailTotalHeight(totalOrdinalCount)}px` }}
+        >
+          {renderedTurns.map(turn => {
+            const turnArrayIndex = turnArrayIndexByOrdinal.get(turn.ordinal) ?? 0;
+            const isCurrent = turn.turnId !== null && turn.turnId === currentTurnId;
+            const isVisible = turn.turnId !== null && visibleTurnIdSet.has(turn.turnId);
+            const turnLabel = t('flowChatHeader.turnBadge', { current: turn.turnIndex });
+            const content = turn.content === null
+              ? null
+              : turn.content.trim() || untitledTurnLabel;
 
-          return (
-            <Tooltip
-              key={turn.turnId}
-              placement="right"
-              delay={250}
-              className="flowchat-turn-rail__tooltip"
-              content={(
-                <span className="flowchat-turn-rail__tooltip-content">
-                  <span className="flowchat-turn-rail__tooltip-turn">{turnLabel}</span>
-                  <span className="flowchat-turn-rail__tooltip-message">{content}</span>
-                </span>
-              )}
-            >
-              <button
-                ref={(node) => {
-                  if (node) {
-                    itemRefs.current.set(turn.turnId, node);
-                  } else {
-                    itemRefs.current.delete(turn.turnId);
-                  }
-                }}
-                type="button"
-                className={`flowchat-turn-rail__item${isVisible ? ' flowchat-turn-rail__item--visible' : ''}`}
-                aria-label={turnLabel}
-                aria-current={isCurrent ? 'step' : undefined}
-                tabIndex={turn.turnId === focusTurnId ? 0 : -1}
-                data-turn-id={turn.turnId}
-                data-turn-index={turn.turnIndex}
-                onClick={() => onNavigate(turn.turnId)}
-                onFocus={() => setFocusTurnId(turn.turnId)}
-                onKeyDown={(event) => handleKeyDown(event, index)}
+            return (
+              <Tooltip
+                key={turn.itemKey}
+                placement="right"
+                delay={250}
+                className="flowchat-turn-rail__tooltip"
+                content={(
+                  <span className="flowchat-turn-rail__tooltip-content">
+                    <span className="flowchat-turn-rail__tooltip-turn">{turnLabel}</span>
+                    {content !== null ? (
+                      <span className="flowchat-turn-rail__tooltip-message">{content}</span>
+                    ) : null}
+                  </span>
+                )}
               >
-                <span className="flowchat-turn-rail__bar" aria-hidden="true" />
-              </button>
-            </Tooltip>
-          );
-        })}
+                <button
+                  ref={(node) => {
+                    if (node) {
+                      itemRefs.current.set(turn.ordinal, node);
+                    } else {
+                      itemRefs.current.delete(turn.ordinal);
+                    }
+                  }}
+                  type="button"
+                  className={`flowchat-turn-rail__item${isVisible ? ' flowchat-turn-rail__item--visible' : ''}`}
+                  style={{
+                    top: `${FLOWCHAT_TURN_RAIL_VERTICAL_PADDING_PX + turn.ordinal * FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX}px`,
+                  }}
+                  aria-label={turnLabel}
+                  aria-current={isCurrent ? 'step' : undefined}
+                  aria-posinset={turn.ordinal + 1}
+                  aria-setsize={totalOrdinalCount}
+                  tabIndex={turn.ordinal === tabStopOrdinal ? 0 : -1}
+                  data-turn-id={turn.turnId ?? undefined}
+                  data-turn-key={turn.itemKey}
+                  data-turn-index={turn.turnIndex}
+                  data-turn-ordinal={turn.ordinal}
+                  onClick={() => {
+                    onNavigate(turn);
+                  }}
+                  onFocus={() => setFocusOrdinal(turn.ordinal)}
+                  onKeyDown={(event) => handleKeyDown(event, turnArrayIndex)}
+                >
+                  <span className="flowchat-turn-rail__bar" aria-hidden="true" />
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
       </div>
     </nav>
   );

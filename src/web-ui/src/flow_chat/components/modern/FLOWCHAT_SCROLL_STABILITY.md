@@ -265,17 +265,34 @@ new request exits tail follow, but it does not remove the previous established
 pin reservation before the target DOM exists. That reservation remains only as
 physical scroll range; the active request prevents the old sticky target from
 reconciling it. Once the requested user message is rendered, the shared pin
-resolver replaces the old reservation, aligns the message to the 57px viewport
-offset, and starts bounded transient stabilization. An expired request releases
-semantic ownership while preserving the current physical range, so failure
-cannot silently clamp the pane to the bottom.
+resolver applies the request's alignment policy. Exact requests replace the old
+reservation, align the message to the 57px viewport offset, and start bounded
+transient stabilization. Turn-rail requests use best-effort alignment: they
+still align exactly when the natural range is sufficient, but when the target
+cannot reach the 57px offset without synthetic tail space, they remove the
+transient pin reservation, clamp to the natural maximum, and release
+`pinned-item` ownership immediately. The natural boundary is an expected
+content limit, not a pending transaction, so it must not retry until TTL expiry.
+`sticky-latest` always uses the exact policy because streaming follow-output
+depends on its protected pin range. An expired request releases semantic
+ownership while preserving the current physical range, so failure cannot
+silently clamp the pane to the bottom.
 
 `rangeChanged` is a target-materialization signal, not a source of turn
 identity. It retries the active generation against real DOM geometry. RAF
 retries remain as a bounded fallback for browsers that coalesce range updates.
-When the static initial-history renderer hands off to Virtuoso with a pending
-target, that target becomes Virtuoso's `initialTopMostItemIndex`; the normal pin
-resolver then performs exact alignment after mount. The left-side
+Transient navigation remains pending until the requested turn stays aligned for
+two consecutive geometry samples. During that bounded transaction, Virtuoso's
+materialization range expands to two viewport heights in both directions so
+height-estimate reconciliation cannot immediately evict the target. If the
+pinned DOM element still disconnects, the coordinator drops the stale element
+anchor but retains logical `pinned-item` ownership while the active generation
+rematerializes it. User intent, replacement, expiry, and explicit handoff still
+release that ownership.
+Virtuoso mounts on the first initial-history commit. A target prepared before
+its ref is available becomes `initialTopMostItemIndex`; targets selected after
+mount enter the normal immediate materialize-then-align transaction. The
+left-side
 `FlowChatTurnRail` is mounted outside the scroller and delegates navigation to
 the same container-owned turn-pin request, so it does not need to rebind across
 renderer handoffs or write the FlowChat viewport directly.
@@ -364,31 +381,27 @@ If a shrink happens without a collapse intent:
 
 This path is safer than doing nothing, but it is more likely to show visible movement than the pre-compensation path.
 
-## C. Static Initial-History Turn Navigation
+## C. Initial-History Snapshot Handoff
 
-The initial-history path renders a bounded static window plus estimated leading
-and trailing spacers before handing the complete projection to Virtuoso. The
-left-side turn rail may target a turn outside that window. The list first
-materializes a new window around the target and then issues the requested
-scroll.
+Virtuoso is the only initial-history scroller and mounts on the first commit.
+For sessions that still need the initial history render budget, a bounded recent
+projection is rendered above it as a non-interactive snapshot. The snapshot:
 
-A smooth scroll does not update `scrollTop` synchronously. The window swap can
-therefore emit a scroll event at the old, browser-clamped physical bottom before
-the target motion begins. That geometry is not evidence that the user returned
-to the latest turn. While a static anchor window is active:
+- has no scroll container, spacers, pagination handlers, or viewport writer
+- uses `pointer-events: none` and cannot consume wheel, touch, keyboard, or
+  scrollbar intent
+- keeps the previous pixels visible while Virtuoso measures its initial range
+- releases immediately when the user starts scrolling so the real Virtuoso
+  motion is never hidden behind a frozen frame
+- retargets its release condition when Turn navigation begins during handoff
+- disappears only after the requested Turn has visible text, the session
+  changes, or the bounded handoff timeout expires
 
-- physical `atBottom` does not make the viewport semantically latest
-- programmatic turn navigation never releases the anchor window
-- programmatic turn navigation must not start older-history pagination when it
-  crosses the leading spacer; only an explicit upward user gesture may do so
-- explicit jump-to-latest navigation releases it directly
-- wheel, touch, keyboard, or scrollbar motion must establish a recent downward
-  user intent before arrival at the physical bottom may release it
-- session reset clears the anchor window and any pending bottom-return intent
-
-Keep the user-intent window bounded. It exists only to classify the scroll event
-that follows an input gesture; it must not become a persistent scroll lock or a
-second viewport writer.
+All Turn navigation, search materialization, boundary pagination, bottom state,
+and follow-output transitions run through the mounted Virtuoso instance even
+while the snapshot is visible. A catalog-backed partial session still keeps
+only its restored tail as the default data presentation; this rendering change
+does not imply full-history hydration.
 
 ## D. Arbitrary Turn Navigation Through Virtuoso
 
@@ -407,6 +420,14 @@ transaction:
 7. cancel stale work on a newer request, user intent, session switch, jump to
    latest, or timeout
 
+Every turn-rail marker, including the canonical latest Turn, uses this same
+immediate transient top-pin transaction. Selecting the latest marker means
+"show this Turn header"; it does not restore the tail presentation or resume
+follow-output. Only the explicit jump-to-latest action restores the canonical
+tail presentation and re-enters live-tail following. This separation keeps
+turn navigation consistent and treats every rail selection as user reading
+intent, including while the latest Turn is streaming.
+
 Do not clear the previous pin/footer range in step 2. The target may be outside
 the current Virtuoso range, and removing the footer first lets the browser clamp
 the old position to the physical bottom before materialization succeeds.
@@ -423,6 +444,81 @@ turn remains the semantic current turn, while every intersecting turn marker
 uses the same rail emphasis. Publish a new ordered `visibleTurnIds` snapshot
 only when membership or order changes so ordinary scroll frames do not cause
 redundant rail renders.
+
+### Catalog-backed history loading
+
+Catalog, loaded Turn cache, and active presentation are separate layers. Keep
+these ownership rules intact:
+
+- `Session.dialogTurns` remains the live restored tail unless an explicit
+  full-history consumer calls `ensureSessionFullHistory`.
+- Data residency, viewport intent, and follow-output ownership are independent.
+  A cached history presentation may remain resident after the viewport returns
+  to the live tail, but it must not keep the UI in history-reading mode,
+  suppress live-tail anchoring, or imply that follow-output is active.
+- For a small session whose cached presentation is contiguous from ordinal zero
+  through the current total (`[0, totalTurnCount)`) and stays within the
+  continuous projection budgets (24 Turns and 200 virtual items), explicit
+  jump-to-latest changes only the viewport intent and follow-output ownership.
+  The rendered projection and its stable virtual-item keys remain unchanged;
+  `historyWindow` is disabled so boundary loading cannot start while following
+  the tail. Canonical overlapping Turns are still overlaid by stable id, and a
+  newly appended canonical Turn extends the projection at the end.
+- Incomplete, discontinuous, or over-budget presentations retain the fallback
+  behavior: explicit jump-to-latest clears the Store's `activeRange`, restores
+  the canonical tail data source, and keeps the most recent component
+  presentation only as a reactivation hint. The Store LRU remains authoritative:
+  reactivation must find the complete range in `loadedRanges`, touch it as MRU,
+  and otherwise fall back to the ordinary window-load transaction.
+- Turn-rail navigation and sequential boundary loading use
+  `load_session_turn_window`; neither path writes the FlowChat scroller.
+- Upward user intent at the restored-tail boundary loads the adjacent ordinal
+  window without holding viewport ownership. Presentation activation then waits
+  for a bounded 320 ms quiet window after the latest wheel, touch, keyboard, or
+  scrollbar intent. New input resets that wait; session changes and newer
+  presentation-owner generations cancel it. Only after the quiet window is
+  acquired does the list capture the current element anchor and change to one
+  contiguous history-window presentation. This keeps a multi-thousand-pixel
+  prepend commit out of an active wheel gesture while still allowing the data
+  request itself to prefetch in parallel. Never expose a later cached range
+  across an unloaded gap.
+- Derive the restored-tail boundary from the canonical `Session.dialogTurns`
+  ordinal interval, never from the start of a merged `loadedRanges` entry.
+  Cache residency may extend to the first Turn while the canonical tail still
+  renders only recent Turns. Reaching ordinal zero is an exhausted boundary,
+  not a not-ready or failed load.
+- Appending below the current presentation does not require compensation.
+  Prepending or trimming above it must retain the existing element-anchor
+  transaction until the same user message returns to its captured viewport
+  offset.
+- A rejected or failed adjacent-window request must release only the element
+  anchor lease created during its commit preparation, if any. A stale
+  completion must never release a newer navigation or layout-preservation
+  transaction.
+- The non-tail loaded Turn cache uses a 48-Turn soft budget and a 64-Turn hard
+  budget. Crossing the hard budget evicts least-recently-used ordinals back
+  toward the soft budget. The live tail, active presentation, pending target,
+  and in-flight request intervals are protected; merged cached ranges may be
+  sliced, but the active presentation is never trimmed by cache eviction.
+- Passive live-tail updates outside the presented history range remain hidden
+  while the user reads history. When the history range overlaps canonical live
+  Turns, stable Turn ids select the canonical objects instead of cached
+  snapshots so streaming or recently completed content stays current without
+  changing the viewport intent. An explicit `send-message` Turn-pin request
+  first restores the tail presentation, then lets the existing sticky-latest
+  pin materialize the newly submitted Turn.
+- Cross-feature focus requests identify a Turn by stable `turnId` whenever one
+  is available, with `turnIndex` reserved for the absolute one-based visible
+  ordinal. They delegate to the same catalog/window materialization transaction
+  as the Turn rail. Never pass that absolute ordinal to `scrollToTurn` on a
+  partial tail or bounded history presentation; that method only understands
+  the currently rendered local list.
+- Search, edit, rollback, and compatibility fallback are explicit full-history
+  consumers. Their shared ensure operation deduplicates an existing request and
+  applies the completed projection only after the caller asks for it.
+- A Host without `turnCatalog`, or without `load_session_turn_window`, retains
+  the legacy full-restore fallback. This compatibility path must not cause a
+  catalog-capable Host to resume unconditional background hydration.
 
 ## Why Transition Tracking Exists
 
