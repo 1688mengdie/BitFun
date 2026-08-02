@@ -252,6 +252,7 @@ export interface VirtualMessageListRef {
 export interface VirtualMessageListProps {
   items?: VirtualItem[];
   presentationMode?: 'tail' | 'history-window';
+  viewportMode?: 'live-tail' | 'history-reading';
   historyWindow?: ActiveTurnRenderRange | null;
   presentationRevision?: number;
   historyBoundaryState?: Record<SessionHistoryWindowDirection, 'idle' | 'loading' | 'error'>;
@@ -450,6 +451,7 @@ function getVirtualItemStableKey(item: VirtualItem): string {
 const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessageListProps>(({
   items,
   presentationMode = 'tail',
+  viewportMode = presentationMode === 'history-window' ? 'history-reading' : 'live-tail',
   historyWindow = null,
   presentationRevision = 0,
   historyBoundaryState = IDLE_HISTORY_WINDOW_BOUNDARY_STATE,
@@ -543,7 +545,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const historyPagingActiveRef = useRef(false);
   const historyPagingRetryTimerRef = useRef<number | null>(null);
   const catalogHistoryWindowRequestRef = useRef<Promise<HistoryWindowBoundaryIntentResult> | null>(null);
-  const previousPresentationModeRef = useRef<'tail' | 'history-window'>(presentationMode);
+  const previousViewportModeRef = useRef<'live-tail' | 'history-reading'>(viewportMode);
   const lastUserScrollIntentAtMsRef = useRef(Number.NEGATIVE_INFINITY);
   const historyPresentationCommitQuietGenerationRef = useRef(0);
   const historyPresentationCommitQuietWaitersRef = useRef(
@@ -622,8 +624,8 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   activeSessionIdRef.current = activeSessionId;
 
   useEffect(() => {
-    const previousMode = previousPresentationModeRef.current;
-    if (previousMode === 'history-window' && presentationMode === 'tail') {
+    const previousMode = previousViewportModeRef.current;
+    if (previousMode === 'history-reading' && viewportMode === 'live-tail') {
       historyPresentationCommitQuietGenerationRef.current += 1;
       Array.from(historyPresentationCommitQuietWaitersRef.current).forEach(waiter => waiter.cancel());
       if (historyPagingRetryTimerRef.current !== null) {
@@ -647,10 +649,10 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       setHistoryPagingAnchorTurnId(null);
       setPreviousHistoryBoundaryStatus(null);
     }
-    if (previousMode !== presentationMode) {
-      previousPresentationModeRef.current = presentationMode;
+    if (previousMode !== viewportMode) {
+      previousViewportModeRef.current = viewportMode;
     }
-  }, [presentationMode]);
+  }, [viewportMode]);
 
   const isInputActive = useChatInputState(state => state.isActive);
   const isInputExpanded = useChatInputState(state => state.isExpanded);
@@ -4918,7 +4920,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   };
 
   const isStreamingOutput = React.useMemo(() => {
-    if (presentationMode === 'history-window') {
+    if (viewportMode === 'history-reading') {
       return false;
     }
     if (isProcessing) {
@@ -4943,7 +4945,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     }
 
     return lastDialogTurn.modelRounds.some(round => round.isStreaming);
-  }, [activeSession, isProcessing, presentationMode]);
+  }, [activeSession, isProcessing, viewportMode]);
   const initialTopMostItemIndex = React.useMemo(() => {
     const pendingTurnId = pendingTurnPin?.turnId ??
       preparedHistoryTurnPinRef.current?.turnId;
@@ -5490,12 +5492,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   preparePinnedTurnFollowHandoffRef.current = preparePinnedTurnFollowHandoff;
 
   useEffect(() => {
-    if (presentationMode !== 'history-window') {
+    if (viewportMode !== 'history-reading') {
       return;
     }
     cancelPendingAutoFollowArm();
     exitFollowOutput('pin-turn-to-top');
-  }, [cancelPendingAutoFollowArm, exitFollowOutput, presentationMode]);
+  }, [cancelPendingAutoFollowArm, exitFollowOutput, viewportMode]);
 
   useEffect(() => {
     if (hasPrimedMountedStreamingTurnFollowRef.current) {
@@ -6204,12 +6206,12 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   ]);
 
   const handleScrollToLatestRequest = useCallback(() => {
-    if (presentationMode === 'history-window' && onRequestJumpToLatest) {
+    if (viewportMode === 'history-reading' && onRequestJumpToLatest) {
       onRequestJumpToLatest();
       return;
     }
     scrollToLatestEndPosition();
-  }, [onRequestJumpToLatest, presentationMode, scrollToLatestEndPosition]);
+  }, [onRequestJumpToLatest, scrollToLatestEndPosition, viewportMode]);
 
   useImperativeHandle(ref, () => ({
     scrollToTurn,
@@ -6647,6 +6649,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       className="virtual-message-list"
       data-testid="flowchat-message-list"
       data-presentation-mode={presentationMode}
+      data-viewport-mode={viewportMode}
       data-streaming-output={isStreamingOutput ? 'true' : 'false'}
     >
       <Virtuoso
@@ -6730,7 +6733,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       />
 
       <ScrollToLatestBar
-        visible={(presentationMode === 'history-window' || !isAtBottom) && virtualItems.length > 0}
+        visible={(viewportMode === 'history-reading' || !isAtBottom) && virtualItems.length > 0}
         onClick={handleScrollToLatestRequest}
         isInputActive={isInputActive}
         isInputExpanded={isInputExpanded}
