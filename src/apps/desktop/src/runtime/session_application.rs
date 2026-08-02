@@ -19,7 +19,9 @@ use bitfun_core::agentic::core::Session;
 use bitfun_core::agentic::persistence::{SessionBranchResult, SessionMetadataPage};
 use bitfun_core::agentic::session::SessionViewRestoreTiming;
 use bitfun_core::product_runtime::{CoreAgentRuntimeCompatibility, CoreProductAgentRuntime};
-use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
+use bitfun_core::service::remote_ssh::workspace_state::{
+    get_effective_session_path, LOCAL_WORKSPACE_SSH_HOST,
+};
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
 use bitfun_core::service::session::{
     DialogTurnData, DialogTurnKind, SessionMetadata, SessionStatus, SessionTranscriptExport,
@@ -166,7 +168,10 @@ struct DesktopSessionScopeResolver {
 impl DesktopSessionScopeResolver {
     async fn resolve(&self, request: DesktopSessionScopeRequest) -> ResolvedDesktopSessionScope {
         let remote_connection_id = normalized_optional(request.remote_connection_id.as_deref());
-        let requested_remote_ssh_host = normalized_optional(request.remote_ssh_host.as_deref());
+        let requested_remote_ssh_host = normalized_remote_ssh_host(
+            remote_connection_id.as_deref(),
+            request.remote_ssh_host.as_deref(),
+        );
         let registered_remote_ssh_host =
             if let Some(connection_id) = remote_connection_id.as_deref() {
                 self.workspace_service
@@ -222,6 +227,28 @@ fn normalized_optional(value: Option<&str>) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+fn normalized_remote_ssh_host(
+    remote_connection_id: Option<&str>,
+    remote_ssh_host: Option<&str>,
+) -> Option<String> {
+    let host = normalized_optional(remote_ssh_host)?;
+    if remote_connection_id.is_none() && is_local_workspace_host(&host) {
+        return None;
+    }
+    Some(host)
+}
+
+fn is_local_workspace_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == LOCAL_WORKSPACE_SSH_HOST
+        || host.starts_with("localhost:")
+        || host == "127.0.0.1"
+        || host.starts_with("127.0.0.1:")
+        || host == "::1"
+        || host == "[::1]"
+        || host.starts_with("[::1]:")
 }
 
 fn choose_remote_ssh_host(
@@ -1032,6 +1059,29 @@ mod tests {
         );
         assert_eq!(normalized_optional(Some("  ")), None);
         assert_eq!(normalized_optional(None), None);
+    }
+
+    #[test]
+    fn local_host_sentinels_require_a_remote_connection_id() {
+        for host in [
+            "localhost",
+            "LOCALHOST:22",
+            "127.0.0.1",
+            "127.0.0.1:22",
+            "::1",
+            "[::1]:22",
+        ] {
+            assert_eq!(normalized_remote_ssh_host(None, Some(host)), None);
+        }
+
+        assert_eq!(
+            normalized_remote_ssh_host(Some("connection-1"), Some(" localhost ")),
+            Some("localhost".to_string())
+        );
+        assert_eq!(
+            normalized_remote_ssh_host(None, Some(" legacy.example ")),
+            Some("legacy.example".to_string())
+        );
     }
 
     #[test]

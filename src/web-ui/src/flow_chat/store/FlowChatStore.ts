@@ -33,6 +33,7 @@ import {
   startupTrace,
 } from '@/shared/utils/startupTrace';
 import { elapsedMs, nowMs } from '@/shared/utils/timing';
+import { normalizeRemoteSessionScope } from '@/shared/utils/remoteSessionScope';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import { i18nService } from '@/infrastructure/i18n/core/I18nService';
 import type {
@@ -86,6 +87,41 @@ import {
 import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
 
 const log = createLogger('FlowChatStore');
+
+function firstNonEmptyString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function persistedSessionRemoteScope(
+  metadata: {
+    remoteConnectionId?: unknown;
+    remoteSshHost?: unknown;
+    workspaceHostname?: unknown;
+  },
+  fallbackRemoteConnectionId?: string,
+  fallbackRemoteSshHost?: string,
+) {
+  const connectionId = firstNonEmptyString(
+    metadata.remoteConnectionId,
+    fallbackRemoteConnectionId,
+  );
+  for (const host of [
+    metadata.remoteSshHost,
+    metadata.workspaceHostname,
+    fallbackRemoteSshHost,
+  ]) {
+    const scope = normalizeRemoteSessionScope(connectionId, host);
+    if (scope.remoteSshHost) {
+      return scope;
+    }
+  }
+  return normalizeRemoteSessionScope(connectionId);
+}
 
 
 function logPersistedDispatchMetadataOverlap(
@@ -5830,6 +5866,11 @@ export class FlowChatStore {
         const lastFinishedAt = deriveLastFinishedAtFromMetadata(metadata);
         const titleState = deriveSessionTitleStateFromMetadata(metadata);
         const hasDynamicDefaultTitle = titleState.titleSource === 'i18n';
+        const remoteScope = persistedSessionRemoteScope(
+          metadata,
+          remoteConnectionId,
+          remoteSshHost,
+        );
 
         this.setState(prev => {
           if (surfaceGeneration !== this.surfaceGeneration) {
@@ -5876,9 +5917,9 @@ export class FlowChatStore {
             lastSubmittedMode: metadata.lastSubmittedAgentType,
             workspacePath: (metadata as any).workspacePath || workspacePath,
             projectWorkspacePath: metadata.projectWorkspacePath || workspacePath,
-            remoteConnectionId: metadata.remoteConnectionId || remoteConnectionId,
-            remoteSshHost:
-              metadata.remoteSshHost || metadata.workspaceHostname || remoteSshHost,
+            remoteConnectionId: remoteScope.remoteConnectionId,
+            remoteSshHost: remoteScope.remoteSshHost,
+            workspaceHostname: metadata.workspaceHostname,
             parentSessionId: relationship.parentSessionId,
             sessionKind: relationship.sessionKind,
             parentToolCallId: relationship.parentToolCallId,
@@ -6203,6 +6244,11 @@ export class FlowChatStore {
           const lastFinishedAt = deriveLastFinishedAtFromMetadata(metadata);
           const titleState = deriveSessionTitleStateFromMetadata(metadata);
           const hasDynamicDefaultTitle = titleState.titleSource === 'i18n';
+          const remoteScope = persistedSessionRemoteScope(
+            metadata,
+            remoteConnectionId,
+            remoteSshHost,
+          );
 
           this.setState(prev => {
             if (prev.sessions.has(metadata.sessionId)) {
@@ -6246,9 +6292,9 @@ export class FlowChatStore {
               lastSubmittedMode: metadata.lastSubmittedAgentType,
               workspacePath: (metadata as any).workspacePath || workspacePath,
               projectWorkspacePath: metadata.projectWorkspacePath || workspacePath,
-              remoteConnectionId: metadata.remoteConnectionId || remoteConnectionId,
-              remoteSshHost:
-                metadata.remoteSshHost || metadata.workspaceHostname || remoteSshHost,
+              remoteConnectionId: remoteScope.remoteConnectionId,
+              remoteSshHost: remoteScope.remoteSshHost,
+              workspaceHostname: metadata.workspaceHostname,
               parentSessionId: relationship.parentSessionId,
               sessionKind: relationship.sessionKind,
               parentToolCallId: relationship.parentToolCallId,
