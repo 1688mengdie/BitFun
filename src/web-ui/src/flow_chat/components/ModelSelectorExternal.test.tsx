@@ -9,6 +9,15 @@ import { ModelSelector } from './ModelSelector';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+const aiApiMocks = vi.hoisted(() => ({
+  getModelCatalog: vi.fn(),
+  onModelCatalogUpdated: vi.fn(),
+}));
+
+vi.mock('@/infrastructure/api/service-api/AIApi', () => ({
+  aiApi: aiApiMocks,
+}));
+
 vi.mock('react-i18next', () => ({
   initReactI18next: {
     type: '3rdParty',
@@ -37,6 +46,7 @@ vi.mock('@/infrastructure/config/services/ConfigManager', () => ({
           capabilities: ['text_chat'],
         },
       ],
+      'ai.agent_model_defaults': { mode: 'model-a' },
     })),
     onConfigChange: vi.fn(() => () => undefined),
     setConfig: vi.fn(async () => undefined),
@@ -74,8 +84,21 @@ vi.mock('../store/FlowChatStore', () => ({
 describe('ModelSelector external transport reuse', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let catalogUpdated: (() => void) | undefined;
 
   beforeEach(() => {
+    catalogUpdated = undefined;
+    aiApiMocks.getModelCatalog.mockResolvedValue({
+      version: 1,
+      default_models: { primary: 'model-a' },
+      models: [],
+    });
+    aiApiMocks.onModelCatalogUpdated.mockImplementation((callback: () => void) => {
+      catalogUpdated = callback;
+      return () => {
+        if (catalogUpdated === callback) catalogUpdated = undefined;
+      };
+    });
     class TestResizeObserver {
       observe() {}
       disconnect() {}
@@ -91,6 +114,52 @@ describe('ModelSelector external transport reuse', () => {
     container.remove();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it('reloads the local catalog when the backend reports a snapshot update', async () => {
+    const updatedCatalog = {
+      version: 2,
+      default_models: { primary: 'model-a' },
+      models: [{
+        id: 'model-a',
+        name: 'Synced provider',
+        provider: 'openai',
+        base_url: 'https://example.test/v1',
+        model_name: 'friendly-model-a',
+        enabled: true,
+        capabilities: ['text_chat'],
+        enable_thinking_process: true,
+        reasoning: {
+          status: 'known',
+          default_preset: 'high',
+          presets: [{
+            id: 'high',
+            label: 'High',
+            order: 10,
+            source: 'models_dev',
+            setting: { type: 'effort', value: 'high' },
+          }],
+        },
+      }],
+    };
+    aiApiMocks.getModelCatalog
+      .mockResolvedValueOnce({ version: 1, default_models: { primary: 'model-a' }, models: [] })
+      .mockResolvedValueOnce(updatedCatalog);
+
+    await act(async () => {
+      root.render(<ModelSelector currentMode="agentic" sessionId="session-a" />);
+      await Promise.resolve();
+    });
+    expect(catalogUpdated).toBeTypeOf('function');
+    expect(container.querySelector('[data-testid="chat-reasoning-preset-selector-btn"]')).toBeNull();
+
+    await act(async () => {
+      catalogUpdated?.();
+      await Promise.resolve();
+    });
+
+    expect(aiApiMocks.getModelCatalog).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('[data-testid="chat-reasoning-preset-selector-btn"]')).not.toBeNull();
   });
 
   it('renders the target catalog through the shared selector and applies a choice', async () => {

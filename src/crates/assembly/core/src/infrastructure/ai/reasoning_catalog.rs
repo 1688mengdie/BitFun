@@ -9,7 +9,11 @@ use bitfun_core_types::{
     ReasoningCatalogProjection, ReasoningPresetDescriptor, ReasoningPresetSetting,
 };
 #[cfg(feature = "product-full")]
-use bitfun_services_integrations::models_dev::ModelsDevCatalogService;
+use bitfun_events::{AIModelCatalogUpdatedEvent, AI_MODEL_CATALOG_UPDATED_EVENT};
+#[cfg(feature = "product-full")]
+use bitfun_services_integrations::models_dev::{
+    ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshot,
+};
 #[cfg(feature = "product-full")]
 use log::debug;
 
@@ -71,11 +75,6 @@ pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCat
         }
     };
 
-    let refresh_service = service.clone();
-    tokio::spawn(async move {
-        refresh_service.refresh_if_stale().await;
-    });
-
     let loaded = ModelsDevReasoningCatalogSnapshot {
         catalog,
         #[cfg(feature = "product-full")]
@@ -87,7 +86,91 @@ pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCat
             snapshot: loaded.clone(),
         });
     }
+
+    let refresh_service = service.clone();
+    tokio::spawn(async move {
+        let ModelsDevRefreshOutcome::Updated(snapshot) = refresh_service.refresh_if_stale().await
+        else {
+            return;
+        };
+        let Some(updated) = parse_models_dev_snapshot(&snapshot) else {
+            return;
+        };
+        if !replace_parsed_catalog_cache(updated) {
+            return;
+        }
+        emit_models_dev_catalog_updated(&snapshot).await;
+    });
     loaded
+}
+
+#[cfg(feature = "product-full")]
+fn parse_models_dev_snapshot(
+    snapshot: &ModelsDevSnapshot,
+) -> Option<ModelsDevReasoningCatalogSnapshot> {
+    let catalog = match ModelsDevCatalog::parse_str(&snapshot.body) {
+        Ok(catalog) => Some(Arc::new(catalog)),
+        Err(error) => {
+            debug!(
+                "Failed to parse refreshed models.dev catalog snapshot: {}",
+                error
+            );
+            return None;
+        }
+    };
+    Some(ModelsDevReasoningCatalogSnapshot {
+        catalog,
+        version: snapshot.version,
+    })
+}
+
+#[cfg(feature = "product-full")]
+fn replace_parsed_catalog_cache(updated: ModelsDevReasoningCatalogSnapshot) -> bool {
+    let Ok(mut cache) = parsed_catalog_cache().write() else {
+        return false;
+    };
+    replace_cached_catalog(&mut cache, updated)
+}
+
+#[cfg(feature = "product-full")]
+fn replace_cached_catalog(
+    cache: &mut Option<CachedReasoningCatalogSnapshot>,
+    updated: ModelsDevReasoningCatalogSnapshot,
+) -> bool {
+    if cache
+        .as_ref()
+        .is_some_and(|cached| cached.snapshot.version == updated.version)
+    {
+        return false;
+    }
+    *cache = Some(CachedReasoningCatalogSnapshot {
+        loaded_at: Instant::now(),
+        snapshot: updated,
+    });
+    true
+}
+
+#[cfg(feature = "product-full")]
+async fn emit_models_dev_catalog_updated(snapshot: &ModelsDevSnapshot) {
+    let payload = match serde_json::to_value(AIModelCatalogUpdatedEvent {
+        source_version: snapshot.version.to_string(),
+        sha256: snapshot.sha256.clone(),
+    }) {
+        Ok(payload) => payload,
+        Err(error) => {
+            debug!(
+                "Failed to serialize models.dev catalog update event: {}",
+                error
+            );
+            return;
+        }
+    };
+    let _ = crate::infrastructure::events::get_global_event_system()
+        .emit(crate::infrastructure::events::BackendEvent::Custom {
+            event_name: AI_MODEL_CATALOG_UPDATED_EVENT.to_string(),
+            payload,
+        })
+        .await;
 }
 
 #[cfg(not(feature = "product-full"))]
@@ -288,5 +371,24 @@ mod tests {
         let selected = apply_selected_reasoning_preset(&base, &projection, "low")
             .expect("generated low session preset");
         assert_eq!(selected.config.reasoning_effort.as_deref(), Some("low"));
+    }
+
+    #[cfg(feature = "product-full")]
+    #[test]
+    fn refreshed_catalog_replaces_projection_without_waiting_for_reload_interval() {
+        let mut cache = Some(super::CachedReasoningCatalogSnapshot {
+            loaded_at: std::time::Instant::now(),
+            snapshot: super::ModelsDevReasoningCatalogSnapshot {
+                catalog: None,
+                version: 1,
+            },
+        });
+        let updated = super::ModelsDevReasoningCatalogSnapshot {
+            catalog: None,
+            version: 2,
+        };
+
+        assert!(super::replace_cached_catalog(&mut cache, updated));
+        assert_eq!(cache.as_ref().map(|value| value.snapshot.version), Some(2));
     }
 }
