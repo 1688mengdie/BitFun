@@ -519,6 +519,8 @@ export interface Session {
 
 export interface SessionConfig {
   modelName?: string;
+  /** Explicit reasoning preset for the next turn; omitted means model default. */
+  reasoningPreset?: string;
   agentType?: string;
   context?: Record<string, string>;
   workspacePath?: string;

@@ -66,6 +66,7 @@ vi.mock('../store/FlowChatStore', () => ({
   FlowChatStore: {
     getInstance: () => ({
       getState: () => ({ sessions: new Map() }),
+      subscribe: () => () => undefined,
     }),
   },
 }));

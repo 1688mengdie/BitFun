@@ -1,0 +1,161 @@
+@use '../../../component-library/styles/tokens' as *;
+
+.bitfun-reasoning-preset-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: $size-gap-3;
+  min-width: 0;
+
+  &__binding {
+    display: grid;
+    grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr) minmax(150px, 1fr);
+    gap: $size-gap-2;
+  }
+
+  &__field,
+  &__json {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-1;
+    min-width: 0;
+  }
+
+  &__field > span {
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: 11px;
+  }
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: $size-gap-3;
+  }
+
+  &__section-title {
+    color: var(--bf-appearance-token-color-text-primary);
+    font-size: var(--bf-appearance-token-font-size-xs);
+    font-weight: var(--bf-appearance-token-font-weight-medium);
+  }
+
+  &__hint,
+  &__empty {
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-2xs);
+  }
+
+  &__generated {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+    padding: $size-gap-2;
+    border: 1px dashed var(--bf-appearance-token-border-subtle);
+    border-radius: $size-radius-sm;
+  }
+
+  &__generated-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $size-gap-1;
+  }
+
+  &__generated-item {
+    padding: 2px 6px;
+    border-radius: $size-radius-sm;
+    background: var(--bf-appearance-token-element-bg-medium);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-font-size-2xs);
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+  }
+
+  &__row {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+    padding: $size-gap-2 0;
+    border-top: 1px solid var(--bf-appearance-token-border-subtle);
+  }
+
+  &__row-head,
+  &__setting {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+  }
+
+  &__row-head > .bitfun-input-wrapper:first-child {
+    flex: 0 1 150px;
+  }
+
+  &__row-head > .bitfun-input-wrapper:nth-child(2) {
+    flex: 1 1 220px;
+  }
+
+  &__row-head .bitfun-input-wrapper,
+  &__setting > .select,
+  &__setting > .bitfun-input-wrapper,
+  &__setting > .bitfun-number-input {
+    min-width: 0;
+  }
+
+  &__setting > .select:first-child {
+    flex: 0 1 190px;
+  }
+
+  &__setting > .bitfun-input-wrapper,
+  &__setting > .bitfun-number-input {
+    flex: 1 1 160px;
+  }
+
+  &__setting > .select:not(:first-child) {
+    flex: 0 1 150px;
+  }
+
+  &__default-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: $size-gap-1;
+    flex-shrink: 0;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-2xs);
+    white-space: nowrap;
+  }
+
+  &__json {
+    flex: 1 1 100%;
+  }
+
+  .bitfun-textarea__field {
+    min-height: 92px;
+    font-family: $font-family-mono;
+    font-size: var(--bf-appearance-token-font-size-2xs);
+  }
+}
+
+@media (max-width: 720px) {
+  .bitfun-reasoning-preset-editor {
+    &__binding,
+    &__row-head,
+    &__setting {
+      grid-template-columns: 1fr;
+      flex-wrap: wrap;
+    }
+
+    &__row-head > .bitfun-input-wrapper:first-child,
+    &__row-head > .bitfun-input-wrapper:nth-child(2),
+    &__setting > .select:first-child,
+    &__setting > .select:not(:first-child),
+    &__setting > .bitfun-input-wrapper,
+    &__setting > .bitfun-number-input {
+      flex: 1 1 100%;
+      width: 100%;
+    }
+  }
+}

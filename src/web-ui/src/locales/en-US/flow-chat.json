@@ -2389,6 +2389,19 @@
     "xhigh": "Extra High",
     "xhighDesc": "Maximum reasoning depth (slower)"
   },
+  "reasoningSelector": {
+    "title": "Reasoning",
+    "auto": "Auto",
+    "modelDefault": "model default",
+    "current": "Reasoning: {{preset}}",
+    "currentAuto": "Reasoning: Auto ({{preset}})",
+    "updateFailed": "Failed to update reasoning preset",
+    "source": {
+      "models_dev": "models.dev",
+      "adapter_fallback": "Built in",
+      "model_config": "Custom"
+    }
+  },
   "coworkScope": {
     "title": "Choose a Cowork workspace",
     "description": "Cowork mode needs a workspace folder to read/write files. Use the current project, or choose another folder.",

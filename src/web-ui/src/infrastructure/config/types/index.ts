@@ -196,6 +196,49 @@ export type ReasoningMode =
   | 'disabled'
   | 'adaptive';
 
+export type ReasoningCatalogBinding =
+  | { source: 'auto' }
+  | { source: 'models_dev'; provider: string; model: string }
+  | { source: 'disabled' };
+
+export type ReasoningPresetSetting =
+  | { type: 'mode'; value: ReasoningMode }
+  | { type: 'effort'; value: string; mode?: ReasoningMode }
+  | { type: 'toggle'; enabled: boolean }
+  | { type: 'budget_tokens'; value: number; mode?: ReasoningMode }
+  | { type: 'request_patch'; body: Record<string, unknown> }
+  | { type: 'sequence'; settings: ReasoningPresetSetting[] };
+
+export interface ReasoningPreset {
+  id: string;
+  label?: string;
+  order?: number;
+  disabled?: boolean;
+  setting?: ReasoningPresetSetting;
+}
+
+export interface ReasoningConfig {
+  catalog?: ReasoningCatalogBinding;
+  default_preset?: string;
+  presets?: ReasoningPreset[];
+}
+
+export type ReasoningPresetSource = 'models_dev' | 'adapter_fallback' | 'model_config';
+
+export interface ReasoningPresetDescriptor {
+  id: string;
+  label: string;
+  order: number;
+  setting: ReasoningPresetSetting;
+  source: ReasoningPresetSource;
+}
+
+export interface ReasoningCatalogProjection {
+  status: 'unsupported' | 'known' | 'unknown';
+  default_preset?: string;
+  presets?: ReasoningPresetDescriptor[];
+}
+
 export interface ModelMetadata {
   category: ModelCategory;
   capabilities: ModelCapability[];
@@ -243,6 +286,10 @@ export interface AIModelConfig {
   capabilities: ModelCapability[];
   recommended_for?: string[];
   metadata?: Record<string, any>;
+  /** Canonical reasoning preset configuration. */
+  reasoning?: ReasoningConfig;
+  /** Compatibility-only input for old model configs. */
+  enable_thinking_process?: boolean;
   reasoning_mode?: ReasoningMode;
   /** Parse `<think>...</think>` text chunks into streaming reasoning content. */
   inline_think_in_text?: boolean;
