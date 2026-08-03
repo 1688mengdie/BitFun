@@ -128,6 +128,11 @@ const DEFAULT_CODEX_MODELS: &[&str] = &[
     "gpt-5.1-codex-mini",
 ];
 
+pub(crate) fn is_known_codex_reasoning_model(model_id: &str) -> bool {
+    let model_id = model_id.trim().to_ascii_lowercase();
+    model_id == "gpt-5-codex" || DEFAULT_CODEX_MODELS.contains(&model_id.as_str())
+}
+
 const FORWARD_COMPAT_CODEX_MODELS: &[(&str, &[&str])] = &[
     ("gpt-5.5", &["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex"]),
     ("gpt-5.4-mini", &["gpt-5.3-codex", "gpt-5.2-codex"]),
@@ -392,7 +397,7 @@ pub(crate) fn convert_tools_flat(
 
 #[cfg(test)]
 mod tests {
-    use super::attach_tools;
+    use super::{attach_tools, is_known_codex_reasoning_model};
     use serde_json::json;
 
     #[test]
@@ -408,6 +413,14 @@ mod tests {
 
         assert!(request_body.get("tools").is_none());
         assert!(request_body.get("tool_choice").is_none());
+    }
+
+    #[test]
+    fn codex_reasoning_model_table_is_exact_and_case_insensitive() {
+        assert!(is_known_codex_reasoning_model("GPT-5.5"));
+        assert!(is_known_codex_reasoning_model("gpt-5-codex"));
+        assert!(!is_known_codex_reasoning_model("gpt-9-unknown"));
+        assert!(!is_known_codex_reasoning_model("gpt-5.5-proxy"));
     }
 
     #[test]

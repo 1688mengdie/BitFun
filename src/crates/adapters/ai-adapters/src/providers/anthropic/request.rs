@@ -15,7 +15,7 @@ use log::{debug, warn};
 use reqwest::RequestBuilder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnthropicThinkingCapability {
+pub(crate) enum AnthropicThinkingCapability {
     ManualOnly,
     AdaptivePreferred,
     AdaptiveOnly,
@@ -77,7 +77,7 @@ fn parse_claude_model_version(model_name: &str, family: &str) -> Option<ClaudeMo
     Some(ClaudeModelVersion { major, minor })
 }
 
-fn anthropic_thinking_capability(model_name: &str) -> AnthropicThinkingCapability {
+pub(crate) fn anthropic_thinking_capability(model_name: &str) -> AnthropicThinkingCapability {
     if model_name.starts_with("claude-mythos") || model_name.starts_with("claude-fable") {
         return AnthropicThinkingCapability::AdaptiveDefaultNoDisabled;
     }

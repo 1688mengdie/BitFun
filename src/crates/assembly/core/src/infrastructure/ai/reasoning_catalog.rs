@@ -385,6 +385,34 @@ mod tests {
     }
 
     #[test]
+    fn adapter_fallback_default_resolves_without_models_dev() {
+        let fallback_model = AIModelConfig {
+            id: "model-fallback".to_string(),
+            name: "Claude fallback".to_string(),
+            provider: "anthropic".to_string(),
+            model_name: "claude-opus-4-8".to_string(),
+            base_url: "https://api.anthropic.com/v1/messages".to_string(),
+            reasoning: Some(ReasoningConfig {
+                default_preset: Some("high".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let projection = project_model_reasoning_catalog(&fallback_model, None);
+        let high = resolve_reasoning_preset(&projection, "high").expect("fallback high");
+
+        assert_eq!(high.source, ReasoningPresetSource::AdapterFallback);
+        assert_eq!(
+            resolve_default_reasoning_setting(&projection),
+            Some(&high.setting)
+        );
+
+        let client = apply_default_reasoning_preset(AIClient::new(runtime_config()), &projection);
+        assert_eq!(client.config.reasoning_mode, ReasoningMode::Adaptive);
+        assert_eq!(client.config.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
     fn configured_override_and_disable_rules_match_the_projected_catalog() {
         let overridden = project_model_reasoning_catalog(
             &model(Some(ReasoningConfig {
