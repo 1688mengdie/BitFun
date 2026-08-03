@@ -33,6 +33,7 @@ import {
 import {
   getModelMaxTokens,
   resolveModelForSessionCreation,
+  resolveReasoningPresetForSessionCreation,
 } from '../../utils/modelResolution';
 import { syncSessionModelSelection } from '../../utils/modelSync';
 import { markCurrentTurnItemsAsCancelled } from '../../utils/turnCancellation';
@@ -64,10 +65,15 @@ export const localSessionDriver: SessionDriver = {
     } = seed;
 
     const sessionModelName = await resolveModelForSessionCreation(config.modelName);
+    const reasoningPreset = remoteConnectionId || remoteSshHost
+      ? undefined
+      : config.reasoningPreset
+        ?? await resolveReasoningPresetForSessionCreation(sessionModelName);
     const maxContextTokens = await getModelMaxTokens(sessionModelName, agentType);
     const mergedConfig: SessionConfig = {
       ...config,
       modelName: sessionModelName,
+      reasoningPreset,
       workspaceId: workspaceId ?? config.workspaceId,
     };
 
@@ -83,6 +89,7 @@ export const localSessionDriver: SessionDriver = {
       remoteSshHost,
       config: {
         modelName: sessionModelName,
+        reasoningPreset,
         enableTools: true,
         safeMode: true,
         autoCompact: true,

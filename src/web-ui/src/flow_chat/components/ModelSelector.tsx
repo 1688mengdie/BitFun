@@ -8,16 +8,20 @@
  * - Supports 'auto' | 'primary' | 'fast' | specific model IDs
  */
 
-import React, { useState, useEffect, useId, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useId, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
-import { Brain, ChevronDown, Check, Zap } from 'lucide-react';
+import { ChevronDown, Check, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { configManager } from '@/infrastructure/config/services/ConfigManager';
 import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
+import {
+  aiApi,
+  type AIModelCatalog,
+  type ReasoningCatalogProjection,
+} from '@/infrastructure/api/service-api/AIApi';
 import { ACPClientAPI, type AcpSessionOptions } from '@/infrastructure/api/service-api/ACPClientAPI';
 import { getProviderDisplayName } from '@/infrastructure/config/services/modelConfigs';
-import { getEffectiveReasoningMode, isReasoningVisiblyEnabled } from '@/infrastructure/config/utils/reasoning';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import type { AIModelConfig, AgentModelDefaultsConfig, DefaultModelsConfig } from '@/infrastructure/config/types';
 import { Switch, Tooltip } from '@/component-library';
@@ -33,6 +37,11 @@ import {
 } from '../utils/tokenUsageDisplay';
 import { createLogger } from '@/shared/utils/logger';
 import { getModelSelectorDropdownStyle } from './modelSelectorDropdownPosition';
+import { ReasoningPresetSelector } from './ReasoningPresetSelector';
+import {
+  getRecentReasoningPreset,
+  setRecentReasoningPreset,
+} from '../utils/reasoningPresets';
 import './ModelSelector.scss';
 
 const log = createLogger('ModelSelector');
@@ -79,14 +88,21 @@ interface ModelInfo {
   providerName: string;
   provider: string;
   contextWindow?: number;
-  enableThinking?: boolean;
-  reasoningEffort?: string;
 }
 
 // Helper: identify special model IDs.
 const isSpecialModel = (value: string): value is 'auto' | 'primary' | 'fast' => {
   return value === 'auto' || value === 'primary' || value === 'fast';
 };
+
+function resolveConcreteModelId(
+  modelId: string,
+  defaultModels: DefaultModelsConfig,
+): string | undefined {
+  if (modelId === 'auto' || modelId === 'primary') return defaultModels.primary ?? undefined;
+  if (modelId === 'fast') return defaultModels.fast ?? defaultModels.primary ?? undefined;
+  return modelId || undefined;
+}
 
 const formatContextWindow = (contextWindow?: number): string | null => {
   if (!contextWindow) return null;
@@ -190,12 +206,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 }) => {
   const { t } = useTranslation('flow-chat');
   const [allModels, setAllModels] = useState<AIModelConfig[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<AIModelCatalog | null>(null);
   const [defaultModels, setDefaultModels] = useState<DefaultModelsConfig>({});
   const [modeModel, setModeModel] = useState('auto');
   const [acpOptions, setAcpOptions] = useState<AcpSessionOptions | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [keyboardNavigationOpen, setKeyboardNavigationOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [reasoningLoading, setReasoningLoading] = useState(false);
   const acpRestoreToastShownRef = useRef<string | null>(null);
   const acpOptionsRef = useRef<AcpSessionOptions | null>(null);
 
@@ -205,19 +223,38 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const menuId = useId();
 
   useEffect(() => {
-    onLoadingChange?.(loading);
-  }, [loading, onLoadingChange]);
+    onLoadingChange?.(loading || reasoningLoading);
+  }, [loading, onLoadingChange, reasoningLoading]);
 
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({
     position: 'fixed',
     visibility: 'hidden',
   });
   const activeSession = sessionId ? FlowChatStore.getInstance().getState().sessions.get(sessionId) : undefined;
+  const sessionReasoningPreset = useSyncExternalStore(
+    useCallback(
+      (callback) => FlowChatStore.getInstance().subscribe(() => callback()),
+      [],
+    ),
+    useCallback(
+      () => sessionId
+        ? FlowChatStore.getInstance().getState().sessions.get(sessionId)?.config.reasoningPreset
+        : undefined,
+      [sessionId],
+    ),
+    () => undefined,
+  );
   const acpClientId =
     acpClientIdFromAgentType(activeSession?.config.agentType) ??
     acpClientIdFromAgentType(activeSession?.mode);
   const isAcpSession = Boolean(acpClientId && sessionId);
   const targetIsSubagent = isSubagentSession || activeSession?.sessionKind === 'subagent';
+  const isRemoteWorkspaceSession = Boolean(
+    activeSession?.remoteConnectionId
+    || activeSession?.remoteSshHost
+    || activeSession?.config.remoteConnectionId
+    || activeSession?.config.remoteSshHost,
+  );
 
   // Load configuration data.
   const loadConfigData = useCallback(async () => {
@@ -234,6 +271,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       setAllModels(models);
       setDefaultModels(defaultModelsData);
       setModeModel(agentModelDefaults?.mode?.trim() || 'auto');
+
+      try {
+        setModelCatalog(await aiApi.getModelCatalog());
+      } catch (error) {
+        setModelCatalog(null);
+        log.warn('Failed to load AI model catalog', { error });
+      }
 
       log.debug('Configuration loaded', {
         modelsCount: models.length
@@ -440,10 +484,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
               providerName: getProviderDisplayName(localModel),
               provider: localModel.provider,
               contextWindow: localModel.context_window,
-              enableThinking: isReasoningVisiblyEnabled(
-                getEffectiveReasoningMode(localModel),
-              ),
-              reasoningEffort: localModel.reasoning_effort,
             }
           : {
               id: modelId,
@@ -526,8 +566,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         providerName: getProviderDisplayName(model),
         provider: model.provider,
         contextWindow: model.context_window,
-        enableThinking: isReasoningVisiblyEnabled(getEffectiveReasoningMode(model)),
-        reasoningEffort: model.reasoning_effort,
       };
     }
 
@@ -541,8 +579,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       providerName: getProviderDisplayName(model),
       provider: model.provider,
       contextWindow: model.context_window,
-      enableThinking: isReasoningVisiblyEnabled(getEffectiveReasoningMode(model)),
-      reasoningEffort: model.reasoning_effort,
     };
   }, [getCurrentModelId, allModels, defaultModels, t]);
   
@@ -561,13 +597,44 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         providerName: getProviderDisplayName(m),
         provider: m.provider,
         contextWindow: m.context_window,
-        enableThinking: isReasoningVisiblyEnabled(getEffectiveReasoningMode(m)),
-        reasoningEffort: m.reasoning_effort,
       }));
   }, [allModels]);
+
+  const currentNativeModelId = getCurrentModelId();
+  const concreteModelId = resolveConcreteModelId(currentNativeModelId, defaultModels);
+  const currentReasoningProjection = useMemo((): ReasoningCatalogProjection | null => {
+    if (!concreteModelId) return null;
+    return modelCatalog?.models.find(model => model.id === concreteModelId)?.reasoning ?? null;
+  }, [concreteModelId, modelCatalog]);
+  const selectedReasoningPreset = currentReasoningProjection?.status === 'known'
+    && currentReasoningProjection.presets?.some(preset => preset.id === sessionReasoningPreset)
+    ? sessionReasoningPreset
+    : undefined;
+
+  useEffect(() => {
+    if (
+      !targetIsSubagent
+      && !isRemoteWorkspaceSession
+      && concreteModelId
+      && selectedReasoningPreset
+    ) {
+      setRecentReasoningPreset(concreteModelId, selectedReasoningPreset);
+    }
+  }, [concreteModelId, isRemoteWorkspaceSession, selectedReasoningPreset, targetIsSubagent]);
+
+  const recentPresetForModel = useCallback((modelId: string): string | undefined => {
+    const resolvedModelId = resolveConcreteModelId(modelId, defaultModels);
+    if (!resolvedModelId) return undefined;
+    const projection = modelCatalog?.models.find(model => model.id === resolvedModelId)?.reasoning;
+    if (projection?.status !== 'known') return undefined;
+    const recentPreset = getRecentReasoningPreset(resolvedModelId);
+    return projection.presets?.some(preset => preset.id === recentPreset)
+      ? recentPreset
+      : undefined;
+  }, [defaultModels, modelCatalog]);
   
   const handleSelectModel = useCallback(async (modelId: string) => {
-    if (loading) return;
+    if (loading || reasoningLoading) return;
 
     setLoading(true);
     setDropdownOpen(false);
@@ -579,6 +646,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const previousSessionModelName = sessionId
       ? store.getState().sessions.get(sessionId)?.config.modelName
       : undefined;
+    const previousReasoningPreset = sessionId
+      ? store.getState().sessions.get(sessionId)?.config.reasoningPreset
+      : undefined;
+    const nextReasoningPreset = isRemoteWorkspaceSession
+      ? previousReasoningPreset
+      : recentPresetForModel(modelId);
     let sessionModelWrittenOptimistically = false;
 
     try {
@@ -608,6 +681,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         // Update the frontend session model immediately so the UI reflects the
         // switch without waiting for the backend IPC round-trip.
         store.updateSessionModelName(sessionId, modelId);
+        if (!isRemoteWorkspaceSession) {
+          store.updateSessionReasoningPreset(sessionId, nextReasoningPreset);
+        }
         sessionModelWrittenOptimistically = true;
         const maxContextTokens = await getModelMaxTokens(modelId, currentMode);
         store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
@@ -616,6 +692,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           await agentAPI.updateSessionModel({
             sessionId,
             modelName: modelId,
+            ...(!isRemoteWorkspaceSession
+              ? { reasoningPreset: nextReasoningPreset ?? null }
+              : {}),
             workspacePath: sessionProjectWorkspacePath(session),
             remoteConnectionId: session.remoteConnectionId,
             remoteSshHost: session.remoteSshHost,
@@ -633,6 +712,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       await configManager.setConfig('ai.agent_model_defaults.mode', modelId);
       setModeModel(modelId);
       await updateTargetSessionModel();
+      if (sessionId && !isRemoteWorkspaceSession) {
+        setRecentReasoningPreset(resolveConcreteModelId(modelId, defaultModels) ?? modelId, nextReasoningPreset);
+      }
 
       log.info('Mode model updated', { mode: currentMode, modelId });
 
@@ -645,6 +727,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       if (sessionId && sessionModelWrittenOptimistically && previousSessionModelName) {
         store.updateSessionModelName(sessionId, previousSessionModelName);
       }
+      if (sessionId && sessionModelWrittenOptimistically) {
+        store.updateSessionReasoningPreset(sessionId, previousReasoningPreset);
+      }
       notificationService.error(t('modelSelector.switchFailed'));
     } finally {
       setLoading(false);
@@ -656,9 +741,77 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     activeSession?.workspacePath,
     acpClientId,
     currentMode,
+    defaultModels,
     externalSelection,
     isAcpSession,
+    isRemoteWorkspaceSession,
     loading,
+    reasoningLoading,
+    recentPresetForModel,
+    sessionId,
+    t,
+    targetIsSubagent,
+  ]);
+
+  const handleSelectReasoningPreset = useCallback(async (presetId: string | null) => {
+    if (
+      loading
+      || reasoningLoading
+      || !sessionId
+      || !concreteModelId
+      || currentReasoningProjection?.status !== 'known'
+    ) {
+      return;
+    }
+    const normalizedPreset = presetId?.trim() || undefined;
+    if (
+      normalizedPreset
+      && !currentReasoningProjection.presets?.some(preset => preset.id === normalizedPreset)
+    ) {
+      return;
+    }
+
+    const store = FlowChatStore.getInstance();
+    const session = store.getState().sessions.get(sessionId);
+    if (!session) return;
+    const previousPreset = session.config.reasoningPreset;
+    if (previousPreset === normalizedPreset) return;
+
+    setReasoningLoading(true);
+    store.updateSessionReasoningPreset(sessionId, normalizedPreset);
+    try {
+      if (!session.isTransient) {
+        await agentAPI.updateSessionModel({
+          sessionId,
+          modelName: currentNativeModelId,
+          reasoningPreset: normalizedPreset ?? null,
+          workspacePath: sessionProjectWorkspacePath(session),
+          remoteConnectionId: session.remoteConnectionId,
+          remoteSshHost: session.remoteSshHost,
+          includeInternal: session.sessionKind === 'subagent',
+        });
+      }
+      if (!targetIsSubagent) {
+        setRecentReasoningPreset(concreteModelId, normalizedPreset);
+      }
+      log.info('Session reasoning preset updated', {
+        sessionId,
+        modelId: concreteModelId,
+        presetId: normalizedPreset ?? 'auto',
+      });
+    } catch (error) {
+      store.updateSessionReasoningPreset(sessionId, previousPreset);
+      log.error('Failed to update session reasoning preset', error);
+      notificationService.error(t('reasoningSelector.updateFailed'));
+    } finally {
+      setReasoningLoading(false);
+    }
+  }, [
+    concreteModelId,
+    currentNativeModelId,
+    currentReasoningProjection,
+    loading,
+    reasoningLoading,
     sessionId,
     t,
     targetIsSubagent,
@@ -1018,7 +1171,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return null;
   }
 
-  const currentModelId = getCurrentModelId();
+  const currentModelId = currentNativeModelId;
 
   const fallbackTooltip = t('modelSelector.autoModelDesc');
   const baseTooltip = getModelTooltipText(currentModel, fallbackTooltip);
@@ -1052,27 +1205,33 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             setKeyboardNavigationOpen(nextOpen && event.detail === 0);
             setDropdownOpen(nextOpen);
           }}
-          disabled={loading}
+          disabled={loading || reasoningLoading}
          data-bf-component="model-selector" data-bf-part="trigger" data-bf-state={dropdownOpen ? 'open' : undefined}>
           <span className="bitfun-model-selector__name" data-bf-component="model-selector" data-bf-part="name">
             {getModelDisplayLabel(currentModel, t('modelSelector.autoModel'))}
           </span>
-          {currentModel?.enableThinking && (
-            <Brain size={9} className="bitfun-model-selector__thinking-icon" />
-          )}
-          {currentModel?.reasoningEffort && (
-            <span className="bitfun-model-selector__effort-badge">
-              {currentModel.reasoningEffort}
-            </span>
-          )}
-          {tokenPercentage > 0 && (
-            <span className={`bitfun-model-selector__ctx-usage${tokenStatusClass ? ` bitfun-model-selector__ctx-usage--${tokenStatusClass}` : ''}`} data-bf-component="model-selector" data-bf-part="contextUsage">
-              · {tokenPercentage}%
-            </span>
-          )}
           <ChevronDown size={10} className="bitfun-model-selector__chevron" />
         </button>
       </Tooltip>
+
+      {sessionId && !isRemoteWorkspaceSession && (
+        <ReasoningPresetSelector
+          projection={currentReasoningProjection}
+          selectedPreset={selectedReasoningPreset}
+          disabled={loading}
+          loading={reasoningLoading}
+          dropdownPlacement={dropdownPlacement}
+          onSelect={handleSelectReasoningPreset}
+        />
+      )}
+
+      {tokenPercentage > 0 && (
+        <Tooltip content={tooltipContent}>
+          <span className={`bitfun-model-selector__ctx-usage${tokenStatusClass ? ` bitfun-model-selector__ctx-usage--${tokenStatusClass}` : ''}`} data-bf-component="model-selector" data-bf-part="contextUsage">
+            · {tokenPercentage}%
+          </span>
+        </Tooltip>
+      )}
 
       {dropdownOpen && createPortal(
         <div
@@ -1212,9 +1371,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                     <div className="bitfun-model-selector__option-main" data-bf-component="model-selector" data-bf-part="optionMain">
                       <span className="bitfun-model-selector__option-name">
                         {model.modelName}
-                        {model.enableThinking && (
-                          <Brain size={10} className="bitfun-model-selector__option-thinking" />
-                        )}
                       </span>
                     </div>
                     {isSelected && (

@@ -11,6 +11,8 @@ import type {
   AgentModelDefaultsConfig,
   DefaultModelsConfig,
 } from '@/infrastructure/config/types';
+import { aiApi } from '@/infrastructure/api/service-api/AIApi';
+import { getRecentReasoningPreset } from './reasoningPresets';
 
 const log = createLogger('ModelResolution');
 
@@ -104,5 +106,26 @@ export async function resolveModelForSessionCreation(modelName?: string): Promis
   } catch (error) {
     log.warn('Failed to resolve model default during session creation', { error });
     return 'auto';
+  }
+}
+
+export async function resolveReasoningPresetForSessionCreation(
+  modelName: string,
+): Promise<string | undefined> {
+  try {
+    const catalog = await aiApi.getModelCatalog();
+    const concreteModelId = modelName === 'auto' || modelName === 'primary'
+      ? catalog.default_models.primary ?? undefined
+      : modelName === 'fast'
+        ? catalog.default_models.fast ?? catalog.default_models.primary ?? undefined
+        : modelName;
+    if (!concreteModelId) return undefined;
+    const projection = catalog.models.find(model => model.id === concreteModelId)?.reasoning;
+    if (projection?.status !== 'known') return undefined;
+    const preset = getRecentReasoningPreset(concreteModelId);
+    return projection.presets?.some(item => item.id === preset) ? preset : undefined;
+  } catch (error) {
+    log.warn('Failed to resolve recent reasoning preset during session creation', { error });
+    return undefined;
   }
 }

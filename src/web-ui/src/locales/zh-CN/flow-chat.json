@@ -2389,6 +2389,19 @@
     "xhigh": "Extra High",
     "xhighDesc": "最大推理深度（较慢）"
   },
+  "reasoningSelector": {
+    "title": "思考强度",
+    "auto": "自动",
+    "modelDefault": "模型默认值",
+    "current": "思考强度：{{preset}}",
+    "currentAuto": "思考强度：自动（{{preset}}）",
+    "updateFailed": "更新思考预设失败",
+    "source": {
+      "models_dev": "models.dev",
+      "adapter_fallback": "内置",
+      "model_config": "自定义"
+    }
+  },
   "coworkScope": {
     "title": "选择 Cowork 工作区",
     "description": "Cowork 模式需要一个工作区目录用于读写文件。你可以使用当前项目，或选择另一个目录。",

@@ -4,7 +4,15 @@ import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
 import type { SendMessageRequest } from './tauri-commands';
 import type { ConnectionTestMessageCode } from '@/shared/utils/aiConnectionTestMessages';
-import type { ReasoningMode, SubscriptionProvider } from '@/infrastructure/config/types';
+import type {
+  ReasoningCatalogProjection,
+  ReasoningMode,
+  SubscriptionProvider,
+} from '@/infrastructure/config/types';
+export type {
+  ReasoningCatalogProjection,
+  ReasoningPresetSetting,
+} from '@/infrastructure/config/types';
 
 export interface CreateAISessionRequest {
   session_id?: string;
@@ -28,28 +36,6 @@ export interface ConnectionTestResult {
 export interface RemoteModelInfo {
   id: string;
   display_name?: string;
-}
-
-export type ReasoningPresetSetting =
-  | { type: 'mode'; value: ReasoningMode }
-  | { type: 'effort'; value: string; mode?: ReasoningMode }
-  | { type: 'toggle'; enabled: boolean }
-  | { type: 'budget_tokens'; value: number; mode?: ReasoningMode }
-  | { type: 'request_patch'; body: Record<string, unknown> }
-  | { type: 'sequence'; settings: ReasoningPresetSetting[] };
-
-export interface ReasoningPresetDescriptor {
-  id: string;
-  label: string;
-  order: number;
-  setting: ReasoningPresetSetting;
-  source: 'models_dev' | 'adapter_fallback' | 'model_config';
-}
-
-export interface ReasoningCatalogProjection {
-  status: 'unsupported' | 'known' | 'unknown';
-  default_preset?: string;
-  presets?: ReasoningPresetDescriptor[];
 }
 
 export interface AIModelCatalogEntry {
