@@ -3,6 +3,7 @@
 pub mod client;
 pub mod diagnostics;
 pub mod model_selector;
+pub mod models_dev;
 pub mod providers;
 pub mod stream;
 #[cfg(feature = "subscription-auth")]

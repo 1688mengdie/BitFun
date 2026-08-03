@@ -33,6 +33,9 @@ pub mod hook_import;
 #[cfg(feature = "mcp")]
 pub mod mcp;
 
+#[cfg(feature = "models-dev")]
+pub mod models_dev;
+
 #[cfg(feature = "miniapp-runtime")]
 pub mod miniapp;
 

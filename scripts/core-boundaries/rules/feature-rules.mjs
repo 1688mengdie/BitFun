@@ -114,7 +114,7 @@ export const optionalDependencyFeatureOwnerRules = [
         ownerFeatures: ['mcp', 'miniapp-runtime', 'remote-connect', 'remote-ssh-concrete', 'speech'],
       },
       { depName: 'bitfun-agent-runtime', ownerFeatures: ['deep-research', 'hook-import'] },
-      { depName: 'bitfun-core-types', ownerFeatures: ['speech'] },
+      { depName: 'bitfun-core-types', ownerFeatures: ['remote-connect', 'speech'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['canvas-runtime', 'function-agents', 'hook-import', 'miniapp-runtime', 'plugin-source'] },
       { depName: 'bitfun-runtime-ports', ownerFeatures: ['git', 'remote-connect', 'remote-ssh', 'remote-ssh-concrete', 'script-tool-runtime'] },
       {
@@ -143,7 +143,7 @@ export const optionalDependencyFeatureOwnerRules = [
       // remote-ssh-concrete: one-click relay deploy fetches the signed release
       // checksum over HTTPS and verifies it on this device, because the target
       // server has no minisign and no trust root of its own.
-      { depName: 'reqwest', ownerFeatures: ['announcement', 'browser-control', 'debug-log', 'mcp', 'miniapp-market', 'miniapp-runtime', 'remote-connect', 'remote-ssh-concrete', 'review-platform', 'speech', 'web-tools'] },
+      { depName: 'reqwest', ownerFeatures: ['announcement', 'browser-control', 'debug-log', 'mcp', 'miniapp-market', 'miniapp-runtime', 'models-dev', 'remote-connect', 'remote-ssh-concrete', 'review-platform', 'speech', 'web-tools'] },
       { depName: 'rmcp', ownerFeatures: ['mcp'] },
       { depName: 'russh', ownerFeatures: ['remote-ssh-concrete'] },
       { depName: 'russh-keys', ownerFeatures: ['remote-ssh-concrete'] },
@@ -151,7 +151,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'rustls', ownerFeatures: ['remote-connect'] },
       { depName: 'rustls-native-certs', ownerFeatures: ['remote-connect'] },
       { depName: 'schannel', ownerFeatures: ['remote-connect'] },
-      { depName: 'sha2', ownerFeatures: ['canvas-runtime', 'hook-import', 'mcp', 'miniapp-market', 'plugin-source', 'remote-connect', 'remote-ssh', 'review-platform', 'speech'] },
+      { depName: 'sha2', ownerFeatures: ['canvas-runtime', 'hook-import', 'mcp', 'miniapp-market', 'models-dev', 'plugin-source', 'remote-connect', 'remote-ssh', 'review-platform', 'speech'] },
       { depName: 'sherpa-onnx', ownerFeatures: ['speech'] },
       { depName: 'shellexpand', ownerFeatures: ['remote-ssh-concrete'] },
       { depName: 'sse-stream', ownerFeatures: ['mcp'] },
@@ -476,6 +476,7 @@ export const ownerCrateFeatureAssemblyRules = [
       'hook-import',
       'miniapp-runtime',
       'mcp',
+      'models-dev',
       'plugin-source',
       'remote-connect',
       'remote-ssh',

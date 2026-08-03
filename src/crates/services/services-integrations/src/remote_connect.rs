@@ -23,6 +23,7 @@ mod relay_http;
 pub mod session_store;
 pub mod sync_state;
 
+use bitfun_core_types::ReasoningCatalogProjection;
 use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{
     AgentInputAttachment, AgentSessionCreateRequest, AgentSubmissionRequest, AgentSubmissionSource,
@@ -1573,7 +1574,7 @@ pub struct RemoteDefaultModelsConfig {
     pub speech_recognition: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteModelConfig {
     pub id: String,
     pub name: String,
@@ -1591,9 +1592,11 @@ pub struct RemoteModelConfig {
     pub reasoning_effort: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningCatalogProjection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RemoteModelCatalog {
     pub version: u64,
     pub models: Vec<RemoteModelConfig>,
@@ -1648,7 +1651,7 @@ impl RemoteReasoningModeFact {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemoteModelFacts {
     pub id: String,
     pub name: String,
@@ -1662,11 +1665,13 @@ pub struct RemoteModelFacts {
     pub reasoning_mode: Option<RemoteReasoningModeFact>,
     pub reasoning_effort: Option<String>,
     pub thinking_budget_tokens: Option<u32>,
+    pub reasoning: Option<ReasoningCatalogProjection>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemoteModelCatalogFacts {
     pub last_modified_ms: i64,
+    pub source_version: Option<u64>,
     pub models: Vec<RemoteModelFacts>,
     pub default_models: RemoteDefaultModelsConfig,
     pub session_model_id: Option<String>,
@@ -1674,7 +1679,7 @@ pub struct RemoteModelCatalogFacts {
 
 pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModelCatalog {
     RemoteModelCatalog {
-        version: facts.last_modified_ms.max(0) as u64,
+        version: catalog_version(facts.last_modified_ms, facts.source_version),
         models: facts
             .models
             .into_iter()
@@ -1697,11 +1702,22 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
                     .map(|reasoning_mode| reasoning_mode.wire_value().to_string()),
                 reasoning_effort: model.reasoning_effort,
                 thinking_budget_tokens: model.thinking_budget_tokens,
+                reasoning: model.reasoning,
             })
             .collect(),
         default_models: facts.default_models,
         session_model_id: facts.session_model_id,
     }
+}
+
+fn catalog_version(last_modified_ms: i64, source_version: Option<u64>) -> u64 {
+    const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
+    let config_version = last_modified_ms.max(0) as u64;
+    let version = match source_version {
+        Some(source_version) => config_version ^ source_version.rotate_left(17),
+        None => config_version,
+    };
+    version & MAX_SAFE_JAVASCRIPT_INTEGER
 }
 
 pub fn normalize_remote_session_model_id(model_id: Option<&str>) -> Option<String> {
@@ -1745,7 +1761,7 @@ pub fn normalize_remote_model_selection(
         .ok_or_else(|| format!("Unknown model selection: {requested_model_id}"))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RemoteModelCatalogPollDelta {
     pub changed: bool,
     pub catalog: Option<RemoteModelCatalog>,

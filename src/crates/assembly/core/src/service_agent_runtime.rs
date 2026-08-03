@@ -11,6 +11,7 @@ use bitfun_agent_runtime::sdk::{
     AgentSessionModelSelection, AgentSessionModelSelectionUpdateRequest, AgentSessionRestorePort,
     AgentSessionRevertPort, AgentSessionUsagePort, AgentTurnSettlementPort, RuntimeError,
 };
+use bitfun_ai_adapters::models_dev::{project_reasoning_catalog, ModelsDevCatalog};
 use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{
     AgentDialogTurnPort, AgentDialogTurnRequest, AgentInputAttachment, AgentLifecycleDeliveryPort,
@@ -23,6 +24,7 @@ use bitfun_runtime_ports::{
     RuntimeServiceCapability, RuntimeServicePort, SessionStoragePathRequest, SessionStorePort,
     ToolPermissionConfig,
 };
+use bitfun_services_integrations::models_dev::ModelsDevCatalogService;
 use bitfun_services_integrations::remote_connect::{
     agent_input_attachment_from_remote_image_context, build_remote_chat_messages,
     build_remote_model_catalog,
@@ -44,7 +46,7 @@ use bitfun_services_integrations::remote_connect::{
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate,
 };
 use log::{debug, info};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use crate::agentic::coordination::{
@@ -253,6 +255,36 @@ fn remote_reasoning_mode_fact(reasoning_mode: ReasoningMode) -> RemoteReasoningM
         ReasoningMode::Disabled => RemoteReasoningModeFact::Disabled,
         ReasoningMode::Adaptive => RemoteReasoningModeFact::Adaptive,
     }
+}
+
+fn models_dev_catalog_service() -> &'static ModelsDevCatalogService {
+    static SERVICE: OnceLock<ModelsDevCatalogService> = OnceLock::new();
+    SERVICE.get_or_init(|| {
+        let cache_file = crate::infrastructure::get_path_manager_arc()
+            .cache_root()
+            .join("models-dev")
+            .join("catalog.json");
+        ModelsDevCatalogService::new(cache_file)
+    })
+}
+
+async fn load_models_dev_reasoning_catalog() -> (Option<ModelsDevCatalog>, u64) {
+    let service = models_dev_catalog_service();
+    let snapshot = service.load_cached_or_bundled().await;
+    let catalog = match ModelsDevCatalog::parse_str(&snapshot.body) {
+        Ok(catalog) => Some(catalog),
+        Err(error) => {
+            debug!("Failed to parse models.dev catalog snapshot: {}", error);
+            None
+        }
+    };
+
+    let refresh_service = service.clone();
+    tokio::spawn(async move {
+        refresh_service.refresh_if_stale().await;
+    });
+
+    (catalog, snapshot.version)
 }
 
 /// Convert persisted turns into mobile ChatMessages.
@@ -931,12 +963,20 @@ impl CoreServiceAgentRuntime {
             .await
             .map_err(|e| format!("Failed to load global config: {e}"))?;
         let ai_config: AIConfig = global_config.ai;
+        let (models_dev_catalog, models_dev_version) = load_models_dev_reasoning_catalog().await;
 
         let models: Vec<RemoteModelFacts> = ai_config
             .models
             .into_iter()
             .map(|model| {
                 let reasoning_mode = model.effective_reasoning_mode();
+                let reasoning = project_reasoning_catalog(
+                    &model.provider,
+                    &model.model_name,
+                    &model.base_url,
+                    model.reasoning.as_ref(),
+                    models_dev_catalog.as_ref(),
+                );
 
                 RemoteModelFacts {
                     id: model.id,
@@ -955,6 +995,7 @@ impl CoreServiceAgentRuntime {
                     reasoning_mode: Some(remote_reasoning_mode_fact(reasoning_mode)),
                     reasoning_effort: model.reasoning_effort,
                     thinking_budget_tokens: model.thinking_budget_tokens,
+                    reasoning: Some(reasoning),
                 }
             })
             .collect();
@@ -966,6 +1007,7 @@ impl CoreServiceAgentRuntime {
         };
         Ok(build_remote_model_catalog(RemoteModelCatalogFacts {
             last_modified_ms: global_config.last_modified.timestamp_millis(),
+            source_version: Some(models_dev_version),
             models,
             default_models: RemoteDefaultModelsConfig {
                 primary: ai_config.default_models.primary,
