@@ -378,7 +378,7 @@ ssh_config = ["dep:ssh_config"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "test-util"] }
 
 [[test]]
 name = "debug_log_owner_contracts"

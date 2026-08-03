@@ -14,6 +14,13 @@ export type {
   ReasoningPresetSetting,
 } from '@/infrastructure/config/types';
 
+export const AI_MODEL_CATALOG_UPDATED_EVENT = 'ai://model-catalog-updated';
+
+export interface AIModelCatalogUpdatedEvent {
+  sourceVersion: string;
+  sha256: string;
+}
+
 export interface CreateAISessionRequest {
   session_id?: string;
   agent_type: string;
@@ -125,6 +132,10 @@ export class AIApi {
     } catch (error) {
       throw createTauriCommandError('get_ai_model_catalog', error);
     }
+  }
+
+  onModelCatalogUpdated(callback: (event: AIModelCatalogUpdatedEvent) => void): () => void {
+    return api.listen(AI_MODEL_CATALOG_UPDATED_EVENT, callback);
   }
 
    

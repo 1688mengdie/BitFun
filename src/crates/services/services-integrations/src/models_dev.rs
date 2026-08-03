@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 pub const DEFAULT_MODELS_DEV_ENDPOINT: &str = "https://models.dev/api.json";
 const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const MIN_REFRESH_ATTEMPT_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const MAX_REFRESH_ATTEMPTS: usize = 3;
 const BUNDLED_MODELS_DEV_SNAPSHOT: &str = include_str!("../assets/models-dev.json");
 
 #[derive(Debug, Default)]
@@ -34,6 +35,15 @@ pub struct ModelsDevSnapshot {
     pub source: ModelsDevSnapshotSource,
     pub version: u64,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelsDevRefreshOutcome {
+    NotNeeded,
+    Throttled,
+    Unchanged { version: u64 },
+    Updated(ModelsDevSnapshot),
+    Failed,
 }
 
 #[derive(Debug, Clone)]
@@ -102,18 +112,18 @@ impl ModelsDevCatalogService {
     }
 
     /// Refresh the cache when stale. Failures leave the last valid cache intact.
-    pub async fn refresh_if_stale(&self) -> bool {
+    pub async fn refresh_if_stale(&self) -> ModelsDevRefreshOutcome {
         if self.endpoint_url.trim().is_empty() || self.is_cache_fresh().await {
-            return false;
+            return ModelsDevRefreshOutcome::NotNeeded;
         }
         let Ok(mut refresh_state) = self.refresh_state.try_lock() else {
-            return false;
+            return ModelsDevRefreshOutcome::Throttled;
         };
         let now = Instant::now();
         if refresh_state.last_attempt.is_some_and(|last_attempt| {
             now.duration_since(last_attempt) < MIN_REFRESH_ATTEMPT_INTERVAL
         }) {
-            return false;
+            return ModelsDevRefreshOutcome::Throttled;
         }
         refresh_state.last_attempt = Some(now);
         drop(refresh_state);
@@ -125,41 +135,61 @@ impl ModelsDevCatalogService {
             Ok(client) => client,
             Err(error) => {
                 warn!("Failed to create models.dev HTTP client: {}", error);
-                return false;
-            }
-        };
-        let response = match client.get(&self.endpoint_url).send().await {
-            Ok(response) => response,
-            Err(error) => {
-                warn!("Failed to fetch models.dev catalog: {}", error);
-                return false;
-            }
-        };
-        if !response.status().is_success() {
-            warn!("models.dev catalog returned HTTP {}", response.status());
-            return false;
-        }
-        let body = match response.text().await {
-            Ok(body) if is_valid_catalog_document(&body) => body,
-            Ok(_) => {
-                warn!("models.dev catalog response failed schema validation");
-                return false;
-            }
-            Err(error) => {
-                warn!("Failed to read models.dev catalog response: {}", error);
-                return false;
+                return ModelsDevRefreshOutcome::Failed;
             }
         };
 
+        let body = {
+            let mut body = None;
+            for attempt in 0..MAX_REFRESH_ATTEMPTS {
+                match fetch_catalog_body(&client, &self.endpoint_url).await {
+                    Ok(value) => {
+                        body = Some(value);
+                        break;
+                    }
+                    Err(error) if error.is_retryable() && attempt + 1 < MAX_REFRESH_ATTEMPTS => {
+                        warn!(
+                            "models.dev catalog refresh attempt {}/{} failed: {}; retrying",
+                            attempt + 1,
+                            MAX_REFRESH_ATTEMPTS,
+                            error
+                        );
+                        tokio::time::sleep(retry_backoff(attempt)).await;
+                    }
+                    Err(error) => {
+                        warn!(
+                            "models.dev catalog refresh failed after {} attempt(s): {}",
+                            attempt + 1,
+                            error
+                        );
+                        break;
+                    }
+                }
+            }
+            let Some(body) = body else {
+                return ModelsDevRefreshOutcome::Failed;
+            };
+            body
+        };
+
+        let previous = self.load_cached_or_bundled().await;
+
         match self.write_cache_atomically(&body).await {
-            Ok(()) => true,
+            Ok(()) if previous.sha256 == sha256_hex(body.as_bytes()) => {
+                ModelsDevRefreshOutcome::Unchanged {
+                    version: previous.version,
+                }
+            }
+            Ok(()) => {
+                ModelsDevRefreshOutcome::Updated(snapshot(body, ModelsDevSnapshotSource::Cache))
+            }
             Err(error) => {
                 warn!(
                     "Failed to persist models.dev catalog at {}: {}",
                     self.cache_file.display(),
                     error
                 );
-                false
+                ModelsDevRefreshOutcome::Failed
             }
         }
     }
@@ -243,6 +273,66 @@ impl ModelsDevCatalogService {
     }
 }
 
+#[derive(Debug)]
+enum RefreshError {
+    Request(reqwest::Error),
+    Status(reqwest::StatusCode),
+    InvalidDocument,
+    ResponseBody(reqwest::Error),
+}
+
+impl RefreshError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            Self::Request(error) | Self::ResponseBody(error) => {
+                error.is_connect() || error.is_timeout() || error.is_request() || error.is_body()
+            }
+            Self::Status(status) => {
+                status.is_server_error() || matches!(status.as_u16(), 408 | 429)
+            }
+            Self::InvalidDocument => false,
+        }
+    }
+}
+
+impl std::fmt::Display for RefreshError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Request(error) => write!(formatter, "request error: {error}"),
+            Self::Status(status) => write!(formatter, "HTTP {status}"),
+            Self::InvalidDocument => write!(formatter, "response failed schema validation"),
+            Self::ResponseBody(error) => write!(formatter, "response body error: {error}"),
+        }
+    }
+}
+
+async fn fetch_catalog_body(
+    client: &reqwest::Client,
+    endpoint_url: &str,
+) -> Result<String, RefreshError> {
+    let response = client
+        .get(endpoint_url)
+        .send()
+        .await
+        .map_err(RefreshError::Request)?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(RefreshError::Status(status));
+    }
+    let body = response.text().await.map_err(RefreshError::ResponseBody)?;
+    if !is_valid_catalog_document(&body) {
+        return Err(RefreshError::InvalidDocument);
+    }
+    Ok(body)
+}
+
+fn retry_backoff(attempt: usize) -> Duration {
+    match attempt {
+        0 => Duration::from_millis(100),
+        _ => Duration::from_millis(250),
+    }
+}
+
 fn snapshot(body: String, source: ModelsDevSnapshotSource) -> ModelsDevSnapshot {
     let digest = sha256_hex(body.as_bytes());
     let version = digest
@@ -286,8 +376,14 @@ fn is_valid_catalog_document(body: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelsDevCatalogService, ModelsDevSnapshotSource};
+    use super::{ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshotSource};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     const VALID: &str = r#"{"openai":{"id":"openai","name":"OpenAI","models":{"gpt-test":{"id":"gpt-test","name":"GPT Test"}}}}"#;
 
@@ -323,7 +419,10 @@ mod tests {
 
         assert_eq!(snapshot.source, ModelsDevSnapshotSource::Bundled);
         assert!(snapshot.body.contains("gpt-test"));
-        assert!(!service.refresh_if_stale().await);
+        assert_eq!(
+            service.refresh_if_stale().await,
+            ModelsDevRefreshOutcome::NotNeeded
+        );
     }
 
     #[tokio::test]
@@ -351,5 +450,73 @@ mod tests {
         assert_eq!(snapshot.source, ModelsDevSnapshotSource::Cache);
         assert_eq!(snapshot.body, VALID);
         assert!(!cache_file.with_extension("tmp").exists());
+    }
+
+    #[tokio::test]
+    async fn transient_refresh_failures_are_retried_with_a_bounded_attempt_count() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let cache_file = directory.path().join("models.json");
+        let (endpoint, attempts, server) =
+            spawn_http_server(vec![(500, ""), (503, ""), (200, VALID)]).await;
+        let service = ModelsDevCatalogService::new(&cache_file)
+            .with_endpoint(endpoint)
+            .with_cache_ttl(Duration::ZERO);
+
+        let outcome = service.refresh_if_stale().await;
+
+        assert!(matches!(outcome, ModelsDevRefreshOutcome::Updated(_)));
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        server.await.expect("test server should finish");
+    }
+
+    #[tokio::test]
+    async fn unchanged_refresh_does_not_report_a_catalog_update() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let cache_file = directory.path().join("models.json");
+        tokio::fs::write(&cache_file, VALID)
+            .await
+            .expect("existing cache write");
+        let (endpoint, attempts, server) = spawn_http_server(vec![(200, VALID)]).await;
+        let service = ModelsDevCatalogService::new(&cache_file)
+            .with_endpoint(endpoint)
+            .with_cache_ttl(Duration::ZERO);
+
+        let outcome = service.refresh_if_stale().await;
+
+        assert!(matches!(outcome, ModelsDevRefreshOutcome::Unchanged { .. }));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        server.await.expect("test server should finish");
+    }
+
+    async fn spawn_http_server(
+        responses: Vec<(u16, &str)>,
+    ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test server should bind");
+        let address = listener.local_addr().expect("test server address");
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_task = attempts.clone();
+        let responses = responses
+            .into_iter()
+            .map(|(status, body)| (status, body.to_string()))
+            .collect::<Vec<_>>();
+        let task = tokio::spawn(async move {
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().await.expect("test request");
+                attempts_for_task.fetch_add(1, Ordering::SeqCst);
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("test response");
+            }
+        });
+        (format!("http://{address}/models.json"), attempts, task)
     }
 }

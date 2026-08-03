@@ -258,6 +258,15 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const isAcpSession = Boolean(acpClientId && sessionId);
   const targetIsSubagent = isSubagentSession || activeSession?.sessionKind === 'subagent';
 
+  const loadModelCatalog = useCallback(async () => {
+    try {
+      setModelCatalog(await aiApi.getModelCatalog());
+    } catch (error) {
+      setModelCatalog(null);
+      log.warn('Failed to load AI model catalog', { error });
+    }
+  }, []);
+
   // Load configuration data.
   const loadConfigData = useCallback(async () => {
     try {
@@ -273,13 +282,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       setAllModels(models);
       setDefaultModels(defaultModelsData);
       setModeModel(agentModelDefaults?.mode?.trim() || 'auto');
-
-      try {
-        setModelCatalog(await aiApi.getModelCatalog());
-      } catch (error) {
-        setModelCatalog(null);
-        log.warn('Failed to load AI model catalog', { error });
-      }
+      await loadModelCatalog();
 
       log.debug('Configuration loaded', {
         modelsCount: models.length
@@ -287,9 +290,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     } catch (error) {
       log.error('Failed to load configuration', error);
     }
-  }, []);
+  }, [loadModelCatalog]);
   
   useEffect(() => {
+    const unsubscribeCatalog = aiApi.onModelCatalogUpdated(() => {
+      void loadModelCatalog();
+    });
     loadConfigData();
     
     const handleConfigUpdate = () => {
@@ -309,8 +315,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     return () => {
       globalEventBus.off('mode:config:updated', handleConfigUpdate);
       unsubscribe();
+      unsubscribeCatalog();
     };
-  }, [loadConfigData]);
+  }, [loadConfigData, loadModelCatalog]);
 
   const loadAcpOptions = useCallback(async () => {
     if (!isAcpSession || !acpClientId || !sessionId) {

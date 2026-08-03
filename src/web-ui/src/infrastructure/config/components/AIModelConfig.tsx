@@ -452,22 +452,26 @@ const AIModelConfig: React.FC = () => {
       : t('advancedSettings.customRequestBody.modeMergeHint');
   }, [getCustomRequestBodyTrimHint, t]);
 
-  
+  const loadModelCatalog = useCallback(async () => {
+    try {
+      setModelCatalog(await aiApi.getModelCatalog());
+    } catch (error) {
+      setModelCatalog(null);
+      log.warn('Failed to load model reasoning catalog', { error });
+    }
+  }, []);
+
   const loadConfig = useCallback(async () => {
     try {
-      const [models, proxy, streamIdleTimeoutSecs, streamTtftTimeoutSecs, allowJsonRepair, catalog] = await Promise.all([
+      const [models, proxy, streamIdleTimeoutSecs, streamTtftTimeoutSecs, allowJsonRepair] = await Promise.all([
         configManager.getConfig<AIModelConfigType[]>('ai.models'),
         configManager.getConfig<ProxyConfig>('ai.proxy'),
         configManager.getConfig<number | null>('ai.stream_idle_timeout_secs'),
         configManager.getConfig<number | null>('ai.stream_ttft_timeout_secs'),
         configManager.getConfig<boolean>('ai.allow_tool_json_repair'),
-        aiApi.getModelCatalog().catch((error) => {
-          log.warn('Failed to load model reasoning catalog', { error });
-          return null;
-        }),
       ]);
       setAiModels(models);
-      setModelCatalog(catalog);
+      await loadModelCatalog();
       if (proxy) {
         setProxyConfig(proxy);
       }
@@ -481,11 +485,15 @@ const AIModelConfig: React.FC = () => {
     } catch (error) {
       log.error('Failed to load AI config', error);
     }
-  }, []);
+  }, [loadModelCatalog]);
 
   useEffect(() => {
+    const unsubscribeCatalog = aiApi.onModelCatalogUpdated(() => {
+      void loadModelCatalog();
+    });
     loadConfig();
-  }, [loadConfig]);
+    return unsubscribeCatalog;
+  }, [loadConfig, loadModelCatalog]);
 
   const refreshSubscriptionAccounts = useCallback(async () => {
     setIsLoadingSubscriptions(true);
