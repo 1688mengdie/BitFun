@@ -17,6 +17,16 @@ use tokio::fs;
 type ConfigMigrationFn = fn(Value) -> BitFunResult<Value>;
 type ConfigMigration = (&'static str, &'static str, ConfigMigrationFn);
 
+fn invalid_config_error(context: &str, result: &ConfigValidationResult) -> BitFunError {
+    let messages = result
+        .errors
+        .iter()
+        .map(|error| format!("{}: {}", error.path, error.message))
+        .collect::<Vec<_>>()
+        .join(", ");
+    BitFunError::validation(format!("{context}: {messages}"))
+}
+
 fn canonical_config_path(path: &str) -> &str {
     match path {
         "ai.review_teams.rate_limit_status" => "ai.review_team_rate_limit_status",
@@ -361,6 +371,14 @@ impl ConfigManager {
 
                 self.config = config;
 
+                let validation_result = self.validate_config().await?;
+                if !validation_result.valid {
+                    return Err(invalid_config_error(
+                        "Invalid configuration file",
+                        &validation_result,
+                    ));
+                }
+
                 if needs_migration || legacy_config_normalized {
                     self.config.version = current_version;
                     self.save_config().await?;
@@ -400,6 +418,14 @@ impl ConfigManager {
         Self::add_default_func_agent_models_config(&mut config.ai.func_agent_models);
 
         self.config = config;
+
+        let validation_result = self.validate_config().await?;
+        if !validation_result.valid {
+            return Err(invalid_config_error(
+                "Invalid merged configuration file",
+                &validation_result,
+            ));
+        }
 
         self.config.version = env!("CARGO_PKG_VERSION").to_string();
         self.save_config().await?;
@@ -511,9 +537,19 @@ impl ConfigManager {
         self.set_value_by_path(path, json_value)?;
         self.config.last_modified = chrono::Utc::now();
 
-        if let Err(e) = self.validate_config().await {
+        let validation_result = match self.validate_config().await {
+            Ok(result) => result,
+            Err(error) => {
+                self.config = old_config;
+                return Err(error);
+            }
+        };
+        if !validation_result.valid {
             self.config = old_config;
-            return Err(e);
+            return Err(invalid_config_error(
+                "Invalid configuration update",
+                &validation_result,
+            ));
         }
 
         self.notify_config_changed(path, &old_config).await?;
@@ -537,6 +573,21 @@ impl ConfigManager {
         }
 
         self.config.last_modified = chrono::Utc::now();
+
+        let validation_result = match self.validate_config().await {
+            Ok(result) => result,
+            Err(error) => {
+                self.config = old_config;
+                return Err(error);
+            }
+        };
+        if !validation_result.valid {
+            self.config = old_config;
+            return Err(invalid_config_error(
+                "Invalid configuration reset",
+                &validation_result,
+            ));
+        }
 
         if let Some(path) = path {
             let path = canonical_config_path(path);
@@ -579,15 +630,10 @@ impl ConfigManager {
 
         let validation_result = self.providers.validate_config(&imported_config).await?;
         if !validation_result.valid {
-            let error_messages: Vec<String> = validation_result
-                .errors
-                .iter()
-                .map(|e| e.message.clone())
-                .collect();
-            return Err(BitFunError::validation(format!(
-                "Invalid imported config: {}",
-                error_messages.join(", ")
-            )));
+            return Err(invalid_config_error(
+                "Invalid imported config",
+                &validation_result,
+            ));
         }
 
         self.config = imported_config;

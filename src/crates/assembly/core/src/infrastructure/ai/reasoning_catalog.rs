@@ -55,7 +55,8 @@ fn models_dev_catalog_service() -> &'static ModelsDevCatalogService {
 }
 
 #[cfg(feature = "product-full")]
-pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCatalogSnapshot {
+pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
+) -> ModelsDevReasoningCatalogSnapshot {
     if let Ok(cache) = parsed_catalog_cache().read() {
         if let Some(cached) = cache
             .as_ref()
@@ -87,7 +88,14 @@ pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCat
         });
     }
 
-    let refresh_service = service.clone();
+    loaded
+}
+
+#[cfg(feature = "product-full")]
+pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCatalogSnapshot {
+    let loaded = load_models_dev_reasoning_catalog_without_refresh().await;
+
+    let refresh_service = models_dev_catalog_service().clone();
     tokio::spawn(async move {
         let ModelsDevRefreshOutcome::Updated(snapshot) = refresh_service.refresh_if_stale().await
         else {
@@ -175,6 +183,12 @@ async fn emit_models_dev_catalog_updated(snapshot: &ModelsDevSnapshot) {
 
 #[cfg(not(feature = "product-full"))]
 pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCatalogSnapshot {
+    ModelsDevReasoningCatalogSnapshot { catalog: None }
+}
+
+#[cfg(not(feature = "product-full"))]
+pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
+) -> ModelsDevReasoningCatalogSnapshot {
     ModelsDevReasoningCatalogSnapshot { catalog: None }
 }
 
