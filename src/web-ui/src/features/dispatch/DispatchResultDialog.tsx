@@ -78,8 +78,16 @@ export const DispatchResultDialog: React.FC<DispatchResultDialogProps> = ({
       ariaLabelledBy={DIALOG_TITLE_ID}
       testId="dispatch-sync-dialog"
     >
-      <div className="dispatch-result-dialog">
-        <div className="dispatch-result-dialog__header">
+      <div
+        className="dispatch-result-dialog"
+        data-bf-component="dispatch-result-dialog"
+        data-bf-part="root"
+      >
+        <div
+          className="dispatch-result-dialog__header"
+          data-bf-component="dispatch-result-dialog"
+          data-bf-part="header"
+        >
           <h2 id={DIALOG_TITLE_ID} className="dispatch-result-dialog__title">
             {t('dispatch.syncTitle')}
           </h2>
@@ -90,7 +98,11 @@ export const DispatchResultDialog: React.FC<DispatchResultDialogProps> = ({
           </span>
         </div>
 
-        <div className="dispatch-result-dialog__body">
+        <div
+          className="dispatch-result-dialog__body"
+          data-bf-component="dispatch-result-dialog"
+          data-bf-part="body"
+        >
           {error ? (
             <Alert type="error" message={error} closable onClose={() => setError(null)} />
           ) : null}
@@ -175,7 +187,11 @@ export const DispatchResultDialog: React.FC<DispatchResultDialogProps> = ({
           ) : null}
         </div>
 
-        <div className="dispatch-result-dialog__actions">
+        <div
+          className="dispatch-result-dialog__actions"
+          data-bf-component="dispatch-result-dialog"
+          data-bf-part="actions"
+        >
           <Button variant="secondary" size="small" onClick={onClose}>
             {t('dispatch.syncClose')}
           </Button>

@@ -374,8 +374,16 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
       ariaLabelledBy={DIALOG_TITLE_ID}
       testId="dispatch-install-dialog"
     >
-      <div className="dispatch-install-dialog">
-        <div className="dispatch-install-dialog__header">
+      <div
+        className="dispatch-install-dialog"
+        data-bf-component="dispatch-install-dialog"
+        data-bf-part="root"
+      >
+        <div
+          className="dispatch-install-dialog__header"
+          data-bf-component="dispatch-install-dialog"
+          data-bf-part="header"
+        >
           <h2 id={DIALOG_TITLE_ID} className="dispatch-install-dialog__title">
             {t('dispatch.configureTitle', { target: target?.displayName ?? '' })}
           </h2>
@@ -384,7 +392,11 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
           </span>
         </div>
 
-        <div className="dispatch-install-dialog__body">
+        <div
+          className="dispatch-install-dialog__body"
+          data-bf-component="dispatch-install-dialog"
+          data-bf-part="body"
+        >
           {error ? (
             <Alert type="error" message={error} closable onClose={() => setError(null)} />
           ) : null}
@@ -625,7 +637,11 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
           </section>
         </div>
 
-        <div className="dispatch-install-dialog__actions">
+        <div
+          className="dispatch-install-dialog__actions"
+          data-bf-component="dispatch-install-dialog"
+          data-bf-part="actions"
+        >
           <Button
             variant="secondary"
             size="small"

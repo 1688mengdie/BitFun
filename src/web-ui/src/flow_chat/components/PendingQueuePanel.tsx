@@ -208,16 +208,16 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
   }
 
   return (
-    <div
+    <div data-bf-component="pending-queue-panel" data-bf-part="root"
       className={`bitfun-pending-queue-panel ${className ?? ''}`.trim()}
       data-testid="pending-queue-panel"
       onClick={e => {
         e.stopPropagation();
       }}
     >
-      <div className="bitfun-pending-queue-panel__header">
+      <div data-bf-component="pending-queue-panel" data-bf-part="header" className="bitfun-pending-queue-panel__header">
         <Inbox size={10} className="bitfun-pending-queue-panel__header-icon" />
-        <span className="bitfun-pending-queue-panel__title">
+        <span data-bf-component="pending-queue-panel" data-bf-part="title" className="bitfun-pending-queue-panel__title">
           {t('pendingQueue.title', { count: visibleItems.length })}
           <span className="bitfun-pending-queue-panel__hint">
             {' · '}
@@ -225,7 +225,7 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
           </span>
         </span>
       </div>
-      <ul className="bitfun-pending-queue-panel__list">
+      <ul data-bf-component="pending-queue-panel" data-bf-part="list" className="bitfun-pending-queue-panel__list">
         {visibleItems.map(item => {
           const isEditing = editingId === item.id;
           const isSendingNow = item.status === 'sending_now';
@@ -241,11 +241,17 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
             .filter(Boolean)
             .join(' ');
           return (
-            <li key={item.id} className={itemClass}>
-              <div className="bitfun-pending-queue-panel__content">
+            <li data-bf-component="pending-queue-panel" data-bf-part="item" data-bf-state={[
+              isEditing && 'editing',
+              isSending && 'sending',
+              isFailed && 'failed',
+            ].filter(Boolean).join(' ') || undefined} key={item.id} className={itemClass}>
+              <div data-bf-component="pending-queue-panel" data-bf-part="content" className="bitfun-pending-queue-panel__content">
                 {isEditing ? (
                   <>
                     <textarea
+                      data-bf-component="pending-queue-panel"
+                      data-bf-part="editor"
                       className="bitfun-pending-queue-panel__editor"
                       value={editingDraft}
                       autoFocus
@@ -268,6 +274,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                 ) : isSendingNow ? (
                   <>
                     <div
+                      data-bf-component="pending-queue-panel"
+                      data-bf-part="preview"
                       className="bitfun-pending-queue-panel__preview"
                       title={previewText}
                     >
@@ -277,7 +285,7 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                         </span>
                       )}
                     </div>
-                    <div className="bitfun-pending-queue-panel__sending-label">
+                    <div data-bf-component="pending-queue-panel" data-bf-part="status" className="bitfun-pending-queue-panel__sending-label">
                       <Loader2 size={11} />
                       {t('pendingQueue.statusSending')}
                     </div>
@@ -285,6 +293,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                 ) : (
                   <>
                     <div
+                      data-bf-component="pending-queue-panel"
+                      data-bf-part="preview"
                       className="bitfun-pending-queue-panel__preview"
                       title={t('pendingQueue.actions.edit')}
                       role="button"
@@ -304,18 +314,20 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                       )}
                     </div>
                     {isFailed && (
-                      <div className="bitfun-pending-queue-panel__failed-label">
+                      <div data-bf-component="pending-queue-panel" data-bf-part="status" className="bitfun-pending-queue-panel__failed-label">
                         {t('pendingQueue.statusFailed')}
                       </div>
                     )}
                   </>
                 )}
               </div>
-              <div className="bitfun-pending-queue-panel__actions">
+              <div data-bf-component="pending-queue-panel" data-bf-part="actions" className="bitfun-pending-queue-panel__actions">
                 {isEditing ? (
                   <>
                     <Tooltip content={t('pendingQueue.actions.saveEdit')}>
                       <IconButton
+                        data-bf-component="pending-queue-panel"
+                        data-bf-part="action"
                         size="small"
                         className="bitfun-pending-queue-panel__btn bitfun-pending-queue-panel__btn--primary"
                         onClick={() => handleEditSave(item)}
@@ -326,6 +338,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                     </Tooltip>
                     <Tooltip content={t('pendingQueue.actions.cancelEdit')}>
                       <IconButton
+                        data-bf-component="pending-queue-panel"
+                        data-bf-part="action"
                         size="small"
                         className="bitfun-pending-queue-panel__btn"
                         onClick={handleEditCancel}
@@ -339,6 +353,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                   <>
                     <Tooltip content={t('pendingQueue.actions.edit')}>
                       <IconButton
+                        data-bf-component="pending-queue-panel"
+                        data-bf-part="action"
                         size="small"
                         className="bitfun-pending-queue-panel__btn"
                         disabled={isSending}
@@ -351,6 +367,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                     {!isAcpSession && (
                       <Tooltip content={t('pendingQueue.tooltip.sendNow')}>
                         <IconButton
+                          data-bf-component="pending-queue-panel"
+                          data-bf-part="action"
                           size="small"
                           className="bitfun-pending-queue-panel__btn bitfun-pending-queue-panel__btn--primary"
                           disabled={isSending}
@@ -369,6 +387,8 @@ export function PendingQueuePanel({ sessionId, className }: PendingQueuePanelPro
                     )}
                     <Tooltip content={t('pendingQueue.actions.delete')}>
                       <IconButton
+                        data-bf-component="pending-queue-panel"
+                        data-bf-part="action"
                         size="small"
                         className="bitfun-pending-queue-panel__btn bitfun-pending-queue-panel__btn--danger"
                         disabled={isSending}

@@ -317,7 +317,11 @@ const MiniAppMarketView: React.FC = () => {
         title={t('market.title')}
         subtitle={t('market.subtitle')}
         actions={(
-          <div className="miniapp-market-native__header-actions">
+          <div
+            className="miniapp-market-native__header-actions"
+            data-bf-component="miniapp-market-view"
+            data-bf-part="headerActions"
+          >
             <Search
               value={query}
               onChange={setQuery}
@@ -350,7 +354,11 @@ const MiniAppMarketView: React.FC = () => {
         )}
       />
 
-      <div className="gallery-zones">
+      <div
+        className="gallery-zones"
+        data-bf-component="miniapp-market-view"
+        data-bf-part="root"
+      >
         <GalleryZone
           title={t('market.catalog')}
           tools={(
@@ -407,6 +415,8 @@ const MiniAppMarketView: React.FC = () => {
                       key={item.listingId}
                       type="button"
                       className="miniapp-market-card"
+                      data-bf-component="miniapp-market-view"
+                      data-bf-part="card"
                       onClick={() => void openDetail(item)}
                     >
                       <div className="miniapp-market-card__visual">
@@ -516,7 +526,11 @@ const MiniAppMarketView: React.FC = () => {
         ) : null}
       >
         {detail ? (
-          <div className="miniapp-market-detail">
+              <div
+                className="miniapp-market-detail"
+                data-bf-component="miniapp-market-view"
+                data-bf-part="detail"
+              >
             {detail.screenshotUrls.length ? (
               <div className="miniapp-market-detail__screenshots">
                 {detail.screenshotUrls.map((url) => <img key={url} src={url} alt="" />)}

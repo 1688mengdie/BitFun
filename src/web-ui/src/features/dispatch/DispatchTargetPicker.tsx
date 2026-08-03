@@ -102,6 +102,8 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
   const menu = open ? (
     <div
       className="dispatch-target-picker__menu"
+      data-bf-component="dispatch-target-picker"
+      data-bf-part="menu"
       role="menu"
       aria-label={t('chatInput.dispatch.menuLabel')}
       data-testid="dispatch-target-menu"
@@ -119,6 +121,8 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
           role="menuitemradio"
           aria-checked={target.kind === 'local'}
           className="dispatch-target-picker__option"
+          data-bf-component="dispatch-target-picker"
+          data-bf-part="option"
           onClick={() => {
             setOpen(false);
             onSelectLocal?.();
@@ -259,11 +263,18 @@ export const DispatchTargetPicker: React.FC<DispatchTargetPickerProps> = ({
 
   return (
     <>
-      <div ref={rootRef} className="dispatch-target-picker">
+      <div
+        ref={rootRef}
+        className="dispatch-target-picker"
+        data-bf-component="dispatch-target-picker"
+        data-bf-part="root"
+      >
         <Tooltip content={tooltip} placement="top">
           <button
             type="button"
             className="dispatch-target-picker__trigger"
+            data-bf-component="dispatch-target-picker"
+            data-bf-part="trigger"
             aria-haspopup="menu"
             aria-expanded={open}
             aria-label={tooltip}

@@ -5,15 +5,15 @@
  * deck.renderPage → hidden host WebView slide rasterization (export),
  * chat.* → floating session bubble composer claims and session focus,
  * clipboard.* → Host navigator.clipboard.
- * Also handles bitfun/request-theme and pushes theme changes to the iframe.
+ * Also handles bitfun/request-appearance and pushes Appearance changes to the iframe.
  */
 import { useLayoutEffect, useRef, useEffect, useState, RefObject } from 'react';
 import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { open as dialogOpen, save as dialogSave, message as dialogMessage } from '@tauri-apps/plugin-dialog';
 import type { MiniApp } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext';
-import { useTheme } from '@/infrastructure/theme/hooks/useTheme';
-import { buildMiniAppThemeVars } from '../utils/buildMiniAppThemeVars';
+import { useAppearance } from '@/infrastructure/appearance';
+import { buildMiniAppAppearancePayload } from '../utils/buildMiniAppAppearancePayload';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 import { useI18n } from '@/infrastructure/i18n';
 import type { MiniAppRunScope } from '../customization/miniAppCustomizationTypes';
@@ -58,10 +58,10 @@ export function useMiniAppBridge(
 ) {
   const [bridgeReady, setBridgeReady] = useState(false);
   const { workspacePath } = useCurrentWorkspace();
-  const { theme: currentTheme } = useTheme();
+  const { current: currentAppearance } = useAppearance();
   const { currentLanguage } = useI18n('scenes/miniapp');
-  const themeRef = useRef(currentTheme);
-  themeRef.current = currentTheme;
+  const appearanceRef = useRef(currentAppearance);
+  appearanceRef.current = currentAppearance;
   const workspacePathRef = useRef(workspacePath);
   workspacePathRef.current = workspacePath;
   const localeRef = useRef(currentLanguage);
@@ -125,11 +125,11 @@ export function useMiniAppBridge(
           '*',
         );
 
-      if (method === 'bitfun/request-theme') {
-        const payload = buildMiniAppThemeVars(themeRef.current);
+      if (method === 'bitfun/request-appearance') {
+        const payload = buildMiniAppAppearancePayload(appearanceRef.current);
         if (payload && iframeRef.current?.contentWindow) {
           iframeRef.current.contentWindow.postMessage(
-            { type: 'bitfun:event', event: 'themeChange', payload },
+            { type: 'bitfun:event', event: 'appearanceChange', payload },
             '*',
           );
         }
@@ -636,14 +636,13 @@ export function useMiniAppBridge(
   }, [iframeRef]);
 
   useEffect(() => {
-    if (!bridgeReady) return;
-    const payload = buildMiniAppThemeVars(currentTheme);
+    const payload = buildMiniAppAppearancePayload(currentAppearance);
     if (!payload || !iframeRef.current?.contentWindow) return;
     iframeRef.current.contentWindow.postMessage(
-      { type: 'bitfun:event', event: 'themeChange', payload },
+      { type: 'bitfun:event', event: 'appearanceChange', payload },
       '*',
     );
-  }, [bridgeReady, currentTheme, iframeRef]);
+  }, [currentAppearance, iframeRef]);
 
   // Push locale changes to the iframe so MiniApps can re-render their UI strings
   // without reloading. MiniApps subscribe via `app.on('localeChange', fn)`.

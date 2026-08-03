@@ -197,7 +197,7 @@ MiniApp 框架**只暴露下列能力**，没有任何"通用 BitFun 后端通�
 | 悬浮会话气泡 | `app.chat.claimComposer / releaseComposer / focusSession / setComposerDraft / onUserMessage` | 受 `permissions.agent.enabled` 限制；把内容和提交路由注册进右下角的标准悬浮聊天窗（输入器、附件、模型、权限、停止等仍由宿主共享组件拥有），并展示小应用自己的 Agent 过程（Agentic MiniApp 模式，样板间：`builtin-ppt-live`） |
 | 幻灯片栅格化 | `app.deck.renderPage` | 在隐藏宿主 WebView 中渲染单页 HTML，返回 base64 PNG/PDF（导出用） |
 | 自定义后端 | `app.call('xxx', …)` + `worker.js` | 仅 `node.enabled = true` 时可用，自己实现业务逻辑 |
-| 主题 / i18n | `app.theme` / `app.locale` / `app.onThemeChange` / `app.onLocaleChange` / `app.t(...)` | 见对应章节 |
+| 主题 / i18n | `app.appearanceMode` / `app.locale` / `app.onAppearanceChange` / `app.onLocaleChange` / `app.t(...)` | 见对应章节 |
 
 ### 框架**不**直接暴露的 BitFun 后端能力（截至本文档）
 
@@ -242,16 +242,16 @@ MiniApp 在 iframe 中运行时自动与主应用主题同步，避免界面风�
 
 | 成员 | 说明 |
 |------|------|
-| `app.theme` | 当前主题类型字符串：`'dark'` 或 `'light'`（随主应用切换更新） |
-| `app.onThemeChange(fn)` | 注册主题变更回调，参数为 payload：`{ type, id, vars }` |
+| `app.appearanceMode` | 当前主题类型字符串：`'dark'` 或 `'light'`（随主应用切换更新） |
+| `app.onAppearanceChange(fn)` | 注册主题变更回调，参数为 payload：`{ mode, id, vars }` |
 
-### data-theme-type 属性
+### data-bf-appearance-mode 属性
 
-编译后的 HTML 根元素 `<html>` 带有 `data-theme-type="dark"` 或 `"light"`，便于用 CSS 按主题写样式，例如：
+编译后的 HTML 根元素 `<html>` 带有 `data-bf-appearance-mode="dark"` 或 `"light"`，便于用 CSS 按主题写样式，例如：
 
 ```css
-[data-theme-type="light"] .panel { background: #f5f5f5; }
-[data-theme-type="dark"] .panel { background: #1a1a1a; }
+[data-bf-appearance-mode="light"] .panel { background: #f5f5f5; }
+[data-bf-appearance-mode="dark"] .panel { background: #1a1a1a; }
 ```
 
 ### --bitfun-* CSS 变量
@@ -307,8 +307,8 @@ body {
 
 ### 同步时机
 
-- iframe 加载后 bridge 会向宿主发送 `bitfun/request-theme`，宿主回推当前主题变量，iframe 内 `_applyThemeVars` 写入 `:root`。
-- 主应用切换主题时，宿主会向 iframe 发送 `themeChange` 事件，bridge 更新变量并触发 `onThemeChange` 回调。
+- iframe 加载后 bridge 会向宿主发送 `bitfun/request-appearance`，宿主回推当前主题变量，iframe 内 `_applyAppearanceVars` 写入 `:root`。
+- 主应用切换主题时，宿主会向 iframe 发送 `appearanceChange` 事件，bridge 更新变量并触发 `onAppearanceChange` 回调。
 
 ## 国际化（i18n）
 

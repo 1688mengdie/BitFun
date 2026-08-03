@@ -147,7 +147,7 @@ describe('Remote Connect safety contracts', () => {
     expect(dialogSource).toContain('setAccountUsername(hint?.username.trim() || null)');
     expect(connectedView).toContain("t('accountLogin.username')");
     expect(connectedView).not.toContain('connectedUserId');
-    expect(dialogSource).toContain('handleDisconnectRelay,\n            accountUsername,');
+    expect(dialogSource).toMatch(/handleDisconnectRelay,\s+accountUsername,/);
     expect(performLogin).toContain("loginSuccess', { user_id: user }");
     expect(performLogin).not.toContain("loginSuccess', { user_id: result.user_id }");
   });

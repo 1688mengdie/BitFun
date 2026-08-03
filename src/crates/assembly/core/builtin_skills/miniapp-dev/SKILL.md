@@ -163,9 +163,9 @@ MiniApp 里可用的是 `window.app`。
 - `app.dialog.*`
 - `app.clipboard.*`
 - `app.ai.*`
-- `app.theme`
+- `app.appearanceMode`
 - `app.locale`
-- `app.onThemeChange`
+- `app.onAppearanceChange`
 - `app.onLocaleChange`
 - `app.t(...)`
 - `app.call(...)` 仅在 `node.enabled = true` 时
