@@ -2109,6 +2109,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           // Undefined is intentional: the target's probed default model wins
           // unless a future preflight selector records an explicit choice.
           dispatchModel: selection.model,
+          dispatchModelCatalog: selection.modelCatalog,
           dispatchAvailableModels: selection.availableModels,
           dispatchDefaultModel: selection.defaultModel,
         },
@@ -2192,12 +2193,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       models: effectiveTargetSession.config.dispatchAvailableModels ?? [],
       selectedModelId: effectiveTargetSession.config.dispatchModel,
       defaultModelId: effectiveTargetSession.config.dispatchDefaultModel,
+      reasoningCatalog: effectiveTargetSession.config.dispatchModelCatalog,
+      selectedReasoningPreset: effectiveTargetSession.config.dispatchReasoningPreset,
       providerLabel,
       disabled: caps.submissionOptionsLocked,
       onSelect: (modelId: string) => {
         FlowChatStore.getInstance().updateSessionDispatchModel(sessionId, modelId);
         if (jobId) {
           dispatchJobStore.getState().updateModel(jobId, modelId);
+        }
+      },
+      onSelectReasoningPreset: (presetId: string | null) => {
+        const normalizedPreset = presetId?.trim() || 'auto';
+        FlowChatStore.getInstance().updateSessionDispatchReasoningPreset(
+          sessionId,
+          normalizedPreset,
+        );
+        if (jobId) {
+          dispatchJobStore.getState().updateReasoningPreset(jobId, normalizedPreset);
         }
       },
     };

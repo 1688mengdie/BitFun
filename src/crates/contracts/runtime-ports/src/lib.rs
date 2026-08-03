@@ -1148,6 +1148,8 @@ pub struct AgentSessionSummary {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_user_dialog_agent_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_submitted_agent_type: Option<String>,
@@ -3868,6 +3870,7 @@ mod tests {
             session_name: "Main".to_string(),
             agent_type: "agentic".to_string(),
             model_id: Some("provider/model".to_string()),
+            reasoning_preset: Some("high".to_string()),
             last_user_dialog_agent_type: Some("plan".to_string()),
             last_submitted_agent_type: Some("agentic".to_string()),
             turn_count: 3,

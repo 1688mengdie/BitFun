@@ -5632,6 +5632,7 @@ impl SessionManager {
                         session_name: session.session_name.clone(),
                         agent_type: session.agent_type.clone(),
                         model_id: session.config.model_id.clone(),
+                        reasoning_preset: session.config.reasoning_preset.clone(),
                         last_user_dialog_agent_type: session.last_user_dialog_agent_type.clone(),
                         last_submitted_agent_type: session.last_submitted_agent_type.clone(),
                         created_by: session.created_by.clone(),

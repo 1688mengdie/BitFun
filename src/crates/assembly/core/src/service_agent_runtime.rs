@@ -361,23 +361,35 @@ fn remote_chat_history_turn_from_core_turn(turn: &DialogTurnData) -> RemoteChatH
     }
 }
 
-async fn resolve_session_model_id(session_id: &str) -> Option<String> {
-    let coordinator = get_global_coordinator()?;
+async fn resolve_session_model_selection(session_id: &str) -> (Option<String>, Option<String>) {
+    let Some(coordinator) = get_global_coordinator() else {
+        return (None, None);
+    };
     let session_manager = coordinator.get_session_manager();
 
     if let Some(session) = session_manager.get_session(session_id) {
-        return normalize_remote_session_model_id(session.config.model_id.as_deref());
+        return (
+            normalize_remote_session_model_id(session.config.model_id.as_deref()),
+            session.config.reasoning_preset.clone(),
+        );
     }
 
-    let session_storage_dir =
-        CoreServiceAgentRuntime::resolve_session_storage_dir(session_id).await?;
+    let Some(session_storage_dir) =
+        CoreServiceAgentRuntime::resolve_session_storage_dir(session_id).await
+    else {
+        return (None, None);
+    };
     coordinator
         .restore_session_view_from_storage_path_timed(&session_storage_dir, session_id)
         .await
         .ok()
-        .and_then(|(session, _, _)| {
-            normalize_remote_session_model_id(session.config.model_id.as_deref())
+        .map(|(session, _, _)| {
+            (
+                normalize_remote_session_model_id(session.config.model_id.as_deref()),
+                session.config.reasoning_preset,
+            )
         })
+        .unwrap_or_default()
 }
 
 fn core_dialog_submission_policy(policy: RemoteDialogSubmissionPolicy) -> DialogSubmissionPolicy {
@@ -1000,10 +1012,10 @@ impl CoreServiceAgentRuntime {
             })
             .collect();
 
-        let session_model_id = if let Some(session_id) = session_id {
-            resolve_session_model_id(session_id).await
+        let (session_model_id, session_reasoning_preset) = if let Some(session_id) = session_id {
+            resolve_session_model_selection(session_id).await
         } else {
-            None
+            (None, None)
         };
         Ok(build_remote_model_catalog(RemoteModelCatalogFacts {
             last_modified_ms: global_config.last_modified.timestamp_millis(),
@@ -1018,6 +1030,7 @@ impl CoreServiceAgentRuntime {
                 speech_recognition: ai_config.default_models.speech_recognition,
             },
             session_model_id,
+            session_reasoning_preset,
         }))
     }
 

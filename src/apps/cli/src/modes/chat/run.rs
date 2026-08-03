@@ -394,6 +394,7 @@ impl ChatMode {
                             &transcript,
                         );
                         state.current_model_id = summary.model_id;
+                        state.current_reasoning_preset = summary.reasoning_preset;
                         state.apply_workspace_binding(workspace_binding);
 
                         tracing::info!(
@@ -1005,11 +1006,7 @@ impl ChatMode {
                         ..
                     } => {
                         if chat_state.current_turn_id() == Some(turn_id.as_str()) {
-                            chat_state.handle_user_steering(
-                                steering_id,
-                                display_content,
-                                false,
-                            );
+                            chat_state.handle_user_steering(steering_id, display_content, false);
                             chat_view.invalidate_lines_cache();
                             needs_redraw = true;
                         } else {

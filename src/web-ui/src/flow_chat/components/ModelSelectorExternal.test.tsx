@@ -127,4 +127,93 @@ describe('ModelSelector external transport reuse', () => {
     });
     expect(onSelect).toHaveBeenCalledWith('model-b');
   });
+
+  it('hides reasoning when the target did not report a catalog', async () => {
+    await act(async () => {
+      root.render(
+        <ModelSelector
+          currentMode="agentic"
+          externalSelection={{
+            models: ['model-a'],
+            selectedModelId: 'model-a',
+            providerLabel: 'parallels-ubuntu',
+            onSelect: vi.fn(),
+            onSelectReasoningPreset: vi.fn(),
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    expect(
+      container.querySelector('[data-testid="chat-reasoning-preset-selector-btn"]'),
+    ).toBeNull();
+  });
+
+  it('renders target-owned reasoning presets and applies a choice', async () => {
+    const onSelectReasoningPreset = vi.fn(async () => undefined);
+    await act(async () => {
+      root.render(
+        <ModelSelector
+          currentMode="agentic"
+          externalSelection={{
+            models: ['model-a'],
+            selectedModelId: 'model-a',
+            providerLabel: 'parallels-ubuntu',
+            reasoningCatalog: {
+              version: 1,
+              default_models: {},
+              models: [{
+                id: 'model-a',
+                name: 'Target model',
+                provider: 'openai',
+                base_url: 'https://target.example.test/v1',
+                model_name: 'model-a',
+                enabled: true,
+                capabilities: ['text_chat'],
+                enable_thinking_process: true,
+                reasoning: {
+                  status: 'known',
+                  default_preset: 'medium',
+                  presets: [
+                    {
+                      id: 'medium',
+                      label: 'Medium',
+                      order: 10,
+                      source: 'models_dev',
+                      setting: { type: 'effort', value: 'medium' },
+                    },
+                    {
+                      id: 'high',
+                      label: 'High',
+                      order: 20,
+                      source: 'models_dev',
+                      setting: { type: 'effort', value: 'high' },
+                    },
+                  ],
+                },
+              }],
+            },
+            onSelect: vi.fn(),
+            onSelectReasoningPreset,
+          }}
+        />,
+      );
+      await Promise.resolve();
+    });
+
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-reasoning-preset-selector-btn"]',
+    );
+    expect(trigger).not.toBeNull();
+    await act(async () => {
+      trigger?.click();
+    });
+    await act(async () => {
+      document.body.querySelector<HTMLButtonElement>('[data-preset-id="high"]')?.click();
+      await Promise.resolve();
+    });
+
+    expect(onSelectReasoningPreset).toHaveBeenCalledWith('high');
+  });
 });

@@ -81,6 +81,8 @@ export interface DispatchProtocolProbe {
   capabilities: string[];
   modelConfigured: boolean;
   availableModels: string[];
+  /** Canonical capability projection produced by the target runtime. */
+  modelCatalog: import('@/infrastructure/api/service-api/AIApi').AIModelCatalog;
   defaultModel?: string;
   modelDiagnostic?: string;
   workspace?: DispatchWorkspaceProbe;
@@ -285,6 +287,7 @@ export interface DispatchSelection {
   baseRef: string;
   approvalPolicy: DispatchApprovalPolicy;
   model?: string;
+  modelCatalog?: import('@/infrastructure/api/service-api/AIApi').AIModelCatalog;
   availableModels?: string[];
   defaultModel?: string;
 }

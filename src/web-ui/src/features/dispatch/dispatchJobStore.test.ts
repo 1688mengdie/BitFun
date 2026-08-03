@@ -377,4 +377,28 @@ describe('dispatchJobStore', () => {
     expect(persistedState?.transportByJobId).toBeUndefined();
     expect(persistedState?.dismissedSessionIds).toEqual([]);
   });
+
+  it('resets reasoning to Auto when the dispatch model changes', () => {
+    registerJob();
+    dispatchJobStore.getState().updateReasoningPreset('job-1', 'high');
+
+    dispatchJobStore.getState().updateModel('job-1', 'model-2');
+
+    expect(dispatchJobStore.getState().jobs['job-1']).toMatchObject({
+      model: 'model-2',
+      reasoningPreset: 'auto',
+    });
+  });
+
+  it('persists the target reasoning preset in observer state', () => {
+    registerJob();
+    dispatchJobStore.getState().updateReasoningPreset('job-1', 'high');
+
+    const partialize = dispatchJobStore.persist.getOptions().partialize;
+    const persistedState = partialize?.(
+      dispatchJobStore.getState(),
+    ) as { jobs?: Record<string, { reasoningPreset?: string }> } | undefined;
+
+    expect(persistedState?.jobs?.['job-1']?.reasoningPreset).toBe('high');
+  });
 });

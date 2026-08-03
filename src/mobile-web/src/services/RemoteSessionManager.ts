@@ -95,6 +95,16 @@ export interface RemoteModelConfig {
   enable_thinking_process?: boolean;
   reasoning_mode?: 'default' | 'enabled' | 'disabled' | 'adaptive';
   reasoning_effort?: string;
+  reasoning?: {
+    status: 'unsupported' | 'unknown' | 'known';
+    default_preset?: string;
+    presets?: Array<{
+      id: string;
+      label: string;
+      order: number;
+      source: 'models_dev' | 'adapter' | 'user';
+    }>;
+  };
 }
 
 export interface RemoteDefaultModels {
@@ -107,6 +117,7 @@ export interface RemoteModelCatalog {
   models: RemoteModelConfig[];
   default_models: RemoteDefaultModels;
   session_model_id?: string | null;
+  session_reasoning_preset?: string | null;
 }
 
 export interface ChatMessageItem {

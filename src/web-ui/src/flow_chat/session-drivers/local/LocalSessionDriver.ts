@@ -65,10 +65,8 @@ export const localSessionDriver: SessionDriver = {
     } = seed;
 
     const sessionModelName = await resolveModelForSessionCreation(config.modelName);
-    const reasoningPreset = remoteConnectionId || remoteSshHost
-      ? undefined
-      : config.reasoningPreset
-        ?? await resolveReasoningPresetForSessionCreation(sessionModelName);
+    const reasoningPreset = config.reasoningPreset
+      ?? await resolveReasoningPresetForSessionCreation(sessionModelName);
     const maxContextTokens = await getModelMaxTokens(sessionModelName, agentType);
     const mergedConfig: SessionConfig = {
       ...config,

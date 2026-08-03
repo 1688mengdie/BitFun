@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use bitfun_agent_runtime::sdk::{PermissionReply, PermissionRequest};
+use bitfun_core::AIModelCatalog;
 
 // The wire contract (version, capability names, attachment shape and
 // limits) has one source of truth shared with the controller side.
@@ -34,7 +35,7 @@ pub(crate) struct DispatchWorkspaceProbe {
     pub(crate) behind: Option<u64>,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DispatchProbeResponse {
     pub(crate) protocol_version: u32,
@@ -44,6 +45,7 @@ pub(crate) struct DispatchProbeResponse {
     pub(crate) capabilities: Vec<String>,
     pub(crate) model_configured: bool,
     pub(crate) available_models: Vec<String>,
+    pub(crate) model_catalog: AIModelCatalog,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) default_model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -83,6 +85,9 @@ pub(crate) struct DispatchSubmitRequest {
     pub(crate) approval_policy: DispatchApprovalPolicy,
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// Explicit canonical preset id. `auto` clears the session override.
+    #[serde(default)]
+    pub(crate) reasoning_preset: Option<String>,
     #[serde(default)]
     pub(crate) title: Option<String>,
     #[serde(default)]
@@ -360,6 +365,10 @@ pub(crate) struct DispatchContinueRequest {
     /// it also becomes the job's model for later turns.
     #[serde(default)]
     pub(crate) model: Option<String>,
+    /// Per-turn preset override. Absent keeps the job's current selection;
+    /// `auto` clears it and uses the target model default.
+    #[serde(default)]
+    pub(crate) reasoning_preset: Option<String>,
     /// Per-turn approval-policy override with the same carry-forward rule.
     #[serde(default)]
     pub(crate) approval_policy: Option<DispatchApprovalPolicy>,

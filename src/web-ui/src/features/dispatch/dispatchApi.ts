@@ -88,6 +88,7 @@ export const dispatchApi = {
     prompt: string;
     approvalPolicy: DispatchApprovalPolicy;
     model?: string;
+    reasoningPreset?: string;
     title?: string;
     sourceWorkspacePath?: string;
     sourceWorkspaceId?: string;
@@ -113,6 +114,8 @@ export const dispatchApi = {
     options?: {
       /** Per-turn model override; carries forward as the job's model. */
       model?: string;
+      /** Per-turn target-owned reasoning preset; `auto` clears the override. */
+      reasoningPreset?: string;
       /** Per-turn approval-policy override with the same carry-forward rule. */
       approvalPolicy?: DispatchApprovalPolicy;
       /** Operation kind; defaults to an ordinary prompt turn. */
@@ -127,6 +130,7 @@ export const dispatchApi = {
         prompt,
         displayContent,
         model: options?.model,
+        reasoningPreset: options?.reasoningPreset,
         approvalPolicy: options?.approvalPolicy,
         kind: options?.kind,
         attachments: options?.attachments,

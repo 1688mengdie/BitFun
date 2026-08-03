@@ -1829,12 +1829,15 @@ function getModelDisplayName(model: RemoteModelConfig | null): string {
   return model.model_name || model.name || '';
 }
 
-function isReasoningEnabled(model: RemoteModelConfig | null): boolean {
-  if (!model) return false;
-  if (model.reasoning_mode) {
-    return model.reasoning_mode === 'enabled' || model.reasoning_mode === 'adaptive';
-  }
-  return !!model.enable_thinking_process;
+function selectedReasoningLabel(
+  model: RemoteModelConfig | null,
+  catalog: RemoteModelCatalog | null,
+): string | undefined {
+  if (model?.reasoning?.status !== 'known') return undefined;
+  const selected = catalog?.session_reasoning_preset?.trim()
+    || model.reasoning.default_preset?.trim();
+  if (!selected) return undefined;
+  return model.reasoning.presets?.find(preset => preset.id === selected)?.label || selected;
 }
 
 function getSelectedModelInfo(
@@ -1865,8 +1868,8 @@ function getSelectedModelInfo(
         ? (selectedModelId === 'primary' ? t('chat.modelPrimary') : t('chat.modelFast'))
         : t('chat.modelAuto'),
       meta: buildModelProviderMeta(resolved) || t('chat.modelAutoDesc'),
-      enableThinking: isReasoningEnabled(resolved),
-      reasoningEffort: resolved?.reasoning_effort,
+      enableThinking: resolved?.reasoning?.status === 'known',
+      reasoningEffort: selectedReasoningLabel(resolved, catalog),
     };
   }
 
@@ -1882,8 +1885,8 @@ function getSelectedModelInfo(
   return {
     label: getModelDisplayName(resolved),
     meta: buildModelProviderMeta(resolved),
-    enableThinking: isReasoningEnabled(resolved),
-    reasoningEffort: resolved.reasoning_effort,
+    enableThinking: resolved.reasoning?.status === 'known',
+    reasoningEffort: selectedReasoningLabel(resolved, catalog),
   };
 }
 
@@ -2032,7 +2035,7 @@ const ModelSelectorPill: React.FC<{
                       <span className="chat-model-selector__option-name-text">
                         {getModelDisplayName(model)}
                       </span>
-                      {isReasoningEnabled(model) && (
+                      {model.reasoning?.status === 'known' && (
                         <SparklesIcon className="chat-model-selector__option-thinking" size={10} />
                       )}
                     </span>
