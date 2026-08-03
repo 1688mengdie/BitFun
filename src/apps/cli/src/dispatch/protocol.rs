@@ -585,6 +585,8 @@ pub(crate) struct DispatchJobListEntry {
     pub(crate) approval_policy: DispatchApprovalPolicy,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_preset: Option<String>,
 }
 
 #[cfg(test)]
@@ -613,5 +615,20 @@ mod tests {
             serde_json::to_value(DispatchJobState::Running).expect("serialize state"),
             "running"
         );
+
+        let list_entry = DispatchJobListEntry {
+            job_id: "job-1".to_string(),
+            session_id: "session-1".to_string(),
+            state: DispatchJobState::Running,
+            started_at: None,
+            workspace_path: "/repo".to_string(),
+            title: "Reasoning job".to_string(),
+            agent_type: "agentic".to_string(),
+            approval_policy: DispatchApprovalPolicy::Remote,
+            model: Some("model-1".to_string()),
+            reasoning_preset: Some("high".to_string()),
+        };
+        let value = serde_json::to_value(list_entry).expect("serialize list entry");
+        assert_eq!(value["reasoningPreset"], "high");
     }
 }

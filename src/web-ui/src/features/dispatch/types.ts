@@ -219,6 +219,7 @@ export interface DispatchJobListEntry {
   agentType?: string;
   approvalPolicy?: DispatchApprovalPolicy;
   model?: string;
+  reasoningPreset?: string;
 }
 
 export interface OutboundDispatchRecord {
@@ -244,6 +245,7 @@ export interface OutboundDispatchRecord {
   agentType?: string;
   approvalPolicy?: DispatchApprovalPolicy;
   model?: string;
+  reasoningPreset?: string;
   lastCursor: number;
   lastState: DispatchJobState;
   createdAt: string;
