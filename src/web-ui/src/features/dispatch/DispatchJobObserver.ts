@@ -88,6 +88,7 @@ const RAW_EVENT_NAMES: Record<string, string> = {
   ThreadGoalUpdated: 'agentic://thread-goal-updated',
   DeepReviewQueueStateChanged: 'agentic://deep-review-queue-state-changed',
   SessionModelAutoMigrated: 'agentic://session-model-auto-migrated',
+  SessionReasoningPresetAutoCleared: 'agentic://session-reasoning-preset-auto-cleared',
   UserSteeringInjected: 'agentic://user-steering-injected',
 };
 

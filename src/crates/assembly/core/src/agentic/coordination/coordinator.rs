@@ -10277,6 +10277,23 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await;
     }
 
+    pub async fn emit_session_reasoning_preset_auto_cleared(
+        &self,
+        session_id: &str,
+        previous_preset_id: &str,
+        reason: &str,
+    ) {
+        let event = AgenticEvent::SessionReasoningPresetAutoCleared {
+            session_id: session_id.to_string(),
+            previous_preset_id: previous_preset_id.to_string(),
+            reason: reason.to_string(),
+        };
+        let _ = self
+            .event_queue
+            .enqueue(event, Some(EventPriority::High))
+            .await;
+    }
+
     pub async fn emit_deep_review_queue_state_changed(
         &self,
         session_id: &str,

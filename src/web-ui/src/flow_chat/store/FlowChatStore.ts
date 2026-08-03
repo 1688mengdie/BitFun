@@ -3825,6 +3825,23 @@ export class FlowChatStore {
     return true;
   }
 
+  /** Clear a backend-invalidated reasoning preset without overwriting a newer choice. */
+  public applySessionReasoningPresetAutoClear(
+    sessionId: string,
+    previousPresetId: string,
+  ): boolean {
+    const session = this.state.sessions.get(sessionId);
+    if (
+      !session
+      || session.config.reasoningPreset?.trim() !== previousPresetId.trim()
+    ) {
+      return false;
+    }
+
+    this.updateSessionReasoningPreset(sessionId, undefined);
+    return true;
+  }
+
   /** Update the target-owned model choice before an observer job is submitted. */
   public updateSessionDispatchModel(sessionId: string, modelName: string): void {
     this.setState(prev => {
