@@ -309,13 +309,16 @@ pub fn project_reasoning_catalog(
 
 fn auto_provider_id(provider: &str, base_url: &str) -> Option<&'static str> {
     let provider = provider.trim().to_ascii_lowercase();
-    if provider == "deepseek" || base_url.to_ascii_lowercase().contains("api.deepseek.com") {
-        return Some("deepseek");
+    let endpoint = reqwest::Url::parse(base_url.trim()).ok()?;
+    if endpoint.scheme() != "https" || endpoint.port_or_known_default() != Some(443) {
+        return None;
     }
-    match provider.as_str() {
-        "response" | "responses" | "openai" => Some("openai"),
-        "anthropic" => Some("anthropic"),
-        "gemini" | "google" => Some("google"),
+    let host = endpoint.host_str()?.trim_end_matches('.');
+    match (provider.as_str(), host) {
+        ("response" | "responses" | "openai", "api.openai.com") => Some("openai"),
+        ("anthropic", "api.anthropic.com") => Some("anthropic"),
+        ("gemini" | "google", "generativelanguage.googleapis.com") => Some("google"),
+        ("deepseek" | "openai" | "anthropic", "api.deepseek.com") => Some("deepseek"),
         _ => None,
     }
 }
@@ -412,6 +415,10 @@ mod tests {
                 "deepseek": {"models": {
                     "deepseek-v4-flash": {"id":"deepseek-v4-flash","reasoning":true,
                         "reasoning_options":[{"type":"toggle"},{"type":"effort","values":["high","max"]}]}
+                }},
+                "google": {"models": {
+                    "gemini-test": {"id":"gemini-test","reasoning":true,
+                        "reasoning_options":{"type":"toggle"}}
                 }}
             }"#,
         )
@@ -479,6 +486,107 @@ mod tests {
         assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
         assert!(projection.presets.iter().any(|preset| preset.id == "off"));
         assert!(projection.presets.iter().any(|preset| preset.id == "max"));
+    }
+
+    #[test]
+    fn auto_catalog_rejects_custom_and_untrusted_endpoints() {
+        for (provider, model, base_url) in [
+            (
+                "responses",
+                "gpt-test",
+                "https://gateway.example.com/v1/responses",
+            ),
+            (
+                "anthropic",
+                "claude-test",
+                "https://gateway.example.com/anthropic",
+            ),
+            (
+                "gemini",
+                "gemini-test",
+                "https://gateway.example.com/gemini",
+            ),
+            (
+                "openai",
+                "deepseek-v4-flash",
+                "https://api.deepseek.com.evil.example/v1",
+            ),
+            (
+                "responses",
+                "gpt-test",
+                "http://api.openai.com/v1/responses",
+            ),
+            (
+                "responses",
+                "gpt-test",
+                "https://api.openai.com:8443/v1/responses",
+            ),
+        ] {
+            let projection =
+                project_reasoning_catalog(provider, model, base_url, None, Some(&catalog()));
+            assert_eq!(
+                projection.status,
+                ReasoningCapabilityStatus::Unknown,
+                "auto catalog must fail closed for {base_url}"
+            );
+            assert!(projection.presets.is_empty());
+        }
+    }
+
+    #[test]
+    fn auto_catalog_requires_the_official_endpoint_to_match_the_protocol() {
+        let projection = project_reasoning_catalog(
+            "anthropic",
+            "gpt-test",
+            "https://api.openai.com/v1",
+            None,
+            Some(&catalog()),
+        );
+
+        assert_eq!(projection.status, ReasoningCapabilityStatus::Unknown);
+        assert!(projection.presets.is_empty());
+    }
+
+    #[test]
+    fn explicit_models_dev_binding_allows_a_custom_endpoint() {
+        let configured = ReasoningConfig {
+            catalog: ReasoningCatalogBinding::ModelsDev {
+                provider: "openai".to_string(),
+                model: "gpt-test".to_string(),
+            },
+            ..Default::default()
+        };
+        let projection = project_reasoning_catalog(
+            "responses",
+            "gateway-model-alias",
+            "https://gateway.example.com/v1/responses",
+            Some(&configured),
+            Some(&catalog()),
+        );
+
+        assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
+        assert_eq!(
+            projection
+                .presets
+                .iter()
+                .map(|preset| preset.id.as_str())
+                .collect::<Vec<_>>(),
+            ["low", "high"]
+        );
+    }
+
+    #[test]
+    fn official_google_endpoint_projects_gemini_options() {
+        let projection = project_reasoning_catalog(
+            "gemini",
+            "gemini-test",
+            "https://generativelanguage.googleapis.com/v1beta",
+            None,
+            Some(&catalog()),
+        );
+
+        assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
+        assert!(projection.presets.iter().any(|preset| preset.id == "on"));
     }
 
     #[test]
