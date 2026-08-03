@@ -2130,17 +2130,23 @@ impl ExecutionEngine {
             SessionModelBindingPolicy::ApprovedImmutable
         ) {
             ai_client_factory
-                .get_client_by_approved_binding(
+                .get_client_by_approved_binding_with_reasoning_preset(
                     &model_id,
                     session
                         .config
                         .model_binding_fingerprint
                         .as_deref()
                         .unwrap_or_default(),
+                    session.config.reasoning_preset.as_deref(),
                 )
                 .await
         } else {
-            ai_client_factory.get_client_resolved(&model_id).await
+            ai_client_factory
+                .get_client_resolved_with_reasoning_preset(
+                    &model_id,
+                    session.config.reasoning_preset.as_deref(),
+                )
+                .await
         };
         let ai_client = ai_client_result.map_err(|e| {
             BitFunError::AIClient(format!(
@@ -3015,17 +3021,23 @@ impl ExecutionEngine {
             SessionModelBindingPolicy::ApprovedImmutable
         ) {
             ai_client_factory
-                .get_client_by_approved_binding(
+                .get_client_by_approved_binding_with_reasoning_preset(
                     &model_id,
                     session
                         .config
                         .model_binding_fingerprint
                         .as_deref()
                         .unwrap_or_default(),
+                    session.config.reasoning_preset.as_deref(),
                 )
                 .await
         } else {
-            ai_client_factory.get_client_resolved(&model_id).await
+            ai_client_factory
+                .get_client_resolved_with_reasoning_preset(
+                    &model_id,
+                    session.config.reasoning_preset.as_deref(),
+                )
+                .await
         };
         let ai_client = ai_client_result.map_err(|e| {
             BitFunError::AIClient(format!(

@@ -183,6 +183,10 @@ pub struct SessionConfig {
     /// Model config ID used by this session (for token usage tracking)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
+    /// Explicit reasoning preset selected for this session. `None` means the
+    /// model's default preset (Auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_preset: Option<String>,
     /// Whether this child session accepts another delegated turn.
     #[serde(default, skip_serializing_if = "is_reusable_continuation_policy")]
     pub continuation_policy: SessionContinuationPolicy,
@@ -219,6 +223,7 @@ impl Default for SessionConfig {
             remote_connection_id: None,
             remote_ssh_host: None,
             model_id: None,
+            reasoning_preset: None,
             continuation_policy: SessionContinuationPolicy::default(),
             model_binding_policy: SessionModelBindingPolicy::default(),
             model_binding_fingerprint: None,
@@ -314,6 +319,7 @@ mod tests {
         assert!(config.remote_connection_id.is_none());
         assert!(config.remote_ssh_host.is_none());
         assert!(config.model_id.is_none());
+        assert!(config.reasoning_preset.is_none());
         assert_eq!(
             config.continuation_policy,
             SessionContinuationPolicy::Reusable

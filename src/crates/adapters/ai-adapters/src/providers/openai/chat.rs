@@ -29,10 +29,30 @@ pub(crate) fn build_request_body(
     }
 
     common::apply_reasoning_fields(&mut request_body, client, url);
+    let selected_reasoning_fields = shared::capture_selected_reasoning_fields(
+        client,
+        &request_body,
+        &["thinking", "enable_thinking", "reasoning_effort"],
+        &[],
+    );
 
     if let Some(max_tokens) = client.config.max_tokens {
         request_body["max_tokens"] = serde_json::json!(max_tokens);
     }
+
+    shared::apply_model_reasoning_request_patches(
+        client,
+        &mut request_body,
+        &[
+            "model",
+            "messages",
+            "stream",
+            "max_tokens",
+            "tool_stream",
+            "tools",
+        ],
+        &[],
+    );
 
     let protected_body = shared::protect_request_body(
         client,
@@ -49,6 +69,22 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut request_body, protected_body);
+    shared::apply_selected_reasoning_overlay(
+        client,
+        &mut request_body,
+        selected_reasoning_fields,
+        &["thinking", "enable_thinking", "reasoning_effort"],
+        &[],
+        &[
+            "model",
+            "messages",
+            "stream",
+            "max_tokens",
+            "tool_stream",
+            "tools",
+        ],
+        &[],
+    );
 
     if let Some(request_obj) = request_body.as_object_mut() {
         if let Some(existing_n) = request_obj.remove("n") {

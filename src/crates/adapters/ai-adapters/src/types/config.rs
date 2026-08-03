@@ -1,4 +1,6 @@
-pub use bitfun_core_types::{AIConfig, ProxyConfig, ReasoningMode};
+pub use bitfun_core_types::{
+    AIConfig, ProxyConfig, ReasoningMode, ReasoningPresetApplication, ReasoningPresetSetting,
+};
 
 fn append_endpoint(base_url: &str, endpoint: &str) -> String {
     let base = base_url.trim();

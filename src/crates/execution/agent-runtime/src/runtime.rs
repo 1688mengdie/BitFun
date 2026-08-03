@@ -20,17 +20,17 @@ use bitfun_runtime_ports::{
     AgentSessionForkBeforeTurnRequest, AgentSessionForkPort, AgentSessionForkRequest,
     AgentSessionForkResult, AgentSessionListRequest, AgentSessionManagementPort,
     AgentSessionModePort, AgentSessionModeUpdateRequest, AgentSessionModelPort,
-    AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentSessionRevertPort,
-    AgentSessionRevertRequest, AgentSessionRevertResult, AgentSessionSummary,
-    AgentSessionUsagePort, AgentSessionUsageRequest, AgentSessionWorkspaceBinding,
-    AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
-    AgentSubmissionResult, AgentSubmissionSource, AgentThreadGoalCreateRequest,
-    AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
-    AgentThreadGoalUpdateStatusRequest, AgentTransientSessionDiscardRequest,
-    AgentTurnCancellationPort, AgentTurnCancellationRequest, AgentTurnCancellationResult,
-    AgentTurnSettlementPort, AgentTurnSettlementRequest, AgentUserShellCommandPort,
-    AgentUserShellCommandRequest, AgentUserShellCommandResult, AgentWorkspaceReference,
-    AgentWorkspaceReferencePort, AgentWorkspaceReferenceSearchRequest,
+    AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRenameRequest, AgentSessionRevertPort, AgentSessionRevertRequest,
+    AgentSessionRevertResult, AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
+    AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
+    AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
+    AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest,
+    AgentTransientSessionDiscardRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
+    AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest,
+    AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
+    AgentWorkspaceReference, AgentWorkspaceReferencePort, AgentWorkspaceReferenceSearchRequest,
     AgentWorkspaceReferenceSearchResult, DialogSteerOutcome, DialogSubmitOutcome,
     PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PluginRuntimeBinding, PortError,
     PortErrorKind, PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
@@ -1165,6 +1165,22 @@ impl AgentRuntime {
         })?;
         session_model
             .update_session_model(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
+    pub async fn update_session_model_selection(
+        &self,
+        request: AgentSessionModelSelectionUpdateRequest,
+    ) -> Result<(), RuntimeError> {
+        let session_model = self.session_model.as_ref().ok_or_else(|| {
+            RuntimeError::Port(PortError::new(
+                PortErrorKind::NotAvailable,
+                "agent session model port is not registered",
+            ))
+        })?;
+        session_model
+            .update_session_model_selection(request)
             .await
             .map_err(RuntimeError::from)
     }

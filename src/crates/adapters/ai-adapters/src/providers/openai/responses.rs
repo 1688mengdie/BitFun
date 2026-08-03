@@ -49,6 +49,21 @@ pub(crate) fn build_request_body(
             "effort": effort
         });
     }
+    let selected_reasoning_fields =
+        shared::capture_selected_reasoning_fields(client, &request_body, &["reasoning"], &[]);
+    shared::apply_model_reasoning_request_patches(
+        client,
+        &mut request_body,
+        &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "max_output_tokens",
+            "tools",
+        ],
+        &[],
+    );
 
     let protected_body = shared::protect_request_body(
         client,
@@ -71,6 +86,22 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut request_body, protected_body);
+    shared::apply_selected_reasoning_overlay(
+        client,
+        &mut request_body,
+        selected_reasoning_fields,
+        &["reasoning"],
+        &[],
+        &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "max_output_tokens",
+            "tools",
+        ],
+        &[],
+    );
 
     shared::log_request_body(
         "ai::responses_stream_request",

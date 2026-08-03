@@ -99,18 +99,83 @@ impl AIClientFactory {
             .await
     }
 
+    /// Resolve an approved base client and apply one session preset without
+    /// inserting the derived client into the factory cache.
+    pub async fn get_client_by_approved_binding_with_reasoning_preset(
+        &self,
+        model_id: &str,
+        configuration_fingerprint: &str,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let client = self
+            .get_client_by_approved_binding(model_id, configuration_fingerprint)
+            .await?;
+        self.apply_session_reasoning_preset(model_id, client, reasoning_preset)
+            .await
+    }
+
     /// Get a client (supports resolving primary/fast)
     pub async fn get_client_resolved(&self, model_id: &str) -> Result<Arc<AIClient>> {
+        let resolved_model_id = self.resolve_model_id(model_id).await?;
+        self.get_or_create_client(&resolved_model_id, None).await
+    }
+
+    /// Resolve a base client and apply one session preset without caching the
+    /// derived client. An unknown preset fails closed to the model default.
+    pub async fn get_client_resolved_with_reasoning_preset(
+        &self,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let resolved_model_id = self.resolve_model_id(model_id).await?;
+        let client = self.get_or_create_client(&resolved_model_id, None).await?;
+        self.apply_session_reasoning_preset(&resolved_model_id, client, reasoning_preset)
+            .await
+    }
+
+    async fn resolve_model_id(&self, model_id: &str) -> Result<String> {
         let global_config: crate::service::config::GlobalConfig =
             self.config_service.get_config(None).await?;
-        let resolved_model_id = resolve_required_model_selector(
+        resolve_required_model_selector(
             model_id,
             |selector| global_config.ai.resolve_model_selection(selector),
             |model_ref| global_config.ai.resolve_model_reference(model_ref),
         )
-        .map_err(|error| anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow!(error.to_string()))
+    }
 
-        self.get_or_create_client(&resolved_model_id, None).await
+    async fn apply_session_reasoning_preset(
+        &self,
+        model_id: &str,
+        client: Arc<AIClient>,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let Some(reasoning_preset) = reasoning_preset
+            .map(str::trim)
+            .filter(|preset| !preset.is_empty())
+        else {
+            return Ok(client);
+        };
+        let global_config: crate::service::config::GlobalConfig =
+            self.config_service.get_config(None).await?;
+        let setting = global_config
+            .ai
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .and_then(|model| model.reasoning.as_ref())
+            .and_then(|reasoning| reasoning.preset(reasoning_preset))
+            .and_then(|preset| preset.setting.as_ref());
+
+        let Some(setting) = setting else {
+            warn!(
+                "Session reasoning preset is not available for the resolved model; falling back to model default: model_id={}, preset_id={}",
+                model_id, reasoning_preset
+            );
+            return Ok(client);
+        };
+
+        Ok(Arc::new(client.with_reasoning_preset(setting)))
     }
 
     pub fn invalidate_cache(&self) {
@@ -240,11 +305,12 @@ impl AIClientFactory {
         };
 
         let stream_options = build_stream_options_for_model(&global_config.ai, Some(model_config));
-        let client = Arc::new(AIClient::new_with_runtime_options(
-            ai_config,
-            proxy_config,
-            stream_options,
-        ));
+        let mut client =
+            AIClient::new_with_runtime_options(ai_config, proxy_config, stream_options);
+        if let Some(setting) = model_config.default_reasoning_setting() {
+            client = client.with_model_reasoning_preset(setting);
+        }
+        let client = Arc::new(client);
 
         {
             let mut cache = match self.client_cache.write() {

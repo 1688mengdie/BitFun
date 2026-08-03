@@ -74,7 +74,17 @@ impl TryFrom<AIModelConfig> for AIConfig {
     type Error = String;
 
     fn try_from(other: AIModelConfig) -> Result<Self, Self::Error> {
-        let reasoning_mode = other.effective_reasoning_mode();
+        let mut reasoning_mode = other.effective_reasoning_mode();
+        let mut reasoning_effort = other.reasoning_effort.clone();
+        let mut thinking_budget_tokens = other.thinking_budget_tokens;
+        if let Some(parameters) = other
+            .default_reasoning_setting()
+            .and_then(|setting| setting.application().parameters)
+        {
+            reasoning_mode = parameters.mode;
+            reasoning_effort = parameters.effort;
+            thinking_budget_tokens = parameters.budget_tokens;
+        }
 
         let custom_request_body = if let Some(body_str) = &other.custom_request_body {
             match serde_json::from_str::<serde_json::Value>(body_str) {
@@ -150,8 +160,8 @@ impl TryFrom<AIModelConfig> for AIConfig {
             custom_headers: other.custom_headers,
             custom_headers_mode: other.custom_headers_mode,
             skip_ssl_verify: other.skip_ssl_verify,
-            reasoning_effort: other.reasoning_effort,
-            thinking_budget_tokens: other.thinking_budget_tokens,
+            reasoning_effort,
+            thinking_budget_tokens,
             custom_request_body,
             custom_request_body_mode: other.custom_request_body_mode,
         })
@@ -251,6 +261,7 @@ mod tests {
             metadata: None,
             enable_thinking_process: false,
             reasoning_mode: None,
+            reasoning: None,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,

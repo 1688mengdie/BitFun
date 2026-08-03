@@ -58,6 +58,8 @@ pub struct AIClient {
     pub(crate) client: Client,
     pub config: AIConfig,
     pub(crate) stream_options: StreamOptions,
+    pub(crate) model_reasoning_preset: Option<ReasoningPresetSetting>,
+    pub(crate) selected_reasoning_preset: Option<ReasoningPresetSetting>,
 }
 
 impl AIClient {
@@ -89,6 +91,8 @@ impl AIClient {
             client,
             config,
             stream_options,
+            model_reasoning_preset: None,
+            selected_reasoning_preset: None,
         }
     }
 
@@ -110,7 +114,29 @@ impl AIClient {
             client: self.client.clone(),
             config,
             stream_options: self.stream_options.clone(),
+            model_reasoning_preset: self.model_reasoning_preset.clone(),
+            selected_reasoning_preset: self.selected_reasoning_preset.clone(),
         }
+    }
+
+    /// Clone this client with the model-level default preset attached.
+    ///
+    /// The preset remains below `custom_request_body` in request precedence.
+    pub fn with_model_reasoning_preset(&self, setting: &ReasoningPresetSetting) -> Self {
+        let mut cloned = self.clone();
+        apply_reasoning_parameters(&mut cloned.config, setting);
+        cloned.model_reasoning_preset = Some(setting.clone());
+        cloned
+    }
+
+    /// Clone this client with a session-selected preset while reusing the HTTP client.
+    ///
+    /// Provider builders apply this overlay after the model custom request body.
+    pub fn with_reasoning_preset(&self, setting: &ReasoningPresetSetting) -> Self {
+        let mut cloned = self.clone();
+        apply_reasoning_parameters(&mut cloned.config, setting);
+        cloned.selected_reasoning_preset = Some(setting.clone());
+        cloned
     }
 
     /// Clone this client with a different max output token limit while
@@ -122,6 +148,8 @@ impl AIClient {
             client: self.client.clone(),
             config,
             stream_options: self.stream_options.clone(),
+            model_reasoning_preset: self.model_reasoning_preset.clone(),
+            selected_reasoning_preset: self.selected_reasoning_preset.clone(),
         }
     }
 
@@ -348,6 +376,15 @@ impl AIClient {
     }
 }
 
+fn apply_reasoning_parameters(config: &mut AIConfig, setting: &ReasoningPresetSetting) {
+    let Some(parameters) = setting.application().parameters else {
+        return;
+    };
+    config.reasoning_mode = parameters.mode;
+    config.reasoning_effort = parameters.effort;
+    config.thinking_budget_tokens = parameters.budget_tokens;
+}
+
 fn send_message_retry_delay_ms(attempt_index: usize, error_message: &str) -> u64 {
     let shift = u32::try_from(attempt_index)
         .unwrap_or(u32::MAX)
@@ -506,8 +543,8 @@ fn gemini_response_to_trace(response: &GeminiResponse) -> ModelExchangeResponseT
 mod tests {
     use super::{is_transient_stream_error, send_message_retry_delay_ms, AIClient};
     use crate::providers::{anthropic, gemini, gemini::GeminiMessageConverter, openai};
-    use crate::types::ReasoningMode;
     use crate::types::{AIConfig, ToolDefinition};
+    use crate::types::{ReasoningMode, ReasoningPresetSetting};
     use serde_json::{json, Value};
 
     fn make_test_client(format: &str, custom_request_body: Option<Value>) -> AIClient {
@@ -538,6 +575,77 @@ mod tests {
         let mut client = make_test_client(format, None);
         client.config.custom_request_body_mode = Some("trim".to_string());
         client
+    }
+
+    #[test]
+    fn selected_reasoning_effort_overrides_model_custom_body() {
+        let client = make_test_client(
+            "responses",
+            Some(json!({
+                "reasoning": { "effort": "low" }
+            })),
+        )
+        .with_reasoning_preset(&ReasoningPresetSetting::Effort {
+            value: "high".to_string(),
+            mode: None,
+        });
+
+        let body = openai::responses::build_request_body(
+            &client,
+            None,
+            vec![json!({"role": "user", "content": "hello"})],
+            None,
+            client.config.custom_request_body.clone(),
+        );
+
+        assert_eq!(body["reasoning"]["effort"], "high");
+        assert_eq!(body["model"], "test-model");
+    }
+
+    #[test]
+    fn selected_reasoning_toggle_clears_custom_reasoning_fields() {
+        let client = make_test_client(
+            "responses",
+            Some(json!({ "reasoning": { "effort": "low" } })),
+        )
+        .with_reasoning_preset(&ReasoningPresetSetting::Toggle { enabled: false });
+
+        let body = openai::responses::build_request_body(
+            &client,
+            None,
+            vec![json!({"role": "user", "content": "hello"})],
+            None,
+            client.config.custom_request_body.clone(),
+        );
+
+        assert_eq!(body["reasoning"]["effort"], "none");
+    }
+
+    #[test]
+    fn selected_request_patch_is_applied_after_custom_body_and_cannot_replace_model() {
+        let client = make_test_client(
+            "responses",
+            Some(json!({
+                "reasoning": { "effort": "low" }
+            })),
+        )
+        .with_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
+            body: json!({
+                "reasoning": { "effort": "xhigh" },
+                "model": "attacker-model"
+            }),
+        });
+
+        let body = openai::responses::build_request_body(
+            &client,
+            None,
+            vec![json!({"role": "user", "content": "hello"})],
+            None,
+            client.config.custom_request_body.clone(),
+        );
+
+        assert_eq!(body["reasoning"]["effort"], "xhigh");
+        assert_eq!(body["model"], "test-model");
     }
 
     #[test]

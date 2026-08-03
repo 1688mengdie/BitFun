@@ -251,6 +251,12 @@ pub(crate) fn build_request_body(
     }
 
     apply_reasoning_fields(&mut request_body, client.config.reasoning_mode);
+    let selected_reasoning_fields = shared::capture_selected_reasoning_fields(
+        client,
+        &request_body,
+        &[],
+        &[("generationConfig", "thinkingConfig")],
+    );
 
     if let Some(tools) = gemini_tools {
         let tool_names = tools
@@ -280,6 +286,13 @@ pub(crate) fn build_request_body(
         }
     }
 
+    shared::apply_model_reasoning_request_patches(
+        client,
+        &mut request_body,
+        &["contents", "systemInstruction", "tools", "toolConfig"],
+        &[("generationConfig", "maxOutputTokens")],
+    );
+
     let protected_body = shared::protect_request_body(
         client,
         &mut request_body,
@@ -301,6 +314,15 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut request_body, protected_body);
+    shared::apply_selected_reasoning_overlay(
+        client,
+        &mut request_body,
+        selected_reasoning_fields,
+        &[],
+        &[("generationConfig", "thinkingConfig")],
+        &["contents", "systemInstruction", "tools", "toolConfig"],
+        &[("generationConfig", "maxOutputTokens")],
+    );
 
     shared::log_request_body(
         "ai::gemini_stream_request",
