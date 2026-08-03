@@ -281,6 +281,7 @@ fn project_skill(dir_name: &str) -> SkillInfo {
 #[test]
 fn builtin_skill_catalog_and_mode_policy_are_runtime_owned() {
     assert_eq!(builtin_skill_group_key("docx"), Some("office"));
+    assert_eq!(builtin_skill_group_key("create-bitfun-skin"), Some("meta"));
     assert_eq!(builtin_skill_group_key("find-skills"), Some("meta"));
     assert_eq!(builtin_skill_group_key("miniapp-dev"), Some("miniapp"));
     assert_eq!(
@@ -300,6 +301,10 @@ fn builtin_skill_catalog_and_mode_policy_are_runtime_owned() {
     );
     assert_eq!(
         resolve_builtin_default_enabled("ppt-design", "Cowork"),
+        Some(true)
+    );
+    assert_eq!(
+        resolve_builtin_default_enabled("create-bitfun-skin", "DeepResearch"),
         Some(true)
     );
     assert_eq!(
