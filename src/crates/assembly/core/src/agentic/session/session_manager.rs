@@ -3564,6 +3564,17 @@ impl SessionManager {
         session_id: &str,
         model_id: &str,
     ) -> BitFunResult<()> {
+        self.update_session_model_selection(session_id, model_id, None)
+            .await
+    }
+
+    /// Atomically updates the model and optional reasoning preset.
+    pub async fn update_session_model_selection(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+    ) -> BitFunResult<()> {
         let ai_config = Self::load_ai_config_for_model_resolution().await;
         let mut resolved_context_window = None;
 
@@ -3598,6 +3609,10 @@ impl SessionManager {
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {}", session_id)))?;
         let mut updated_session = original_session.clone();
         updated_session.config.model_id = Some(model_id.to_string());
+        updated_session.config.reasoning_preset = reasoning_preset
+            .map(str::trim)
+            .filter(|preset| !preset.is_empty())
+            .map(ToOwned::to_owned);
         if let Some(ai_config) = ai_config.as_ref() {
             resolved_context_window =
                 Self::sync_session_context_window_from_ai_config(&mut updated_session, ai_config);
@@ -3630,6 +3645,7 @@ impl SessionManager {
 
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.config.model_id = updated_session.config.model_id;
+            session.config.reasoning_preset = updated_session.config.reasoning_preset;
             session.config.max_context_tokens = updated_session.config.max_context_tokens;
             session.updated_at = now;
             session.last_activity_at = now;

@@ -8,8 +8,8 @@
 use bitfun_agent_runtime::sdk::{
     AgentEventSource, AgentInteractionResponsePort, AgentRuntime, AgentRuntimeBuilder,
     AgentSessionCompactionPort, AgentSessionForkPort, AgentSessionModePort, AgentSessionModelPort,
-    AgentSessionModelUpdateRequest, AgentSessionRestorePort, AgentSessionRevertPort,
-    AgentSessionUsagePort, AgentTurnSettlementPort, RuntimeError,
+    AgentSessionModelSelection, AgentSessionModelSelectionUpdateRequest, AgentSessionRestorePort,
+    AgentSessionRevertPort, AgentSessionUsagePort, AgentTurnSettlementPort, RuntimeError,
 };
 use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{
@@ -1020,9 +1020,12 @@ impl CoreServiceAgentRuntime {
         }
 
         runtime
-            .update_session_model(AgentSessionModelUpdateRequest {
+            .update_session_model_selection(AgentSessionModelSelectionUpdateRequest {
                 session_id: session_id.to_string(),
-                model_id: normalized_model_id.clone(),
+                selection: AgentSessionModelSelection {
+                    model_id: normalized_model_id.clone(),
+                    reasoning_preset: None,
+                },
             })
             .await
             .map_err(Self::runtime_error_message)?;

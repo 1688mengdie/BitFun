@@ -4,7 +4,9 @@
 
 use crate::util::errors::*;
 use async_trait::async_trait;
-use bitfun_core_types::WorktreeSettings;
+use bitfun_core_types::{
+    ReasoningConfig, ReasoningPreset, ReasoningPresetSetting, WorktreeSettings,
+};
 use bitfun_runtime_ports::{PermissionRule, ToolPermissionConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1348,15 +1350,18 @@ pub struct AIModelConfig {
 
     /// Compatibility-only input field for older saved configs.
     ///
-    /// New code should use `reasoning_mode`. This field is deserialized for migration and
-    /// compatibility, then omitted from future saves. When `reasoning_mode` is absent, `true`
-    /// maps to `enabled` and `false` maps to `default`.
+    /// This field is deserialized for migration and compatibility, then omitted from future
+    /// saves. New code uses the canonical `reasoning` preset configuration.
     #[serde(default, skip_serializing)]
     pub enable_thinking_process: bool,
 
-    /// Provider-agnostic reasoning mode.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Compatibility-only reasoning mode input. Canonical saves use `reasoning`.
+    #[serde(default, skip_serializing)]
     pub reasoning_mode: Option<ReasoningMode>,
+
+    /// Canonical model reasoning presets and default selection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<ReasoningConfig>,
 
     /// Whether to parse OpenAI-compatible text chunks containing `<think>...</think>` into
     /// streaming reasoning content.
@@ -1376,13 +1381,14 @@ pub struct AIModelConfig {
     #[serde(default)]
     pub skip_ssl_verify: bool,
 
-    /// Reasoning effort level for providers that support explicit effort controls.
-    /// Valid values are provider-specific. None = use API default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Compatibility-only effort input for older model configs. Canonical saves use
+    /// `reasoning.presets`.
+    #[serde(default, skip_serializing)]
     pub reasoning_effort: Option<String>,
 
-    /// Optional Anthropic manual thinking token budget.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Compatibility-only Anthropic manual thinking budget. Canonical saves use
+    /// `reasoning.presets`.
+    #[serde(default, skip_serializing)]
     pub thinking_budget_tokens: Option<u32>,
 
     /// Custom request body (JSON string, used to override default request body fields).
@@ -1485,6 +1491,7 @@ struct AIModelConfigCompat {
     metadata: Option<serde_json::Value>,
     enable_thinking_process: Option<bool>,
     reasoning_mode: Option<ReasoningMode>,
+    reasoning: Option<ReasoningConfig>,
     #[serde(default = "default_true")]
     inline_think_in_text: bool,
     custom_headers: Option<std::collections::HashMap<String, String>>,
@@ -1517,6 +1524,13 @@ impl From<AIModelConfigCompat> for AIModelConfig {
                 }
             })
         });
+        let reasoning = value.reasoning.or_else(|| {
+            legacy_reasoning_config(
+                reasoning_mode,
+                value.reasoning_effort.clone(),
+                value.thinking_budget_tokens,
+            )
+        });
 
         Self {
             id: value.id,
@@ -1537,6 +1551,7 @@ impl From<AIModelConfigCompat> for AIModelConfig {
             metadata: value.metadata,
             enable_thinking_process: value.enable_thinking_process.unwrap_or(false),
             reasoning_mode,
+            reasoning,
             inline_think_in_text: value.inline_think_in_text,
             custom_headers: value.custom_headers,
             custom_headers_mode: value.custom_headers_mode,
@@ -1552,6 +1567,16 @@ impl From<AIModelConfigCompat> for AIModelConfig {
 
 impl AIModelConfig {
     pub fn effective_reasoning_mode(&self) -> ReasoningMode {
+        if let Some(parameters) = self
+            .reasoning
+            .as_ref()
+            .and_then(ReasoningConfig::default_preset)
+            .and_then(|preset| preset.setting.as_ref())
+            .and_then(|setting| setting.application().parameters)
+        {
+            return parameters.mode;
+        }
+
         self.reasoning_mode.unwrap_or({
             if self.enable_thinking_process {
                 ReasoningMode::Enabled
@@ -1560,6 +1585,68 @@ impl AIModelConfig {
             }
         })
     }
+
+    pub fn default_reasoning_setting(&self) -> Option<&ReasoningPresetSetting> {
+        self.reasoning
+            .as_ref()
+            .and_then(ReasoningConfig::default_preset)
+            .and_then(|preset| preset.setting.as_ref())
+    }
+}
+
+pub(crate) fn legacy_reasoning_config(
+    mode: Option<ReasoningMode>,
+    effort: Option<String>,
+    budget_tokens: Option<u32>,
+) -> Option<ReasoningConfig> {
+    let effort = effort.filter(|value| !value.trim().is_empty());
+    if mode.is_none() && effort.is_none() && budget_tokens.is_none() {
+        return None;
+    }
+
+    let effective_mode = mode.unwrap_or(ReasoningMode::Default);
+    let mut settings = Vec::new();
+    if let Some(value) = effort {
+        settings.push(ReasoningPresetSetting::Effort {
+            value,
+            mode: Some(effective_mode),
+        });
+    } else {
+        settings.push(ReasoningPresetSetting::Mode {
+            value: effective_mode,
+        });
+    }
+    if let Some(value) = budget_tokens {
+        settings.push(ReasoningPresetSetting::BudgetTokens {
+            value,
+            mode: Some(effective_mode),
+        });
+    }
+
+    let setting = if settings.len() == 1 {
+        settings.pop().expect("one legacy reasoning setting")
+    } else {
+        ReasoningPresetSetting::Sequence { settings }
+    };
+    let (id, label) = match effective_mode {
+        ReasoningMode::Disabled => ("off", "Off"),
+        ReasoningMode::Adaptive => ("adaptive", "Adaptive"),
+        ReasoningMode::Enabled if budget_tokens.is_some() => ("legacy-budget", "Legacy budget"),
+        ReasoningMode::Enabled => ("on", "On"),
+        ReasoningMode::Default => ("legacy", "Legacy default"),
+    };
+
+    Some(ReasoningConfig {
+        default_preset: Some(id.to_string()),
+        presets: vec![ReasoningPreset {
+            id: id.to_string(),
+            label: Some(label.to_string()),
+            order: Some(0),
+            disabled: false,
+            setting: Some(setting),
+        }],
+        ..Default::default()
+    })
 }
 
 pub use bitfun_core_types::ProxyConfig;
@@ -1859,6 +1946,7 @@ impl Default for AIModelConfig {
             metadata: None,
             enable_thinking_process: false,
             reasoning_mode: None,
+            reasoning: None,
             inline_think_in_text: true,
             custom_headers: None,
             custom_headers_mode: None,
@@ -2494,10 +2582,11 @@ mod tests {
         let value = serde_json::to_value(&config).expect("config should serialize");
 
         assert!(value.get("enable_thinking_process").is_none());
-        assert_eq!(
-            value.get("reasoning_mode").and_then(|v| v.as_str()),
-            Some("enabled")
-        );
+        assert!(value.get("reasoning_mode").is_none());
+        assert!(value.get("reasoning_effort").is_none());
+        assert!(value.get("thinking_budget_tokens").is_none());
+        assert_eq!(value["reasoning"]["default_preset"], "on");
+        assert_eq!(value["reasoning"]["presets"][0]["id"], "on");
     }
 
     #[test]

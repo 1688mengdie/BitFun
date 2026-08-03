@@ -14,9 +14,12 @@ pub mod tool_image_attachment;
 pub mod worktree;
 
 pub use ai::{
-    AIConfig, ConnectionTestMessageCode, ConnectionTestResult, Message, ProxyConfig, ReasoningMode,
-    RemoteModelInfo, ToolCall, ToolCallConfirmationDetails, ToolCallRequestInfo,
-    ToolCallResponseInfo, ToolDefinition,
+    AIConfig, ConnectionTestMessageCode, ConnectionTestResult, Message, ProxyConfig,
+    ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningCatalogProjection,
+    ReasoningConfig, ReasoningMode, ReasoningPreset, ReasoningPresetApplication,
+    ReasoningPresetDescriptor, ReasoningPresetSetting, ReasoningPresetSource,
+    ReasoningRuntimeParameters, RemoteModelInfo, ToolCall, ToolCallConfirmationDetails,
+    ToolCallRequestInfo, ToolCallResponseInfo, ToolDefinition,
 };
 pub use errors::{AiErrorDetail, ErrorCategory};
 pub use session::{
@@ -31,6 +34,6 @@ pub use surface::{
 pub use tool_image_attachment::ToolImageAttachment;
 pub use worktree::{
     SessionExecutionTarget, SessionExecutionTargetKind, SessionExecutionTargetRequest,
-    WorktreeError, WorktreeErrorCode, WorktreeLifecycle,
-    WorktreeSessionSummary, WorktreeSettings, WorktreeSummary,
+    WorktreeError, WorktreeErrorCode, WorktreeLifecycle, WorktreeSessionSummary, WorktreeSettings,
+    WorktreeSummary,
 };

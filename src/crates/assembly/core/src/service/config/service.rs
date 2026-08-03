@@ -910,4 +910,61 @@ mod tests {
             true
         );
     }
+
+    #[tokio::test]
+    async fn startup_migrates_legacy_model_reasoning_and_persists_canonical_only_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user_root = dir.path().join("legacy-model-reasoning-startup");
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(user_root));
+        let settings = || ConfigManagerSettings {
+            path_manager: Some(path_manager.clone()),
+            auto_save: true,
+            backup_count: 0,
+        };
+
+        let initial_service = ConfigService::with_settings(settings())
+            .await
+            .expect("initial config service");
+        drop(initial_service);
+
+        let mut raw_config =
+            serde_json::to_value(GlobalConfig::default()).expect("default config should serialize");
+        raw_config["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+        raw_config["ai"]["models"] = serde_json::json!([{
+            "id": "legacy-model",
+            "name": "Legacy model",
+            "provider": "responses",
+            "model_name": "gpt-test",
+            "base_url": "https://example.com/v1",
+            "api_key": "key",
+            "enabled": true,
+            "reasoning_mode": "enabled",
+            "reasoning_effort": "high"
+        }]);
+        tokio::fs::write(
+            path_manager.app_config_file(),
+            serde_json::to_string_pretty(&raw_config).expect("legacy config should serialize"),
+        )
+        .await
+        .expect("legacy config should be written");
+
+        let migrated_service = ConfigService::with_settings(settings())
+            .await
+            .expect("legacy config should reload");
+        drop(migrated_service);
+
+        let persisted: serde_json::Value = serde_json::from_str(
+            &tokio::fs::read_to_string(path_manager.app_config_file())
+                .await
+                .expect("migrated config should be persisted"),
+        )
+        .expect("persisted config should be valid JSON");
+        let model = &persisted["ai"]["models"][0];
+        assert_eq!(model["reasoning"]["default_preset"], "on");
+        assert_eq!(model["reasoning"]["presets"][0]["setting"]["value"], "high");
+        assert!(model.get("reasoning_mode").is_none());
+        assert!(model.get("reasoning_effort").is_none());
+        assert!(model.get("thinking_budget_tokens").is_none());
+        assert!(model.get("enable_thinking_process").is_none());
+    }
 }

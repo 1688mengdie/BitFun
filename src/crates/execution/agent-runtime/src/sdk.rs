@@ -68,25 +68,26 @@ pub use bitfun_runtime_ports::{
     AgentSessionForkAtTurnRequest, AgentSessionForkBeforeTurnRequest, AgentSessionForkPort,
     AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
     AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
-    AgentSessionModelPort, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
-    AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
-    AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
-    AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
-    AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
-    AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest,
-    AgentTransientSessionDiscardRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
-    AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest,
-    AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
-    AgentWorkspaceReference, AgentWorkspaceReferenceKind, AgentWorkspaceReferencePort,
-    AgentWorkspaceReferenceSearchEntry, AgentWorkspaceReferenceSearchRequest,
-    AgentWorkspaceReferenceSearchResult, AgentWorkspaceReferenceSourceRange, ClockPort,
-    DialogSteerOutcome, DialogSubmissionPolicy, DialogSubmitOutcome, FileSystemPort, GitPort,
-    McpCatalogPort, NetworkPort, PermissionAuditRecord, PermissionDelegationContext,
-    PermissionGrant, PermissionGrantKey, PermissionReply, PermissionReplySource, PermissionRequest,
-    PermissionRequestEvent, PermissionRequestSource, PermissionRequestSourceKind, PortError,
-    PortErrorKind, PortResult, RemoteAssistantWorkspaceFacts, RemoteCapabilityPort,
-    RemoteConnectionPort, RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
+    AgentSessionModelPort, AgentSessionModelSelection, AgentSessionModelSelectionUpdateRequest,
+    AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentSessionRevertPort,
+    AgentSessionRevertRequest, AgentSessionRevertResult, AgentSessionSummary,
+    AgentSessionUsagePort, AgentSessionUsageRequest, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
+    AgentSubmissionResult, AgentSubmissionSource, AgentThreadGoalCreateRequest,
+    AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest, AgentThreadGoalManagementPort,
+    AgentThreadGoalUpdateStatusRequest, AgentTransientSessionDiscardRequest,
+    AgentTurnCancellationPort, AgentTurnCancellationRequest, AgentTurnCancellationResult,
+    AgentTurnSettlementPort, AgentTurnSettlementRequest, AgentUserShellCommandPort,
+    AgentUserShellCommandRequest, AgentUserShellCommandResult, AgentWorkspaceReference,
+    AgentWorkspaceReferenceKind, AgentWorkspaceReferencePort, AgentWorkspaceReferenceSearchEntry,
+    AgentWorkspaceReferenceSearchRequest, AgentWorkspaceReferenceSearchResult,
+    AgentWorkspaceReferenceSourceRange, ClockPort, DialogSteerOutcome, DialogSubmissionPolicy,
+    DialogSubmitOutcome, FileSystemPort, GitPort, McpCatalogPort, NetworkPort,
+    PermissionAuditRecord, PermissionDelegationContext, PermissionGrant, PermissionGrantKey,
+    PermissionReply, PermissionReplySource, PermissionRequest, PermissionRequestEvent,
+    PermissionRequestSource, PermissionRequestSourceKind, PortError, PortErrorKind, PortResult,
+    RemoteAssistantWorkspaceFacts, RemoteCapabilityPort, RemoteConnectionPort,
+    RemoteProjectionPort, RemoteRecentWorkspaceFacts, RemoteWorkspaceFacts,
     RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind, RemoteWorkspacePort,
     RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate, RuntimeEventEnvelope, RuntimeEventSink,
     RuntimeEventType, RuntimeServiceCapability, RuntimeServicePort, SessionStorageKind,
@@ -501,6 +502,13 @@ impl AgentRuntime {
         request: AgentSessionModelUpdateRequest,
     ) -> Result<(), RuntimeError> {
         self.inner.update_session_model(request).await
+    }
+
+    pub async fn update_session_model_selection(
+        &self,
+        request: AgentSessionModelSelectionUpdateRequest,
+    ) -> Result<(), RuntimeError> {
+        self.inner.update_session_model_selection(request).await
     }
 
     pub async fn update_session_mode(

@@ -278,10 +278,31 @@ pub(crate) fn build_request_body(
         client.config.reasoning_effort.as_deref(),
         client.config.thinking_budget_tokens,
     );
+    let selected_reasoning_fields = shared::capture_selected_reasoning_fields(
+        client,
+        &request_body,
+        &["thinking", "output_config"],
+        &[],
+    );
 
     if let Some(system) = system_message {
         request_body["system"] = serde_json::Value::String(system);
     }
+
+    shared::apply_model_reasoning_request_patches(
+        client,
+        &mut request_body,
+        &[
+            "model",
+            "messages",
+            "max_tokens",
+            "stream",
+            "system",
+            "tool_stream",
+            "tools",
+        ],
+        &[],
+    );
 
     let protected_body = shared::protect_request_body(
         client,
@@ -305,6 +326,23 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut request_body, protected_body);
+    shared::apply_selected_reasoning_overlay(
+        client,
+        &mut request_body,
+        selected_reasoning_fields,
+        &["thinking", "output_config"],
+        &[],
+        &[
+            "model",
+            "messages",
+            "max_tokens",
+            "stream",
+            "system",
+            "tool_stream",
+            "tools",
+        ],
+        &[],
+    );
 
     shared::log_request_body(
         "ai::anthropic_stream_request",

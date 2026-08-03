@@ -3,6 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ReasoningMode {
@@ -11,6 +15,220 @@ pub enum ReasoningMode {
     Enabled,
     Disabled,
     Adaptive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(tag = "source", rename_all = "snake_case")]
+pub enum ReasoningCatalogBinding {
+    #[default]
+    Auto,
+    ModelsDev {
+        provider: String,
+        model: String,
+    },
+    Disabled,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningPresetSetting {
+    /// Sets a provider-neutral mode without inventing an effort or budget.
+    Mode {
+        value: ReasoningMode,
+    },
+    Effort {
+        value: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<ReasoningMode>,
+    },
+    Toggle {
+        enabled: bool,
+    },
+    BudgetTokens {
+        value: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<ReasoningMode>,
+    },
+    RequestPatch {
+        body: Value,
+    },
+    /// Preserves combinations such as a legacy mode + effort + token budget.
+    Sequence {
+        settings: Vec<ReasoningPresetSetting>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct ReasoningPreset {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order: Option<i32>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub disabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setting: Option<ReasoningPresetSetting>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct ReasoningConfig {
+    pub catalog: ReasoningCatalogBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_preset: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<ReasoningPreset>,
+}
+
+impl ReasoningConfig {
+    pub fn preset(&self, preset_id: &str) -> Option<&ReasoningPreset> {
+        let preset_id = preset_id.trim();
+        self.presets
+            .iter()
+            .find(|preset| !preset.disabled && preset.id == preset_id && preset.setting.is_some())
+    }
+
+    pub fn default_preset(&self) -> Option<&ReasoningPreset> {
+        self.default_preset
+            .as_deref()
+            .and_then(|preset_id| self.preset(preset_id))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningPresetSource {
+    ModelsDev,
+    AdapterFallback,
+    ModelConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReasoningPresetDescriptor {
+    pub id: String,
+    pub label: String,
+    pub order: i32,
+    pub setting: ReasoningPresetSetting,
+    pub source: ReasoningPresetSource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningCapabilityStatus {
+    Unsupported,
+    Known,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ReasoningCatalogProjection {
+    pub status: ReasoningCapabilityStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_preset: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub presets: Vec<ReasoningPresetDescriptor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReasoningRuntimeParameters {
+    pub mode: ReasoningMode,
+    pub effort: Option<String>,
+    pub budget_tokens: Option<u32>,
+}
+
+impl Default for ReasoningRuntimeParameters {
+    fn default() -> Self {
+        Self {
+            mode: ReasoningMode::Default,
+            effort: None,
+            budget_tokens: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ReasoningPresetApplication {
+    pub parameters: Option<ReasoningRuntimeParameters>,
+    pub request_patches: Vec<Value>,
+}
+
+impl ReasoningPresetSetting {
+    pub fn application(&self) -> ReasoningPresetApplication {
+        fn apply(
+            setting: &ReasoningPresetSetting,
+            parameters: &mut Option<ReasoningRuntimeParameters>,
+            request_patches: &mut Vec<Value>,
+        ) {
+            match setting {
+                ReasoningPresetSetting::Mode { value } => {
+                    parameters.get_or_insert_with(Default::default).mode = *value;
+                }
+                ReasoningPresetSetting::Effort { value, mode } => {
+                    let parameters = parameters.get_or_insert_with(Default::default);
+                    parameters.mode = mode.unwrap_or(ReasoningMode::Enabled);
+                    parameters.effort = Some(value.clone());
+                }
+                ReasoningPresetSetting::Toggle { enabled } => {
+                    parameters.get_or_insert_with(Default::default).mode = if *enabled {
+                        ReasoningMode::Enabled
+                    } else {
+                        ReasoningMode::Disabled
+                    };
+                }
+                ReasoningPresetSetting::BudgetTokens { value, mode } => {
+                    let parameters = parameters.get_or_insert_with(Default::default);
+                    parameters.mode = mode.unwrap_or(ReasoningMode::Enabled);
+                    parameters.budget_tokens = Some(*value);
+                }
+                ReasoningPresetSetting::RequestPatch { body } => {
+                    request_patches.push(body.clone());
+                }
+                ReasoningPresetSetting::Sequence { settings } => {
+                    for setting in settings {
+                        apply(setting, parameters, request_patches);
+                    }
+                }
+            }
+        }
+
+        let mut application = ReasoningPresetApplication::default();
+        apply(
+            self,
+            &mut application.parameters,
+            &mut application.request_patches,
+        );
+        application
+    }
+}
+
+#[cfg(test)]
+mod reasoning_tests {
+    use super::{ReasoningMode, ReasoningPresetSetting};
+
+    #[test]
+    fn sequence_preserves_legacy_mode_effort_and_budget_parameters() {
+        let setting = ReasoningPresetSetting::Sequence {
+            settings: vec![
+                ReasoningPresetSetting::Effort {
+                    value: "high".to_string(),
+                    mode: Some(ReasoningMode::Adaptive),
+                },
+                ReasoningPresetSetting::BudgetTokens {
+                    value: 12000,
+                    mode: Some(ReasoningMode::Adaptive),
+                },
+            ],
+        };
+        let application = setting.application();
+        let parameters = application.parameters.expect("semantic parameters");
+
+        assert_eq!(parameters.mode, ReasoningMode::Adaptive);
+        assert_eq!(parameters.effort.as_deref(), Some("high"));
+        assert_eq!(parameters.budget_tokens, Some(12000));
+        assert!(application.request_patches.is_empty());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

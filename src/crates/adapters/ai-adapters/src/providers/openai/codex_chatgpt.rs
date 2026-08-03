@@ -105,6 +105,22 @@ pub(crate) fn build_request_body(
     } else {
         body["include"] = json!([]);
     }
+    let selected_reasoning_fields =
+        shared::capture_selected_reasoning_fields(client, &body, &["reasoning", "include"], &[]);
+    shared::apply_model_reasoning_request_patches(
+        client,
+        &mut body,
+        &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "include",
+            "tools",
+        ],
+        &[],
+    );
 
     let protected = shared::protect_request_body(
         client,
@@ -128,6 +144,23 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut body, protected);
+    shared::apply_selected_reasoning_overlay(
+        client,
+        &mut body,
+        selected_reasoning_fields,
+        &["reasoning", "include"],
+        &[],
+        &[
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "include",
+            "tools",
+        ],
+        &[],
+    );
 
     shared::log_request_body(
         TARGET,

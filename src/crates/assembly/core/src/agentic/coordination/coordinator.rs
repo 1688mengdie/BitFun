@@ -2165,16 +2165,26 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     pub async fn update_session_model(&self, session_id: &str, model_id: &str) -> BitFunResult<()> {
+        self.update_session_model_selection(session_id, model_id, None)
+            .await
+    }
+
+    pub async fn update_session_model_selection(
+        &self,
+        session_id: &str,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+    ) -> BitFunResult<()> {
         self.ensure_session_runtime_ownership(session_id, None)?;
         let normalized_model_id = normalize_model_selection(model_id).await?;
 
         self.session_manager
-            .update_session_model_id(session_id, &normalized_model_id)
+            .update_session_model_selection(session_id, &normalized_model_id, reasoning_preset)
             .await?;
 
         info!(
-            "Coordinator updated session model: session_id={}, model_id={}",
-            session_id, normalized_model_id
+            "Coordinator updated session model: session_id={}, model_id={}, reasoning_preset={:?}",
+            session_id, normalized_model_id, reasoning_preset
         );
 
         Ok(())
@@ -11196,6 +11206,19 @@ impl bitfun_runtime_ports::AgentSessionModelPort for ConversationCoordinator {
         self.update_session_model(&request.session_id, &request.model_id)
             .await
             .map_err(runtime_port_error_preserving_message)
+    }
+
+    async fn update_session_model_selection(
+        &self,
+        request: bitfun_runtime_ports::AgentSessionModelSelectionUpdateRequest,
+    ) -> bitfun_runtime_ports::PortResult<()> {
+        self.update_session_model_selection(
+            &request.session_id,
+            &request.selection.model_id,
+            request.selection.reasoning_preset.as_deref(),
+        )
+        .await
+        .map_err(runtime_port_error_preserving_message)
     }
 }
 

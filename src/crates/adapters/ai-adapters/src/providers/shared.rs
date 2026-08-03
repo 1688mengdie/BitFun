@@ -2,6 +2,7 @@ use crate::client::utils::{
     build_request_body_subset, is_trim_custom_request_body_mode, merge_json_value,
 };
 use crate::client::AIClient;
+use crate::types::ReasoningPresetSetting;
 use reqwest::RequestBuilder;
 
 pub(crate) fn apply_header_policy<F>(
@@ -90,6 +91,119 @@ pub(crate) fn merge_extra_body_recursively(
             let target = request_obj.entry(key).or_insert(serde_json::Value::Null);
             merge_json_value(target, value);
         }
+    }
+}
+
+pub(crate) fn capture_selected_reasoning_fields(
+    client: &AIClient,
+    request_body: &serde_json::Value,
+    top_level_keys: &[&str],
+    nested_fields: &[(&str, &str)],
+) -> Option<serde_json::Value> {
+    client
+        .selected_reasoning_preset
+        .as_ref()
+        .filter(|setting| setting.application().parameters.is_some())
+        .map(|_| build_request_body_subset(request_body, top_level_keys, nested_fields))
+}
+
+pub(crate) fn apply_model_reasoning_request_patches(
+    client: &AIClient,
+    request_body: &mut serde_json::Value,
+    protected_top_level_keys: &[&str],
+    protected_nested_fields: &[(&str, &str)],
+) {
+    let Some(setting) = client.model_reasoning_preset.as_ref() else {
+        return;
+    };
+    apply_reasoning_request_patches(
+        setting,
+        request_body,
+        protected_top_level_keys,
+        protected_nested_fields,
+    );
+}
+
+pub(crate) fn apply_selected_reasoning_overlay(
+    client: &AIClient,
+    request_body: &mut serde_json::Value,
+    captured_reasoning_fields: Option<serde_json::Value>,
+    reasoning_top_level_keys: &[&str],
+    reasoning_nested_fields: &[(&str, &str)],
+    protected_top_level_keys: &[&str],
+    protected_nested_fields: &[(&str, &str)],
+) {
+    if let Some(captured_reasoning_fields) = captured_reasoning_fields {
+        if let Some(request_object) = request_body.as_object_mut() {
+            for key in reasoning_top_level_keys {
+                request_object.remove(*key);
+            }
+            for (parent, child) in reasoning_nested_fields {
+                if let Some(parent_object) = request_object
+                    .get_mut(*parent)
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    parent_object.remove(*child);
+                }
+            }
+        }
+        merge_json_value(request_body, captured_reasoning_fields);
+    }
+    let Some(setting) = client.selected_reasoning_preset.as_ref() else {
+        return;
+    };
+    apply_reasoning_request_patches(
+        setting,
+        request_body,
+        protected_top_level_keys,
+        protected_nested_fields,
+    );
+}
+
+fn apply_reasoning_request_patches(
+    setting: &ReasoningPresetSetting,
+    request_body: &mut serde_json::Value,
+    protected_top_level_keys: &[&str],
+    protected_nested_fields: &[(&str, &str)],
+) {
+    for mut patch in setting.application().request_patches {
+        let Some(patch_object) = patch.as_object_mut() else {
+            log::warn!("Ignoring non-object reasoning preset request patch");
+            continue;
+        };
+        for key in protected_top_level_keys {
+            patch_object.remove(*key);
+        }
+        for (parent, child) in protected_nested_fields {
+            if let Some(parent_object) = patch_object
+                .get_mut(*parent)
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                parent_object.remove(*child);
+            }
+        }
+        apply_json_merge_patch(request_body, &patch);
+    }
+}
+
+fn apply_json_merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {
+    let serde_json::Value::Object(patch) = patch else {
+        *target = patch.clone();
+        return;
+    };
+    if !target.is_object() {
+        *target = serde_json::json!({});
+    }
+    let target = target
+        .as_object_mut()
+        .expect("merge patch target should be an object");
+    for (key, patch_value) in patch {
+        if patch_value.is_null() {
+            target.remove(key);
+            continue;
+        }
+        let target_value = target.entry(key.clone()).or_insert(serde_json::Value::Null);
+        apply_json_merge_patch(target_value, patch_value);
     }
 }
 

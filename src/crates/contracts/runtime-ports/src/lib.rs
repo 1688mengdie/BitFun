@@ -1252,6 +1252,23 @@ pub struct AgentSessionModelUpdateRequest {
     pub model_id: String,
 }
 
+/// Atomically selects a model and an optional reasoning preset for the next
+/// turn. The legacy model-only request remains available for older clients.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionModelSelection {
+    pub model_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_preset: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSessionModelSelectionUpdateRequest {
+    pub session_id: String,
+    pub selection: AgentSessionModelSelection,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionModeUpdateRequest {
@@ -2330,8 +2347,24 @@ pub trait AgentUserShellCommandPort: Send + Sync {
 
 #[async_trait::async_trait]
 pub trait AgentSessionModelPort: Send + Sync {
-    async fn update_session_model(&self, request: AgentSessionModelUpdateRequest)
-        -> PortResult<()>;
+    async fn update_session_model_selection(
+        &self,
+        request: AgentSessionModelSelectionUpdateRequest,
+    ) -> PortResult<()>;
+
+    async fn update_session_model(
+        &self,
+        request: AgentSessionModelUpdateRequest,
+    ) -> PortResult<()> {
+        self.update_session_model_selection(AgentSessionModelSelectionUpdateRequest {
+            session_id: request.session_id,
+            selection: AgentSessionModelSelection {
+                model_id: request.model_id,
+                reasoning_preset: None,
+            },
+        })
+        .await
+    }
 }
 
 #[async_trait::async_trait]

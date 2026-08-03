@@ -101,10 +101,83 @@ pub(crate) fn normalize_legacy_tool_permissions_config_value(mut config: Value) 
     config
 }
 
+/// Moves per-model reasoning controls into the canonical preset schema.
+///
+/// Legacy fields are input-only. Once this normalization succeeds, persistence
+/// serializes only `reasoning`, so later saves cannot recreate the old shape.
+pub(crate) fn normalize_legacy_model_reasoning_config_value(mut config: Value) -> Value {
+    let Some(models) = config
+        .get_mut("ai")
+        .and_then(Value::as_object_mut)
+        .and_then(|ai| ai.get_mut("models"))
+        .and_then(Value::as_array_mut)
+    else {
+        return config;
+    };
+
+    for model in models {
+        let Some(model) = model.as_object_mut() else {
+            continue;
+        };
+        let has_legacy_reasoning = [
+            "enable_thinking_process",
+            "reasoning_mode",
+            "reasoning_effort",
+            "thinking_budget_tokens",
+        ]
+        .iter()
+        .any(|key| model.contains_key(*key));
+        if !has_legacy_reasoning {
+            continue;
+        }
+
+        if !model.contains_key("reasoning") {
+            let mode = model
+                .get("reasoning_mode")
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())
+                .or_else(|| {
+                    model
+                        .get("enable_thinking_process")
+                        .and_then(Value::as_bool)
+                        .map(|enabled| {
+                            if enabled {
+                                ReasoningMode::Enabled
+                            } else {
+                                ReasoningMode::Default
+                            }
+                        })
+                });
+            let effort = model
+                .get("reasoning_effort")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let budget_tokens = model
+                .get("thinking_budget_tokens")
+                .and_then(Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok());
+            let reasoning = super::types::legacy_reasoning_config(mode, effort, budget_tokens)
+                .unwrap_or_default();
+            model.insert(
+                "reasoning".to_string(),
+                serde_json::to_value(reasoning)
+                    .expect("canonical reasoning config should always serialize"),
+            );
+        }
+
+        model.remove("enable_thinking_process");
+        model.remove("reasoning_mode");
+        model.remove("reasoning_effort");
+        model.remove("thinking_budget_tokens");
+    }
+
+    config
+}
+
 fn normalize_legacy_config_value(config: Value) -> Value {
-    normalize_legacy_tool_permissions_config_value(
+    normalize_legacy_model_reasoning_config_value(normalize_legacy_tool_permissions_config_value(
         normalize_legacy_agent_model_defaults_config_value(config),
-    )
+    ))
 }
 
 fn config_value_for_persistence(config: &GlobalConfig) -> BitFunResult<Value> {
@@ -832,6 +905,7 @@ mod tests {
     use super::{
         canonical_config_path, config_value_for_persistence,
         normalize_legacy_agent_model_defaults_config_value,
+        normalize_legacy_model_reasoning_config_value,
         normalize_legacy_tool_permissions_config_value,
     };
     use crate::service::config::types::GlobalConfig;
@@ -846,6 +920,60 @@ mod tests {
             canonical_config_path("ai.review_teams.default"),
             "ai.review_teams.default"
         );
+    }
+
+    #[test]
+    fn legacy_model_reasoning_is_normalized_to_canonical_only_config() {
+        let normalized = normalize_legacy_model_reasoning_config_value(serde_json::json!({
+            "ai": {
+                "models": [{
+                    "id": "model-1",
+                    "reasoning_mode": "adaptive",
+                    "reasoning_effort": "high",
+                    "thinking_budget_tokens": 12000
+                }]
+            }
+        }));
+        let model = &normalized["ai"]["models"][0];
+
+        assert_eq!(model["reasoning"]["default_preset"], "adaptive");
+        assert_eq!(
+            model["reasoning"]["presets"][0]["setting"]["type"],
+            "sequence"
+        );
+        assert!(model.get("reasoning_mode").is_none());
+        assert!(model.get("reasoning_effort").is_none());
+        assert!(model.get("thinking_budget_tokens").is_none());
+    }
+
+    #[test]
+    fn canonical_model_reasoning_wins_and_legacy_fields_are_removed() {
+        let normalized = normalize_legacy_model_reasoning_config_value(serde_json::json!({
+            "ai": {
+                "models": [{
+                    "id": "model-1",
+                    "reasoning": {
+                        "catalog": { "source": "disabled" },
+                        "default_preset": "custom",
+                        "presets": [{
+                            "id": "custom",
+                            "setting": { "type": "effort", "value": "xhigh" }
+                        }]
+                    },
+                    "reasoning_mode": "disabled",
+                    "reasoning_effort": "low"
+                }]
+            }
+        }));
+        let model = &normalized["ai"]["models"][0];
+
+        assert_eq!(model["reasoning"]["default_preset"], "custom");
+        assert_eq!(
+            model["reasoning"]["presets"][0]["setting"]["value"],
+            "xhigh"
+        );
+        assert!(model.get("reasoning_mode").is_none());
+        assert!(model.get("reasoning_effort").is_none());
     }
 
     #[test]
