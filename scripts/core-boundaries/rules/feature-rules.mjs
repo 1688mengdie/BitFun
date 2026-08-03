@@ -164,7 +164,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'urlencoding', ownerFeatures: ['canvas-runtime', 'miniapp-market', 'remote-connect', 'review-platform'] },
       { depName: 'uuid', ownerFeatures: ['canvas-runtime', 'debug-log', 'hook-import', 'miniapp-runtime', 'plugin-source', 'remote-connect', 'remote-ssh-concrete', 'speech'] },
       { depName: 'which', ownerFeatures: ['miniapp-runtime', 'remote-connect', 'script-tool-runtime', 'workspace-search'] },
-      { depName: 'windows', ownerFeatures: ['plugin-source', 'review-platform'] },
+      { depName: 'windows', ownerFeatures: ['models-dev', 'plugin-source', 'review-platform'] },
       { depName: 'x25519-dalek', ownerFeatures: ['remote-connect'] },
     ],
   },

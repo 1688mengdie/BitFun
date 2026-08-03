@@ -3,6 +3,10 @@
 //! This module deliberately exposes the source document as JSON text. The
 //! provider-specific interpretation belongs to `bitfun-ai-adapters`, which is
 //! above this integration layer in the repository dependency graph.
+//!
+//! `BITFUN_MODELS_DEV_PATH` selects a local JSON file as the runtime refresh
+//! source for development and testing. When it is not set,
+//! `BITFUN_MODELS_DEV_URL` selects the HTTP source.
 
 use log::{debug, warn};
 use std::path::PathBuf;
@@ -16,6 +20,8 @@ const DEFAULT_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
 const MIN_REFRESH_ATTEMPT_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const MAX_REFRESH_ATTEMPTS: usize = 3;
 const BUNDLED_MODELS_DEV_SNAPSHOT: &str = include_str!("../assets/models-dev.json");
+const MODELS_DEV_PATH_ENV: &str = "BITFUN_MODELS_DEV_PATH";
+const MODELS_DEV_URL_ENV: &str = "BITFUN_MODELS_DEV_URL";
 
 #[derive(Debug, Default)]
 struct RefreshState {
@@ -46,10 +52,16 @@ pub enum ModelsDevRefreshOutcome {
     Failed,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ModelsDevRuntimeSource {
+    Http(String),
+    LocalFile(PathBuf),
+}
+
 #[derive(Debug, Clone)]
 pub struct ModelsDevCatalogService {
     cache_file: PathBuf,
-    endpoint_url: String,
+    runtime_source: ModelsDevRuntimeSource,
     bundled_snapshot: Arc<str>,
     cache_ttl: Duration,
     refresh_state: Arc<Mutex<RefreshState>>,
@@ -57,14 +69,9 @@ pub struct ModelsDevCatalogService {
 
 impl ModelsDevCatalogService {
     pub fn new(cache_file: impl Into<PathBuf>) -> Self {
-        let endpoint_url = std::env::var("BITFUN_MODELS_DEV_URL")
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| DEFAULT_MODELS_DEV_ENDPOINT.to_string());
         Self {
             cache_file: cache_file.into(),
-            endpoint_url,
+            runtime_source: runtime_source_from_environment(),
             bundled_snapshot: Arc::from(BUNDLED_MODELS_DEV_SNAPSHOT),
             cache_ttl: DEFAULT_CACHE_TTL,
             refresh_state: Arc::new(Mutex::new(RefreshState::default())),
@@ -79,7 +86,13 @@ impl ModelsDevCatalogService {
 
     #[cfg(test)]
     fn with_endpoint(mut self, endpoint_url: impl Into<String>) -> Self {
-        self.endpoint_url = endpoint_url.into();
+        self.runtime_source = ModelsDevRuntimeSource::Http(endpoint_url.into());
+        self
+    }
+
+    #[cfg(test)]
+    fn with_local_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.runtime_source = ModelsDevRuntimeSource::LocalFile(path.into());
         self
     }
 
@@ -113,63 +126,90 @@ impl ModelsDevCatalogService {
 
     /// Refresh the cache when stale. Failures leave the last valid cache intact.
     pub async fn refresh_if_stale(&self) -> ModelsDevRefreshOutcome {
-        if self.endpoint_url.trim().is_empty() || self.is_cache_fresh().await {
-            return ModelsDevRefreshOutcome::NotNeeded;
-        }
-        let Ok(mut refresh_state) = self.refresh_state.try_lock() else {
-            return ModelsDevRefreshOutcome::Throttled;
-        };
-        let now = Instant::now();
-        if refresh_state.last_attempt.is_some_and(|last_attempt| {
-            now.duration_since(last_attempt) < MIN_REFRESH_ATTEMPT_INTERVAL
-        }) {
-            return ModelsDevRefreshOutcome::Throttled;
-        }
-        refresh_state.last_attempt = Some(now);
-        drop(refresh_state);
-
-        let client = match reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .build()
-        {
-            Ok(client) => client,
-            Err(error) => {
-                warn!("Failed to create models.dev HTTP client: {}", error);
-                return ModelsDevRefreshOutcome::Failed;
-            }
-        };
-
-        let body = {
-            let mut body = None;
-            for attempt in 0..MAX_REFRESH_ATTEMPTS {
-                match fetch_catalog_body(&client, &self.endpoint_url).await {
-                    Ok(value) => {
-                        body = Some(value);
-                        break;
-                    }
-                    Err(error) if error.is_retryable() && attempt + 1 < MAX_REFRESH_ATTEMPTS => {
+        let body = match &self.runtime_source {
+            ModelsDevRuntimeSource::LocalFile(path) => {
+                let body = match fs::read_to_string(path).await {
+                    Ok(body) if is_valid_catalog_document(&body) => body,
+                    Ok(_) => {
                         warn!(
-                            "models.dev catalog refresh attempt {}/{} failed: {}; retrying",
-                            attempt + 1,
-                            MAX_REFRESH_ATTEMPTS,
-                            error
+                            "Local models.dev catalog at {} failed schema validation",
+                            path.display()
                         );
-                        tokio::time::sleep(retry_backoff(attempt)).await;
+                        return ModelsDevRefreshOutcome::Failed;
                     }
                     Err(error) => {
                         warn!(
-                            "models.dev catalog refresh failed after {} attempt(s): {}",
-                            attempt + 1,
+                            "Failed to read local models.dev catalog at {}: {}",
+                            path.display(),
                             error
                         );
-                        break;
+                        return ModelsDevRefreshOutcome::Failed;
+                    }
+                };
+                if self.cache_matches(&body).await {
+                    return ModelsDevRefreshOutcome::NotNeeded;
+                }
+                body
+            }
+            ModelsDevRuntimeSource::Http(endpoint_url) => {
+                if endpoint_url.trim().is_empty() || self.is_cache_fresh().await {
+                    return ModelsDevRefreshOutcome::NotNeeded;
+                }
+                let Ok(mut refresh_state) = self.refresh_state.try_lock() else {
+                    return ModelsDevRefreshOutcome::Throttled;
+                };
+                let now = Instant::now();
+                if refresh_state.last_attempt.is_some_and(|last_attempt| {
+                    now.duration_since(last_attempt) < MIN_REFRESH_ATTEMPT_INTERVAL
+                }) {
+                    return ModelsDevRefreshOutcome::Throttled;
+                }
+                refresh_state.last_attempt = Some(now);
+                drop(refresh_state);
+
+                let client = match reqwest::Client::builder()
+                    .timeout(Duration::from_secs(10))
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(error) => {
+                        warn!("Failed to create models.dev HTTP client: {}", error);
+                        return ModelsDevRefreshOutcome::Failed;
+                    }
+                };
+                let mut body = None;
+                for attempt in 0..MAX_REFRESH_ATTEMPTS {
+                    match fetch_catalog_body(&client, endpoint_url).await {
+                        Ok(value) => {
+                            body = Some(value);
+                            break;
+                        }
+                        Err(error)
+                            if error.is_retryable() && attempt + 1 < MAX_REFRESH_ATTEMPTS =>
+                        {
+                            warn!(
+                                "models.dev catalog refresh attempt {}/{} failed: {}; retrying",
+                                attempt + 1,
+                                MAX_REFRESH_ATTEMPTS,
+                                error
+                            );
+                            tokio::time::sleep(retry_backoff(attempt)).await;
+                        }
+                        Err(error) => {
+                            warn!(
+                                "models.dev catalog refresh failed after {} attempt(s): {}",
+                                attempt + 1,
+                                error
+                            );
+                            break;
+                        }
                     }
                 }
+                let Some(body) = body else {
+                    return ModelsDevRefreshOutcome::Failed;
+                };
+                body
             }
-            let Some(body) = body else {
-                return ModelsDevRefreshOutcome::Failed;
-            };
-            body
         };
 
         let previous = self.load_cached_or_bundled().await;
@@ -210,67 +250,127 @@ impl ModelsDevCatalogService {
                 .is_ok_and(|body| is_valid_catalog_document(&body))
     }
 
+    async fn cache_matches(&self, expected: &str) -> bool {
+        fs::read_to_string(&self.cache_file)
+            .await
+            .is_ok_and(|body| is_valid_catalog_document(&body) && body == expected)
+    }
+
     async fn write_cache_atomically(&self, body: &str) -> std::io::Result<()> {
         if let Some(parent) = self.cache_file.parent() {
             fs::create_dir_all(parent).await?;
         }
+        let nonce = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
         let temp_file = self.cache_file.with_file_name(format!(
-            ".{}.{}.tmp",
+            ".{}.{}.{}.tmp",
             self.cache_file
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("models-dev"),
-            std::process::id()
+            std::process::id(),
+            nonce
         ));
         fs::write(&temp_file, body).await?;
         #[cfg(not(windows))]
-        {
-            match fs::rename(&temp_file, &self.cache_file).await {
-                Ok(()) => Ok(()),
-                Err(error) => {
-                    let _ = fs::remove_file(&temp_file).await;
-                    Err(error)
-                }
-            }
-        }
-
+        let replacement = fs::rename(&temp_file, &self.cache_file).await;
         #[cfg(windows)]
-        {
-            match fs::rename(&temp_file, &self.cache_file).await {
-                Ok(()) => Ok(()),
-                Err(_rename_error) if self.cache_file.exists() => {
-                    let backup_file = self.cache_file.with_file_name(format!(
-                        ".{}.{}.bak",
-                        self.cache_file
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .unwrap_or("models-dev"),
-                        std::process::id()
-                    ));
-                    let _ = fs::remove_file(&backup_file).await;
-                    if let Err(error) = fs::rename(&self.cache_file, &backup_file).await {
-                        let _ = fs::remove_file(&temp_file).await;
-                        return Err(error);
-                    }
-                    match fs::rename(&temp_file, &self.cache_file).await {
-                        Ok(()) => {
-                            let _ = fs::remove_file(&backup_file).await;
-                            Ok(())
-                        }
-                        Err(error) => {
-                            let _ = fs::rename(&backup_file, &self.cache_file).await;
-                            let _ = fs::remove_file(&temp_file).await;
-                            Err(error)
-                        }
-                    }
-                }
-                Err(rename_error) => {
-                    let _ = fs::remove_file(&temp_file).await;
-                    Err(rename_error)
-                }
+        let replacement = replace_cache_file_atomically(&temp_file, &self.cache_file);
+
+        match replacement {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = fs::remove_file(&temp_file).await;
+                Err(error)
             }
         }
     }
+}
+
+fn runtime_source_from_environment() -> ModelsDevRuntimeSource {
+    runtime_source_from_values(
+        std::env::var(MODELS_DEV_PATH_ENV).ok(),
+        std::env::var(MODELS_DEV_URL_ENV).ok(),
+    )
+}
+
+fn runtime_source_from_values(
+    local_path: Option<String>,
+    endpoint_url: Option<String>,
+) -> ModelsDevRuntimeSource {
+    if let Some(local_path) = local_path
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    {
+        return ModelsDevRuntimeSource::LocalFile(PathBuf::from(local_path));
+    }
+
+    ModelsDevRuntimeSource::Http(
+        endpoint_url
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_MODELS_DEV_ENDPOINT.to_string()),
+    )
+}
+
+#[cfg(windows)]
+fn replace_cache_file_atomically(
+    temp_path: &std::path::Path,
+    target_path: &std::path::Path,
+) -> std::io::Result<()> {
+    use windows::core::PCWSTR;
+    use windows::Win32::Storage::FileSystem::{
+        MoveFileExW, ReplaceFileW, MOVEFILE_WRITE_THROUGH, REPLACEFILE_WRITE_THROUGH,
+    };
+
+    let temp = windows_extended_path(temp_path)?;
+    let target = windows_extended_path(target_path)?;
+    let result = unsafe {
+        if target_path.exists() {
+            ReplaceFileW(
+                PCWSTR(target.as_ptr()),
+                PCWSTR(temp.as_ptr()),
+                PCWSTR::null(),
+                REPLACEFILE_WRITE_THROUGH,
+                None,
+                None,
+            )
+        } else {
+            MoveFileExW(
+                PCWSTR(temp.as_ptr()),
+                PCWSTR(target.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        }
+    };
+    result.map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+#[cfg(windows)]
+fn windows_extended_path(path: &std::path::Path) -> std::io::Result<Vec<u16>> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let absolute = std::path::absolute(path)?;
+    let path = absolute.as_os_str().encode_wide().collect::<Vec<_>>();
+    let slash = b'\\' as u16;
+    let mut extended = if path.starts_with(&[slash, slash, b'?' as u16, slash])
+        || path.starts_with(&[slash, slash, b'.' as u16, slash])
+    {
+        path
+    } else if path.starts_with(&[slash, slash]) {
+        r"\\?\UNC\"
+            .encode_utf16()
+            .chain(path.into_iter().skip(2))
+            .collect()
+    } else if path.len() >= 3 && path[1] == b':' as u16 && path[2] == slash {
+        r"\\?\".encode_utf16().chain(path).collect()
+    } else {
+        path
+    };
+    extended.push(0);
+    Ok(extended)
 }
 
 #[derive(Debug)]
@@ -376,7 +476,11 @@ fn is_valid_catalog_document(body: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshotSource};
+    use super::{
+        runtime_source_from_values, ModelsDevCatalogService, ModelsDevRefreshOutcome,
+        ModelsDevRuntimeSource, ModelsDevSnapshotSource,
+    };
+    use std::path::PathBuf;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -450,6 +554,93 @@ mod tests {
         assert_eq!(snapshot.source, ModelsDevSnapshotSource::Cache);
         assert_eq!(snapshot.body, VALID);
         assert!(!cache_file.with_extension("tmp").exists());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn failed_windows_replacement_preserves_the_existing_cache() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let cache_file = directory.path().join("models.json");
+        let missing_temp_file = directory.path().join("missing.tmp");
+        tokio::fs::write(&cache_file, VALID)
+            .await
+            .expect("existing cache write");
+
+        super::replace_cache_file_atomically(&missing_temp_file, &cache_file)
+            .expect_err("missing replacement should fail");
+
+        assert_eq!(
+            tokio::fs::read_to_string(cache_file)
+                .await
+                .expect("preserved cache read"),
+            VALID
+        );
+    }
+
+    #[test]
+    fn local_runtime_source_takes_precedence_over_http_source() {
+        assert_eq!(
+            runtime_source_from_values(
+                Some(" E:/tmp/models-dev.json ".to_string()),
+                Some("https://example.com/models.json".to_string()),
+            ),
+            ModelsDevRuntimeSource::LocalFile(PathBuf::from("E:/tmp/models-dev.json"))
+        );
+    }
+
+    #[tokio::test]
+    async fn local_runtime_source_replaces_a_fresh_cache() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let cache_file = directory.path().join("models.json");
+        let source_file = directory.path().join("local-models.json");
+        tokio::fs::write(
+            &cache_file,
+            r#"{"openai":{"models":{"gpt-old":{"id":"gpt-old"}}}}"#,
+        )
+        .await
+        .expect("existing cache write");
+        tokio::fs::write(&source_file, VALID)
+            .await
+            .expect("local source write");
+        let service = ModelsDevCatalogService::new(&cache_file).with_local_file(&source_file);
+
+        let outcome = service.refresh_if_stale().await;
+
+        let ModelsDevRefreshOutcome::Updated(snapshot) = outcome else {
+            panic!("local source should update the cache");
+        };
+        assert_eq!(snapshot.source, ModelsDevSnapshotSource::Cache);
+        assert_eq!(snapshot.body, VALID);
+        assert_eq!(
+            tokio::fs::read_to_string(cache_file)
+                .await
+                .expect("updated cache read"),
+            VALID
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_local_runtime_source_preserves_the_last_valid_cache() {
+        let directory = tempfile::tempdir().expect("temp directory");
+        let cache_file = directory.path().join("models.json");
+        let source_file = directory.path().join("local-models.json");
+        tokio::fs::write(&cache_file, VALID)
+            .await
+            .expect("existing cache write");
+        tokio::fs::write(&source_file, "not json")
+            .await
+            .expect("invalid local source write");
+        let service = ModelsDevCatalogService::new(&cache_file).with_local_file(&source_file);
+
+        let outcome = service.refresh_if_stale().await;
+
+        assert_eq!(outcome, ModelsDevRefreshOutcome::Failed);
+        assert_eq!(
+            tokio::fs::read_to_string(cache_file)
+                .await
+                .expect("preserved cache read"),
+            VALID
+        );
     }
 
     #[tokio::test]
