@@ -538,6 +538,7 @@ pub async fn submit(
         request.agent_type.clone(),
         request.approval_policy.clone(),
         request.model.clone(),
+        request.reasoning_preset.clone(),
     )
     .with_source_workspace(
         request.source_workspace_path.clone(),
@@ -1122,6 +1123,7 @@ pub(super) async fn record_follow_up_state(
         .update_submission_options(
             &record.job_id,
             request.model.as_deref(),
+            request.reasoning_preset.as_deref(),
             request.approval_policy.as_deref(),
         )
         .await

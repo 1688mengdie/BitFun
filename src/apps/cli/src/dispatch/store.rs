@@ -956,6 +956,27 @@ impl DispatchStore {
             let Ok(state) = self.load_state(&job_id) else {
                 continue;
             };
+            // A newly accepted follow-up is durable in the pending mailbox
+            // before its worker rewrites the job record. Project those options
+            // immediately so controller recovery cannot briefly restore stale
+            // model or reasoning selections during that window.
+            let pending_turn = if state.state.is_terminal() {
+                None
+            } else {
+                self.peek_follow_up_turn(&job_id).ok().flatten()
+            };
+            let model = pending_turn
+                .as_ref()
+                .and_then(|turn| turn.model.clone())
+                .or(job.request.model);
+            let reasoning_preset = pending_turn
+                .as_ref()
+                .and_then(|turn| turn.reasoning_preset.clone())
+                .or(job.request.reasoning_preset);
+            let approval_policy = pending_turn
+                .as_ref()
+                .and_then(|turn| turn.approval_policy)
+                .unwrap_or(job.request.approval_policy);
             entries.push(DispatchJobListEntry {
                 job_id,
                 session_id: job.request.session_id,
@@ -964,8 +985,9 @@ impl DispatchStore {
                 workspace_path: job.request.workspace_path,
                 title: job.title,
                 agent_type: job.request.agent_type,
-                approval_policy: job.request.approval_policy,
-                model: job.request.model,
+                approval_policy,
+                model,
+                reasoning_preset,
             });
         }
         entries.sort_by(|left, right| right.started_at.cmp(&left.started_at));
@@ -2315,6 +2337,12 @@ mod tests {
         assert_eq!(peeked.reasoning_preset.as_deref(), Some("high"));
         assert_eq!(peeked.approval_policy, Some(DispatchApprovalPolicy::Remote));
 
+        let listed = store.list_jobs().expect("list queued job");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].model.as_deref(), Some("model-2"));
+        assert_eq!(listed[0].reasoning_preset.as_deref(), Some("high"));
+        assert_eq!(listed[0].approval_policy, DispatchApprovalPolicy::Remote);
+
         // A retried turnId bound to different options must be refused.
         let mut conflicting = follow_up.clone();
         conflicting.reasoning_preset = Some("low".to_string());
@@ -2336,6 +2364,10 @@ mod tests {
         assert_eq!(job.request.model.as_deref(), Some("model-2"));
         assert_eq!(job.request.reasoning_preset.as_deref(), Some("high"));
         assert_eq!(job.request.approval_policy, DispatchApprovalPolicy::Remote);
+
+        let listed = store.list_jobs().expect("list applied job");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].reasoning_preset.as_deref(), Some("high"));
 
         // ...without breaking submit idempotency: the ORIGINAL submit retry
         // still matches its stored fingerprint after the rewrite.

@@ -275,6 +275,7 @@ pub async fn submit_device(
         request.agent_type.clone(),
         request.approval_policy.clone(),
         request.model.clone(),
+        request.reasoning_preset.clone(),
     )
     .with_source_workspace(
         request.source_workspace_path.clone(),

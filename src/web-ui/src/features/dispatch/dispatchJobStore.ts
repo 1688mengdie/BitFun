@@ -394,6 +394,7 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
                 agentType: record.agentType || existing.agentType,
                 approvalPolicy: record.approvalPolicy || existing.approvalPolicy,
                 model: record.model || existing.model,
+                reasoningPreset: record.reasoningPreset ?? existing.reasoningPreset,
                 branch: record.branch || existing.branch,
                 baselineWorktreePath: nextBaselinePath,
                 baselineWorktreeMissing:
@@ -432,6 +433,7 @@ export const useDispatchJobStore = create<DispatchJobStoreState>()(
               baselineWorktreePath: record.baselineWorktreePath,
               syncedHeadCommit: record.syncedHeadCommit,
               model: record.model,
+              reasoningPreset: record.reasoningPreset,
               // A newly reconstructed projection must replay its own
               // transcript instead of inheriting another observer's cursor.
               cursor: 0,
