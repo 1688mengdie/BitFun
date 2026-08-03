@@ -66,6 +66,11 @@ use std::time::{Duration, SystemTime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
 
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_MODEL_RESOLUTION_AI_CONFIG: crate::service::config::types::AIConfig;
+}
+
 /// Session manager configuration
 #[derive(Debug, Clone)]
 pub struct SessionManagerConfig {
@@ -522,6 +527,11 @@ impl SessionManager {
 
     async fn load_ai_config_for_model_resolution() -> Option<crate::service::config::types::AIConfig>
     {
+        #[cfg(test)]
+        if let Ok(ai_config) = TEST_MODEL_RESOLUTION_AI_CONFIG.try_with(Clone::clone) {
+            return Some(ai_config);
+        }
+
         let config_service = get_global_config_service().await.ok()?;
         config_service.get_config(Some("ai")).await.ok()
     }
@@ -2213,6 +2223,19 @@ impl SessionManager {
         };
         session.created_by = created_by;
         session.kind = kind;
+        if let Some(ai_config) = Self::load_ai_config_for_model_resolution().await {
+            let previous_context_window = session.config.max_context_tokens;
+            if let Some(resolved_context_window) =
+                Self::sync_session_context_window_from_ai_config(&mut session, &ai_config)
+            {
+                if resolved_context_window != previous_context_window {
+                    debug!(
+                        "Resolved session context window before creation: session_id={}, previous={}, resolved={}",
+                        session.session_id, previous_context_window, resolved_context_window
+                    );
+                }
+            }
+        }
         let persist = self.config.enable_persistence
             && !transient
             && Self::should_persist_session_kind(session.kind);
@@ -7543,6 +7566,7 @@ mod tests {
     use super::{
         should_auto_migrate_session_model, CoreSessionStorePort, SessionExecutionBindingError,
         SessionExecutionBindingUpdate, SessionManager, SessionManagerConfig,
+        TEST_MODEL_RESOLUTION_AI_CONFIG,
     };
     use crate::agentic::core::{
         CompressionState, Message, MessageContent, MessageRole, ProcessingPhase, Session,
@@ -9493,6 +9517,44 @@ mod tests {
             context_window: Some(context_window),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn session_creation_persists_resolved_model_context_window() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager.clone());
+        let ai_config = ServiceAIConfig {
+            models: vec![test_model("deepseek-v4-flash", 200_000)],
+            ..Default::default()
+        };
+
+        let session = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(ai_config, async {
+                manager
+                    .create_session(
+                        "Remote session".to_string(),
+                        "agentic".to_string(),
+                        SessionConfig {
+                            workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                            model_id: Some("deepseek-v4-flash".to_string()),
+                            max_context_tokens: 128_128,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            })
+            .await
+            .expect("session should create");
+
+        assert_eq!(session.config.max_context_tokens, 200_000);
+        let persisted = persistence_manager
+            .load_session(workspace.path(), &session.session_id)
+            .await
+            .expect("persisted session should load");
+        assert_eq!(persisted.config.max_context_tokens, 200_000);
     }
 
     #[test]
