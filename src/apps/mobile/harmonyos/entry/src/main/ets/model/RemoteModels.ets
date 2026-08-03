@@ -453,3 +453,12 @@ export interface ReadFileResult {
   mimeType: string;
   size: number;
 }
+
+export interface ReadFileChunkResult {
+  name: string;
+  contentBase64: string;
+  offset: number;
+  chunkSize: number;
+  totalSize: number;
+  mimeType: string;
+}

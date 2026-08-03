@@ -1,6 +1,18 @@
 import { RecentWorkspaceEntry } from '../../model/RemoteModels';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 
+export class RemoteCreateSessionContext {
+  readonly deviceId: string;
+  readonly workspacePath: string;
+  readonly agentType: string;
+
+  constructor(deviceId: string, workspacePath: string, agentType: string = 'Claw') {
+    this.deviceId = deviceId;
+    this.workspacePath = workspacePath;
+    this.agentType = agentType;
+  }
+}
+
 @ObservedV2
 export class RemoteCreateSessionState {
   @Trace draft: string = '';
@@ -38,11 +50,23 @@ export class RemoteCreateSessionState {
 
   setDevices(devices: CloudAccountDevice[]): void {
     this.devices = devices.slice();
+    const selected = devices.find((device: CloudAccountDevice): boolean =>
+      device.deviceId === this.selectedDeviceId
+    );
+    if (selected) {
+      this.selectedDeviceName = selected.deviceName;
+    }
     this.isLoadingDevices = false;
   }
 
   setWorkspaces(workspaces: RecentWorkspaceEntry[]): void {
     this.workspaces = workspaces.slice();
+    const selected = workspaces.find((workspace: RecentWorkspaceEntry): boolean =>
+      workspace.path === this.selectedWorkspacePath
+    );
+    if (selected) {
+      this.selectedWorkspaceName = selected.name;
+    }
     this.isLoadingWorkspaces = false;
   }
 
@@ -59,6 +83,10 @@ export class RemoteCreateSessionState {
     this.selectedWorkspaceName = workspace?.name || '';
     this.openMenu = 'none';
     this.errorText = '';
+  }
+
+  submissionContext(): RemoteCreateSessionContext {
+    return new RemoteCreateSessionContext(this.selectedDeviceId, this.selectedWorkspacePath);
   }
 
   clearWorkspace(): void {

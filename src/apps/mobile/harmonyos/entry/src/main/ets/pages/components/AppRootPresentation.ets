@@ -1,20 +1,29 @@
 import display from '@ohos.display';
+import deviceInfo from '@ohos.deviceInfo';
 import mediaQuery from '@ohos.mediaquery';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { RemotePermissionMode, RemoteSession } from '../../model/RemoteModels';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
+import { RemoteLogger } from '../../services/RemoteLogger';
+import { RemoteUiState } from '../../services/RemoteUiState';
 import { AppShell } from './AppShell';
 import { AppSidebar } from './AppSidebar';
 import { ConnectView } from './ConnectView';
 import { ConversationIntent } from './ConversationIntent';
 import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
+import { ComposerPresentation } from './ComposerBar';
+import { ConversationViewSettings } from './ConversationViewSettings';
 import { ConversationViewHost } from './ConversationViewHost';
+import { FilePreviewSurface } from './FilePreviewSurface';
 import { RemoteControlSettingsSheet } from './RemoteControlSettingsSheet';
 import { RemoteCreateSessionView } from './RemoteCreateSessionView';
 import { RemoteHomeView } from './RemoteHomeView';
 import { RemoteSessionList } from './RemoteSessionList';
+import { RemoteSessionLoadingView } from './RemoteSessionLoadingView';
+import { SidebarToggleButton } from './SidebarToggleButton';
+import { SessionActionPresentation } from './SessionActionSurface';
 import { SettingsSheet } from './SettingsSheet';
-import { CARD, GREEN, INK, LINE, MUTED, PAGE_BG, RED } from './Theme';
+import { CARD, FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, PAGE_BG, PRIMARY_ACTION, PRIMARY_ACTION_TEXT, RED } from './Theme';
 import { AppRoute, ConversationSource } from '../navigation/AppRouteContract';
 import { AppShellState } from '../state/AppShellState';
 import {
@@ -25,6 +34,12 @@ import { GeneralChatPageState } from '../state/GeneralChatPageState';
 import { RemotePageState } from '../state/RemotePageState';
 import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { ConversationViewState } from '../state/ConversationViewState';
+import { FilePreviewPhase, FilePreviewState } from '../state/FilePreviewState';
+import {
+  FilePreviewLayout,
+  FilePreviewPlacement,
+  FilePreviewPlacementPolicy
+} from '../state/FilePreviewPlacementPolicy';
 
 const WIDE_DETAIL_CONTENT_MAX_WIDTH: number = 920;
 
@@ -36,16 +51,26 @@ function safeFoldStatus(): display.FoldStatus {
   }
 }
 
+function safeDeviceType(): string {
+  try {
+    return deviceInfo.deviceType || '';
+  } catch (_err) {
+    return '';
+  }
+}
+
 export class AppRootPresentationActions {
   readonly onNavigationBack: (route: AppRoute) => boolean;
   readonly onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void;
   readonly onCloseSidebar: () => void;
   readonly onWideConversationSource: (source: ConversationSource) => void;
+  readonly onCompactLayoutEntered: () => void;
   readonly onRemoteHome: RemoteHomePresentationActions;
   readonly onRemoteCreate: RemoteCreatePresentationActions;
   readonly onSidebar: SidebarPresentationActions;
   readonly onSettings: SettingsPresentationActions;
   readonly onConnect: ConnectPresentationActions;
+  readonly onFilePreview: FilePreviewPresentationActions;
   readonly generalStatus: () => string;
 
   constructor(
@@ -53,23 +78,46 @@ export class AppRootPresentationActions {
     onConversationIntent: (route: AppRoute, intent: ConversationIntent) => void,
     onCloseSidebar: () => void,
     onWideConversationSource: (source: ConversationSource) => void,
+    onCompactLayoutEntered: () => void,
     onRemoteHome: RemoteHomePresentationActions,
     onRemoteCreate: RemoteCreatePresentationActions,
     onSidebar: SidebarPresentationActions,
     onSettings: SettingsPresentationActions,
     onConnect: ConnectPresentationActions,
+    onFilePreview: FilePreviewPresentationActions,
     generalStatus: () => string
   ) {
     this.onNavigationBack = onNavigationBack;
     this.onConversationIntent = onConversationIntent;
     this.onCloseSidebar = onCloseSidebar;
     this.onWideConversationSource = onWideConversationSource;
+    this.onCompactLayoutEntered = onCompactLayoutEntered;
     this.onRemoteHome = onRemoteHome;
     this.onRemoteCreate = onRemoteCreate;
     this.onSidebar = onSidebar;
     this.onSettings = onSettings;
     this.onConnect = onConnect;
+    this.onFilePreview = onFilePreview;
     this.generalStatus = generalStatus;
+  }
+}
+
+export class FilePreviewPresentationActions {
+  readonly close: () => void;
+  readonly refresh: () => void;
+  readonly download: (path: string) => void;
+  readonly openLink: (reference: string, label: string) => void;
+
+  constructor(
+    close: () => void,
+    refresh: () => void,
+    download: (path: string) => void,
+    openLink: (reference: string, label: string) => void
+  ) {
+    this.close = close;
+    this.refresh = refresh;
+    this.download = download;
+    this.openLink = openLink;
   }
 }
 
@@ -109,8 +157,12 @@ export class RemoteHomePresentationActions {
   readonly cancelWorkspace: () => void; readonly cancelAssistant: () => void;
   readonly queryChanged: (query: string) => void; readonly search: () => void; readonly loadMore: () => void;
   readonly reconnect: () => void; readonly disconnect: () => void; readonly clearPairing: () => void;
-  readonly create: (agentType: string) => void; readonly createAssistant: () => void;
-  readonly createInWorkspace: (path: string, agentType: string) => void; readonly openSession: (session: RemoteSession) => void;
+  readonly create: (agentType: string) => void; readonly createInPlace: (agentType: string) => void;
+  readonly createAssistant: () => void;
+  readonly createInWorkspace: (path: string, agentType: string) => void;
+  readonly createInWorkspaceInPlace: (path: string, agentType: string) => void;
+  readonly openSession: (session: RemoteSession) => void;
+  readonly openSessionInPlace: (session: RemoteSession) => void;
   readonly deleteSession: (session: RemoteSession) => void;
 
   constructor(
@@ -119,8 +171,11 @@ export class RemoteHomePresentationActions {
     selectWorkspace: (path: string) => void, selectAssistant: (path: string) => void,
     cancelWorkspace: () => void, cancelAssistant: () => void, queryChanged: (query: string) => void,
     search: () => void, loadMore: () => void, reconnect: () => void, disconnect: () => void,
-    clearPairing: () => void, create: (agentType: string) => void, createAssistant: () => void,
-    createInWorkspace: (path: string, agentType: string) => void, openSession: (session: RemoteSession) => void,
+    clearPairing: () => void, create: (agentType: string) => void, createInPlace: (agentType: string) => void,
+    createAssistant: () => void,
+    createInWorkspace: (path: string, agentType: string) => void,
+    createInWorkspaceInPlace: (path: string, agentType: string) => void, openSession: (session: RemoteSession) => void,
+    openSessionInPlace: (session: RemoteSession) => void,
     deleteSession: (session: RemoteSession) => void
   ) {
     this.openSidebar = openSidebar; this.connectWorkspace = connectWorkspace; this.addConnection = addConnection;
@@ -128,8 +183,10 @@ export class RemoteHomePresentationActions {
     this.showAssistants = showAssistants; this.selectWorkspace = selectWorkspace; this.selectAssistant = selectAssistant;
     this.cancelWorkspace = cancelWorkspace; this.cancelAssistant = cancelAssistant; this.queryChanged = queryChanged;
     this.search = search; this.loadMore = loadMore; this.reconnect = reconnect; this.disconnect = disconnect;
-    this.clearPairing = clearPairing; this.create = create; this.createAssistant = createAssistant;
-    this.createInWorkspace = createInWorkspace; this.openSession = openSession; this.deleteSession = deleteSession;
+    this.clearPairing = clearPairing; this.create = create; this.createInPlace = createInPlace;
+    this.createAssistant = createAssistant; this.createInWorkspace = createInWorkspace;
+    this.createInWorkspaceInPlace = createInWorkspaceInPlace; this.openSession = openSession;
+    this.openSessionInPlace = openSessionInPlace; this.deleteSession = deleteSession;
   }
 }
 
@@ -210,16 +267,32 @@ export struct AppRootPresentation {
   @Param remotePageState: RemotePageState = new RemotePageState();
   @Param remoteCreateState: RemoteCreateSessionState = new RemoteCreateSessionState();
   @Param generalPageState: GeneralChatPageState = new GeneralChatPageState();
+  @Param filePreviewState: FilePreviewState = new FilePreviewState();
   @Param deviceId: string = '';
   @Param currentRoute: AppRoute = AppRoute.ChatHome;
   @Local viewportWidth: number = 0;
   @Local wideLayoutMatched: boolean = false;
   @Local foldStatus: display.FoldStatus = safeFoldStatus();
+  @Local largeScreenLayout: boolean = false;
   @Local wideMasterPaneWidth: number = ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH;
   @Local wideMasterDetailGap: number = 0;
   @Local wideDetailContentOffset: number = 0;
   @Local wideDetailContentWidth: number = 0;
+  @Local wideCollapsedDetailContentOffset: number = 0;
+  @Local wideCollapsedDetailContentWidth: number = 0;
+  @Local wideMasterPaneCollapsed: boolean = false;
+  @Local wideMasterPaneMotionActive: boolean = false;
+  @Local restoreCollapsedMasterAfterPreview: boolean = false;
   @Local remoteWideSortMode: string = 'project';
+  @Local remoteWorkspaceFilter: string = '';
+  @Local remoteAgentFilter: string = '';
+  @Local remoteStatusFilter: string = '';
+  @Local showRemoteViewSettings: boolean = false;
+  @Local showRemoteWorkspaceMetadata: boolean = false;
+  @Local showRemoteUpdatedMetadata: boolean = false;
+  @Local showRemoteStatusMetadata: boolean = false;
+  private readonly deviceType: string = safeDeviceType();
+  private verticalCreases: ConversationLayoutCrease[] = [];
   private wideQueryListener?: mediaQuery.MediaQueryListener;
   private foldStatusChanged: (status: display.FoldStatus) => void =
     (status: display.FoldStatus): void => {
@@ -229,17 +302,19 @@ export struct AppRootPresentation {
   private wideQueryChanged: (result: mediaQuery.MediaQueryResult) => void =
     (result: mediaQuery.MediaQueryResult): void => {
       this.wideLayoutMatched = result.matches;
+      this.refreshWideGeometry();
     };
   @Param actions: AppRootPresentationActions = new AppRootPresentationActions(
-    () => false, () => {}, () => {}, () => {},
+    () => false, () => {}, () => {}, () => {}, () => {},
     new RemoteHomePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
-      () => {}, () => {}, () => {}, () => {}, () => {}),
+      () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => '', async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
     new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {},
       () => {}, async (): Promise<CloudAccountDevice[]> => [], async (_device: CloudAccountDevice): Promise<void> => {}),
+    new FilePreviewPresentationActions(() => {}, () => {}, () => {}, () => {}),
     () => ''
   );
 
@@ -253,12 +328,27 @@ export struct AppRootPresentation {
     this.unbindResponsiveQueries();
   }
 
+  @Monitor('filePreviewState.visible')
+  onFilePreviewVisibilityChanged(): void {
+    if (this.filePreviewState.visible && this.wideMasterPaneCollapsed) {
+      this.restoreCollapsedMasterAfterPreview = true;
+      this.wideMasterPaneCollapsed = false;
+    } else if (!this.filePreviewState.visible && this.restoreCollapsedMasterAfterPreview && this.isWideLayout()) {
+      this.wideMasterPaneCollapsed = true;
+      this.restoreCollapsedMasterAfterPreview = false;
+    }
+  }
+
   build() {
     Stack() {
-      AppShell({ shellState: this.shellState, content: () => { this.NavigationContent(); },
+      AppShell({ shellState: this.shellState, useWideLayout: this.isWideLayout(), content: () => { this.NavigationContent(); },
         sidebar: () => { this.SidebarContent(); }, settings: () => { this.SettingsContent(); },
         connect: () => { this.ConnectContent(); }, onCloseSidebar: this.actions.onCloseSidebar })
+      if (this.filePreviewPlacement() === FilePreviewPlacement.CompactFullPage) {
+        this.FilePreviewPane()
+      }
     }.width('100%').height('100%')
+    .bindSheet($$this.showRemoteViewSettings, this.RemoteViewSettingsSheet(), this.remoteViewSettingsSheetOptions())
     .onAreaChange((_oldArea: Area, newArea: Area) => {
       this.viewportWidth = this.areaWidth(newArea.width);
       this.refreshWideGeometry();
@@ -282,21 +372,39 @@ export struct AppRootPresentation {
   RouteContent(route: AppRoute) {
     if (this.isGeneralWideRoute(route) && this.isWideLayout()) {
       this.WideGeneralChatContent(route)
-    } else if (route === AppRoute.RemoteChat && this.isWideLayout()) {
+    } else if (this.showsWideRemoteConversation(route) &&
+      this.filePreviewPlacement() === FilePreviewPlacement.WideFocusSplit) {
+      this.WideRemotePreviewFocusContent()
+    } else if (this.showsWideRemoteConversation(route)) {
       this.WideRemoteChatContent()
     } else if (route === AppRoute.RemoteHome && this.isWideLayout()) {
       this.WideRemoteHomeContent()
+    } else if (route === AppRoute.RemoteCreate && this.isWideLayout()) {
+      this.WideRemoteCreateContent()
     } else {
-      this.RouteSurfaceContent(route, true, true)
+      this.RouteSurfaceContent(route, true, route !== AppRoute.ChatHome)
     }
   }
 
   @Builder
-  RouteSurfaceContent(route: AppRoute, showSidebarButton: boolean, showBackButton: boolean) {
+  RouteSurfaceContent(
+    route: AppRoute,
+    showSidebarButton: boolean,
+    showBackButton: boolean,
+    showSidebarRestoreButton: boolean = false,
+    useWidePresentation: boolean = false
+  ) {
     Column() {
       if (route === AppRoute.RemoteHome) {
         RemoteHomeView({ pageState: this.remotePageState, isBusy: this.remotePageState.isBusy,
           selectedSessionId: this.remotePageState.activeSession.sessionId,
+          sortMode: this.remoteWideSortMode,
+          workspaceFilter: this.remoteWorkspaceFilter,
+          agentFilter: this.remoteAgentFilter,
+          statusFilter: this.remoteStatusFilter,
+          showWorkspaceMetadata: this.showRemoteWorkspaceMetadata,
+          showUpdatedMetadata: this.showRemoteUpdatedMetadata,
+          showStatusMetadata: this.showRemoteStatusMetadata,
           onOpenSidebar: this.actions.onRemoteHome.openSidebar,
           onConnectWorkspace: this.actions.onRemoteHome.connectWorkspace,
           onAddConnection: this.actions.onRemoteHome.addConnection,
@@ -318,10 +426,36 @@ export struct AppRootPresentation {
           onCreateAssistantSession: this.actions.onRemoteHome.createAssistant,
           onCreateInWorkspace: this.actions.onRemoteHome.createInWorkspace,
           onOpenSession: this.actions.onRemoteHome.openSession,
-          onDeleteSession: this.actions.onRemoteHome.deleteSession })
+          onDeleteSession: this.actions.onRemoteHome.deleteSession,
+          onSortModeChange: (mode: string) => {
+            this.remoteWideSortMode = mode;
+          },
+          onWorkspaceFilterChange: (value: string) => {
+            this.remoteWorkspaceFilter = value;
+          },
+          onAgentFilterChange: (value: string) => {
+            this.remoteAgentFilter = value;
+          },
+          onStatusFilterChange: (value: string) => {
+            this.remoteStatusFilter = value;
+          },
+          onWorkspaceMetadataChange: (value: boolean) => {
+            this.showRemoteWorkspaceMetadata = value;
+          },
+          onUpdatedMetadataChange: (value: boolean) => {
+            this.showRemoteUpdatedMetadata = value;
+          },
+          onStatusMetadataChange: (value: boolean) => {
+            this.showRemoteStatusMetadata = value;
+          } })
       } else if (route === AppRoute.RemoteCreate) {
         RemoteCreateSessionView({
           state: this.remoteCreateState,
+          presentation: useWidePresentation ? ComposerPresentation.Floating : ComposerPresentation.Create,
+          showSidebarRestoreButton: showSidebarRestoreButton,
+          onRestoreSidebar: () => {
+            this.restoreWideMasterPane();
+          },
           onBack: this.actions.onRemoteCreate.back,
           onToggleDeviceMenu: this.actions.onRemoteCreate.toggleDevices,
           onToggleWorkspaceMenu: this.actions.onRemoteCreate.toggleWorkspaces,
@@ -334,8 +468,18 @@ export struct AppRootPresentation {
         ConversationViewHost({
           viewState: ConversationViewState.project(route, this.remotePageState, this.generalPageState,
             this.actions.generalStatus()),
+          activeFilePreviewPath: route === AppRoute.RemoteChat && this.filePreviewState.visible ?
+            this.filePreviewState.target.remotePath : '',
+          activeFilePreviewLoading: route === AppRoute.RemoteChat && this.filePreviewState.visible &&
+            this.filePreviewState.phase === FilePreviewPhase.Loading,
           showSidebarButton: showSidebarButton,
           showBackButton: showBackButton,
+          showSidebarRestoreButton: showSidebarRestoreButton,
+          composerPresentation: useWidePresentation ? ComposerPresentation.Floating : ComposerPresentation.Compact,
+          contentHorizontalOffset: useWidePresentation ? this.collapsedDetailVisualBias() : 0,
+          onRestoreSidebar: () => {
+            this.restoreWideMasterPane();
+          },
           onIntent: (intent: ConversationIntent) => this.actions.onConversationIntent(route, intent)
         })
       }
@@ -345,30 +489,49 @@ export struct AppRootPresentation {
   @Builder
   WideGeneralChatContent(route: AppRoute) {
     Row() {
-      Column() {
-        AppSidebar({ sessions: this.generalPageState.recentSessions(), pinnedSessionId: this.generalPageState.pinnedSessionId(),
-          selectedSessionId: this.generalPageState.activeSession.sessionId,
-          connectionState: this.remotePageState.connectionState,
-          accountUserId: this.remotePageState.accountUserId,
-          activeSection: 'chat',
-          showConversationSourceSwitcher: true,
-          conversationSource: ConversationSource.General,
-          onClose: this.actions.onSidebar.close,
-          onNewChat: this.actions.onSidebar.newChat,
-          onEnterCode: () => this.actions.onWideConversationSource(ConversationSource.Remote),
-          onConversationSource: this.actions.onWideConversationSource,
-          onOpenSettings: this.actions.onSidebar.settings, onOpenAccount: this.actions.onSidebar.openAccount,
-          onOpenSession: this.actions.onSidebar.openSession,
-          onArchiveSession: this.actions.onSidebar.archive, onExportSession: this.actions.onSidebar.exportSession,
-          onDeleteSession: this.actions.onSidebar.deleteSession })
-      }
-      .width(this.wideMasterPaneWidth)
-      .height('100%')
-      .backgroundColor(PAGE_BG)
-      .border({ width: { right: 1 }, color: LINE })
+      if (!this.wideMasterPaneCollapsed) {
+        Column() {
+          Column() {
+            AppSidebar({ sessions: this.generalPageState.recentSessions(), pinnedSessionId: this.generalPageState.pinnedSessionId(),
+              selectedSessionId: this.generalPageState.activeSession.sessionId,
+              connectionState: this.remotePageState.connectionState,
+              accountUserId: this.remotePageState.accountUserId,
+              activeSection: 'chat',
+              showConversationSourceSwitcher: true,
+              showCollapseButton: true,
+              conversationSource: ConversationSource.General,
+              onClose: this.actions.onSidebar.close,
+              onNewChat: this.actions.onSidebar.newChat,
+              onEnterCode: () => this.actions.onWideConversationSource(ConversationSource.Remote),
+              onConversationSource: this.actions.onWideConversationSource,
+              onCollapse: () => {
+                this.collapseWideMasterPane();
+              },
+              onOpenSettings: this.actions.onSidebar.settings, onOpenAccount: this.actions.onSidebar.openAccount,
+              onOpenSession: this.actions.onSidebar.openSession,
+              onArchiveSession: this.actions.onSidebar.archive, onExportSession: this.actions.onSidebar.exportSession,
+              onDeleteSession: this.actions.onSidebar.deleteSession })
+          }
+          .width('100%')
+          .height('100%')
+          .backgroundColor(FLOATING_PANEL_BG)
+          .borderRadius(18)
+          .clip(true)
+          .shadow({ radius: 24, color: '#14000000', offsetX: 4, offsetY: 8 })
+        }
+        .width(this.wideMasterPaneWidth)
+        .height('100%')
+        .padding({ left: 10, right: 6, top: 10, bottom: 10 })
+        .backgroundColor(PAGE_BG)
+        .transition(this.wideMasterPaneMotionActive ?
+          TransitionEffect.translate({ x: -28, y: 0 })
+            .combine(TransitionEffect.opacity(0))
+            .animation({ duration: 220, curve: Curve.EaseInOut }) :
+          TransitionEffect.opacity(1))
 
-      this.WideMasterDetailGap()
-      this.WideConversationDetail(route, true)
+        this.WideMasterDetailGap()
+      }
+      this.WideConversationDetail(route, false)
     }
     .width('100%')
     .height('100%')
@@ -378,8 +541,10 @@ export struct AppRootPresentation {
   @Builder
   WideRemoteHomeContent() {
     Row() {
-      this.RemoteMasterPane('')
-      this.WideMasterDetailGap()
+      if (!this.wideMasterPaneCollapsed) {
+        this.RemoteMasterPane(false)
+        this.WideMasterDetailGap()
+      }
 
       Column() {
         this.RemoteFlowPlaceholder()
@@ -394,39 +559,67 @@ export struct AppRootPresentation {
   }
 
   @Builder
-  RemoteMasterPane(selectedSessionId: string) {
-    Column({ space: 12 }) {
-      this.RemoteWidePaneHeader()
-      ConversationSourceSwitcher({
-        activeSource: ConversationSource.Remote,
-        onSelectSource: this.actions.onWideConversationSource
-      })
-      if (this.canShowRemoteWideList()) {
-        RemoteSessionList({
+  WideRemoteCreateContent() {
+    Row() {
+      if (!this.wideMasterPaneCollapsed) {
+        this.RemoteMasterPane(false)
+        this.WideMasterDetailGap()
+      }
+      this.WideConversationDetail(AppRoute.RemoteCreate, false)
+    }
+    .width('100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  RemoteMasterPane(
+    showSelectedSession: boolean,
+    paneWidth: number = this.wideMasterPaneWidth
+  ) {
+    Column() {
+      Column({ space: 12 }) {
+        this.RemoteWidePaneHeader()
+        ConversationSourceSwitcher({
+          activeSource: ConversationSource.Remote,
+          onSelectSource: this.actions.onWideConversationSource
+        })
+        if (this.isRemoteWideInitialLoading()) {
+          RemoteSessionLoadingView()
+          this.RemoteWideSearchBar()
+        } else if (this.canShowRemoteWideList()) {
+          RemoteSessionList({
           sessions: this.remotePageState.visibleSessions(),
           query: this.remotePageState.sessionQuery,
           sortMode: this.remoteWideSortMode,
+          workspaceFilter: this.remoteWorkspaceFilter,
+          agentFilter: this.remoteAgentFilter,
+          statusFilter: this.remoteStatusFilter,
           workspaceName: this.remotePageState.workspaceName,
           workspacePath: this.remotePageState.workspacePath,
           workspaceKind: this.remotePageState.workspaceKind,
           recentWorkspaces: this.remotePageState.recentWorkspaces,
+          actionPresentation: SessionActionPresentation.Popover,
+          showWorkspaceMetadata: this.showRemoteWorkspaceMetadata,
+          showUpdatedMetadata: this.showRemoteUpdatedMetadata,
+          showStatusMetadata: this.showRemoteStatusMetadata,
           hasMoreSessions: this.remotePageState.hasMoreSessions,
           isBusy: this.remotePageState.isBusy || this.remotePageState.isLoadingSessions,
-          selectedSessionId: selectedSessionId,
+          selectedSessionId: showSelectedSession ? this.remotePageState.activeSession.sessionId : '',
           onCreate: () => {
-            this.actions.onRemoteHome.create('code');
+            this.actions.onRemoteHome.createInPlace('code');
           },
           onCreateAssistantSession: () => {
             this.actions.onRemoteHome.createAssistant();
           },
           onCreateInWorkspace: (path: string, agentType: string) => {
-            this.actions.onRemoteHome.createInWorkspace(path, agentType);
+            this.actions.onRemoteHome.createInWorkspaceInPlace(path, agentType);
           },
           onSelectWorkspace: (path: string) => {
             this.actions.onRemoteHome.selectWorkspace(path);
           },
           onOpenSession: (session: RemoteSession) => {
-            this.actions.onRemoteHome.openSession(session);
+            this.actions.onRemoteHome.openSessionInPlace(session);
           },
           onDeleteSession: (session: RemoteSession) => {
             this.actions.onRemoteHome.deleteSession(session);
@@ -434,17 +627,29 @@ export struct AppRootPresentation {
           onLoadMore: () => {
             this.actions.onRemoteHome.loadMore();
           }
-        })
-        this.RemoteWideSearchBar()
-      } else {
-        this.RemoteWideDisconnected()
+          })
+          this.RemoteWideSearchBar()
+        } else {
+          this.RemoteWideDisconnected()
+        }
       }
+      .width('100%')
+      .height('100%')
+      .padding({ left: 20, right: 16, top: 10, bottom: 8 })
+      .backgroundColor(FLOATING_PANEL_BG)
+      .borderRadius(18)
+      .clip(true)
+      .shadow({ radius: 24, color: '#14000000', offsetX: 4, offsetY: 8 })
     }
-    .width(this.wideMasterPaneWidth)
+    .width(paneWidth)
     .height('100%')
-    .padding({ left: 24, right: 18, top: 14, bottom: 12 })
+    .padding({ left: 10, right: 6, top: 10, bottom: 10 })
     .backgroundColor(PAGE_BG)
-    .border({ width: { right: 1 }, color: LINE })
+    .transition(this.wideMasterPaneMotionActive ?
+      TransitionEffect.translate({ x: -28, y: 0 })
+        .combine(TransitionEffect.opacity(0))
+        .animation({ duration: 220, curve: Curve.EaseInOut }) :
+      TransitionEffect.opacity(1))
   }
 
   @Builder
@@ -458,7 +663,7 @@ export struct AppRootPresentation {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Row({ space: 6 }) {
-          this.RemoteWideStatusDot()
+          this.RemoteWideStatusIndicator()
           Text(this.remoteWideStatusText())
             .fontSize(12)
             .fontColor(MUTED)
@@ -472,20 +677,33 @@ export struct AppRootPresentation {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
-      Stack({ alignContent: Alignment.Center }) {
-        Image($r('app.media.remote_ref_more'))
-          .width(22)
+      Row({ space: 6 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Row({ space: 3 }) {
+            Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+            Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+            Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+          }
           .height(8)
-          .objectFit(ImageFit.Contain)
+          .alignItems(VerticalAlign.Center)
+        }
+        .width(38)
+        .height(38)
+        .backgroundColor(CARD)
+        .borderRadius(19)
+        .border({ width: 1, color: LINE })
+        .accessibilityText(RemoteI18n.t('remote.actions'))
+        .onClick(() => {
+          this.showRemoteViewSettings = true;
+        })
+
+        SidebarToggleButton({
+          controlSize: 38,
+          onToggle: () => {
+            this.collapseWideMasterPane();
+          }
+        })
       }
-      .width(38)
-      .height(38)
-      .backgroundColor(CARD)
-      .borderRadius(19)
-      .border({ width: 1, color: LINE })
-      .onClick(() => {
-        this.actions.onRemoteHome.openSettings();
-      })
     }
     .width('100%')
     .height(46)
@@ -493,24 +711,75 @@ export struct AppRootPresentation {
   }
 
   @Builder
-  RemoteWideStatusDot() {
-    Stack() {
-      Text('')
+  RemoteViewSettingsSheet() {
+    ConversationViewSettings({
+      sessions: this.remotePageState.visibleSessions(),
+      workspaceName: this.remotePageState.workspaceName,
+      workspacePath: this.remotePageState.workspacePath,
+      workspaceKind: this.remotePageState.workspaceKind,
+      recentWorkspaces: this.remotePageState.recentWorkspaces,
+      sortMode: this.remoteWideSortMode,
+      workspaceFilter: this.remoteWorkspaceFilter,
+      agentFilter: this.remoteAgentFilter,
+      statusFilter: this.remoteStatusFilter,
+      showWorkspaceMetadata: this.showRemoteWorkspaceMetadata,
+      showUpdatedMetadata: this.showRemoteUpdatedMetadata,
+      showStatusMetadata: this.showRemoteStatusMetadata,
+      onSortModeChange: (mode: string) => {
+        this.remoteWideSortMode = mode;
+      },
+      onWorkspaceFilterChange: (value: string) => {
+        RemoteLogger.info(`wide view-settings workspace received=${value.length > 0 ? value : '<all>'}`);
+        this.remoteWorkspaceFilter = value;
+      },
+      onAgentFilterChange: (value: string) => {
+        this.remoteAgentFilter = value;
+      },
+      onStatusFilterChange: (value: string) => {
+        this.remoteStatusFilter = value;
+      },
+      onWorkspaceMetadataChange: (value: boolean) => {
+        this.showRemoteWorkspaceMetadata = value;
+      },
+      onUpdatedMetadataChange: (value: boolean) => {
+        this.showRemoteUpdatedMetadata = value;
+      },
+      onStatusMetadataChange: (value: boolean) => {
+        this.showRemoteStatusMetadata = value;
+      },
+      onClose: () => {
+        this.showRemoteViewSettings = false;
+      }
+    })
+  }
+
+  @Builder
+  RemoteWideStatusIndicator() {
+    if (this.isRemoteWideInitialLoading()) {
+      LoadingProgress()
+        .width(14)
+        .height(14)
+        .color(MUTED)
+    } else {
+      Stack() {
+        Text('')
+      }
+        .width(7)
+        .height(7)
+        .backgroundColor(this.remoteWideStatusColor())
+        .borderRadius(4)
     }
-      .width(7)
-      .height(7)
-      .backgroundColor(this.remoteWideStatusColor())
-      .borderRadius(4)
   }
 
   @Builder
   RemoteWideSearchBar() {
     Row({ space: 8 }) {
       Row({ space: 7 }) {
-        Image($r('app.media.remote_ref_search_reference'))
-          .width(16)
-          .height(16)
-          .objectFit(ImageFit.Contain)
+        SymbolGlyph($r('sys.symbol.magnifyingglass'))
+          .fontSize(16)
+          .fontColor([MUTED])
+          .width(18)
+          .height(18)
           .opacity(0.58)
         TextInput({ placeholder: RemoteI18n.t('remote.searchChats'), text: this.remotePageState.sessionQuery })
           .height(38)
@@ -535,18 +804,19 @@ export struct AppRootPresentation {
       .border({ width: 1, color: LINE })
 
       Stack({ alignContent: Alignment.Center }) {
-        Image($r('app.media.remote_ref_new_chat'))
-          .width(20)
-          .height(20)
-          .objectFit(ImageFit.Contain)
+        SymbolGlyph($r('sys.symbol.square_and_pencil'))
+          .fontSize(20)
+          .fontColor([PRIMARY_ACTION_TEXT])
+          .width(22)
+          .height(22)
       }
       .width(42)
       .height(42)
-      .backgroundColor(INK)
+      .backgroundColor(PRIMARY_ACTION)
       .borderRadius(21)
-      .opacity(this.remotePageState.isBusy ? 0.45 : 1)
+      .opacity(this.isRemoteWideActionBusy() ? 0.45 : 1)
       .onClick(() => {
-        if (!this.remotePageState.isBusy) {
+        if (!this.isRemoteWideActionBusy()) {
           this.actions.onRemoteHome.createAssistant();
         }
       })
@@ -560,10 +830,9 @@ export struct AppRootPresentation {
   RemoteWideDisconnected() {
     Column({ space: 12 }) {
       Stack({ alignContent: Alignment.Center }) {
-        Image($r('app.media.remote_ref_device'))
-          .width(42)
-          .height(42)
-          .objectFit(ImageFit.Contain)
+        SymbolGlyph($r('sys.symbol.desktop'))
+          .fontSize(42)
+          .fontColor([INK])
       }
       .width(74)
       .height(74)
@@ -580,12 +849,13 @@ export struct AppRootPresentation {
         .lineHeight(20)
         .fontColor(MUTED)
         .textAlign(TextAlign.Center)
-      Button(RemoteI18n.t('connect.connect'))
+      Text(RemoteI18n.t('connect.connect'))
         .width(136)
         .height(44)
         .fontSize(15)
-        .fontColor(CARD)
-        .backgroundColor(INK)
+        .fontColor(PRIMARY_ACTION_TEXT)
+        .backgroundColor(PRIMARY_ACTION)
+        .textAlign(TextAlign.Center)
         .borderRadius(22)
         .onClick(() => {
           this.actions.onRemoteHome.connectWorkspace();
@@ -600,10 +870,48 @@ export struct AppRootPresentation {
 
   @Builder
   WideRemoteChatContent() {
+    if (this.filePreviewPlacement() === FilePreviewPlacement.WideTriplePane) {
+      Row() {
+        this.RemoteMasterPane(
+          true,
+          this.filePreviewLayout().masterPaneWidth
+        )
+        this.WidePaneGap(this.filePreviewLayout().masterConversationGap)
+        this.WideConversationDetail(
+          AppRoute.RemoteChat,
+          false,
+          this.filePreviewLayout().conversationPaneWidth
+        )
+        this.WidePaneGap(this.filePreviewLayout().conversationPreviewGap)
+        this.FilePreviewPane(this.filePreviewLayout().previewPaneWidth)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(PAGE_BG)
+    } else {
+      Row() {
+        if (!this.wideMasterPaneCollapsed) {
+          this.RemoteMasterPane(true)
+          this.WideMasterDetailGap()
+        }
+        this.WideConversationDetail(AppRoute.RemoteChat, false)
+      }
+      .width('100%')
+      .height('100%')
+      .backgroundColor(PAGE_BG)
+    }
+  }
+
+  @Builder
+  WideRemotePreviewFocusContent() {
     Row() {
-      this.RemoteMasterPane(this.remotePageState.activeSession.sessionId)
-      this.WideMasterDetailGap()
-      this.WideConversationDetail(AppRoute.RemoteChat, false)
+      this.WideConversationDetail(
+        AppRoute.RemoteChat,
+        false,
+        this.filePreviewLayout().conversationPaneWidth
+      )
+      this.WidePaneGap(this.filePreviewLayout().conversationPreviewGap)
+      this.FilePreviewPane(this.filePreviewLayout().previewPaneWidth)
     }
     .width('100%')
     .height('100%')
@@ -611,31 +919,82 @@ export struct AppRootPresentation {
   }
 
   @Builder
-  WideConversationDetail(route: AppRoute, showBackButton: boolean) {
-    Row() {
-      if (this.wideDetailContentOffset > 0) {
-        Blank().width(this.wideDetailContentOffset)
+  FilePreviewPane(paneWidth: number = 0) {
+    Column() {
+      FilePreviewSurface({
+        state: this.filePreviewState,
+        remoteAvailable: RemoteUiState.canUseRemote(this.remotePageState.connectionState),
+        downloadPath: this.remotePageState.downloadingFilePath,
+        downloadedPath: this.remotePageState.downloadedFilePath,
+        downloadStatus: this.remotePageState.fileDownloadStatus,
+        onClose: this.actions.onFilePreview.close,
+        onRefresh: this.actions.onFilePreview.refresh,
+        onDownload: this.actions.onFilePreview.download,
+        onOpenLink: this.actions.onFilePreview.openLink
+      })
+    }
+    .layoutWeight(paneWidth > 0 ? 0 : 1)
+    .width(paneWidth > 0 ? paneWidth : '100%')
+    .height('100%')
+    .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  WideConversationDetail(route: AppRoute, showBackButton: boolean, paneWidth: number = 0) {
+    if (paneWidth > 0) {
+      Column() {
+        this.RouteSurfaceContent(route, false, showBackButton, false, true)
       }
-      Row() {
-        Column() {
-          this.RouteSurfaceContent(route, false, showBackButton)
+      .width(paneWidth)
+      .height('100%')
+      .constraintSize({ maxWidth: WIDE_DETAIL_CONTENT_MAX_WIDTH })
+      .backgroundColor(PAGE_BG)
+    } else {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Row() {
+          if (this.currentDetailContentOffset() > 0) {
+            Blank().width(this.currentDetailContentOffset())
+          }
+          Row() {
+            Column() {
+              this.RouteSurfaceContent(route, false, showBackButton, false, true)
+            }
+            .width('100%')
+            .height('100%')
+            .constraintSize({ maxWidth: WIDE_DETAIL_CONTENT_MAX_WIDTH })
+            .backgroundColor(PAGE_BG)
+          }
+          .width(this.currentDetailContentWidth() > 0 ? this.currentDetailContentWidth() : '100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          if (this.currentDetailContentOffset() > 0) {
+            Blank().layoutWeight(1)
+          }
         }
         .width('100%')
         .height('100%')
-        .constraintSize({ maxWidth: WIDE_DETAIL_CONTENT_MAX_WIDTH })
+        .justifyContent(FlexAlign.Center)
         .backgroundColor(PAGE_BG)
+
+        if (this.wideMasterPaneCollapsed) {
+          SidebarToggleButton({
+            restore: true,
+            controlSize: 44,
+            onToggle: () => {
+              this.restoreWideMasterPane();
+            }
+          })
+          .position({ x: this.currentDetailContentOffset() + 12, y: 12 })
+          .zIndex(2)
+          .transition(TransitionEffect.scale({ x: 0.9, y: 0.9 })
+            .combine(TransitionEffect.opacity(0))
+            .animation({ duration: 180, curve: Curve.EaseOut }))
+        }
       }
-      .width(this.wideDetailContentWidth > 0 ? this.wideDetailContentWidth : '100%')
+      .layoutWeight(1)
       .height('100%')
-      .justifyContent(FlexAlign.Center)
-      if (this.wideDetailContentOffset > 0) {
-        Blank().layoutWeight(1)
-      }
+      .backgroundColor(PAGE_BG)
     }
-    .layoutWeight(1)
-    .height('100%')
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(PAGE_BG)
   }
 
   @Builder
@@ -650,9 +1009,31 @@ export struct AppRootPresentation {
   }
 
   @Builder
+  WidePaneGap(width: number) {
+    if (width > 0) {
+      Row() {
+      }
+      .width(width)
+      .height('100%')
+      .backgroundColor(LINE)
+    }
+  }
+
+  @Builder
   RemoteFlowPlaceholder() {
     Column() {
-      Row() {
+      Row({ space: 8 }) {
+        if (this.wideMasterPaneCollapsed) {
+          SidebarToggleButton({
+            restore: true,
+            controlSize: 48,
+            onToggle: () => {
+              this.restoreWideMasterPane();
+            }
+          })
+        } else {
+          Blank().width(48).height(48)
+        }
         Column({ space: 4 }) {
           Text(RemoteI18n.t('remote.chats'))
             .fontSize(20)
@@ -664,15 +1045,23 @@ export struct AppRootPresentation {
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
-        .alignItems(HorizontalAlign.Start)
-        Blank()
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Center)
+        Blank().width(48).height(48)
       }
       .width('100%')
       .height(76)
-      .padding({ left: 24, right: 24, top: 14, bottom: 12 })
+        .padding({ left: 16, right: 16, top: 14, bottom: 12 })
       .border({ width: { bottom: 1 }, color: LINE })
 
       Column({ space: 8 }) {
+        if (this.isRemoteWideInitialLoading()) {
+          LoadingProgress()
+            .width(28)
+            .height(28)
+            .color(MUTED)
+            .margin({ bottom: 8 })
+        }
         Text(this.remoteFlowPlaceholderTitle())
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
@@ -695,15 +1084,76 @@ export struct AppRootPresentation {
   }
 
   private isWideLayout(): boolean {
-    return ConversationLayoutPolicy.useMasterDetail(
+    return this.largeScreenLayout;
+  }
+
+  private collapseWideMasterPane(): void {
+    if (!this.isWideLayout() || this.filePreviewState.visible) {
+      return;
+    }
+    this.enableWideMasterPaneMotion();
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseInOut }, () => {
+      this.wideMasterPaneCollapsed = true;
+    });
+  }
+
+  private restoreWideMasterPane(): void {
+    this.enableWideMasterPaneMotion();
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseInOut }, () => {
+      this.wideMasterPaneCollapsed = false;
+      this.restoreCollapsedMasterAfterPreview = false;
+    });
+  }
+
+  private enableWideMasterPaneMotion(): void {
+    this.wideMasterPaneMotionActive = true;
+    setTimeout(() => {
+      this.wideMasterPaneMotionActive = false;
+    }, 240);
+  }
+
+  private currentDetailContentOffset(): number {
+    return this.wideMasterPaneCollapsed ?
+      this.wideCollapsedDetailContentOffset : this.wideDetailContentOffset;
+  }
+
+  private currentDetailContentWidth(): number {
+    return this.wideMasterPaneCollapsed ?
+      this.wideCollapsedDetailContentWidth : this.wideDetailContentWidth;
+  }
+
+  private collapsedDetailVisualBias(): number {
+    if (!this.wideMasterPaneCollapsed || this.wideCollapsedDetailContentOffset > 0) {
+      return 0;
+    }
+    const availableMargin = (this.wideCollapsedDetailContentWidth - WIDE_DETAIL_CONTENT_MAX_WIDTH) / 2;
+    return Math.min(72, Math.max(0, availableMargin));
+  }
+
+  private filePreviewPlacement(): FilePreviewPlacement {
+    return this.filePreviewLayout().placement;
+  }
+
+  private filePreviewLayout(): FilePreviewLayout {
+    return FilePreviewPlacementPolicy.resolveLayout(
+      this.filePreviewState.visible,
+      this.isWideLayout(),
       this.viewportWidth,
-      this.wideLayoutMatched,
-      this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED
+      this.verticalCreases,
+      this.wideMasterPaneWidth
     );
   }
 
   private isGeneralWideRoute(route: AppRoute): boolean {
     return route === AppRoute.ChatHome || route === AppRoute.GeneralChat;
+  }
+
+  private showsWideRemoteConversation(route: AppRoute): boolean {
+    if (!this.isWideLayout()) {
+      return false;
+    }
+    return route === AppRoute.RemoteChat ||
+      (route === AppRoute.RemoteHome && this.remotePageState.activeSession.sessionId.length > 0);
   }
 
   private bindResponsiveQueries(): void {
@@ -753,14 +1203,29 @@ export struct AppRootPresentation {
   }
 
   private refreshWideGeometry(): void {
+    const wasWideLayout = this.largeScreenLayout;
+    const verticalCreases = this.currentVerticalCreases();
+    this.verticalCreases = verticalCreases;
+    this.largeScreenLayout = ConversationLayoutPolicy.useMasterDetail(
+      this.viewportWidth,
+      this.wideLayoutMatched,
+      this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED,
+      this.deviceType,
+      verticalCreases
+    );
     const geometry = ConversationLayoutPolicy.resolveWideGeometry(
       this.viewportWidth,
-      this.currentVerticalCreases()
+      verticalCreases
     );
     this.wideMasterPaneWidth = geometry.masterPaneWidth;
     this.wideMasterDetailGap = geometry.masterDetailGap;
     this.wideDetailContentOffset = geometry.detailContentOffset;
     this.wideDetailContentWidth = geometry.detailContentWidth;
+    this.wideCollapsedDetailContentOffset = geometry.collapsedDetailContentOffset;
+    this.wideCollapsedDetailContentWidth = geometry.collapsedDetailContentWidth;
+    if (wasWideLayout && !this.largeScreenLayout) {
+      this.actions.onCompactLayoutEntered();
+    }
   }
 
   private currentVerticalCreases(): ConversationLayoutCrease[] {
@@ -787,6 +1252,20 @@ export struct AppRootPresentation {
       this.remotePageState.isLoadingHome || this.remotePageState.isLoadingSessions;
   }
 
+  private isRemoteWideInitialLoading(): boolean {
+    return this.remotePageState.isLoadingHome || this.isRemoteWideConnecting();
+  }
+
+  private isRemoteWideConnecting(): boolean {
+    return this.remotePageState.connectionState === 'parsing' ||
+      this.remotePageState.connectionState === 'pairing' ||
+      this.remotePageState.connectionState === 'reconnecting';
+  }
+
+  private isRemoteWideActionBusy(): boolean {
+    return this.remotePageState.isBusy || this.isRemoteWideInitialLoading();
+  }
+
   private remoteWideStatusText(): string {
     if (this.remotePageState.statusText.length > 0) {
       return this.remotePageState.statusText;
@@ -794,7 +1273,7 @@ export struct AppRootPresentation {
     return this.remoteDesktopName();
   }
 
-  private remoteWideStatusColor(): string {
+  private remoteWideStatusColor(): ResourceColor {
     if (this.remotePageState.connectionState === 'connected') {
       return GREEN;
     }
@@ -810,7 +1289,22 @@ export struct AppRootPresentation {
   }
 
   private remoteFlowPlaceholderTitle(): string {
+    if (this.isRemoteWideInitialLoading()) {
+      return RemoteI18n.t('common.loading');
+    }
     return this.remotePageState.visibleSessions().length > 0 ? '选择会话' : RemoteI18n.t('remote.emptyTitle');
+  }
+
+  private remoteViewSettingsSheetOptions(): SheetOptions {
+    return {
+      height: 520,
+      width: 560,
+      preferType: SheetType.CENTER,
+      backgroundColor: '#00000000',
+      maskColor: '#44000000',
+      showClose: false,
+      dragBar: false
+    };
   }
 
   @Builder SidebarContent() {
@@ -849,6 +1343,8 @@ export struct AppRootPresentation {
     } else {
       SettingsSheet({ generalChatApiUrl: this.generalPageState.apiUrl, generalChatModelName: this.generalPageState.modelName,
         hasGeneralChatApiKey: this.generalPageState.hasApiKey,
+        generalChatModelCatalog: this.generalPageState.modelCatalog,
+        selectedGeneralChatModelId: this.generalPageState.selectedModelId,
         accountUsername: this.remotePageState.accountUsername,
         authenticatedUserId: this.remotePageState.accountUserId,
       deviceId: this.deviceId,

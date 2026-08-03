@@ -1,5 +1,5 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { ACCENT, CARD, INK, SUBTLE } from './Theme';
+import { CARD, INK, PRIMARY_ACTION, PRIMARY_ACTION_TEXT, SUBTLE } from './Theme';
 
 @ComponentV2
 export struct RemoteBottomBar {
@@ -12,10 +12,9 @@ export struct RemoteBottomBar {
   build() {
     Row({ space: 12 }) {
       Row({ space: 8 }) {
-        Image($r('app.media.remote_ref_search_reference'))
-          .width(24)
-          .height(24)
-          .objectFit(ImageFit.Contain)
+        SymbolGlyph($r('sys.symbol.magnifyingglass'))
+          .fontSize(20)
+          .fontColor([INK])
         TextInput({ placeholder: RemoteI18n.t('remote.searchChats'), text: this.query })
           .layoutWeight(1)
           .height(48)
@@ -42,20 +41,19 @@ export struct RemoteBottomBar {
 
       Button() {
         Row({ space: 9 }) {
-          Image($r('app.media.remote_ref_new_chat'))
-            .width(24)
-            .height(24)
-            .objectFit(ImageFit.Contain)
+          SymbolGlyph($r('sys.symbol.square_and_pencil'))
+            .fontSize(20)
+            .fontColor([PRIMARY_ACTION_TEXT])
           Text(RemoteI18n.t('remote.newChat'))
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
-            .fontColor(CARD)
+            .fontColor(PRIMARY_ACTION_TEXT)
         }
       }
       .width(118)
       .height(48)
       .padding(0)
-      .backgroundColor(ACCENT)
+      .backgroundColor(PRIMARY_ACTION)
       .borderRadius(24)
       .shadow({ radius: 20, color: '#18000000', offsetY: 7 })
       .enabled(!this.isBusy)
