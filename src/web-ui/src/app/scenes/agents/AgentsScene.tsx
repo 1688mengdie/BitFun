@@ -40,7 +40,7 @@ import {
 } from './agentsStore';
 import { useAgentsList } from './hooks/useAgentsList';
 import { AGENT_ICON_MAP } from './agentsIcons';
-import { CAPABILITY_ACCENT, CORE_AGENT_ACCENTS, DEFAULT_CORE_AGENT_ACCENT } from './agentTheme';
+import { CAPABILITY_ACCENT, CORE_AGENT_ACCENTS, DEFAULT_CORE_AGENT_ACCENT } from './agentAppearance';
 import { getCardGradient } from '@/shared/utils/cardGradients';
 import { isUserSelectableToolName } from '@/shared/utils/toolVisibility';
 import { getAgentBadge, getAgentDescription, getCapabilityLabel } from './utils';
@@ -597,12 +597,17 @@ const AgentsHomeView: React.FC = () => {
   );
 
   return (
-    <GalleryLayout className="bitfun-agents-scene" data-testid="agent-skill-panel">
+    <GalleryLayout
+      className="bitfun-agents-scene"
+      data-testid="agent-skill-panel"
+      data-bf-scene="agents"
+      data-bf-part="root"
+    >
       <GalleryPageHeader
         title={t('page.title')}
         subtitle={t('page.subtitle')}
         extraContent={(
-          <div className="gallery-anchor-bar">
+          <div className="gallery-anchor-bar" data-bf-scene="agents" data-bf-part="anchorBar">
             <button
               type="button"
               className="gallery-anchor-btn"
@@ -645,7 +650,7 @@ const AgentsHomeView: React.FC = () => {
         )}
       />
 
-      <div className="gallery-zones" data-testid="agent-list">
+      <div className="gallery-zones" data-bf-scene="agents" data-bf-part="zones" data-testid="agent-list">
         <GalleryZone
           id="core-agents-zone"
           data-testid="agents-core-zone"
@@ -669,7 +674,7 @@ const AgentsHomeView: React.FC = () => {
               testId="agent-list-empty"
             />
           ) : (
-            <GalleryGrid minCardWidth={360}>
+            <GalleryGrid minCardWidth={360} data-bf-scene="agents" data-bf-part="coreGrid">
               {coreAgents.map((agent, index) => (
                 <CoreAgentCard
                   key={agent.id}
@@ -706,7 +711,7 @@ const AgentsHomeView: React.FC = () => {
           subtitle={t('agentsZone.subtitle')}
           tools={(
             <>
-              <div className="bitfun-agents-scene__agent-filters">
+              <div className="bitfun-agents-scene__agent-filters" data-bf-scene="agents" data-bf-part="filters">
                 <div className="bitfun-agents-scene__agent-filter-group">
                   <span className="bitfun-agents-scene__agent-filter-label">
                     {t('filters.source')}
@@ -885,7 +890,7 @@ const AgentsHomeView: React.FC = () => {
             </div>
 
             {selectedAgent.agentKind === 'mode' && selectedAgentUsesSharedProfile ? (
-              <div className="agent-card__section">
+              <div className="agent-card__section" data-bf-scene="agents" data-bf-part="detailSection">
                 <div className="agent-card__section-head">
                   <div className="agent-card__section-title">
                     <span>{t('agentsOverview.sharedProfileLabel')}</span>
@@ -1314,7 +1319,7 @@ const AgentsScene: React.FC = () => {
 
   if (page === 'createAgent') {
     return (
-      <div className="bitfun-agents-scene bitfun-agents-scene--page">
+      <div className="bitfun-agents-scene bitfun-agents-scene--page" data-bf-scene="agents" data-bf-part="root">
         <CreateAgentPage />
       </div>
     );

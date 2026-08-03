@@ -854,44 +854,34 @@ describe('ExternalSourcesConfig', () => {
     expect(container.textContent).toContain('GITHUB_TOKEN');
     expect(container.textContent).toContain('OPENCODE_TOKEN');
 
-    const approvalDetails = container.querySelector(
-      '.bitfun-external-sources-config__review-details',
-    ) as HTMLDetailsElement;
-    const approvalCard = approvalDetails.closest(
+    const approvalCard = Array.from(container.querySelectorAll(
       '.bitfun-external-sources-config__tool-card',
+    )).find((candidate) => (
+      candidate.textContent?.includes('github')
+      && candidate.textContent?.includes('mcpApprovals.enable')
+    )) as HTMLElement;
+    const approvalDetail = approvalCard.querySelector(
+      '.bitfun-external-sources-config__tool-detail',
     ) as HTMLElement;
-    const alwaysVisibleSummary = approvalCard.querySelector(
-      '.bitfun-external-sources-config__review-summary',
+    const approvalRisk = approvalCard.querySelector(
+      '.bitfun-external-sources-config__tool-warning',
     ) as HTMLElement;
-    const alwaysVisibleRisk = approvalCard.querySelector(
-      '.bitfun-external-sources-config__review-risk',
-    ) as HTMLElement;
-    expect(approvalDetails.open).toBe(false);
-    expect(alwaysVisibleSummary.textContent).toContain('mcp.command:{"command":"npx"}');
-    expect(alwaysVisibleRisk.textContent).toContain('mcpApprovals.compactWarning');
-    expect(approvalDetails.contains(alwaysVisibleSummary)).toBe(false);
-    expect(approvalDetails.contains(alwaysVisibleRisk)).toBe(false);
+    expect(approvalDetail.textContent).toContain('mcp.command:{"command":"npx"}');
+    expect(approvalDetail.textContent).toContain('mcp.workingDirectory:{"location":"<workspace>"}');
+    expect(approvalDetail.textContent).toContain('GITHUB_TOKEN');
+    expect(approvalDetail.textContent).toContain('OPENCODE_TOKEN');
+    expect(approvalRisk.textContent).toContain('mcpApprovals.warning');
     const approvalEnable = Array.from(approvalCard.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('mcpApprovals.enable')) as HTMLButtonElement;
-    expect(alwaysVisibleRisk.id).toBe('mcp-review-risk-mcp-decision-v1');
-    expect(approvalEnable.getAttribute('aria-describedby')).toBe(alwaysVisibleRisk.id);
-    const remoteSummary = Array.from(approvalCard.parentElement?.querySelectorAll(
-      '.bitfun-external-sources-config__review-summary',
-    ) ?? []).find((candidate) => candidate.textContent?.includes('mcp.url')) as HTMLElement;
-    const remoteDetails = remoteSummary.closest(
+    expect(approvalRisk.id).toBe('mcp-review-risk-mcp-decision-v1');
+    expect(approvalEnable.getAttribute('aria-describedby')).toBe(approvalRisk.id);
+    const remoteCard = Array.from(container.querySelectorAll(
       '.bitfun-external-sources-config__tool-card',
-    )?.querySelector('.bitfun-external-sources-config__review-details') as HTMLDetailsElement;
-    expect(remoteSummary.textContent).toContain(
+    )).find((candidate) => candidate.textContent?.includes('mcp.url')) as HTMLElement;
+    expect(remoteCard.textContent).toContain(
       'mcp.url:{"url":"https://mcp.example.test"}',
     );
-    expect(remoteDetails.textContent).not.toContain(
-      'mcp.url:{"url":"https://mcp.example.test"}',
-    );
-    expect(approvalDetails.querySelector('summary')?.textContent)
-      .toContain('mcpApprovals.showDetails');
     expect(container.textContent).toContain('mcpApprovals.enable');
-    await act(async () => approvalDetails.querySelector('summary')?.click());
-    expect(approvalDetails.open).toBe(true);
 
     const externalConflictCandidate = Array.from(
       container.querySelectorAll('.bitfun-external-sources-config__candidate'),

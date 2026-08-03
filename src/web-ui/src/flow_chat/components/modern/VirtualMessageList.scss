@@ -53,12 +53,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--color-bg-scene); /* FlowChat background. */
+    background: var(--bf-appearance-token-color-bg-scene); /* FlowChat background. */
   }
   
   .empty-state {
     text-align: center;
-    color: var(--color-text-muted);
+    color: var(--bf-appearance-token-color-text-muted);
     padding: 2rem;
   }
   
@@ -75,10 +75,10 @@
     max-width: calc(100% - 32px);
     margin: 0 auto 8px;
     padding: 4px 10px;
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--bf-appearance-token-border-subtle);
     border-radius: 6px;
-    background: var(--element-bg-subtle);
-    color: var(--color-text-muted);
+    background: var(--bf-appearance-token-element-bg-subtle);
+    color: var(--bf-appearance-token-color-text-muted);
     font-size: 12px;
     line-height: 18px;
     text-align: center;
@@ -94,7 +94,7 @@
     align-items: center;
     justify-content: center;
     gap: 6px;
-    color: var(--color-text-muted);
+    color: var(--bf-appearance-token-color-text-muted);
     font-size: 12px;
     line-height: 18px;
     pointer-events: none;
@@ -129,7 +129,7 @@
     overflow: hidden;
     scrollbar-gutter: stable;
     pointer-events: none;
-    background: var(--color-bg-scene);
+    background: var(--bf-appearance-token-color-bg-scene);
     contain: paint;
   }
 

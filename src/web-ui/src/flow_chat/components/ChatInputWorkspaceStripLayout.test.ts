@@ -27,8 +27,8 @@ describe('ChatInputWorkspaceStrip layout styles', () => {
     expect(stylesheet).toContain('min-width: 16px;');
     expect(stylesheet).toContain('width: 14px;');
     expect(stylesheet).toContain('height: 14px;');
-    expect(stylesheet).toContain('color: color-mix(in srgb, var(--color-accent-500) 62%, var(--color-text-secondary));');
-    expect(stylesheet).toContain('color: color-mix(in srgb, var(--color-accent-500) 86%, var(--color-text-primary));');
+    expect(stylesheet).toContain('color: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 62%, var(--bf-appearance-token-color-text-secondary));');
+    expect(stylesheet).toContain('color: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 86%, var(--bf-appearance-token-color-text-primary));');
   });
 
   it('keeps the permission control compact and collapses labels on narrow screens', () => {
@@ -37,8 +37,8 @@ describe('ChatInputWorkspaceStrip layout styles', () => {
     expect(stylesheet).toContain('&__permission-trigger');
     expect(stylesheet).toContain('min-width: 18px;');
     expect(stylesheet).toContain('&--ask {');
-    expect(stylesheet).toContain('border-color: var(--color-success-border);');
-    expect(stylesheet).toContain('background: var(--color-success-bg);');
+    expect(stylesheet).toContain('border-color: var(--bf-appearance-token-color-success-border);');
+    expect(stylesheet).toContain('background: var(--bf-appearance-token-color-success-bg);');
     expect(stylesheet).toContain('width: min(286px, calc(100vw - 24px));');
     expect(stylesheet).toContain('@media (max-width: 560px)');
     expect(stylesheet).toContain('&__permission-label');

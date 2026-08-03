@@ -1330,11 +1330,16 @@ export const RelayDeployWizard: React.FC<RelayDeployWizardProps> = ({
         closeOnOverlayClick={false}
         contentClassName="modal__content--fill-flex"
       >
-        <div className="relay-deploy-wizard">
-          <div className="relay-deploy-wizard__steps">
+        <div className="relay-deploy-wizard" data-bf-component="relay-deploy" data-bf-part="root">
+          <div className="relay-deploy-wizard__steps" data-bf-component="relay-deploy" data-bf-part="steps">
             {steps.map((s, i) => (
               <React.Fragment key={s.key}>
-                <div className={`relay-deploy-wizard__step ${i === stepIndex ? 'active' : ''} ${i < stepIndex ? 'completed' : ''}`}>
+                <div
+                  className={`relay-deploy-wizard__step ${i === stepIndex ? 'active' : ''} ${i < stepIndex ? 'completed' : ''}`}
+                  data-bf-component="relay-deploy"
+                  data-bf-part="step"
+                  data-bf-state={[i === stepIndex && 'active', i < stepIndex && 'completed'].filter(Boolean).join(' ') || undefined}
+                >
                   <span className="relay-deploy-wizard__step-dot">
                     {i < stepIndex ? <CheckCircle2 size={12} /> : i + 1}
                   </span>
@@ -1346,7 +1351,7 @@ export const RelayDeployWizard: React.FC<RelayDeployWizardProps> = ({
           </div>
 
           {error && (
-            <div className="relay-deploy-wizard__error-banner">
+            <div className="relay-deploy-wizard__error-banner" data-bf-component="relay-deploy" data-bf-part="error">
               <Alert type="error" message={error} closable onClose={() => setError(null)}
                 className="relay-deploy-wizard__error-alert" />
             </div>

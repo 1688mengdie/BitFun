@@ -21,6 +21,7 @@
 //! attribute is touched.
 
 pub mod api;
+pub mod appearance;
 pub mod computer_use;
 pub mod crash_diagnostics;
 mod embedded_relay_host;
@@ -29,7 +30,6 @@ pub mod macos_menubar;
 pub mod runtime;
 pub mod sleep_prevention;
 pub mod startup_trace;
-pub mod theme;
 pub mod tray;
 
 use bitfun_core::agentic::tools::computer_use_capability::set_computer_use_desktop_available;
@@ -907,7 +907,7 @@ pub async fn run() {
             };
             let window_started = Instant::now();
             startup_trace.record_phase("main_window_create_start", "native_window");
-            theme::create_main_window(
+            appearance::create_main_window(
                 &app_handle,
                 &startup_trace_id,
                 &startup_trace,
@@ -1117,7 +1117,7 @@ pub async fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            theme::show_main_window,
+            appearance::show_main_window,
             hide_main_window_after_close_request,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,
@@ -1222,9 +1222,9 @@ pub async fn run() {
             get_app_state,
             update_app_status,
             update_workspace_info,
-            theme::show_agent_companion_desktop_pet,
-            theme::hide_agent_companion_desktop_pet,
-            theme::resize_agent_companion_desktop_pet,
+            appearance::show_agent_companion_desktop_pet,
+            appearance::hide_agent_companion_desktop_pet,
+            appearance::resize_agent_companion_desktop_pet,
             list_agent_companion_pets,
             import_agent_companion_pet_package,
             delete_agent_companion_pet_package,

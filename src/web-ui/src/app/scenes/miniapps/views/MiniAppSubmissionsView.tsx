@@ -319,8 +319,17 @@ const MiniAppSubmissionsView: React.FC = () => {
         </div>
       ) : null}
 
-      <div className="miniapp-submissions__workspace">
-        <form className="miniapp-submissions__form" onSubmit={(event) => void submit(event)}>
+      <div
+        className="miniapp-submissions__workspace"
+        data-bf-component="miniapp-submissions-view"
+        data-bf-part="root"
+      >
+        <form
+          className="miniapp-submissions__form"
+          data-bf-component="miniapp-submissions-view"
+          data-bf-part="form"
+          onSubmit={(event) => void submit(event)}
+        >
           <header className="miniapp-submissions__section-heading">
             <h3>
               <PackageOpen size={14} />
@@ -556,7 +565,11 @@ const MiniAppSubmissionsView: React.FC = () => {
           </Button>
         </form>
 
-        <section className="miniapp-submissions__history">
+        <section
+          className="miniapp-submissions__history"
+          data-bf-component="miniapp-submissions-view"
+          data-bf-part="history"
+        >
           <header className="miniapp-submissions__section-heading">
             <h3>
               <History size={14} />
@@ -567,7 +580,11 @@ const MiniAppSubmissionsView: React.FC = () => {
           {submissions.length ? (
             <div className="miniapp-submissions__list">
               {submissions.map((submission) => (
-                <article key={submission.submissionId}>
+                <article
+                  key={submission.submissionId}
+                  data-bf-component="miniapp-submissions-view"
+                  data-bf-part="item"
+                >
                   <div className="miniapp-submissions__list-head">
                     <span className="miniapp-submissions__app-icon">
                       {renderMiniAppIcon(submission.icon || 'box', 16)}

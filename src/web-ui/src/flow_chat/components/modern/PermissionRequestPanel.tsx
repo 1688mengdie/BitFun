@@ -142,7 +142,8 @@ export function PermissionRequestPanel({
   if (!request) return null;
 
   return (
-    <div
+    <div data-bf-component="permission-request-panel" data-bf-part="root"
+      data-bf-state={[isCollapsed && 'collapsed', responding && 'responding', error && 'error'].filter(Boolean).join(' ')}
       className={`permission-request-anchor${aboveChatInput ? ' permission-request-anchor--above-chat-input' : ''}`}
       style={panelStyle}
     >
@@ -150,6 +151,8 @@ export function PermissionRequestPanel({
         <Tooltip content={t('permission.expandPanel', { count: pendingCount })} placement="top">
           <button
             type="button"
+            data-bf-component="permission-request-panel"
+            data-bf-part="collapsedTrigger"
             className="permission-request-panel__collapsed-trigger"
             onClick={() => setIsCollapsed(false)}
             aria-label={t('permission.expandPanel', { count: pendingCount })}
@@ -157,7 +160,7 @@ export function PermissionRequestPanel({
             data-testid="permission-request-panel-expand"
           >
             <ShieldAlert size={21} aria-hidden="true" />
-            <span className="permission-request-panel__collapsed-badge" aria-hidden="true">
+            <span data-bf-component="permission-request-panel" data-bf-part="collapsedBadge" className="permission-request-panel__collapsed-badge" aria-hidden="true">
               {pendingCount > 99 ? '99+' : pendingCount}
             </span>
           </button>
@@ -165,15 +168,17 @@ export function PermissionRequestPanel({
       ) : (
         <section
           id="permission-request-panel"
+          data-bf-component="permission-request-panel"
+          data-bf-part="panel"
           className="permission-request-panel"
           aria-label={t('permission.title')}
         >
-          <div className="permission-request-panel__heading">
+          <div data-bf-component="permission-request-panel" data-bf-part="heading" className="permission-request-panel__heading">
             <div className="permission-request-panel__heading-title">
               <ShieldAlert size={18} aria-hidden="true" />
               <h2>{t('permission.title')}</h2>
             </div>
-            <div className="permission-request-panel__heading-actions">
+            <div data-bf-component="permission-request-panel" data-bf-part="headingActions" className="permission-request-panel__heading-actions">
               <span className="permission-request-panel__count">
                 {t('permission.batchCount', { count: requests.length })}
               </span>
@@ -191,18 +196,20 @@ export function PermissionRequestPanel({
               </Tooltip>
             </div>
           </div>
-          <div className="permission-request-panel__requests" role="list">
+          <div data-bf-component="permission-request-panel" data-bf-part="requests" className="permission-request-panel__requests" role="list">
             {requests.map((item, index) => {
               const resourceSummary = item.resources.join(', ');
               const resourceTooltip = item.resources.join('\n');
 
               return (
                 <div
+                  data-bf-component="permission-request-panel"
+                  data-bf-part="request"
                   className={`permission-request-panel__request${index === 0 ? ' permission-request-panel__request--active' : ''}`}
                   key={item.requestId}
                   role="listitem"
                 >
-                  <div className="permission-request-panel__request-heading">
+                  <div data-bf-component="permission-request-panel" data-bf-part="requestHeading" className="permission-request-panel__request-heading">
                     <div className="permission-request-panel__tool-identity">
                       <strong>{item.source.identity}</strong>
                       {item.delegation && (
@@ -213,7 +220,7 @@ export function PermissionRequestPanel({
                     </div>
                     <span>{index === 0 ? t('permission.current') : t('permission.pending')}</span>
                   </div>
-                  <div className="permission-request-panel__request-details">
+                  <div data-bf-component="permission-request-panel" data-bf-part="requestDetails" className="permission-request-panel__request-details">
                     <span className="permission-request-panel__action">
                       {permissionActionLabel(item.action, t)}
                     </span>
@@ -231,9 +238,11 @@ export function PermissionRequestPanel({
               );
             })}
           </div>
-          {risk && <p className="permission-request-panel__risk">{risk}</p>}
-          {error && <p role="alert">{t('permission.responseFailed')}</p>}
+          {risk && <p data-bf-component="permission-request-panel" data-bf-part="risk" className="permission-request-panel__risk">{risk}</p>}
+          {error && <p data-bf-component="permission-request-panel" data-bf-part="error" role="alert">{t('permission.responseFailed')}</p>}
           <textarea
+            data-bf-component="permission-request-panel"
+            data-bf-part="feedback"
             value={feedback}
             onChange={(event) => setFeedback(event.target.value)}
             placeholder={t('permission.feedbackPlaceholder')}
@@ -241,8 +250,8 @@ export function PermissionRequestPanel({
             disabled={responding}
             rows={2}
           />
-          <div className="permission-request-panel__actions">
-            <div className="permission-request-panel__single-actions">
+          <div data-bf-component="permission-request-panel" data-bf-part="actions" className="permission-request-panel__actions">
+            <div data-bf-component="permission-request-panel" data-bf-part="singleActions" className="permission-request-panel__single-actions">
               <button
                 type="button"
                 onClick={() => void respond('once')}
@@ -272,7 +281,7 @@ export function PermissionRequestPanel({
                 <X size={15} aria-hidden="true" /> {t('permission.reject')}
               </button>
             </div>
-            <div className="permission-request-panel__batch-actions">
+            <div data-bf-component="permission-request-panel" data-bf-part="batchActions" className="permission-request-panel__batch-actions">
               <button
                 type="button"
                 onClick={() => void respondBatch('once')}

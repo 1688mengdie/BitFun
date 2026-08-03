@@ -10,16 +10,16 @@
 
     &:not(:disabled):hover,
     &--active {
-      background: color-mix(in srgb, var(--element-bg-soft) 82%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 82%, transparent);
     }
 
     &--has-activity {
-      color: color-mix(in srgb, var(--color-success) 86%, var(--color-text-primary));
+      color: color-mix(in srgb, var(--bf-appearance-token-color-success) 86%, var(--bf-appearance-token-color-text-primary));
 
       &:not(:disabled):hover,
       &.session-tree-popover__trigger--active {
-        color: var(--color-success);
-        background: color-mix(in srgb, var(--color-success) 12%, transparent);
+        color: var(--bf-appearance-token-color-success);
+        background: color-mix(in srgb, var(--bf-appearance-token-color-success) 12%, transparent);
       }
     }
   }
@@ -38,8 +38,8 @@
     width: 4px;
     height: 4px;
     border-radius: 999px;
-    background: color-mix(in srgb, var(--color-success) 92%, white 8%);
-    box-shadow: 0 0 0 1px var(--color-bg-elevated);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-success) 92%, white 8%);
+    box-shadow: 0 0 0 1px var(--bf-appearance-token-color-bg-elevated);
   }
 
   &__panel {
@@ -51,10 +51,10 @@
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--border-base);
+    border: 1px solid var(--bf-appearance-token-border-base);
     border-radius: $size-radius-lg;
-    background: color-mix(in srgb, var(--color-bg-elevated) 94%, transparent);
-    box-shadow: var(--shadow-lg);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 94%, transparent);
+    box-shadow: var(--bf-appearance-token-shadow-lg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     z-index: 30;
@@ -66,9 +66,9 @@
     justify-content: space-between;
     gap: $size-gap-2;
     padding: $size-gap-2 $size-gap-3;
-    border-bottom: 1px solid var(--border-base);
-    color: var(--color-text-secondary);
-    font-size: var(--flowchat-font-size-xs);
+    border-bottom: 1px solid var(--bf-appearance-token-border-base);
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
   }
 
   &__body {
@@ -86,7 +86,7 @@
     border-radius: $size-radius-base;
 
     &:hover {
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
 
     &--root {
@@ -112,11 +112,11 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: var(--color-text-muted);
+    color: var(--bf-appearance-token-color-text-muted);
     cursor: pointer;
 
     &:hover {
-      color: var(--color-text-primary);
+      color: var(--bf-appearance-token-color-text-primary);
     }
   }
 
@@ -130,13 +130,13 @@
     padding: 3px $size-gap-2 3px 0;
     border: 0;
     background: transparent;
-    color: var(--color-text-primary);
+    color: var(--bf-appearance-token-color-text-primary);
     text-align: left;
     cursor: pointer;
 
     > svg {
       flex: 0 0 auto;
-      color: var(--color-text-secondary);
+      color: var(--bf-appearance-token-color-text-secondary);
     }
   }
 
@@ -156,11 +156,11 @@
 
   &__action-menu-button {
     flex: 0 0 auto;
-    color: var(--color-text-secondary);
+    color: var(--bf-appearance-token-color-text-secondary);
 
     &:not(:disabled):hover {
-      color: var(--color-text-primary);
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      color: var(--bf-appearance-token-color-text-primary);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
   }
 
@@ -175,10 +175,10 @@
     flex-direction: column;
     gap: 2px;
     padding: 4px;
-    border: 1px solid var(--border-base);
+    border: 1px solid var(--bf-appearance-token-border-base);
     border-radius: $size-radius-base;
-    background: color-mix(in srgb, var(--color-bg-elevated) 98%, transparent);
-    box-shadow: var(--shadow-base);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-bg-elevated) 98%, transparent);
+    box-shadow: var(--bf-appearance-token-shadow-base);
     z-index: 10000;
   }
 
@@ -191,19 +191,19 @@
     border: 0;
     border-radius: calc($size-radius-base - 2px);
     background: transparent;
-    color: var(--color-text-primary);
-    font-size: var(--flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-primary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
     text-align: left;
     white-space: nowrap;
     cursor: pointer;
 
     svg {
       flex: 0 0 auto;
-      color: var(--color-text-secondary);
+      color: var(--bf-appearance-token-color-text-secondary);
     }
 
     &:hover:not(:disabled) {
-      background: color-mix(in srgb, var(--element-bg-soft) 88%, transparent);
+      background: color-mix(in srgb, var(--bf-appearance-token-element-bg-soft) 88%, transparent);
     }
 
     &:disabled {
@@ -212,11 +212,11 @@
     }
 
     &--danger:hover:not(:disabled) {
-      color: var(--color-error);
-      background: color-mix(in srgb, var(--color-error) 12%, transparent);
+      color: var(--bf-appearance-token-color-error);
+      background: color-mix(in srgb, var(--bf-appearance-token-color-error) 12%, transparent);
 
       svg {
-        color: var(--color-error);
+        color: var(--bf-appearance-token-color-error);
       }
     }
   }
@@ -237,12 +237,12 @@
   }
 
   &__node-title {
-    font-size: var(--flowchat-font-size-sm);
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
   }
 
   &__node-meta {
-    color: var(--color-text-muted);
-    font-size: var(--flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
     font-weight: 400;
   }
 
@@ -251,24 +251,24 @@
     height: 7px;
     flex: 0 0 7px;
     border-radius: 50%;
-    background: var(--color-text-muted);
+    background: var(--bf-appearance-token-color-text-muted);
 
     &--running,
     &--finishing {
-      background: var(--color-success);
+      background: var(--bf-appearance-token-color-success);
     }
 
     &--waiting {
-      background: var(--color-warning);
+      background: var(--bf-appearance-token-color-warning);
     }
 
     &--error,
     &--cancelled {
-      background: var(--color-error);
+      background: var(--bf-appearance-token-color-error);
     }
 
     &--completed {
-      background: var(--color-info);
+      background: var(--bf-appearance-token-color-info);
     }
   }
 
@@ -279,11 +279,11 @@
     justify-content: center;
     gap: $size-gap-2;
     padding: $size-gap-3;
-    color: var(--color-text-muted);
-    font-size: var(--flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
 
     &--error {
-      color: var(--color-error);
+      color: var(--bf-appearance-token-color-error);
     }
   }
 }

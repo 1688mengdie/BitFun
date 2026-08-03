@@ -434,7 +434,7 @@ export const Select: React.FC<SelectProps> = ({
     if (multiple) {
       const selected = selectedOptions as SelectOption[];
       if (selected.length === 0) {
-        return <span className="select__placeholder">{resolvedPlaceholder}</span>;
+        return <span className="select__placeholder" data-bf-component="select" data-bf-part="value">{resolvedPlaceholder}</span>;
       }
       
       const displayTags = selected.slice(0, maxTagCount);
@@ -469,15 +469,15 @@ export const Select: React.FC<SelectProps> = ({
       if (!selected) {
         if (allowCustomValue && selectedValue && selectedValue !== '') {
           return (
-            <span className="select__value">
+            <span className="select__value" data-bf-component="select" data-bf-part="value">
               <span className="select__value-label select__value-label--custom">{String(selectedValue)}</span>
             </span>
           );
         }
-        return <span className="select__placeholder">{resolvedPlaceholder}</span>;
+        return <span className="select__placeholder" data-bf-component="select" data-bf-part="value">{resolvedPlaceholder}</span>;
       }
       return (
-        <span className="select__value">
+        <span className="select__value" data-bf-component="select" data-bf-part="value">
           {selected.icon && <span className="select__value-icon">{selected.icon}</span>}
           <span className="select__value-label">{selected.label}</span>
         </span>
@@ -506,6 +506,9 @@ export const Select: React.FC<SelectProps> = ({
         data-selected={selected ? 'true' : 'false'}
         data-testid={option.testId}
         {...option.testAttributes}
+        data-bf-component="select"
+        data-bf-part="option"
+        data-bf-state={[selected && 'selected', highlighted && 'highlighted', option.disabled && 'disabled'].filter(Boolean).join(' ') || undefined}
       >
         {multiple && (
           <span className={`select__checkbox ${selected ? 'select__checkbox--checked' : ''}`}>
@@ -515,11 +518,11 @@ export const Select: React.FC<SelectProps> = ({
         
         {renderOption ? renderOption(option) : (
           <div className="select__option-content">
-            {option.icon && <span className="select__option-icon">{option.icon}</span>}
+            {option.icon && <span className="select__option-icon" data-bf-component="select" data-bf-part="optionIcon">{option.icon}</span>}
             <div className="select__option-text">
-              <div className="select__option-label">{option.label}</div>
+              <div className="select__option-label" data-bf-component="select" data-bf-part="optionLabel">{option.label}</div>
               {option.description && (
-                <div className="select__option-description">{option.description}</div>
+                <div className="select__option-description" data-bf-component="select" data-bf-part="optionDescription">{option.description}</div>
               )}
             </div>
           </div>
@@ -529,8 +532,8 @@ export const Select: React.FC<SelectProps> = ({
   };
 
   return (
-    <div {...rootProps} className={classNames} ref={selectRef}>
-      {label && <div id={labelId} className="select__label">{label}</div>}
+    <div {...rootProps} className={classNames} ref={selectRef} data-bf-component="select" data-bf-part="root" data-bf-size={size} data-bf-placement={resolvedPlacement} data-bf-multiple={String(multiple)} data-bf-state={[isOpen && 'open', disabled && 'disabled', error && 'error', loading && 'loading'].filter(Boolean).join(' ') || undefined}>
+      {label && <div id={labelId} className="select__label" data-bf-component="select" data-bf-part="label">{label}</div>}
       
       <div
         className="select__trigger"
@@ -551,26 +554,21 @@ export const Select: React.FC<SelectProps> = ({
         aria-labelledby={triggerAriaLabelledBy ?? (label ? labelId : undefined)}
         aria-describedby={error && errorMessage ? errorId : triggerAriaDescribedBy}
         data-testid={triggerTestId}
+        data-bf-component="select"
+        data-bf-part="trigger"
       >
         {renderSelectedValue()}
         
-        <div className="select__suffix">
+        <div className="select__suffix" data-bf-component="select" data-bf-part="suffix">
           {loading && (
-            <span className="select__loading">
+            <span className="select__loading" data-bf-component="select" data-bf-part="loading">
               <span className="select__loading-spinner" />
             </span>
           )}
           {clearable && !loading && (multiple ? (selectedValue as any[]).length > 0 : selectedValue) && (
-            <button
-              type="button"
-              className="select__clear"
-              onClick={handleClear}
-              aria-label={t('search.clear')}
-            >
-              ×
-            </button>
+            <span className="select__clear" onClick={handleClear} data-bf-component="select" data-bf-part="clear">×</span>
           )}
-          <span className={`select__arrow ${isOpen ? 'select__arrow--open' : ''}`}>
+          <span className={`select__arrow ${isOpen ? 'select__arrow--open' : ''}`} data-bf-component="select" data-bf-part="arrow">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
               <path d="M2 4L6 8L10 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
@@ -587,9 +585,12 @@ export const Select: React.FC<SelectProps> = ({
           aria-multiselectable={multiple || undefined}
           aria-busy={loading || undefined}
           data-testid={dropdownTestId}
+          data-bf-component="select"
+          data-bf-part="dropdown"
+          data-bf-placement={resolvedPlacement}
         >
           {searchable && (
-            <div className="select__search">
+            <div className="select__search" data-bf-component="select" data-bf-part="search">
               <input
                 ref={searchInputRef}
                 type="text"
@@ -631,6 +632,8 @@ export const Select: React.FC<SelectProps> = ({
                     ));
                   }
                 }}
+                data-bf-component="select"
+                data-bf-part="searchInput"
               />
               {searchQuery && (
                 <button
@@ -667,10 +670,10 @@ export const Select: React.FC<SelectProps> = ({
             </div>
           )}
           
-          <div className="select__options">
+          <div className="select__options" data-bf-component="select" data-bf-part="options">
             {filteredOptions.length === 0 ? (
               loading ? (
-                <div className="select__empty select__empty--loading">
+                <div className="select__empty select__empty--loading" data-bf-component="select" data-bf-part="empty">
                   <span className="select__loading-spinner" aria-hidden="true" />
                   <span>{t('select.loading')}</span>
                 </div>
@@ -683,7 +686,7 @@ export const Select: React.FC<SelectProps> = ({
                   <span className="select__custom-value-action">{resolvedCustomValueHint}</span>
                 </div>
               ) : (
-                <div className="select__empty">{resolvedEmptyText}</div>
+                <div className="select__empty" data-bf-component="select" data-bf-part="empty">{resolvedEmptyText}</div>
               )
             ) : groupedOptions.hasGroups ? (
               (() => {
@@ -699,8 +702,10 @@ export const Select: React.FC<SelectProps> = ({
                         className="select__group"
                         role="group"
                         aria-label={groupName}
+                        data-bf-component="select"
+                        data-bf-part="group"
                       >
-                        <div className="select__group-label">{groupName}</div>
+                        <div className="select__group-label" data-bf-component="select" data-bf-part="groupLabel">{groupName}</div>
                         {groupOptions.map((option) => 
                           renderOptionItem(option, globalIndex++)
                         )}
@@ -732,7 +737,7 @@ export const Select: React.FC<SelectProps> = ({
       )}
       
       {error && errorMessage && (
-        <div id={errorId} className="select__error-message" role="alert">{errorMessage}</div>
+        <div className="select__error-message" data-bf-component="select" data-bf-part="message">{errorMessage}</div>
       )}
     </div>
   );
