@@ -7,9 +7,9 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const DISPATCH_PROTOCOL_VERSION: u32 = 4;
+pub const DISPATCH_PROTOCOL_VERSION: u32 = 5;
 
-/// Capabilities every v4 target advertises unconditionally.
+/// Capabilities every v5 target advertises unconditionally.
 pub const DISPATCH_BASE_TARGET_CAPABILITIES: &[&str] = &[
     "persistent_jobs",
     "cursor_events",
@@ -38,6 +38,8 @@ pub const DISPATCH_BASE_TARGET_CAPABILITIES: &[&str] = &[
     "session_query",
     // v4: inline image attachments on submit and follow-up turns.
     "inline_attachments",
+    // v5: target-owned canonical reasoning catalog and per-turn preset selection.
+    "reasoning_presets",
 ];
 
 /// Advertised only where detached workers can run (Linux/macOS), and

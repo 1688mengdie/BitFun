@@ -3844,7 +3844,26 @@ export class FlowChatStore {
         config: {
           ...session.config,
           dispatchModel: normalizedModelName,
+          dispatchReasoningPreset: 'auto',
         },
+        lastActiveAt: Date.now(),
+      });
+      return { ...prev, sessions: newSessions };
+    });
+  }
+
+  /** Update the target-owned reasoning choice for the next dispatch turn. */
+  public updateSessionDispatchReasoningPreset(sessionId: string, presetId: string): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      const normalizedPreset = presetId.trim();
+      if (!session || !normalizedPreset || session.config.dispatchReasoningPreset === normalizedPreset) {
+        return prev;
+      }
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        config: { ...session.config, dispatchReasoningPreset: normalizedPreset },
         lastActiveAt: Date.now(),
       });
       return { ...prev, sessions: newSessions };
@@ -3925,6 +3944,8 @@ export class FlowChatStore {
       jobId: string;
       approvalPolicy: NonNullable<SessionConfig['dispatchApprovalPolicy']>;
       model?: string;
+      reasoningPreset?: string;
+      modelCatalog?: SessionConfig['dispatchModelCatalog'];
       availableModels?: string[];
       defaultModel?: string;
       state?: NonNullable<SessionConfig['dispatchJobState']>;
@@ -3988,6 +4009,10 @@ export class FlowChatStore {
           dispatchJobId: binding.jobId,
           dispatchApprovalPolicy: binding.approvalPolicy,
           dispatchModel: binding.model ?? session.config.dispatchModel,
+          dispatchReasoningPreset:
+            binding.reasoningPreset ?? session.config.dispatchReasoningPreset,
+          dispatchModelCatalog:
+            binding.modelCatalog ?? session.config.dispatchModelCatalog,
           dispatchAvailableModels:
             binding.availableModels ?? session.config.dispatchAvailableModels,
           dispatchDefaultModel:

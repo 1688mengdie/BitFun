@@ -237,6 +237,8 @@ async function ensureProjection(
       jobId: job.jobId,
       approvalPolicy: job.approvalPolicy,
       model: job.model,
+      reasoningPreset: job.reasoningPreset,
+      modelCatalog: job.modelCatalog,
       availableModels: job.availableModels,
       defaultModel: job.defaultModel,
       state: job.state,

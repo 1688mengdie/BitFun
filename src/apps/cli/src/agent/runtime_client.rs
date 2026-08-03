@@ -2192,6 +2192,7 @@ mod tests {
             session_name: "Workspace session".to_string(),
             agent_type: "agentic".to_string(),
             model_id: None,
+            reasoning_preset: None,
             last_user_dialog_agent_type: None,
             last_submitted_agent_type: None,
             turn_count: 1,

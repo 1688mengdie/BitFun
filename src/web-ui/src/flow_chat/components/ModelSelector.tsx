@@ -29,7 +29,12 @@ import { notificationService } from '@/shared/notification-system';
 import { FlowChatStore } from '../store/FlowChatStore';
 import { getModelMaxTokens } from '../services/flow-chat-manager/SessionModule';
 import { acpClientIdFromAgentType } from '../utils/acpSession';
-import { buildAcpFastModeValue, getAcpModelProviderName, resolveAcpFastModeState } from '../utils/acpSessionConfig';
+import {
+  buildAcpFastModeValue,
+  getAcpModelProviderName,
+  resolveAcpFastModeState,
+  resolveAcpReasoningState,
+} from '../utils/acpSessionConfig';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
 import {
   buildContextUsageTooltip,
@@ -51,9 +56,12 @@ export interface ExternalModelSelection {
   models: string[];
   selectedModelId?: string;
   defaultModelId?: string;
+  reasoningCatalog?: AIModelCatalog;
+  selectedReasoningPreset?: string;
   providerLabel: string;
   disabled?: boolean;
   onSelect: (modelId: string) => void | Promise<void>;
+  onSelectReasoningPreset?: (presetId: string | null) => void | Promise<void>;
 }
 
 interface ModelSelectorProps {
@@ -249,12 +257,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     acpClientIdFromAgentType(activeSession?.mode);
   const isAcpSession = Boolean(acpClientId && sessionId);
   const targetIsSubagent = isSubagentSession || activeSession?.sessionKind === 'subagent';
-  const isRemoteWorkspaceSession = Boolean(
-    activeSession?.remoteConnectionId
-    || activeSession?.remoteSshHost
-    || activeSession?.config.remoteConnectionId
-    || activeSession?.config.remoteSshHost,
-  );
 
   // Load configuration data.
   const loadConfigData = useCallback(async () => {
@@ -503,9 +505,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const externalCurrentModel = externalAvailableModels.find(
     model => model.id === externalCurrentModelId,
   ) ?? null;
+  const externalReasoningProjection = useMemo((): ReasoningCatalogProjection | null => {
+    if (!externalSelection?.reasoningCatalog || !externalCurrentModelId) return null;
+    return externalSelection.reasoningCatalog.models.find(
+      model => model.id === externalCurrentModelId,
+    )?.reasoning ?? null;
+  }, [externalCurrentModelId, externalSelection?.reasoningCatalog]);
 
   const acpFastMode = useMemo(
     () => resolveAcpFastModeState(acpOptions?.configOptions ?? []),
+    [acpOptions?.configOptions],
+  );
+  const acpReasoning = useMemo(
+    () => resolveAcpReasoningState(acpOptions?.configOptions ?? []),
     [acpOptions?.configOptions],
   );
   
@@ -614,13 +626,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   useEffect(() => {
     if (
       !targetIsSubagent
-      && !isRemoteWorkspaceSession
       && concreteModelId
       && selectedReasoningPreset
     ) {
       setRecentReasoningPreset(concreteModelId, selectedReasoningPreset);
     }
-  }, [concreteModelId, isRemoteWorkspaceSession, selectedReasoningPreset, targetIsSubagent]);
+  }, [concreteModelId, selectedReasoningPreset, targetIsSubagent]);
 
   const recentPresetForModel = useCallback((modelId: string): string | undefined => {
     const resolvedModelId = resolveConcreteModelId(modelId, defaultModels);
@@ -649,9 +660,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const previousReasoningPreset = sessionId
       ? store.getState().sessions.get(sessionId)?.config.reasoningPreset
       : undefined;
-    const nextReasoningPreset = isRemoteWorkspaceSession
-      ? previousReasoningPreset
-      : recentPresetForModel(modelId);
+    const nextReasoningPreset = recentPresetForModel(modelId);
     let sessionModelWrittenOptimistically = false;
 
     try {
@@ -681,9 +690,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         // Update the frontend session model immediately so the UI reflects the
         // switch without waiting for the backend IPC round-trip.
         store.updateSessionModelName(sessionId, modelId);
-        if (!isRemoteWorkspaceSession) {
-          store.updateSessionReasoningPreset(sessionId, nextReasoningPreset);
-        }
+        store.updateSessionReasoningPreset(sessionId, nextReasoningPreset);
         sessionModelWrittenOptimistically = true;
         const maxContextTokens = await getModelMaxTokens(modelId, currentMode);
         store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
@@ -692,9 +699,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           await agentAPI.updateSessionModel({
             sessionId,
             modelName: modelId,
-            ...(!isRemoteWorkspaceSession
-              ? { reasoningPreset: nextReasoningPreset ?? null }
-              : {}),
+            reasoningPreset: nextReasoningPreset ?? null,
             workspacePath: sessionProjectWorkspacePath(session),
             remoteConnectionId: session.remoteConnectionId,
             remoteSshHost: session.remoteSshHost,
@@ -712,7 +717,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       await configManager.setConfig('ai.agent_model_defaults.mode', modelId);
       setModeModel(modelId);
       await updateTargetSessionModel();
-      if (sessionId && !isRemoteWorkspaceSession) {
+      if (sessionId) {
         setRecentReasoningPreset(resolveConcreteModelId(modelId, defaultModels) ?? modelId, nextReasoningPreset);
       }
 
@@ -744,7 +749,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     defaultModels,
     externalSelection,
     isAcpSession,
-    isRemoteWorkspaceSession,
     loading,
     reasoningLoading,
     recentPresetForModel,
@@ -850,6 +854,40 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     acpFastMode,
     loading,
     sessionId,
+  ]);
+
+  const handleSelectAcpReasoning = useCallback(async (presetId: string | null) => {
+    if (loading || !presetId || !acpReasoning || !acpClientId || !sessionId) return;
+    setReasoningLoading(true);
+    try {
+      const options = await ACPClientAPI.setSessionConfigOption({
+        sessionId,
+        clientId: acpClientId,
+        workspacePath: activeSession?.workspacePath || activeSession?.config.workspacePath,
+        remoteConnectionId: activeSession?.remoteConnectionId,
+        remoteSshHost: activeSession?.remoteSshHost,
+        configId: acpReasoning.option.id,
+        value: { type: 'select', value: presetId },
+      });
+      setAcpOptions(options);
+      syncAcpContextUsageToStore(sessionId, options);
+      log.info('ACP reasoning level updated', { sessionId, acpClientId, presetId });
+    } catch (error) {
+      log.error('Failed to update ACP reasoning level', error);
+      notificationService.error(t('reasoningSelector.updateFailed'));
+    } finally {
+      setReasoningLoading(false);
+    }
+  }, [
+    activeSession?.config.workspacePath,
+    activeSession?.remoteConnectionId,
+    activeSession?.remoteSshHost,
+    activeSession?.workspacePath,
+    acpClientId,
+    acpReasoning,
+    loading,
+    sessionId,
+    t,
   ]);
 
   const handleTriggerKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>) => {
@@ -968,6 +1006,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
           </button>
         </Tooltip>
 
+        {externalSelection.onSelectReasoningPreset && (
+          <ReasoningPresetSelector
+            projection={externalReasoningProjection}
+            selectedPreset={externalSelection.selectedReasoningPreset === 'auto'
+              ? undefined
+              : externalSelection.selectedReasoningPreset}
+            disabled={externalSelection.disabled}
+            loading={false}
+            dropdownPlacement={dropdownPlacement}
+            onSelect={externalSelection.onSelectReasoningPreset}
+          />
+        )}
+
         {dropdownOpen && createPortal(
           <div
             id={menuId}
@@ -1079,6 +1130,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             <ChevronDown size={10} className="bitfun-model-selector__chevron" />
           </button>
         </Tooltip>
+
+        {acpReasoning && (
+          <ReasoningPresetSelector
+            projection={acpReasoning.projection}
+            selectedPreset={acpReasoning.selectedPreset}
+            disabled={loading}
+            loading={reasoningLoading}
+            dropdownPlacement={dropdownPlacement}
+            onSelect={handleSelectAcpReasoning}
+          />
+        )}
 
         {dropdownOpen && createPortal(
           <div
@@ -1214,7 +1276,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         </button>
       </Tooltip>
 
-      {sessionId && !isRemoteWorkspaceSession && (
+      {sessionId && (
         <ReasoningPresetSelector
           projection={currentReasoningProjection}
           selectedPreset={selectedReasoningPreset}

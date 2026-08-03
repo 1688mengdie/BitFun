@@ -1603,6 +1603,8 @@ pub struct RemoteModelCatalog {
     pub default_models: RemoteDefaultModelsConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_model_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_reasoning_preset: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1675,6 +1677,7 @@ pub struct RemoteModelCatalogFacts {
     pub models: Vec<RemoteModelFacts>,
     pub default_models: RemoteDefaultModelsConfig,
     pub session_model_id: Option<String>,
+    pub session_reasoning_preset: Option<String>,
 }
 
 pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModelCatalog {
@@ -1707,6 +1710,7 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
             .collect(),
         default_models: facts.default_models,
         session_model_id: facts.session_model_id,
+        session_reasoning_preset: facts.session_reasoning_preset,
     }
 }
 

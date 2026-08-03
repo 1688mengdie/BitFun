@@ -2511,6 +2511,7 @@ impl PersistenceManager {
                 session_name: metadata.session_name,
                 agent_type: metadata.agent_type,
                 model_id: (!metadata.model_name.trim().is_empty()).then_some(metadata.model_name),
+                reasoning_preset: None,
                 last_user_dialog_agent_type: metadata.last_user_dialog_agent_type,
                 last_submitted_agent_type: metadata.last_submitted_agent_type,
                 created_by: metadata.created_by,
