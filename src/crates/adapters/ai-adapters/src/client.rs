@@ -649,6 +649,89 @@ mod tests {
     }
 
     #[test]
+    fn gemini_selected_request_patch_preserves_nested_runtime_fields() {
+        for replacement in [json!(null), json!("invalid"), json!(["invalid"])] {
+            let mut client = make_test_client("gemini", None);
+            client.config.max_tokens = Some(4096);
+            client.config.temperature = Some(0.2);
+            let client = client.with_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
+                body: json!({ "generationConfig": replacement }),
+            });
+
+            let body = gemini::request::build_request_body(
+                &client,
+                None,
+                vec![json!({
+                    "role": "user",
+                    "parts": [{ "text": "hello" }]
+                })],
+                None,
+                None,
+            );
+
+            assert_eq!(body["generationConfig"]["maxOutputTokens"], 4096);
+            assert!(body["generationConfig"].get("temperature").is_none());
+        }
+    }
+
+    #[test]
+    fn gemini_model_request_patch_preserves_nested_runtime_fields() {
+        let mut client = make_test_client("gemini", None);
+        client.config.max_tokens = Some(4096);
+        let client = client.with_model_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
+            body: json!({ "generationConfig": null }),
+        });
+
+        let body = gemini::request::build_request_body(
+            &client,
+            None,
+            vec![json!({
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            })],
+            None,
+            None,
+        );
+
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 4096);
+    }
+
+    #[test]
+    fn gemini_request_patch_sequence_restores_nested_fields_after_each_patch() {
+        let mut client = make_test_client("gemini", None);
+        client.config.max_tokens = Some(4096);
+        let client = client.with_reasoning_preset(&ReasoningPresetSetting::Sequence {
+            settings: vec![
+                ReasoningPresetSetting::RequestPatch {
+                    body: json!({ "generationConfig": [] }),
+                },
+                ReasoningPresetSetting::RequestPatch {
+                    body: json!({
+                        "generationConfig": {
+                            "candidateCount": 2,
+                            "maxOutputTokens": 1
+                        }
+                    }),
+                },
+            ],
+        });
+
+        let body = gemini::request::build_request_body(
+            &client,
+            None,
+            vec![json!({
+                "role": "user",
+                "parts": [{ "text": "hello" }]
+            })],
+            None,
+            None,
+        );
+
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 4096);
+        assert_eq!(body["generationConfig"]["candidateCount"], 2);
+    }
+
+    #[test]
     fn resolves_openai_models_url_from_completion_endpoint() {
         let client = AIClient::new(AIConfig {
             name: "test".to_string(),
