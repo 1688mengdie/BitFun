@@ -588,6 +588,7 @@ async fn inspect_model_readiness() -> Result<ModelReadiness> {
                 version: 0,
                 models: Vec::new(),
                 default_models: Default::default(),
+                reasoning_preset_selection_supported: true,
                 session_model_id: None,
                 session_reasoning_preset: None,
             });

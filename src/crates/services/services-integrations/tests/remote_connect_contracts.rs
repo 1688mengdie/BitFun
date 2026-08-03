@@ -42,11 +42,12 @@ use bitfun_services_integrations::remote_connect::{
     RemoteDialogWorkspaceBinding, RemoteImageContext, RemoteImageContextAdapter,
     RemoteModelCapabilityFact, RemoteModelCatalog, RemoteModelCatalogFacts, RemoteModelConfig,
     RemoteModelFacts, RemoteReasoningModeFact, RemoteRecentWorkspaceFacts, RemoteResponse,
-    RemoteSessionMetadata, RemoteSessionStateTracker, RemoteSessionTrackerHost,
-    RemoteSessionTrackerRegistry, RemoteSessionWorkspaceIdentity, RemoteTerminalPrewarmRequest,
-    RemoteToolStatus, RemoteWorkspaceFacts, RemoteWorkspaceFileChunk, RemoteWorkspaceFileContent,
-    RemoteWorkspaceFileInfo, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind,
-    RemoteWorkspaceUpdate, TrackerEvent, REMOTE_FILE_MAX_CHUNK_BYTES, REMOTE_FILE_MAX_READ_BYTES,
+    RemoteSessionMetadata, RemoteSessionModelSelection, RemoteSessionStateTracker,
+    RemoteSessionTrackerHost, RemoteSessionTrackerRegistry, RemoteSessionWorkspaceIdentity,
+    RemoteTerminalPrewarmRequest, RemoteToolStatus, RemoteWorkspaceFacts, RemoteWorkspaceFileChunk,
+    RemoteWorkspaceFileContent, RemoteWorkspaceFileInfo, RemoteWorkspaceFileRuntimeHost,
+    RemoteWorkspaceKind, RemoteWorkspaceUpdate, TrackerEvent, REMOTE_FILE_MAX_CHUNK_BYTES,
+    REMOTE_FILE_MAX_READ_BYTES,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -1839,10 +1840,17 @@ fn remote_connect_session_response_helpers_own_pagination_and_timestamps() {
         }
     );
     assert_eq!(
-        remote_session_model_updated_response("session-1", "model-1"),
+        remote_session_model_updated_response(
+            "session-1",
+            RemoteSessionModelSelection {
+                model_id: "model-1".to_string(),
+                reasoning_preset: None,
+            },
+        ),
         RemoteResponse::SessionModelUpdated {
             session_id: "session-1".to_string(),
             model_id: "model-1".to_string(),
+            reasoning_preset: None,
         }
     );
     assert_eq!(
@@ -2037,6 +2045,52 @@ fn remote_connect_command_wire_shape_lives_in_owner_contract() {
 }
 
 #[test]
+fn remote_model_selection_command_preserves_present_nullable_preset() {
+    let omitted: RemoteCommand = serde_json::from_value(serde_json::json!({
+        "cmd": "set_session_model",
+        "session_id": "session-1",
+        "model_id": "model-1"
+    }))
+    .expect("deserialize legacy model-only command");
+    let explicit_auto: RemoteCommand = serde_json::from_value(serde_json::json!({
+        "cmd": "set_session_model",
+        "session_id": "session-1",
+        "model_id": "model-1",
+        "reasoning_preset": null
+    }))
+    .expect("deserialize explicit auto preset");
+    let explicit_high: RemoteCommand = serde_json::from_value(serde_json::json!({
+        "cmd": "set_session_model",
+        "session_id": "session-1",
+        "model_id": "model-1",
+        "reasoning_preset": "high"
+    }))
+    .expect("deserialize explicit reasoning preset");
+
+    assert!(matches!(
+        omitted,
+        RemoteCommand::SetSessionModel {
+            reasoning_preset: None,
+            ..
+        }
+    ));
+    assert!(matches!(
+        explicit_auto,
+        RemoteCommand::SetSessionModel {
+            reasoning_preset: Some(None),
+            ..
+        }
+    ));
+    assert!(matches!(
+        explicit_high,
+        RemoteCommand::SetSessionModel {
+            reasoning_preset: Some(Some(ref preset)),
+            ..
+        } if preset == "high"
+    ));
+}
+
+#[test]
 fn remote_connect_response_wire_shape_lives_in_owner_contract() {
     let active_turn = ActiveTurnSnapshot {
         turn_id: "turn-1".to_string(),
@@ -2126,7 +2180,9 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
             primary: Some("model-1".to_string()),
             ..RemoteDefaultModelsConfig::default()
         },
+        reasoning_preset_selection_supported: true,
         session_model_id: Some("model-1".to_string()),
+        session_reasoning_preset: None,
     }
 }
 
@@ -2174,10 +2230,12 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
             ..RemoteDefaultModelsConfig::default()
         },
         session_model_id: Some("session-model".to_string()),
+        session_reasoning_preset: Some("high".to_string()),
     });
 
-    assert_eq!(catalog.version, 7_u64.rotate_left(17));
+    assert!(catalog.reasoning_preset_selection_supported);
     assert_eq!(catalog.session_model_id.as_deref(), Some("session-model"));
+    assert_eq!(catalog.session_reasoning_preset.as_deref(), Some("high"));
     assert_eq!(catalog.default_models.fast.as_deref(), Some("fast-model"));
     let model = catalog.models.first().expect("model config");
     assert_eq!(model.id, "model-1");
@@ -2208,9 +2266,34 @@ fn remote_model_catalog_version_fits_javascript_number_precision() {
         models: Vec::new(),
         default_models: RemoteDefaultModelsConfig::default(),
         session_model_id: None,
+        session_reasoning_preset: None,
     });
 
     assert!(catalog.version <= (1_u64 << 53) - 1);
+}
+
+#[test]
+fn remote_model_catalog_version_tracks_session_selection() {
+    let facts = RemoteModelCatalogFacts {
+        last_modified_ms: 42,
+        source_version: Some(7),
+        models: Vec::new(),
+        default_models: RemoteDefaultModelsConfig::default(),
+        session_model_id: Some("model-1".to_string()),
+        session_reasoning_preset: None,
+    };
+    let model_one = build_remote_model_catalog(facts.clone());
+    let high = build_remote_model_catalog(RemoteModelCatalogFacts {
+        session_reasoning_preset: Some("high".to_string()),
+        ..facts.clone()
+    });
+    let model_two = build_remote_model_catalog(RemoteModelCatalogFacts {
+        session_model_id: Some("model-2".to_string()),
+        ..facts
+    });
+
+    assert_ne!(model_one.version, high.version);
+    assert_ne!(model_one.version, model_two.version);
 }
 
 #[derive(Default)]

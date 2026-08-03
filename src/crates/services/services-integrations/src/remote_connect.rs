@@ -71,6 +71,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
+fn deserialize_present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
 pub(crate) fn bitfun_home_dir() -> Option<PathBuf> {
     std::env::var_os("BITFUN_HOME")
         .or_else(|| std::env::var_os("BITFUN_E2E_HOME"))
@@ -1156,11 +1164,12 @@ pub fn remote_session_created_response(session_id: impl Into<String>) -> RemoteR
 
 pub fn remote_session_model_updated_response(
     session_id: impl Into<String>,
-    model_id: impl Into<String>,
+    selection: RemoteSessionModelSelection,
 ) -> RemoteResponse {
     RemoteResponse::SessionModelUpdated {
         session_id: session_id.into(),
-        model_id: model_id.into(),
+        model_id: selection.model_id,
+        reasoning_preset: selection.reasoning_preset,
     }
 }
 
@@ -1195,11 +1204,12 @@ pub trait RemoteSessionRuntimeHost: Send + Sync {
         &self,
         session_id: Option<&str>,
     ) -> Result<RemoteModelCatalog, String>;
-    async fn update_session_model(
+    async fn update_session_model_selection(
         &self,
         session_id: &str,
         model_id: &str,
-    ) -> Result<String, String>;
+        reasoning_preset: Option<Option<&str>>,
+    ) -> Result<RemoteSessionModelSelection, String>;
     async fn ensure_session_loaded(&self, session_id: &str) -> Result<(), String>;
     async fn update_session_title(&self, session_id: &str, title: &str) -> Result<String, String>;
     async fn resolve_session_storage_dir(&self, session_id: &str) -> Option<PathBuf>;
@@ -1347,10 +1357,16 @@ where
         RemoteCommand::SetSessionModel {
             session_id,
             model_id,
-        } => match host.update_session_model(session_id, model_id).await {
-            Ok(normalized_model_id) => {
-                remote_session_model_updated_response(session_id.clone(), normalized_model_id)
-            }
+            reasoning_preset,
+        } => match host
+            .update_session_model_selection(
+                session_id,
+                model_id,
+                reasoning_preset.as_ref().map(|preset| preset.as_deref()),
+            )
+            .await
+        {
+            Ok(selection) => remote_session_model_updated_response(session_id.clone(), selection),
             Err(message) => RemoteResponse::Error { message },
         },
         RemoteCommand::UpdateSessionTitle { session_id, title } => {
@@ -1601,6 +1617,8 @@ pub struct RemoteModelCatalog {
     pub version: u64,
     pub models: Vec<RemoteModelConfig>,
     pub default_models: RemoteDefaultModelsConfig,
+    #[serde(default)]
+    pub reasoning_preset_selection_supported: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_model_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1680,9 +1698,21 @@ pub struct RemoteModelCatalogFacts {
     pub session_reasoning_preset: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteSessionModelSelection {
+    pub model_id: String,
+    pub reasoning_preset: Option<String>,
+}
+
 pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModelCatalog {
+    let version = catalog_version(
+        facts.last_modified_ms,
+        facts.source_version,
+        facts.session_model_id.as_deref(),
+        facts.session_reasoning_preset.as_deref(),
+    );
     RemoteModelCatalog {
-        version: catalog_version(facts.last_modified_ms, facts.source_version),
+        version,
         models: facts
             .models
             .into_iter()
@@ -1709,19 +1739,45 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
             })
             .collect(),
         default_models: facts.default_models,
+        reasoning_preset_selection_supported: true,
         session_model_id: facts.session_model_id,
         session_reasoning_preset: facts.session_reasoning_preset,
     }
 }
 
-fn catalog_version(last_modified_ms: i64, source_version: Option<u64>) -> u64 {
+fn catalog_version(
+    last_modified_ms: i64,
+    source_version: Option<u64>,
+    session_model_id: Option<&str>,
+    session_reasoning_preset: Option<&str>,
+) -> u64 {
     const MAX_SAFE_JAVASCRIPT_INTEGER: u64 = (1_u64 << 53) - 1;
     let config_version = last_modified_ms.max(0) as u64;
-    let version = match source_version {
+    let mut version = match source_version {
         Some(source_version) => config_version ^ source_version.rotate_left(17),
         None => config_version,
     };
+    if session_model_id.is_some() || session_reasoning_preset.is_some() {
+        version ^=
+            stable_selection_hash(session_model_id, session_reasoning_preset).rotate_left(29);
+    }
     version & MAX_SAFE_JAVASCRIPT_INTEGER
+}
+
+fn stable_selection_hash(model_id: Option<&str>, reasoning_preset: Option<&str>) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+    const FNV_PRIME: u64 = 0x100000001b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in model_id
+        .unwrap_or_default()
+        .bytes()
+        .chain(std::iter::once(0))
+        .chain(reasoning_preset.unwrap_or_default().bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 pub fn normalize_remote_session_model_id(model_id: Option<&str>) -> Option<String> {
@@ -2147,6 +2203,8 @@ pub enum RemoteCommand {
     SetSessionModel {
         session_id: String,
         model_id: String,
+        #[serde(default, deserialize_with = "deserialize_present_nullable")]
+        reasoning_preset: Option<Option<String>>,
     },
     UpdateSessionTitle {
         session_id: String,
@@ -2315,6 +2373,7 @@ pub enum RemoteResponse {
     SessionModelUpdated {
         session_id: String,
         model_id: String,
+        reasoning_preset: Option<String>,
     },
     SessionTitleUpdated {
         session_id: String,
@@ -3571,6 +3630,7 @@ mod tests {
     struct FakeSessionHost {
         created_requests: Mutex<Vec<AgentSessionCreateRequest>>,
         list_identities: Mutex<Vec<RemoteSessionWorkspaceIdentity>>,
+        model_updates: Mutex<Vec<(String, String, Option<Option<String>>)>>,
         removed_trackers: Mutex<Vec<String>>,
         history_error: Option<String>,
     }
@@ -3626,16 +3686,27 @@ mod tests {
                 version: 1,
                 models: Vec::new(),
                 default_models: RemoteDefaultModelsConfig::default(),
+                reasoning_preset_selection_supported: true,
                 session_model_id: None,
+                session_reasoning_preset: None,
             })
         }
 
-        async fn update_session_model(
+        async fn update_session_model_selection(
             &self,
-            _session_id: &str,
+            session_id: &str,
             model_id: &str,
-        ) -> Result<String, String> {
-            Ok(model_id.to_string())
+            reasoning_preset: Option<Option<&str>>,
+        ) -> Result<RemoteSessionModelSelection, String> {
+            self.model_updates.lock().unwrap().push((
+                session_id.to_string(),
+                model_id.to_string(),
+                reasoning_preset.map(|preset| preset.map(ToOwned::to_owned)),
+            ));
+            Ok(RemoteSessionModelSelection {
+                model_id: model_id.to_string(),
+                reasoning_preset: reasoning_preset.flatten().map(ToOwned::to_owned),
+            })
         }
 
         async fn ensure_session_loaded(&self, _session_id: &str) -> Result<(), String> {
@@ -3763,6 +3834,38 @@ mod tests {
         assert_eq!(
             created_requests[0].remote_ssh_host.as_deref(),
             Some("host-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_session_handler_forwards_and_returns_reasoning_preset() {
+        let host = FakeSessionHost::default();
+
+        let response = handle_remote_session_command(
+            &host,
+            &RemoteCommand::SetSessionModel {
+                session_id: "session-a".to_string(),
+                model_id: "model-1".to_string(),
+                reasoning_preset: Some(Some("high".to_string())),
+            },
+        )
+        .await;
+
+        assert_eq!(
+            response,
+            RemoteResponse::SessionModelUpdated {
+                session_id: "session-a".to_string(),
+                model_id: "model-1".to_string(),
+                reasoning_preset: Some("high".to_string()),
+            }
+        );
+        assert_eq!(
+            host.model_updates.lock().unwrap().as_slice(),
+            [(
+                "session-a".to_string(),
+                "model-1".to_string(),
+                Some(Some("high".to_string())),
+            )]
         );
     }
 
