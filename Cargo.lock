@@ -1014,6 +1014,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1095,6 +1096,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "similar",
  "tar",
  "tauri",
@@ -1516,6 +1518,47 @@ dependencies = [
  "windows-native-keyring-store",
  "x25519-dalek",
  "zbus-secret-service-keyring-store",
+ "zip",
+]
+
+[[package]]
+name = "bitfun-skin-market-server"
+version = "0.2.15"
+dependencies = [
+ "anyhow",
+ "axum",
+ "bitfun-skin-market-service",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "bitfun-skin-market-service"
+version = "0.2.15"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "bitfun-product-domains",
+ "chrono",
+ "hex",
+ "hmac",
+ "image 0.25.10",
+ "reqwest",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "url",
+ "uuid",
  "zip",
 ]
 
