@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "path": "src/crates/services/services-integrations/assets/models-dev.json",
+    "sha256": "a3de54a8da0dc45e174a1293fadb062a818b9210fabf613aee9e520be01658f6",
+    "bytes": 2900
+  },
+  "source": {
+    "project": "models.dev",
+    "api_url": "https://models.dev/api.json",
+    "api_sha256": "b3a52ba98bb4b58714734f8bb98c9bc7ffeff3558f915bcc3211cfe5f276728d",
+    "api_bytes": 3452228,
+    "api_etag": "W/\"b3a52ba98bb4b58714734f8bb98c9bc7\"",
+    "retrieved_at": "2026-08-03T12:25:19.355Z",
+    "repository": "https://github.com/anomalyco/models.dev",
+    "repository_branch": "dev",
+    "repository_revision": "403a7bdd43ac7daeadc8bb755eccabf66a0afb9d",
+    "revision_role": "Upstream dev revision observed when the API document was retrieved; api_sha256 is authoritative for the retrieved source bytes."
+  },
+  "license": {
+    "spdx": "MIT",
+    "copyright": "Copyright (c) 2025 models.dev",
+    "upstream_path": "LICENSE",
+    "source_path": "src/crates/services/services-integrations/assets/models-dev.LICENSE.txt",
+    "release_path": "third-party/models.dev/LICENSE.txt",
+    "sha256": "dc2dc41c9fea2fd3c41c21c6f484844cab367800b88ff24781f980ad3a9d160a"
+  },
+  "transformation": {
+    "kind": "curated_reasoning_fallback",
+    "description": "Select only the listed providers and models, retain provider/model identity plus reasoning capability fields, normalize reasoning_options to arrays, and serialize deterministic pretty-printed JSON.",
+    "retained_provider_fields": [
+      "id",
+      "name"
+    ],
+    "retained_model_fields": [
+      "id",
+      "name",
+      "reasoning",
+      "reasoning_options"
+    ],
+    "included_models": {
+      "openai": [
+        "gpt-5.2-pro",
+        "gpt-5.4"
+      ],
+      "anthropic": [
+        "claude-sonnet-4-6",
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ],
+      "deepseek": [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro"
+      ]
+    }
+  },
+  "maintenance": {
+    "update_command": "pnpm run models-dev:update",
+    "check_command": "pnpm run models-dev:check"
+  }
+}
