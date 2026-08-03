@@ -1,6 +1,6 @@
 import { AssistantEntry, RecentWorkspaceEntry } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { CARD, GREEN, INK, LINE, MUTED, RED, SUBTLE } from './Theme';
+import { CARD, GREEN, INK, LINE, MUTED, RED, SOFT, SUBTLE } from './Theme';
 
 @ComponentV2
 export struct RemoteActionsSheet {
@@ -31,6 +31,7 @@ export struct RemoteActionsSheet {
   @Event onSortModeChange: (mode: string) => void = (_mode: string) => {};
   @Event onAddConnection: () => void = () => {};
   @Event onOpenSettings: () => void = () => {};
+  @Event onOpenViewSettings: () => void = () => {};
 
   aboutToAppear(): void {
     this.selectedSortMode = this.sortMode;
@@ -67,14 +68,9 @@ export struct RemoteActionsSheet {
   private RemoteActionRows() {
     Column({ space: 0 }) {
       this.SectionTitle(RemoteI18n.t('remote.menu.organize'))
-      this.IconRow('remote_actions_folder', RemoteI18n.t('remote.menu.byProject'), 'project', () => {
-        this.selectSortMode('project');
-      })
-      this.IconRow('remote_actions_clock', RemoteI18n.t('remote.menu.byTime'), 'time', () => {
-        this.selectSortMode('time');
-      })
-      this.IconRow('remote_actions_chat', RemoteI18n.t('remote.menu.chatFirst'), 'chat', () => {
-        this.selectSortMode('chat');
+      this.IconRow('remote_actions_settings', RemoteI18n.t('viewSettings.title'), '', () => {
+        this.onDismiss();
+        this.onOpenViewSettings();
       })
       Divider().strokeWidth(1).color(LINE).margin({ top: 8, bottom: 8 })
       this.SectionTitle(RemoteI18n.t('remote.menu.manage'))
@@ -102,7 +98,7 @@ export struct RemoteActionsSheet {
     Text(title)
       .fontSize(13)
       .fontWeight(FontWeight.Medium)
-      .fontColor('#8E8E93')
+      .fontColor(MUTED)
       .width('100%')
       .height(28)
       .padding({ left: 8 })
@@ -113,10 +109,11 @@ export struct RemoteActionsSheet {
   private IconRow(icon: string, label: string, sortMode: string, action: () => void) {
     Row({ space: 10 }) {
       if (sortMode.length > 0 && this.selectedSortMode === sortMode) {
-        Image($r('app.media.remote_actions_check'))
+        SymbolGlyph($r('sys.symbol.checkmark_circle'))
+          .fontSize(18)
+          .fontColor([INK])
           .width(20)
           .height(20)
-          .objectFit(ImageFit.Contain)
       } else {
         Blank().width(20)
       }
@@ -132,24 +129,24 @@ export struct RemoteActionsSheet {
     .height(48)
     .padding({ left: 8, right: 8 })
     .borderRadius(10)
-    .backgroundColor(sortMode.length > 0 && this.selectedSortMode === sortMode ? '#F3F3F3' : '#00000000')
+    .backgroundColor(sortMode.length > 0 && this.selectedSortMode === sortMode ? SOFT : '#00000000')
     .onClick(action)
   }
 
   @Builder
   private ActionIcon(icon: string) {
     if (icon === 'remote_actions_folder') {
-      Image($r('app.media.remote_actions_folder')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.folder')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     } else if (icon === 'remote_actions_clock') {
-      Image($r('app.media.remote_actions_clock')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.clock')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     } else if (icon === 'remote_actions_chat') {
-      Image($r('app.media.remote_actions_chat')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.message')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     } else if (icon === 'remote_actions_cloud') {
-      Image($r('app.media.remote_actions_cloud')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.cloud')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     } else if (icon === 'remote_actions_link') {
-      Image($r('app.media.remote_actions_link')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.link')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     } else {
-      Image($r('app.media.remote_actions_settings')).width(23).height(23).objectFit(ImageFit.Contain)
+      SymbolGlyph($r('sys.symbol.gearshape')).fontSize(20).fontColor([MUTED]).width(23).height(23)
     }
   }
 

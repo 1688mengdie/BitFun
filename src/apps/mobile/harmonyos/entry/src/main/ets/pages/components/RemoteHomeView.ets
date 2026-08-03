@@ -6,13 +6,22 @@ import { RemoteHeader } from './RemoteHeader';
 import { RemoteSessionList } from './RemoteSessionList';
 import { RemoteSessionLoadingView } from './RemoteSessionLoadingView';
 import { RemotePageState } from '../state/RemotePageState';
-import { ACCENT, CARD, INK, MUTED, PAGE_BG } from './Theme';
+import { RemoteLogger } from '../../services/RemoteLogger';
+import { CARD, INK, MUTED, PAGE_BG, PRIMARY_ACTION, PRIMARY_ACTION_TEXT } from './Theme';
+import { ConversationViewSettings } from './ConversationViewSettings';
 
 @ComponentV2
 export struct RemoteHomeView {
   @Param pageState: RemotePageState = new RemotePageState();
   @Param isBusy: boolean = false;
   @Param selectedSessionId: string = '';
+  @Param sortMode: string = 'project';
+  @Param workspaceFilter: string = '';
+  @Param agentFilter: string = '';
+  @Param statusFilter: string = '';
+  @Param showWorkspaceMetadata: boolean = false;
+  @Param showUpdatedMetadata: boolean = false;
+  @Param showStatusMetadata: boolean = false;
   @Event onOpenSidebar: () => void = () => {};
   @Event onConnectWorkspace: () => void = () => {};
   @Event onAddConnection: () => void = () => {};
@@ -35,8 +44,15 @@ export struct RemoteHomeView {
   @Event onCreateInWorkspace: (path: string, agentType: string) => void = (_path: string, _agentType: string) => {};
   @Event onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
   @Event onDeleteSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
+  @Event onSortModeChange: (mode: string) => void = (_mode: string) => {};
+  @Event onWorkspaceFilterChange: (value: string) => void = (_value: string) => {};
+  @Event onAgentFilterChange: (value: string) => void = (_value: string) => {};
+  @Event onStatusFilterChange: (value: string) => void = (_value: string) => {};
+  @Event onWorkspaceMetadataChange: (value: boolean) => void = (_value: boolean) => {};
+  @Event onUpdatedMetadataChange: (value: boolean) => void = (_value: boolean) => {};
+  @Event onStatusMetadataChange: (value: boolean) => void = (_value: boolean) => {};
   @Local showRemoteActions: boolean = false;
-  @Local sortMode: string = 'project';
+  @Local showViewSettings: boolean = false;
 
   build() {
     Stack() {
@@ -72,10 +88,16 @@ export struct RemoteHomeView {
             sessions: this.pageState.visibleSessions(),
             query: this.pageState.sessionQuery,
             sortMode: this.sortMode,
+            workspaceFilter: this.workspaceFilter,
+            agentFilter: this.agentFilter,
+            statusFilter: this.statusFilter,
             workspaceName: this.pageState.workspaceName,
             workspacePath: this.pageState.workspacePath,
             workspaceKind: this.pageState.workspaceKind,
             recentWorkspaces: this.pageState.recentWorkspaces,
+            showWorkspaceMetadata: this.showWorkspaceMetadata,
+            showUpdatedMetadata: this.showUpdatedMetadata,
+            showStatusMetadata: this.showStatusMetadata,
             hasMoreSessions: this.pageState.hasMoreSessions,
             isBusy: this.isBusy || this.pageState.isLoadingSessions,
             onCreate: () => {
@@ -145,6 +167,7 @@ export struct RemoteHomeView {
     .height('100%')
     .padding({ left: 12, right: 12, top: 0, bottom: 16 })
     .backgroundColor(PAGE_BG)
+    .bindSheet($$this.showViewSettings, this.ViewSettingsSheet(), this.viewSettingsSheetOptions())
   }
 
   @Builder
@@ -198,13 +221,59 @@ export struct RemoteHomeView {
         this.onClearPairing();
       },
       onSortModeChange: (mode: string) => {
-        this.sortMode = mode;
+        this.onSortModeChange(mode);
       },
       onAddConnection: () => {
         this.onAddConnection();
       },
       onOpenSettings: () => {
         this.onOpenRemoteSettings();
+      },
+      onOpenViewSettings: () => {
+        this.showViewSettings = true;
+      }
+    })
+  }
+
+  @Builder
+  ViewSettingsSheet() {
+    ConversationViewSettings({
+      sessions: this.pageState.visibleSessions(),
+      workspaceName: this.pageState.workspaceName,
+      workspacePath: this.pageState.workspacePath,
+      workspaceKind: this.pageState.workspaceKind,
+      recentWorkspaces: this.pageState.recentWorkspaces,
+      sortMode: this.sortMode,
+      workspaceFilter: this.workspaceFilter,
+      agentFilter: this.agentFilter,
+      statusFilter: this.statusFilter,
+      showWorkspaceMetadata: this.showWorkspaceMetadata,
+      showUpdatedMetadata: this.showUpdatedMetadata,
+      showStatusMetadata: this.showStatusMetadata,
+      onSortModeChange: (mode: string) => {
+        this.onSortModeChange(mode);
+      },
+            onWorkspaceFilterChange: (value: string) => {
+              RemoteLogger.info(`compact view-settings workspace received=${value.length > 0 ? value : '<all>'}`);
+              this.onWorkspaceFilterChange(value);
+            },
+      onAgentFilterChange: (value: string) => {
+        this.onAgentFilterChange(value);
+      },
+      onStatusFilterChange: (value: string) => {
+        this.onStatusFilterChange(value);
+      },
+      onWorkspaceMetadataChange: (value: boolean) => {
+        this.onWorkspaceMetadataChange(value);
+      },
+      onUpdatedMetadataChange: (value: boolean) => {
+        this.onUpdatedMetadataChange(value);
+      },
+      onStatusMetadataChange: (value: boolean) => {
+        this.onStatusMetadataChange(value);
+      },
+      onClose: () => {
+        this.showViewSettings = false;
       }
     })
   }
@@ -224,13 +293,14 @@ export struct RemoteHomeView {
         .fontColor(MUTED)
         .textAlign(TextAlign.Center)
         .constraintSize({ maxWidth: 280 })
-      Button(RemoteI18n.t('connect.connect'))
+      Text(RemoteI18n.t('connect.connect'))
         .width(148)
         .height(50)
         .fontSize(16)
         .fontWeight(FontWeight.Medium)
-        .fontColor(CARD)
-        .backgroundColor(ACCENT)
+        .fontColor(PRIMARY_ACTION_TEXT)
+        .backgroundColor(PRIMARY_ACTION)
+        .textAlign(TextAlign.Center)
         .borderRadius(25)
         .margin({ top: 14 })
         .onClick(() => {
@@ -246,23 +316,10 @@ export struct RemoteHomeView {
 
   @Builder
   LargeDesktopGlyph() {
-    Stack() {
-      Text('')
-        .width(46)
-        .height(34)
-        .borderRadius(6)
-        .border({ width: 2, color: INK })
-        .position({ x: 9, y: 4 })
-      Text('')
-        .width(18)
-        .height(2)
-        .backgroundColor(INK)
-        .position({ x: 23, y: 44 })
-      Text('')
-        .width(34)
-        .height(2)
-        .backgroundColor(INK)
-        .position({ x: 15, y: 51 })
+    Stack({ alignContent: Alignment.Center }) {
+      SymbolGlyph($r('sys.symbol.desktop'))
+        .fontSize(50)
+        .fontColor([INK])
     }
     .width(64)
     .height(58)
@@ -298,6 +355,16 @@ export struct RemoteHomeView {
 
   private isInitialLoading(): boolean {
     return this.pageState.isLoadingHome || this.isConnecting();
+  }
+
+  private viewSettingsSheetOptions(): SheetOptions {
+    return {
+      height: 520,
+      backgroundColor: '#00000000',
+      maskColor: '#44000000',
+      showClose: false,
+      dragBar: true
+    };
   }
 
 }

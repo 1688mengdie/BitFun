@@ -47,6 +47,9 @@ export class AppShellViewModel {
   }
 
   replaceRouteWithoutAnimation(route: AppRoute, sessionId: string = ''): void {
+    if (this.currentRoute() === route && sessionId.length === 0) {
+      return;
+    }
     this.navigationStack.clear(false);
     if (route !== AppRoute.ChatHome) {
       this.pushRoute(route, sessionId, false);

@@ -24,7 +24,7 @@ export struct RemoteHeader {
             LoadingProgress()
               .width(14)
               .height(14)
-              .color('#B9B9B9')
+              .color(MUTED)
           } else {
             Text('')
               .width(7)
@@ -32,10 +32,11 @@ export struct RemoteHeader {
               .backgroundColor(this.connectionColor())
               .borderRadius(4)
           }
-          Image($r('app.media.remote_ref_device'))
+          SymbolGlyph($r('sys.symbol.desktop'))
+            .fontSize(16)
+            .fontColor([MUTED])
             .width(19)
-            .height(15)
-            .objectFit(ImageFit.Contain)
+            .height(18)
           Text(this.desktopName || RemoteI18n.t('remote.settings.noDesktop'))
             .fontSize(13)
             .fontColor(MUTED)
@@ -55,10 +56,11 @@ export struct RemoteHeader {
   @Builder
   private MenuButton() {
     Stack({ alignContent: Alignment.Center }) {
-      Image($r('app.media.remote_ref_menu'))
+      SymbolGlyph($r('sys.symbol.line_3_horizontal'))
+        .fontSize(22)
+        .fontColor([INK])
         .width(24)
-        .height(15)
-        .objectFit(ImageFit.Contain)
+        .height(24)
     }
     .width(48)
     .height(48)
@@ -73,10 +75,13 @@ export struct RemoteHeader {
   @Builder
   private MoreButton() {
     Stack({ alignContent: Alignment.Center }) {
-      Image($r('app.media.remote_ref_more'))
-        .width(27)
-        .height(8)
-        .objectFit(ImageFit.Contain)
+      Row({ space: 4 }) {
+        Text('').width(4).height(4).backgroundColor(MUTED).borderRadius(2)
+        Text('').width(4).height(4).backgroundColor(MUTED).borderRadius(2)
+        Text('').width(4).height(4).backgroundColor(MUTED).borderRadius(2)
+      }
+      .height(10)
+      .alignItems(VerticalAlign.Center)
     }
     .width(48)
     .height(48)
@@ -88,7 +93,7 @@ export struct RemoteHeader {
     })
   }
 
-  private connectionColor(): string {
+  private connectionColor(): ResourceColor {
     const tone = ConnectionStatusPresenter.tone(this.connectionState);
     if (tone === 'ok') {
       return GREEN;
