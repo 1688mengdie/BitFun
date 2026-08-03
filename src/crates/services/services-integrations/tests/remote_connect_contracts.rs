@@ -1,5 +1,9 @@
 #![cfg(feature = "remote-connect")]
 
+use bitfun_core_types::{
+    ReasoningCapabilityStatus, ReasoningCatalogProjection, ReasoningMode,
+    ReasoningPresetDescriptor, ReasoningPresetSetting, ReasoningPresetSource,
+};
 use bitfun_events::{AgenticEvent, ToolEventData};
 use bitfun_runtime_ports::{
     AgentSubmissionSource, RemoteControlSessionState, RemoteControlStateSnapshot,
@@ -2116,6 +2120,7 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
             reasoning_mode: Some("default".to_string()),
             reasoning_effort: None,
             thinking_budget_tokens: None,
+            reasoning: None,
         }],
         default_models: RemoteDefaultModelsConfig {
             primary: Some("model-1".to_string()),
@@ -2129,6 +2134,7 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
 fn remote_connect_model_catalog_builder_preserves_config_shape() {
     let catalog = build_remote_model_catalog(RemoteModelCatalogFacts {
         last_modified_ms: -7,
+        source_version: Some(7),
         models: vec![RemoteModelFacts {
             id: "model-1".to_string(),
             name: "Model One".to_string(),
@@ -2146,6 +2152,20 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
             reasoning_mode: Some(RemoteReasoningModeFact::Adaptive),
             reasoning_effort: Some("medium".to_string()),
             thinking_budget_tokens: Some(4096),
+            reasoning: Some(ReasoningCatalogProjection {
+                status: ReasoningCapabilityStatus::Known,
+                default_preset: Some("high".to_string()),
+                presets: vec![ReasoningPresetDescriptor {
+                    id: "high".to_string(),
+                    label: "High".to_string(),
+                    order: 10,
+                    setting: ReasoningPresetSetting::Effort {
+                        value: "high".to_string(),
+                        mode: Some(ReasoningMode::Adaptive),
+                    },
+                    source: ReasoningPresetSource::ModelsDev,
+                }],
+            }),
         }],
         default_models: RemoteDefaultModelsConfig {
             primary: Some("model-1".to_string()),
@@ -2156,7 +2176,7 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
         session_model_id: Some("session-model".to_string()),
     });
 
-    assert_eq!(catalog.version, 0);
+    assert_eq!(catalog.version, 7_u64.rotate_left(17));
     assert_eq!(catalog.session_model_id.as_deref(), Some("session-model"));
     assert_eq!(catalog.default_models.fast.as_deref(), Some("fast-model"));
     let model = catalog.models.first().expect("model config");
@@ -2174,6 +2194,23 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
     assert_eq!(model.reasoning_mode.as_deref(), Some("adaptive"));
     assert_eq!(model.reasoning_effort.as_deref(), Some("medium"));
     assert_eq!(model.thinking_budget_tokens, Some(4096));
+    let reasoning = model.reasoning.as_ref().expect("reasoning projection");
+    assert_eq!(reasoning.status, ReasoningCapabilityStatus::Known);
+    assert_eq!(reasoning.default_preset.as_deref(), Some("high"));
+    assert_eq!(reasoning.presets[0].id, "high");
+}
+
+#[test]
+fn remote_model_catalog_version_fits_javascript_number_precision() {
+    let catalog = build_remote_model_catalog(RemoteModelCatalogFacts {
+        last_modified_ms: 0,
+        source_version: Some(u64::MAX),
+        models: Vec::new(),
+        default_models: RemoteDefaultModelsConfig::default(),
+        session_model_id: None,
+    });
+
+    assert!(catalog.version <= (1_u64 << 53) - 1);
 }
 
 #[derive(Default)]

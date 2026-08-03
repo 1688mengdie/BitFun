@@ -59,6 +59,7 @@ function dependencyDescription(dependency) {
 
 const SERVICES_INTEGRATIONS_TOKIO_FEATURES = new Map([
   ['announcement', ['fs', 'sync']],
+  ['models-dev', ['fs', 'sync', 'time']],
   ['browser-control', ['time']],
   ['canvas-runtime', ['fs']],
   ['debug-log', ['rt']],

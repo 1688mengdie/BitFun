@@ -95,6 +95,7 @@ zbus-secret-service-keyring-store = { workspace = true, optional = true }
 [features]
 default = []
 announcement = ["reqwest", "tokio/fs", "tokio/sync"]
+models-dev = ["reqwest", "sha2", "tokio/fs", "tokio/sync", "tokio/time"]
 browser-control = ["anyhow", "bitfun-services-core/process-runtime", "dirs", "reqwest", "thiserror", "tokio/time"]
 canvas-runtime = [
     "dep:bitfun-product-domains",
@@ -218,6 +219,7 @@ remote-connect = [
     "async-trait",
     "base64",
     "bitfun-agent-tools",
+    "dep:bitfun-core-types",
     "bitfun-services-core/local-storage",
     "bitfun-services-core/process-runtime",
     "bitfun-runtime-ports",
@@ -352,6 +354,7 @@ script-tool-runtime = [
 web-tools = ["reqwest", "thiserror"]
 product-full = [
     "announcement",
+    "models-dev",
     "browser-control",
     "canvas-runtime",
     "debug-log",

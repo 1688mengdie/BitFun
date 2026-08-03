@@ -4,7 +4,7 @@ import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
 import type { SendMessageRequest } from './tauri-commands';
 import type { ConnectionTestMessageCode } from '@/shared/utils/aiConnectionTestMessages';
-import type { SubscriptionProvider } from '@/infrastructure/config/types';
+import type { ReasoningMode, SubscriptionProvider } from '@/infrastructure/config/types';
 
 export interface CreateAISessionRequest {
   session_id?: string;
@@ -28,6 +28,58 @@ export interface ConnectionTestResult {
 export interface RemoteModelInfo {
   id: string;
   display_name?: string;
+}
+
+export type ReasoningPresetSetting =
+  | { type: 'mode'; value: ReasoningMode }
+  | { type: 'effort'; value: string; mode?: ReasoningMode }
+  | { type: 'toggle'; enabled: boolean }
+  | { type: 'budget_tokens'; value: number; mode?: ReasoningMode }
+  | { type: 'request_patch'; body: Record<string, unknown> }
+  | { type: 'sequence'; settings: ReasoningPresetSetting[] };
+
+export interface ReasoningPresetDescriptor {
+  id: string;
+  label: string;
+  order: number;
+  setting: ReasoningPresetSetting;
+  source: 'models_dev' | 'adapter_fallback' | 'model_config';
+}
+
+export interface ReasoningCatalogProjection {
+  status: 'unsupported' | 'known' | 'unknown';
+  default_preset?: string;
+  presets?: ReasoningPresetDescriptor[];
+}
+
+export interface AIModelCatalogEntry {
+  id: string;
+  name: string;
+  provider: string;
+  base_url: string;
+  model_name: string;
+  context_window?: number;
+  enabled: boolean;
+  capabilities: string[];
+  enable_thinking_process: boolean;
+  reasoning_mode?: ReasoningMode;
+  reasoning_effort?: string;
+  thinking_budget_tokens?: number;
+  reasoning?: ReasoningCatalogProjection;
+}
+
+export interface AIModelCatalog {
+  version: number;
+  models: AIModelCatalogEntry[];
+  default_models: {
+    primary?: string | null;
+    fast?: string | null;
+    search?: string | null;
+    image_understanding?: string | null;
+    image_generation?: string | null;
+    speech_recognition?: string | null;
+  };
+  session_model_id?: string;
 }
 
 export type SubscriptionLoginStatus = 'pending' | 'authorized' | 'failed' | 'cancelled';
@@ -78,6 +130,14 @@ export class AIApi {
       });
     } catch (error) {
       throw createTauriCommandError('list_ai_models', error);
+    }
+  }
+
+  async getModelCatalog(): Promise<AIModelCatalog> {
+    try {
+      return await api.invoke<AIModelCatalog>('get_ai_model_catalog', {});
+    } catch (error) {
+      throw createTauriCommandError('get_ai_model_catalog', error);
     }
   }
 

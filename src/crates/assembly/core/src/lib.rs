@@ -61,6 +61,14 @@ pub mod util; // General types, errors, helper functions
 #[cfg(feature = "product-full")]
 pub use infrastructure::debug_log as debug;
 
+#[cfg(feature = "product-full")]
+pub use bitfun_services_integrations::remote_connect::RemoteModelCatalog as AIModelCatalog;
+
+#[cfg(feature = "product-full")]
+pub async fn get_ai_model_catalog() -> Result<AIModelCatalog, String> {
+    service_agent_runtime::CoreServiceAgentRuntime::load_remote_model_catalog(None).await
+}
+
 // Export main types
 pub use bitfun_runtime_ports as runtime_ports;
 pub use util::errors::*;
