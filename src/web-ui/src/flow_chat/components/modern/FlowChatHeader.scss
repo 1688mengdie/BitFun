@@ -269,6 +269,17 @@
     scrollbar-gutter: stable;
   }
 
+  &__background-command-empty-state {
+    min-height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: $size-gap-3;
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    text-align: center;
+  }
+
   &__background-command-list-item-button {
     display: flex;
     flex-direction: column;

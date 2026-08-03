@@ -1257,6 +1257,7 @@
       "idle": "空闲"
     },
     "backgroundCommands": "后台命令（{{count}}）",
+    "backgroundCommandEmpty": "暂无后台命令",
     "backgroundCommandUntitled": "后台命令",
     "backgroundCommandSession": "会话 #{{id}}",
     "backgroundCommandStatusRunning": "进行中",
