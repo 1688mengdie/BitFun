@@ -1257,6 +1257,7 @@
       "idle": "Idle"
     },
     "backgroundCommands": "Background commands ({{count}})",
+    "backgroundCommandEmpty": "No background commands",
     "backgroundCommandUntitled": "Background command",
     "backgroundCommandSession": "Session #{{id}}",
     "backgroundCommandStatusRunning": "Active",

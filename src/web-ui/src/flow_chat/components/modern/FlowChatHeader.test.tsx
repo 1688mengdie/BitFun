@@ -157,6 +157,24 @@ describe('FlowChatHeader', () => {
     expect(treeContainer?.nextElementSibling).toBe(commandContainer);
   });
 
+  it('opens the background command panel when no commands exist', () => {
+    act(() => {
+      root.render(<FlowChatHeader {...createProps()} />);
+    });
+
+    const commandButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="flowchat-header-background-commands"]',
+    );
+    expect(commandButton?.disabled).toBe(false);
+
+    act(() => {
+      commandButton?.click();
+    });
+
+    const panel = container.querySelector('.flowchat-header__background-command-panel');
+    expect(panel?.textContent).toContain('flowChatHeader.backgroundCommandEmpty');
+  });
+
   it('renders background command menus in a portal outside the scrollable panel', () => {
     const onStopBackgroundCommand = vi.fn();
     const onStopAllBackgroundCommands = vi.fn();
