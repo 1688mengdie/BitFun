@@ -171,6 +171,11 @@ fn apply_reasoning_request_patches(
             log::warn!("Ignoring non-object reasoning preset request patch");
             continue;
         };
+        let protected_body = build_request_body_subset(
+            request_body,
+            protected_top_level_keys,
+            protected_nested_fields,
+        );
         for key in protected_top_level_keys {
             patch_object.remove(*key);
         }
@@ -183,6 +188,10 @@ fn apply_reasoning_request_patches(
             }
         }
         apply_json_merge_patch(request_body, &patch);
+        // A merge patch can replace or delete a protected field's parent with
+        // null, a scalar, or an array. Restore the captured paths after every
+        // patch so nested runtime fields survive those parent-level changes.
+        merge_json_value(request_body, protected_body);
     }
 }
 
