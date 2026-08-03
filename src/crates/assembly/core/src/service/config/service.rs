@@ -756,6 +756,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn set_config_rejects_invalid_reasoning_and_rolls_back() {
+        let (service, _dir) = test_service("invalid-reasoning-set").await;
+        let valid_models = vec![model("stable-model", true, ModelCategory::GeneralChat)];
+        service
+            .set_config("ai.models", &valid_models)
+            .await
+            .expect("valid models should save");
+
+        let invalid_models = vec![AIModelConfig {
+            reasoning: Some(bitfun_core_types::ReasoningConfig {
+                presets: vec![bitfun_core_types::ReasoningPreset {
+                    id: "bad-budget".to_string(),
+                    setting: Some(bitfun_core_types::ReasoningPresetSetting::BudgetTokens {
+                        value: 0,
+                        mode: None,
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            ..model("invalid-model", true, ModelCategory::GeneralChat)
+        }];
+
+        let error = service
+            .set_config("ai.models", &invalid_models)
+            .await
+            .expect_err("invalid reasoning must be rejected");
+        assert!(error
+            .to_string()
+            .contains("budget_tokens value must be greater than 0"));
+
+        let persisted_models: Vec<AIModelConfig> = service
+            .get_config(Some("ai.models"))
+            .await
+            .expect("models should remain readable");
+        assert_eq!(persisted_models.len(), 1);
+        assert_eq!(persisted_models[0].id, "stable-model");
+    }
+
+    #[tokio::test]
+    async fn import_config_rejects_duplicate_reasoning_presets() {
+        let (service, _dir) = test_service("invalid-reasoning-import").await;
+        let mut config = GlobalConfig::default();
+        config.ai.models.push(AIModelConfig {
+            reasoning: Some(bitfun_core_types::ReasoningConfig {
+                presets: vec![
+                    bitfun_core_types::ReasoningPreset {
+                        id: "same".to_string(),
+                        setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle {
+                            enabled: true,
+                        }),
+                        ..Default::default()
+                    },
+                    bitfun_core_types::ReasoningPreset {
+                        id: "same".to_string(),
+                        setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle {
+                            enabled: false,
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..model("duplicate-model", true, ModelCategory::GeneralChat)
+        });
+
+        let result = service
+            .import_config_data(serde_json::to_value(config).expect("serialize config"))
+            .await
+            .expect("import should return a structured result");
+
+        assert!(!result.success);
+        assert!(result
+            .errors
+            .join(" ")
+            .contains("duplicate preset ID 'same'"));
+    }
+
+    #[tokio::test]
     async fn reconcile_models_repairs_image_understanding_default_to_capable_model() {
         let (service, _dir) = test_service("vision-default-repair").await;
         let models = vec![
@@ -966,5 +1045,55 @@ mod tests {
         assert!(model.get("reasoning_effort").is_none());
         assert!(model.get("thinking_budget_tokens").is_none());
         assert!(model.get("enable_thinking_process").is_none());
+    }
+
+    #[tokio::test]
+    async fn startup_rejects_invalid_canonical_reasoning_config() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let user_root = dir.path().join("invalid-reasoning-startup");
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(user_root));
+        let settings = || ConfigManagerSettings {
+            path_manager: Some(path_manager.clone()),
+            auto_save: true,
+            backup_count: 0,
+        };
+
+        let initial_service = ConfigService::with_settings(settings())
+            .await
+            .expect("initial config service");
+        drop(initial_service);
+
+        let mut raw_config =
+            serde_json::to_value(GlobalConfig::default()).expect("default config should serialize");
+        raw_config["version"] = serde_json::json!(env!("CARGO_PKG_VERSION"));
+        raw_config["ai"]["models"] = serde_json::json!([{
+            "id": "invalid-model",
+            "name": "Invalid model",
+            "provider": "responses",
+            "model_name": "gpt-5.4",
+            "base_url": "https://api.openai.com/v1/responses",
+            "api_key": "key",
+            "enabled": true,
+            "reasoning": {
+                "catalog": { "source": "disabled" },
+                "default_preset": "missing",
+                "presets": []
+            }
+        }]);
+        tokio::fs::write(
+            path_manager.app_config_file(),
+            serde_json::to_string_pretty(&raw_config).expect("invalid config should serialize"),
+        )
+        .await
+        .expect("invalid config should be written");
+
+        let error = match ConfigService::with_settings(settings()).await {
+            Ok(_) => panic!("invalid canonical reasoning must fail startup"),
+            Err(error) => error,
+        };
+
+        assert!(error
+            .to_string()
+            .contains("default preset 'missing' is not available"));
     }
 }

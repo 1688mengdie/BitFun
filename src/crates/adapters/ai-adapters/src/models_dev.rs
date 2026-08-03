@@ -255,22 +255,27 @@ pub fn project_reasoning_catalog(
 
     if let Some(config) = configured {
         for preset in &config.presets {
+            let preset_id = preset.id.trim();
+            if preset_id.is_empty() {
+                continue;
+            }
             if preset.disabled {
-                descriptors.remove(&preset.id);
+                descriptors.remove(preset_id);
                 continue;
             }
             let Some(setting) = preset.setting.clone() else {
+                descriptors.remove(preset_id);
                 continue;
             };
             descriptors.insert(
-                preset.id.clone(),
+                preset_id.to_string(),
                 ReasoningPresetDescriptor {
-                    id: preset.id.clone(),
+                    id: preset_id.to_string(),
                     label: preset
                         .label
                         .clone()
                         .filter(|label| !label.trim().is_empty())
-                        .unwrap_or_else(|| display_label(&preset.id)),
+                        .unwrap_or_else(|| display_label(preset_id)),
                     order: preset.order.unwrap_or(100),
                     setting,
                     source: ReasoningPresetSource::ModelConfig,
@@ -297,12 +302,14 @@ pub fn project_reasoning_catalog(
         ReasoningCapabilityStatus::Unknown
     };
     let default_preset = configured
-        .and_then(|config| config.default_preset.clone())
+        .and_then(|config| config.default_preset.as_deref())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
         .filter(|id| presets.iter().any(|preset| preset.id == *id));
 
     ReasoningCatalogProjection {
         status,
-        default_preset,
+        default_preset: default_preset.map(ToOwned::to_owned),
         presets,
     }
 }
@@ -647,5 +654,36 @@ mod tests {
 
         assert_eq!(projection.status, ReasoningCapabilityStatus::Unsupported);
         assert!(projection.presets.is_empty());
+    }
+
+    #[test]
+    fn later_duplicate_without_setting_removes_the_earlier_descriptor() {
+        let configured = ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Disabled,
+            default_preset: Some("same".to_string()),
+            presets: vec![
+                ReasoningPreset {
+                    id: "same".to_string(),
+                    setting: Some(ReasoningPresetSetting::Toggle { enabled: true }),
+                    ..Default::default()
+                },
+                ReasoningPreset {
+                    id: "same".to_string(),
+                    setting: None,
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let projection = project_reasoning_catalog(
+            "responses",
+            "gpt-test",
+            "https://api.openai.com/v1/responses",
+            Some(&configured),
+            Some(&catalog()),
+        );
+
+        assert!(projection.presets.is_empty());
+        assert!(projection.default_preset.is_none());
     }
 }
