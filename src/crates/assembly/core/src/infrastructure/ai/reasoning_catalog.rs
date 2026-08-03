@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use bitfun_ai_adapters::models_dev::{project_reasoning_catalog, ModelsDevCatalog};
 use bitfun_core_types::{
-    ReasoningCatalogProjection, ReasoningPresetDescriptor, ReasoningPresetSetting,
+    ReasoningCatalogBinding, ReasoningCatalogProjection, ReasoningPresetDescriptor,
+    ReasoningPresetSetting,
 };
 #[cfg(feature = "product-full")]
 use bitfun_events::{AIModelCatalogUpdatedEvent, AI_MODEL_CATALOG_UPDATED_EVENT};
@@ -160,6 +161,10 @@ fn replace_cached_catalog(
 
 #[cfg(feature = "product-full")]
 async fn emit_models_dev_catalog_updated(snapshot: &ModelsDevSnapshot) {
+    crate::service::config::GlobalConfigManager::broadcast_update(
+        crate::service::config::ConfigUpdateEvent::ReasoningCatalogUpdated,
+    )
+    .await;
     let payload = match serde_json::to_value(AIModelCatalogUpdatedEvent {
         source_version: snapshot.version.to_string(),
         sha256: snapshot.sha256.clone(),
@@ -216,6 +221,53 @@ pub(crate) fn resolve_reasoning_preset<'a>(
         .find(|preset| preset.id == preset_id)
 }
 
+/// Normalizes a session-scoped reasoning preset against one concrete model.
+///
+/// `None` is the canonical Auto state. A configured preset can always be
+/// validated from the model config alone. Catalog-derived presets are only
+/// cleared when a models.dev snapshot is available; a transient catalog load
+/// failure must not erase the user's selection.
+pub(crate) fn normalize_reasoning_preset_for_model(
+    model: &AIModelConfig,
+    models_dev: Option<&ModelsDevCatalog>,
+    preset_id: Option<&str>,
+) -> Option<String> {
+    let preset_id = preset_id
+        .map(str::trim)
+        .filter(|preset_id| !preset_id.is_empty() && !preset_id.eq_ignore_ascii_case("auto"))?;
+
+    let configured = model.reasoning.as_ref();
+    if configured.is_some_and(|reasoning| reasoning.preset(preset_id).is_some()) {
+        return Some(preset_id.to_string());
+    }
+    if configured.is_some_and(|reasoning| {
+        reasoning
+            .presets
+            .iter()
+            .any(|preset| preset.id.trim() == preset_id)
+    }) {
+        // An explicit disabled/tombstone preset is authoritative even when the
+        // external catalog is temporarily unavailable.
+        return None;
+    }
+
+    let catalog_is_authoritative = match configured.map(|reasoning| &reasoning.catalog) {
+        Some(ReasoningCatalogBinding::Disabled) => true,
+        Some(ReasoningCatalogBinding::Auto | ReasoningCatalogBinding::ModelsDev { .. }) | None => {
+            models_dev.is_some()
+        }
+    };
+    if !catalog_is_authoritative {
+        return Some(preset_id.to_string());
+    }
+
+    resolve_reasoning_preset(
+        &project_model_reasoning_catalog(model, models_dev),
+        preset_id,
+    )
+    .map(|preset| preset.id.clone())
+}
+
 pub(crate) fn resolve_default_reasoning_setting(
     projection: &ReasoningCatalogProjection,
 ) -> Option<&ReasoningPresetSetting> {
@@ -254,8 +306,8 @@ mod tests {
 
     use super::{
         apply_default_reasoning_preset, apply_selected_reasoning_preset,
-        project_model_reasoning_catalog, resolve_default_reasoning_setting,
-        resolve_reasoning_preset, ModelsDevCatalog,
+        normalize_reasoning_preset_for_model, project_model_reasoning_catalog,
+        resolve_default_reasoning_setting, resolve_reasoning_preset, ModelsDevCatalog,
     };
     use crate::infrastructure::ai::AIClient;
     use crate::service::config::types::AIModelConfig;
@@ -385,6 +437,80 @@ mod tests {
         let selected = apply_selected_reasoning_preset(&base, &projection, "low")
             .expect("generated low session preset");
         assert_eq!(selected.config.reasoning_effort.as_deref(), Some("low"));
+    }
+
+    #[test]
+    fn session_preset_normalization_fails_closed_when_catalog_is_authoritative() {
+        let generated = model(Some(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Auto,
+            ..Default::default()
+        }));
+
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&generated, Some(&catalog()), Some(" high ")),
+            Some("high".to_string())
+        );
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&generated, Some(&catalog()), Some("obsolete")),
+            None
+        );
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&generated, Some(&catalog()), Some("auto")),
+            None
+        );
+    }
+
+    #[test]
+    fn session_preset_normalization_preserves_selection_when_catalog_is_unavailable() {
+        let generated = model(Some(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Auto,
+            ..Default::default()
+        }));
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&generated, None, Some("high")),
+            Some("high".to_string())
+        );
+
+        let disabled = model(Some(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Disabled,
+            ..Default::default()
+        }));
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&disabled, None, Some("high")),
+            None
+        );
+    }
+
+    #[test]
+    fn configured_session_preset_does_not_require_models_dev() {
+        let configured = model(Some(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Auto,
+            presets: vec![ReasoningPreset {
+                id: "custom".to_string(),
+                setting: Some(ReasoningPresetSetting::Toggle { enabled: true }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&configured, None, Some("custom")),
+            Some("custom".to_string())
+        );
+
+        let disabled = model(Some(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Auto,
+            presets: vec![ReasoningPreset {
+                id: "high".to_string(),
+                disabled: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        assert_eq!(
+            normalize_reasoning_preset_for_model(&disabled, None, Some("high")),
+            None
+        );
     }
 
     #[cfg(feature = "product-full")]

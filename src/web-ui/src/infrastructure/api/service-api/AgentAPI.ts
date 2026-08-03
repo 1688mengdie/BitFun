@@ -36,6 +36,12 @@ export interface SessionModelAutoMigratedEvent {
   reason: string;
 }
 
+export interface SessionReasoningPresetAutoClearedEvent {
+  sessionId: string;
+  previousPresetId: string;
+  reason: string;
+}
+
  
 export interface SessionConfig {
   modelName?: string;
@@ -1061,6 +1067,15 @@ export class AgentAPI {
   ): () => void {
     return api.listen<SessionModelAutoMigratedEvent>(
       'agentic://session-model-auto-migrated',
+      callback
+    );
+  }
+
+  onSessionReasoningPresetAutoCleared(
+    callback: (event: SessionReasoningPresetAutoClearedEvent) => void
+  ): () => void {
+    return api.listen<SessionReasoningPresetAutoClearedEvent>(
+      'agentic://session-reasoning-preset-auto-cleared',
       callback
     );
   }

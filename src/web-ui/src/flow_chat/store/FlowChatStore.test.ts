@@ -1279,6 +1279,41 @@ describe('FlowChatStore session model selection', () => {
       flowChatStore.applySessionModelAutoMigration('missing-session', 'removed-model', 'auto'),
     ).toBe(false);
   });
+
+  it('clears an invalidated reasoning preset when the notice matches', () => {
+    const session = createSession({
+      config: { agentType: 'agentic', modelName: 'model-a', reasoningPreset: 'high' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    expect(
+      flowChatStore.applySessionReasoningPresetAutoClear(session.sessionId, 'high'),
+    ).toBe(true);
+    expect(
+      flowChatStore.getState().sessions.get(session.sessionId)?.config.reasoningPreset,
+    ).toBeUndefined();
+  });
+
+  it('ignores a stale reasoning preset clear after a newer selection', () => {
+    const session = createSession({
+      config: { agentType: 'agentic', modelName: 'model-a', reasoningPreset: 'high' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+    flowChatStore.updateSessionReasoningPreset(session.sessionId, 'low');
+
+    expect(
+      flowChatStore.applySessionReasoningPresetAutoClear(session.sessionId, 'high'),
+    ).toBe(false);
+    expect(
+      flowChatStore.getState().sessions.get(session.sessionId)?.config.reasoningPreset,
+    ).toBe('low');
+  });
 });
 
 describe('FlowChatStore historical session hydration state', () => {
