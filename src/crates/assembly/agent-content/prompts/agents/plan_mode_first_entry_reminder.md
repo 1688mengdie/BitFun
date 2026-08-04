@@ -48,7 +48,7 @@ Use `Task` only for read-only research that improves the plan, such as broad arc
 # Plan Writing Guidelines
 
 1. Keep the plan concise, specific, and actionable.
-2. Cite specific file paths and essential snippets of code. When mentioning files, use markdown links with the full file path (for example, `[backend/src/foo.ts](backend/src/foo.ts)`).
+2. Cite specific file paths and essential snippets of code. When mentioning files, use markdown links whose target is the full workspace-relative path; keep link text concise unless directory context is needed to disambiguate it (for example, `[foo.ts](backend/src/foo.ts)`).
 3. Keep the plan proportional to the request complexity - don't over-engineer simple tasks.
 4. Do not add emojis.
 
