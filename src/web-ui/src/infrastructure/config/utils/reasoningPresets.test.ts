@@ -4,6 +4,8 @@ import {
   availableReasoningActionTypes,
   canonicalReasoningConfig,
   nextReasoningActionType,
+  resolveDefaultReasoningEffortValue,
+  resolveReasoningEffortValues,
   validateReasoningConfig,
 } from './reasoningPresets';
 
@@ -21,6 +23,71 @@ function model(overrides: Partial<AIModelConfig> = {}): AIModelConfig {
 }
 
 describe('canonical reasoning presets', () => {
+  it('uses model-specific effort values when the catalog provides them', () => {
+    expect(resolveReasoningEffortValues({
+      status: 'known',
+      presets: [
+        {
+          id: 'low',
+          label: 'Low',
+          order: 10,
+          actions: [{ type: 'effort', value: 'low' }],
+          source: 'models_dev',
+        },
+        {
+          id: 'high',
+          label: 'High',
+          order: 20,
+          actions: [{ type: 'effort', value: 'high' }],
+          source: 'adapter_fallback',
+        },
+        {
+          id: 'custom',
+          label: 'Custom',
+          order: 30,
+          actions: [{ type: 'effort', value: 'vendor-level' }],
+          source: 'model_config',
+        },
+      ],
+    })).toEqual(['low', 'high']);
+  });
+
+  it('falls back to common effort candidates without catalog values', () => {
+    expect(resolveReasoningEffortValues(undefined)).toEqual([
+      'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max',
+    ]);
+  });
+
+  it('defaults effort from the model projection instead of assuming medium', () => {
+    const projection = {
+      status: 'known' as const,
+      default_preset: 'high',
+      presets: [
+        {
+          id: 'low',
+          label: 'Low',
+          order: 10,
+          actions: [{ type: 'effort' as const, value: 'low' }],
+          source: 'models_dev' as const,
+        },
+        {
+          id: 'high',
+          label: 'High',
+          order: 20,
+          actions: [{ type: 'effort' as const, value: 'high' }],
+          source: 'models_dev' as const,
+        },
+      ],
+    };
+
+    expect(resolveDefaultReasoningEffortValue(projection)).toBe('high');
+    expect(resolveDefaultReasoningEffortValue({
+      ...projection,
+      default_preset: undefined,
+    })).toBe('low');
+    expect(resolveDefaultReasoningEffortValue(undefined)).toBe('medium');
+  });
+
   it('uses Auto when canonical reasoning is absent', () => {
     expect(canonicalReasoningConfig(model())).toEqual({
       catalog: { source: 'auto' },

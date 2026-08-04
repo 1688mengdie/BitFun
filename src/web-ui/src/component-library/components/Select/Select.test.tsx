@@ -243,4 +243,45 @@ describe('Select', () => {
       container.querySelectorAll<HTMLElement>('[role="option"]')[1].id,
     );
   });
+
+  it('portals the dropdown outside clipped containers and keeps selection working', async () => {
+    const onChange = vi.fn();
+    await act(async () => {
+      root.render(
+        <div style={{ overflow: 'hidden' }}>
+          <Select
+            dropdownPortal
+            dropdownTestId="portaled-select-menu"
+            options={[
+              { value: 'low', label: 'Low' },
+              { value: 'high', label: 'High' },
+            ]}
+            value="low"
+            onChange={onChange}
+          />
+        </div>,
+      );
+    });
+
+    const trigger = container.querySelector('.select__trigger') as HTMLElement;
+    await act(async () => {
+      trigger.click();
+      await Promise.resolve();
+    });
+
+    const dropdown = document.querySelector<HTMLElement>('[data-testid="portaled-select-menu"]');
+    expect(dropdown).toBeTruthy();
+    expect(container.contains(dropdown)).toBe(false);
+    expect(dropdown?.className).toContain('select__dropdown--portal');
+    expect(dropdown?.style.position).toBe('');
+    expect(dropdown?.style.width).toBe('240px');
+
+    const highOption = Array.from(dropdown?.querySelectorAll<HTMLElement>('[role="option"]') ?? [])
+      .find(option => option.textContent === 'High');
+    await act(async () => {
+      dropdown?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      highOption?.click();
+    });
+    expect(onChange).toHaveBeenCalledWith('high');
+  });
 });

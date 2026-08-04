@@ -1,11 +1,13 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Plus, SquarePen, Trash2, Wifi, Loader, RefreshCw, AlertTriangle, X, Settings, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, Info } from 'lucide-react';
+import { Plus, SquarePen, Trash2, Wifi, Loader, RefreshCw, AlertTriangle, X, Settings, ExternalLink, Eye, EyeOff, ChevronDown, ChevronRight, Info, Brain } from 'lucide-react';
 import { Button, Switch, Select, IconButton, NumberInput, Card, Modal, Input, Textarea, Tooltip, type SelectOption } from '@/component-library';
 import {
   AIModelConfig as AIModelConfigType, 
   ProxyConfig, 
   ModelCategory,
+  ReasoningCatalogBinding,
+  ReasoningCatalogProjection,
   ReasoningConfig,
 } from '../types';
 import { configManager } from '../services/ConfigManager';
@@ -21,7 +23,7 @@ import { ConfigPageHeader, ConfigPageLayout, ConfigPageContent, ConfigPageSectio
 import DefaultModelConfig from './DefaultModelConfig';
 import SubagentModelConfig from './SubagentModelConfig';
 import SessionTitleConfig from './SessionTitleConfig';
-import ReasoningPresetEditor from './ReasoningPresetEditor';
+import ReasoningConfigPanel from './ReasoningConfigPanel';
 import { createLogger } from '@/shared/utils/logger';
 import { translateConnectionTestMessage } from '@/shared/utils/aiConnectionTestMessages';
 import { i18nService } from '@/infrastructure/i18n';
@@ -47,7 +49,7 @@ interface SelectedModelDraft {
   contextWindow: number;
   maxTokens?: number;
   reasoning: ReasoningConfig;
-  reasoningEditorInvalid?: boolean;
+  reasoningProjectionCatalog?: ReasoningCatalogBinding;
 }
 
 interface ProviderGroup {
@@ -90,6 +92,7 @@ function createModelDraft(
   overrides?: Partial<SelectedModelDraft>
 ): SelectedModelDraft {
   const trimmedModelName = modelName.trim();
+  const reasoning = overrides?.reasoning ?? canonicalReasoningConfig(baseConfig as AIModelConfigType);
 
   return {
     key: overrides?.key ?? overrides?.configId ?? baseConfig?.id ?? trimmedModelName,
@@ -98,8 +101,16 @@ function createModelDraft(
     category: overrides?.category ?? baseConfig?.category ?? 'general_chat',
     contextWindow: overrides?.contextWindow ?? baseConfig?.context_window ?? 200000,
     maxTokens: overrides?.maxTokens ?? baseConfig?.max_tokens,
-    reasoning: overrides?.reasoning ?? canonicalReasoningConfig(baseConfig as AIModelConfigType),
+    reasoning,
+    reasoningProjectionCatalog: overrides?.reasoningProjectionCatalog ?? reasoning.catalog,
   };
+}
+
+function reasoningCatalogBindingsEqual(
+  left?: ReasoningCatalogBinding,
+  right?: ReasoningCatalogBinding,
+): boolean {
+  return JSON.stringify(left ?? { source: 'auto' }) === JSON.stringify(right ?? { source: 'auto' });
 }
 
 function uniqModelNames(modelNames: string[]): string[] {
@@ -306,6 +317,25 @@ function modelRequestBehaviorChanged(
   );
 }
 
+function modelDraftHasUnsavedChanges(
+  draft: SelectedModelDraft,
+  persistedModels: AIModelConfigType[],
+): boolean {
+  const persisted = draft.configId
+    ? persistedModels.find(model => model.id === draft.configId)
+    : undefined;
+
+  if (!persisted) return true;
+
+  return (
+    normalizeComparableString(draft.modelName) !== normalizeComparableString(persisted.model_name) ||
+    draft.category !== (persisted.category ?? 'general_chat') ||
+    draft.contextWindow !== (persisted.context_window || 200000) ||
+    draft.maxTokens !== persisted.max_tokens ||
+    stableJson(draft.reasoning) !== stableJson(canonicalReasoningConfig(persisted))
+  );
+}
+
 function configsNeedingAutoTest(
   previousModels: AIModelConfigType[],
   nextConfigs: AIModelConfigType[],
@@ -369,6 +399,7 @@ const AIModelConfig: React.FC = () => {
   const [editingProviderModelIds, setEditingProviderModelIds] = useState<Set<string>>(new Set());
   const [manualModelInput, setManualModelInput] = useState('');
   const [expandedModelCards, setExpandedModelCards] = useState<Set<string>>(new Set());
+  const [reasoningPanelDraftKey, setReasoningPanelDraftKey] = useState<string | null>(null);
   const [subscriptionAccounts, setSubscriptionAccounts] = useState<SubscriptionAccount[]>([]);
   const [isLoadingSubscriptions, setIsLoadingSubscriptions] = useState(false);
   const [loggingInProvider, setLoggingInProvider] = useState<SubscriptionProvider | null>(null);
@@ -1360,12 +1391,16 @@ const AIModelConfig: React.FC = () => {
         return;
       }
       if (draftsToSave.some(draft => (
-        draft.reasoningEditorInvalid
-        || validateReasoningConfig(
+        validateReasoningConfig(
           draft.reasoning,
-          resolveDraftCatalogEntry(draft)?.reasoning?.presets
-            ?.filter(preset => preset.source !== 'model_config')
-            .map(preset => preset.id),
+          reasoningCatalogBindingsEqual(
+            draft.reasoning.catalog,
+            draft.reasoningProjectionCatalog,
+          )
+            ? resolveDraftCatalogEntry(draft)?.reasoning?.presets
+                ?.filter(preset => preset.source !== 'model_config')
+                .map(preset => preset.id)
+            : [],
         ) !== null
       ))) {
         notification.warning(t('messages.invalidReasoningPresets'));
@@ -1706,6 +1741,7 @@ const AIModelConfig: React.FC = () => {
     setEditingConfig(null);
     setCreationMode(null);
     setSelectedProviderId(null);
+    setReasoningPanelDraftKey(null);
   };
 
   const providerGroups = useMemo<ProviderGroup[]>(() => {
@@ -1920,17 +1956,35 @@ const AIModelConfig: React.FC = () => {
       </button>
     );
 
-    const formatReasoningSummary = (draft: SelectedModelDraft) => {
+    const formatReasoningSummary = (
+      draft: SelectedModelDraft,
+      generatedProjection?: ReasoningCatalogProjection,
+    ) => {
       const presetCount = draft.reasoning.presets?.length ?? 0;
-      if (!draft.reasoning.default_preset) {
-        return presetCount > 0
-          ? t('reasoningPresets.summaryCustom', { count: presetCount })
-          : t('reasoningPresets.summaryAuto');
-      }
+      const catalogSource = draft.reasoning.catalog?.source ?? 'auto';
+      const catalogLabel = catalogSource === 'models_dev'
+        ? t('reasoningPresets.catalogSummary.modelsDev')
+        : catalogSource === 'disabled'
+          ? t('reasoningPresets.catalogSummary.disabled')
+          : t('reasoningPresets.catalogSummary.auto');
       const selected = draft.reasoning.presets?.find(
         preset => preset.id === draft.reasoning.default_preset,
+      ) ?? generatedProjection?.presets?.find(
+        preset => preset.id === draft.reasoning.default_preset,
       );
-      return selected?.label?.trim() || selected?.id || draft.reasoning.default_preset;
+      const defaultLabel = draft.reasoning.default_preset
+        ? selected?.label?.trim() || selected?.id || draft.reasoning.default_preset
+        : t('reasoningPresets.autoShort');
+      return presetCount > 0
+        ? t('reasoningPresets.summaryWithCustom', {
+            source: catalogLabel,
+            default: defaultLabel,
+            count: presetCount,
+          })
+        : t('reasoningPresets.summary', {
+            source: catalogLabel,
+            default: defaultLabel,
+          });
     };
 
     const renderSelectedModelRows = () => {
@@ -1954,10 +2008,15 @@ const AIModelConfig: React.FC = () => {
         >
           {selectedModelDrafts.map(draft => {
             const isExpanded = expandedModelCards.has(draft.key) || selectedModelDrafts.length === 1;
+            const hasUnsavedChanges = modelDraftHasUnsavedChanges(draft, aiModels);
             const categoryLabel = categoryCompactLabels[draft.category] ?? draft.category;
             const canToggleExpand = selectedModelDrafts.length > 1;
             const modelDisplayName = draft.modelName;
             const catalogEntry = resolveDraftCatalogEntry(draft);
+            const reasoningProjection = reasoningCatalogBindingsEqual(
+              draft.reasoning.catalog,
+              draft.reasoningProjectionCatalog,
+            ) ? catalogEntry?.reasoning : undefined;
 
             return (
               <div
@@ -1968,6 +2027,7 @@ const AIModelConfig: React.FC = () => {
                 data-model-name={draft.modelName}
                 data-selected="true"
                 data-expanded={isExpanded ? 'true' : 'false'}
+                data-unsaved={hasUnsavedChanges ? 'true' : 'false'}
               >
                 <div
                   className={[
@@ -1996,6 +2056,16 @@ const AIModelConfig: React.FC = () => {
                         {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
                       </div>
                       <div className="bitfun-ai-model-config__selected-model-name">{modelDisplayName}</div>
+                      {hasUnsavedChanges && (
+                        <span
+                          className="bitfun-ai-model-config__selected-model-unsaved"
+                          title={t('providerSelection.unsavedModelHint')}
+                          aria-label={t('providerSelection.unsavedModelHint')}
+                          data-testid="settings-model-unsaved-badge"
+                        >
+                          {t('providerSelection.unsavedModel')}
+                        </span>
+                      )}
                     </div>
                     {!editingConfig.id && (
                       <IconButton
@@ -2022,7 +2092,7 @@ const AIModelConfig: React.FC = () => {
                         {' · '}
                         {formatTokenCountShort(draft.contextWindow)} ctx
                         {' · '}
-                        {formatReasoningSummary(draft)}
+                        {formatReasoningSummary(draft, reasoningProjection)}
                       </span>
                     </div>
                   )}
@@ -2064,15 +2134,23 @@ const AIModelConfig: React.FC = () => {
                         disableWheel
                       />
                     </div>
-                    <ReasoningPresetEditor
-                      value={draft.reasoning}
-                      generatedProjection={catalogEntry?.reasoning}
-                      onChange={(reasoning) => updateModelDraft(draft.modelName, { reasoning })}
-                      onValidationChange={(reasoningEditorInvalid) => updateModelDraft(
-                        draft.modelName,
-                        { reasoningEditorInvalid },
-                      )}
-                    />
+                    <button
+                      type="button"
+                      className="bitfun-ai-model-config__reasoning-summary"
+                      onClick={() => setReasoningPanelDraftKey(draft.key)}
+                      data-testid="settings-model-reasoning-edit"
+                    >
+                      <span className="bitfun-ai-model-config__reasoning-summary-icon">
+                        <Brain size={16} aria-hidden="true" />
+                      </span>
+                      <span className="bitfun-ai-model-config__reasoning-summary-content">
+                        <strong>{t('reasoningPresets.configTitle')}</strong>
+                        <span>{formatReasoningSummary(draft, reasoningProjection)}</span>
+                      </span>
+                      <span className="bitfun-ai-model-config__reasoning-summary-action">
+                        {t('actions.edit')}
+                      </span>
+                    </button>
                   </div>
                 )}
               </div>
@@ -2771,6 +2849,16 @@ const AIModelConfig: React.FC = () => {
       </Tooltip>
     </span>
   );
+  const reasoningPanelDraft = reasoningPanelDraftKey
+    ? selectedModelDrafts.find(draft => draft.key === reasoningPanelDraftKey)
+    : undefined;
+  const reasoningPanelProjection = reasoningPanelDraft
+    && reasoningCatalogBindingsEqual(
+      reasoningPanelDraft.reasoning.catalog,
+      reasoningPanelDraft.reasoningProjectionCatalog,
+    )
+    ? resolveDraftCatalogEntry(reasoningPanelDraft)?.reasoning
+    : undefined;
 
   
   return (
@@ -3214,16 +3302,37 @@ const AIModelConfig: React.FC = () => {
 
       <Modal
         isOpen={isEditing && !!editingConfig}
-        onClose={closeEditingModal}
-        title={editingConfig?.id
-          ? t('editModel')
-          : (getProviderInstanceId(editingConfig)
-            ? t('editProvider')
-            : (currentTemplate ? `${t('newProvider')} - ${currentTemplate.name}` : t('newProvider')))}
+        onClose={reasoningPanelDraft ? () => setReasoningPanelDraftKey(null) : closeEditingModal}
+        title={reasoningPanelDraft
+          ? t('reasoningPresets.dialogTitle', {
+              provider: editingConfig?.name?.trim()
+                || currentTemplate?.name
+                || editingConfig?.provider
+                || '',
+              model: reasoningPanelDraft.modelName,
+            })
+          : editingConfig?.id
+            ? t('editModel')
+            : (getProviderInstanceId(editingConfig)
+              ? t('editProvider')
+              : (currentTemplate ? `${t('newProvider')} - ${currentTemplate.name}` : t('newProvider')))}
         size="xlarge"
         contentClassName="modal__content--fill-flex bitfun-ai-model-config__form--modal"
       >
-        {renderEditingForm()}
+        {reasoningPanelDraft ? (
+          <ReasoningConfigPanel
+            key={reasoningPanelDraft.key}
+            value={reasoningPanelDraft.reasoning}
+            generatedProjection={reasoningPanelProjection}
+            onCancel={() => setReasoningPanelDraftKey(null)}
+            onApply={(reasoning) => {
+              updateModelDraft(reasoningPanelDraft.modelName, {
+                reasoning,
+              });
+              setReasoningPanelDraftKey(null);
+            }}
+          />
+        ) : renderEditingForm()}
       </Modal>
     </ConfigPageLayout>
   );

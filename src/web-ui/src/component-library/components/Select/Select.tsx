@@ -10,7 +10,9 @@ import React, {
   useMemo,
   useCallback,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { useI18n } from '@/infrastructure/i18n';
+import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
 import './Select.scss';
 
 export interface SelectOption {
@@ -56,7 +58,16 @@ export interface SelectProps extends Omit<React.HTMLAttributes<HTMLDivElement>, 
   triggerAriaLabel?: string;
   triggerAriaLabelledBy?: string;
   triggerAriaDescribedBy?: string;
+  /** Render the dropdown in the appearance overlay host to escape clipped containers. */
+  dropdownPortal?: boolean;
 }
+
+const SelectDropdownLayer: React.FC<{
+  enabled: boolean;
+  children: React.ReactElement;
+}> = ({ enabled, children }) => (
+  enabled ? createPortal(children, getAppearanceOverlayHost()) : children
+);
 
 export const Select: React.FC<SelectProps> = ({
   options = [],
@@ -90,6 +101,7 @@ export const Select: React.FC<SelectProps> = ({
   triggerAriaLabel,
   triggerAriaLabelledBy,
   triggerAriaDescribedBy,
+  dropdownPortal = false,
   ...rootProps
 }) => {
   const { t } = useI18n('components');
@@ -110,6 +122,7 @@ export const Select: React.FC<SelectProps> = ({
   );
   const [searchQuery, setSearchQuery] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [portalStyle, setPortalStyle] = useState<React.CSSProperties>();
   const hasMountedRef = useRef(false);
   
   const selectRef = useRef<HTMLDivElement>(null);
@@ -133,21 +146,16 @@ export const Select: React.FC<SelectProps> = ({
     );
   }, [options, searchQuery, searchable]);
 
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      setResolvedPlacement(placement);
-      return;
-    }
-
+  const updateDropdownLayout = useCallback(() => {
     const selectElement = selectRef.current;
     const dropdownElement = dropdownRef.current;
-    if (!selectElement || !dropdownElement || typeof window === 'undefined') {
-      setResolvedPlacement(placement);
-      return;
-    }
+    if (!selectElement || !dropdownElement || typeof window === 'undefined') return;
 
     const triggerRect = selectElement.getBoundingClientRect();
-    const dropdownHeight = dropdownElement.offsetHeight || dropdownElement.scrollHeight || 240;
+    const dropdownHeight = Math.min(
+      dropdownElement.scrollHeight || dropdownElement.offsetHeight || 240,
+      240,
+    );
     const spaceBelow = window.innerHeight - triggerRect.bottom;
     const spaceAbove = triggerRect.top;
 
@@ -159,9 +167,44 @@ export const Select: React.FC<SelectProps> = ({
     }
 
     setResolvedPlacement(nextPlacement);
+    if (!dropdownPortal) {
+      setPortalStyle(undefined);
+      return;
+    }
+
+    const viewportPadding = 8;
+    const availableHeight = Math.max(
+      48,
+      (nextPlacement === 'bottom' ? spaceBelow : spaceAbove) - viewportPadding,
+    );
+    const maxHeight = Math.min(240, availableHeight);
+    const renderedHeight = Math.min(dropdownHeight, maxHeight);
+    const width = triggerRect.width;
+    const left = Math.min(
+      Math.max(triggerRect.left, viewportPadding),
+      Math.max(viewportPadding, window.innerWidth - width - viewportPadding),
+    );
+    setPortalStyle({
+      top: nextPlacement === 'bottom'
+        ? triggerRect.bottom
+        : triggerRect.top - renderedHeight,
+      left,
+      width,
+      maxHeight,
+    });
+  }, [dropdownPortal, placement]);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setResolvedPlacement(placement);
+      setPortalStyle(undefined);
+      return;
+    }
+    updateDropdownLayout();
   }, [
     isOpen,
     placement,
+    updateDropdownLayout,
     options.length,
     searchable,
     multiple,
@@ -170,6 +213,17 @@ export const Select: React.FC<SelectProps> = ({
     searchQuery,
     filteredOptions.length,
   ]);
+
+  useEffect(() => {
+    if (!isOpen || !dropdownPortal) return;
+    const update = () => updateDropdownLayout();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
+  }, [dropdownPortal, isOpen, updateDropdownLayout]);
 
   const groupedOptions = useMemo(() => {
     const groups: { [key: string]: SelectOption[] } = {};
@@ -365,7 +419,12 @@ export const Select: React.FC<SelectProps> = ({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (selectRef.current && !selectRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        selectRef.current
+        && !selectRef.current.contains(target)
+        && !dropdownRef.current?.contains(target)
+      ) {
         if (allowCustomValue && !multiple && searchQuery.trim()) {
           const trimmedValue = searchQuery.trim();
           const existingOption = options.find(opt => 
@@ -577,18 +636,20 @@ export const Select: React.FC<SelectProps> = ({
       </div>
 
       {isOpen && (
-        <div
-          id={listboxId}
-          className={`select__dropdown select__dropdown--${resolvedPlacement}`}
-          ref={dropdownRef}
-          role="listbox"
-          aria-multiselectable={multiple || undefined}
-          aria-busy={loading || undefined}
-          data-testid={dropdownTestId}
-          data-bf-component="select"
-          data-bf-part="dropdown"
-          data-bf-placement={resolvedPlacement}
-        >
+        <SelectDropdownLayer enabled={dropdownPortal}>
+          <div
+            id={listboxId}
+            className={`select__dropdown select__dropdown--${resolvedPlacement}${dropdownPortal ? ' select__dropdown--portal' : ''}`}
+            ref={dropdownRef}
+            role="listbox"
+            aria-multiselectable={multiple || undefined}
+            aria-busy={loading || undefined}
+            data-testid={dropdownTestId}
+            data-bf-component="select"
+            data-bf-part="dropdown"
+            data-bf-placement={resolvedPlacement}
+            style={dropdownPortal ? portalStyle : undefined}
+          >
           {searchable && (
             <div className="select__search" data-bf-component="select" data-bf-part="search">
               <input
@@ -733,7 +794,8 @@ export const Select: React.FC<SelectProps> = ({
               </>
             )}
           </div>
-        </div>
+          </div>
+        </SelectDropdownLayer>
       )}
       
       {error && errorMessage && (
