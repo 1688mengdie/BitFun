@@ -58,8 +58,8 @@ pub struct AIClient {
     pub(crate) client: Client,
     pub config: AIConfig,
     pub(crate) stream_options: StreamOptions,
-    pub(crate) model_reasoning_preset: Option<ReasoningPresetSetting>,
-    pub(crate) selected_reasoning_preset: Option<ReasoningPresetSetting>,
+    pub(crate) model_reasoning_preset: Option<ReasoningPresetDescriptor>,
+    pub(crate) selected_reasoning_preset: Option<ReasoningPresetDescriptor>,
 }
 
 impl AIClient {
@@ -106,37 +106,89 @@ impl AIClient {
         self.stream_options.ttft_timeout
     }
 
-    /// Clone this client with a different reasoning mode while reusing the HTTP client.
-    pub fn with_reasoning_mode(&self, reasoning_mode: crate::types::ReasoningMode) -> Self {
-        let mut config = self.config.clone();
-        config.reasoning_mode = reasoning_mode;
-        Self {
-            client: self.client.clone(),
-            config,
-            stream_options: self.stream_options.clone(),
-            model_reasoning_preset: self.model_reasoning_preset.clone(),
-            selected_reasoning_preset: self.selected_reasoning_preset.clone(),
-        }
-    }
-
     /// Clone this client with the model-level default preset attached.
     ///
     /// The preset remains below `custom_request_body` in request precedence.
-    pub fn with_model_reasoning_preset(&self, setting: &ReasoningPresetSetting) -> Self {
+    pub fn with_model_reasoning_preset(&self, preset: &ReasoningPresetDescriptor) -> Self {
         let mut cloned = self.clone();
-        apply_reasoning_parameters(&mut cloned.config, setting);
-        cloned.model_reasoning_preset = Some(setting.clone());
+        cloned.model_reasoning_preset = Some(preset.clone());
         cloned
     }
 
     /// Clone this client with a session-selected preset while reusing the HTTP client.
     ///
     /// Provider builders apply this overlay after the model custom request body.
-    pub fn with_reasoning_preset(&self, setting: &ReasoningPresetSetting) -> Self {
+    pub fn with_reasoning_preset(&self, preset: &ReasoningPresetDescriptor) -> Self {
         let mut cloned = self.clone();
-        apply_reasoning_parameters(&mut cloned.config, setting);
-        cloned.selected_reasoning_preset = Some(setting.clone());
+        cloned.selected_reasoning_preset = Some(preset.clone());
         cloned
+    }
+
+    pub fn model_reasoning_preset(&self) -> Option<&ReasoningPresetDescriptor> {
+        self.model_reasoning_preset.as_ref()
+    }
+
+    pub fn selected_reasoning_preset(&self) -> Option<&ReasoningPresetDescriptor> {
+        self.selected_reasoning_preset.as_ref()
+    }
+
+    /// Validate that one resolved preset can be compiled for this exact
+    /// provider, endpoint, model, and output-token limit without performing an
+    /// HTTP request.
+    pub fn validate_reasoning_preset(&self, preset: &ReasoningPresetDescriptor) -> Result<()> {
+        let client = self.with_reasoning_preset(preset);
+        let extra_body = client.config.custom_request_body.clone();
+        match ApiFormat::parse(&client.config.format)? {
+            ApiFormat::OpenAIChat => {
+                openai::chat::try_build_request_body(
+                    &client,
+                    &client.config.request_url,
+                    Vec::new(),
+                    None,
+                    extra_body,
+                )?;
+            }
+            ApiFormat::OpenAIResponses
+                if openai::codex_chatgpt::is_codex_chatgpt_endpoint(&client.config.request_url) =>
+            {
+                openai::codex_chatgpt::try_build_request_body(
+                    &client,
+                    None,
+                    Vec::new(),
+                    None,
+                    extra_body,
+                )?;
+            }
+            ApiFormat::OpenAIResponses => {
+                openai::responses::try_build_request_body(
+                    &client,
+                    None,
+                    Vec::new(),
+                    None,
+                    extra_body,
+                )?;
+            }
+            ApiFormat::Anthropic => {
+                anthropic::request::try_build_request_body(
+                    &client,
+                    &client.config.request_url,
+                    None,
+                    Vec::new(),
+                    None,
+                    extra_body,
+                )?;
+            }
+            ApiFormat::Gemini | ApiFormat::GeminiCodeAssist => {
+                gemini::request::try_build_request_body(
+                    &client,
+                    None,
+                    Vec::new(),
+                    None,
+                    extra_body,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Clone this client with a different max output token limit while
@@ -376,15 +428,6 @@ impl AIClient {
     }
 }
 
-fn apply_reasoning_parameters(config: &mut AIConfig, setting: &ReasoningPresetSetting) {
-    let Some(parameters) = setting.application().parameters else {
-        return;
-    };
-    config.reasoning_mode = parameters.mode;
-    config.reasoning_effort = parameters.effort;
-    config.thinking_budget_tokens = parameters.budget_tokens;
-}
-
 fn send_message_retry_delay_ms(attempt_index: usize, error_message: &str) -> u64 {
     let shift = u32::try_from(attempt_index)
         .unwrap_or(u32::MAX)
@@ -544,7 +587,7 @@ mod tests {
     use super::{is_transient_stream_error, send_message_retry_delay_ms, AIClient};
     use crate::providers::{anthropic, gemini, gemini::GeminiMessageConverter, openai};
     use crate::types::{AIConfig, ToolDefinition};
-    use crate::types::{ReasoningMode, ReasoningPresetSetting};
+    use crate::types::{ReasoningPresetAction, ReasoningPresetDescriptor};
     use serde_json::{json, Value};
 
     fn make_test_client(format: &str, custom_request_body: Option<Value>) -> AIClient {
@@ -559,13 +602,10 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body,
             custom_request_body_mode: None,
         })
@@ -577,6 +617,21 @@ mod tests {
         client
     }
 
+    fn reasoning_preset(
+        id: &str,
+        actions: Vec<ReasoningPresetAction>,
+    ) -> ReasoningPresetDescriptor {
+        ReasoningPresetDescriptor {
+            id: id.to_string(),
+            label: id.to_string(),
+            order: 0,
+            actions,
+            source: bitfun_core_types::ReasoningPresetSource::ModelConfig,
+            execution_provider: None,
+            execution_model: None,
+        }
+    }
+
     #[test]
     fn selected_reasoning_effort_overrides_model_custom_body() {
         let client = make_test_client(
@@ -585,10 +640,12 @@ mod tests {
                 "reasoning": { "effort": "low" }
             })),
         )
-        .with_reasoning_preset(&ReasoningPresetSetting::Effort {
-            value: "high".to_string(),
-            mode: None,
-        });
+        .with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "high".to_string(),
+            }],
+        ));
 
         let body = openai::responses::build_request_body(
             &client,
@@ -603,12 +660,17 @@ mod tests {
     }
 
     #[test]
-    fn selected_reasoning_toggle_clears_custom_reasoning_fields() {
+    fn selected_none_effort_overrides_custom_reasoning_fields() {
         let client = make_test_client(
             "responses",
             Some(json!({ "reasoning": { "effort": "low" } })),
         )
-        .with_reasoning_preset(&ReasoningPresetSetting::Toggle { enabled: false });
+        .with_reasoning_preset(&reasoning_preset(
+            "none",
+            vec![ReasoningPresetAction::Effort {
+                value: "none".to_string(),
+            }],
+        ));
 
         let body = openai::responses::build_request_body(
             &client,
@@ -629,12 +691,15 @@ mod tests {
                 "reasoning": { "effort": "low" }
             })),
         )
-        .with_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
-            body: json!({
-                "reasoning": { "effort": "xhigh" },
-                "model": "attacker-model"
-            }),
-        });
+        .with_reasoning_preset(&reasoning_preset(
+            "patched",
+            vec![ReasoningPresetAction::RequestPatch {
+                body: json!({
+                    "reasoning": { "effort": "xhigh" },
+                    "model": "attacker-model"
+                }),
+            }],
+        ));
 
         let body = openai::responses::build_request_body(
             &client,
@@ -649,14 +714,33 @@ mod tests {
     }
 
     #[test]
+    fn direct_non_object_request_patch_fails_closed() {
+        let client = make_test_client("responses", None).with_reasoning_preset(&reasoning_preset(
+            "invalid-patch",
+            vec![ReasoningPresetAction::RequestPatch {
+                body: json!(["not", "an", "object"]),
+            }],
+        ));
+
+        let error =
+            openai::responses::try_build_request_body(&client, None, Vec::new(), None, None)
+                .expect_err("non-object request patches must fail before an HTTP request");
+
+        assert!(error.to_string().contains("must be a JSON object"));
+    }
+
+    #[test]
     fn gemini_selected_request_patch_preserves_nested_runtime_fields() {
         for replacement in [json!(null), json!("invalid"), json!(["invalid"])] {
             let mut client = make_test_client("gemini", None);
             client.config.max_tokens = Some(4096);
             client.config.temperature = Some(0.2);
-            let client = client.with_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
-                body: json!({ "generationConfig": replacement }),
-            });
+            let client = client.with_reasoning_preset(&reasoning_preset(
+                "patch",
+                vec![ReasoningPresetAction::RequestPatch {
+                    body: json!({ "generationConfig": replacement }),
+                }],
+            ));
 
             let body = gemini::request::build_request_body(
                 &client,
@@ -678,9 +762,12 @@ mod tests {
     fn gemini_model_request_patch_preserves_nested_runtime_fields() {
         let mut client = make_test_client("gemini", None);
         client.config.max_tokens = Some(4096);
-        let client = client.with_model_reasoning_preset(&ReasoningPresetSetting::RequestPatch {
-            body: json!({ "generationConfig": null }),
-        });
+        let client = client.with_model_reasoning_preset(&reasoning_preset(
+            "patch",
+            vec![ReasoningPresetAction::RequestPatch {
+                body: json!({ "generationConfig": null }),
+            }],
+        ));
 
         let body = gemini::request::build_request_body(
             &client,
@@ -700,12 +787,13 @@ mod tests {
     fn gemini_request_patch_sequence_restores_nested_fields_after_each_patch() {
         let mut client = make_test_client("gemini", None);
         client.config.max_tokens = Some(4096);
-        let client = client.with_reasoning_preset(&ReasoningPresetSetting::Sequence {
-            settings: vec![
-                ReasoningPresetSetting::RequestPatch {
+        let client = client.with_reasoning_preset(&reasoning_preset(
+            "patches",
+            vec![
+                ReasoningPresetAction::RequestPatch {
                     body: json!({ "generationConfig": [] }),
                 },
-                ReasoningPresetSetting::RequestPatch {
+                ReasoningPresetAction::RequestPatch {
                     body: json!({
                         "generationConfig": {
                             "candidateCount": 2,
@@ -714,7 +802,7 @@ mod tests {
                     }),
                 },
             ],
-        });
+        ));
 
         let body = gemini::request::build_request_body(
             &client,
@@ -744,16 +832,19 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "max",
+            vec![ReasoningPresetAction::Effort {
+                value: "xhigh".to_string(),
+            }],
+        ));
 
         assert_eq!(
             openai::common::resolve_models_url(&client),
@@ -774,16 +865,17 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
         assert_eq!(
             anthropic::discovery::resolve_models_url(&client),
@@ -805,16 +897,17 @@ mod tests {
             max_tokens: Some(4096),
             temperature: Some(0.2),
             top_p: Some(0.8),
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "budget",
+            vec![ReasoningPresetAction::BudgetTokens { value: 2048 }],
+        ));
 
         let request_body = gemini::request::build_request_body(
             &client,
@@ -886,13 +979,10 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
         });
@@ -924,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn build_openai_request_body_uses_generic_thinking_object_when_enabled() {
+    fn openai_chat_rejects_generic_toggle_for_an_unverified_endpoint() {
         let client = AIClient::new(AIConfig {
             name: "openai-compatible".to_string(),
             base_url: "https://example.com/v1".to_string(),
@@ -936,29 +1026,28 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
-        let request_body = openai::chat::build_request_body(
+        let error = openai::chat::try_build_request_body(
             &client,
             &client.config.request_url,
             vec![json!({ "role": "user", "content": "hello" })],
             None,
             None,
-        );
+        )
+        .expect_err("an unverified compatible endpoint must reject generic toggle");
 
-        assert_eq!(request_body["thinking"]["type"], "enabled");
-        assert!(request_body.get("enable_thinking").is_none());
-        assert!(request_body.get("reasoning_effort").is_none());
-        assert!(request_body.get("reasoning_split").is_none());
+        assert!(error.to_string().contains("unsupported"));
     }
 
     #[test]
@@ -974,16 +1063,19 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("xhigh".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "max",
+            vec![ReasoningPresetAction::Effort {
+                value: "xhigh".to_string(),
+            }],
+        ));
 
         let request_body = openai::chat::build_request_body(
             &client,
@@ -1010,16 +1102,17 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Disabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("max".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "off",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
 
         let request_body = openai::chat::build_request_body(
             &client,
@@ -1046,16 +1139,17 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
         let request_body = openai::chat::build_request_body(
             &client,
@@ -1070,7 +1164,7 @@ mod tests {
     }
 
     #[test]
-    fn build_responses_request_body_maps_disabled_mode_to_none_effort() {
+    fn build_responses_request_body_applies_explicit_none_effort() {
         let client = AIClient::new(AIConfig {
             name: "responses".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
@@ -1082,16 +1176,19 @@ mod tests {
             max_tokens: Some(4096),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Disabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "none",
+            vec![ReasoningPresetAction::Effort {
+                value: "none".to_string(),
+            }],
+        ));
 
         let request_body = openai::responses::build_request_body(
             &client,
@@ -1120,16 +1217,19 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Adaptive,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "high".to_string(),
+            }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1157,16 +1257,17 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1195,16 +1296,17 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1233,16 +1335,19 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: Some(2048),
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "high".to_string(),
+            }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1271,13 +1376,10 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Disabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
         });
@@ -1308,16 +1410,19 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("xhigh".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "max",
+            vec![ReasoningPresetAction::Effort {
+                value: "xhigh".to_string(),
+            }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1334,7 +1439,7 @@ mod tests {
     }
 
     #[test]
-    fn build_anthropic_request_body_enabled_reasoning_always_has_budget_tokens() {
+    fn build_anthropic_request_body_toggle_on_has_default_budget() {
         let client = AIClient::new(AIConfig {
             name: "anthropic-proxy".to_string(),
             base_url: "https://proxy.example.com/anthropic".to_string(),
@@ -1346,16 +1451,17 @@ mod tests {
             max_tokens: Some(4000),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Enabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "on",
+            vec![ReasoningPresetAction::Toggle { enabled: true }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1383,13 +1489,10 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
         });
@@ -1420,16 +1523,17 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Disabled,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "off",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1445,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn build_anthropic_request_body_adaptive_deepseek_reasoning_falls_back_to_enabled() {
+    fn build_anthropic_request_body_deepseek_effort_enables_reasoning() {
         let client = AIClient::new(AIConfig {
             name: "deepseek".to_string(),
             base_url: "https://api.deepseek.com/anthropic".to_string(),
@@ -1457,16 +1561,19 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Adaptive,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: Some("high".to_string()),
-            thinking_budget_tokens: Some(4096),
             custom_request_body: None,
             custom_request_body_mode: None,
-        });
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "high".to_string(),
+            }],
+        ));
 
         let request_body = anthropic::request::build_request_body(
             &client,
@@ -1489,8 +1596,12 @@ mod tests {
         client.config.request_url = "https://api.deepseek.com/v1/chat/completions".to_string();
         client.config.model = "deepseek-v4-pro".to_string();
         client.config.max_tokens = Some(8192);
-        client.config.reasoning_mode = ReasoningMode::Enabled;
-        client.config.reasoning_effort = Some("high".to_string());
+        let client = client.with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "high".to_string(),
+            }],
+        ));
         let messages = vec![json!({ "role": "user", "content": "hello" })];
 
         let request_body = openai::chat::build_request_body(
@@ -1514,8 +1625,8 @@ mod tests {
         assert_eq!(request_body["max_tokens"], 8192);
         assert_eq!(request_body["temperature"], 0.7);
         assert_eq!(request_body["response_format"]["type"], "json_object");
-        assert!(request_body.get("thinking").is_none());
-        assert!(request_body.get("reasoning_effort").is_none());
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "high");
     }
 
     #[test]

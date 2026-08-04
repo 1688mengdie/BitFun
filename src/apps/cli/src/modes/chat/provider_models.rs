@@ -143,15 +143,31 @@ impl ChatMode {
                 let config_service = GlobalConfigManager::get_service().await.ok()?;
                 let models: Vec<bitfun_core::service::config::AIModelConfig> =
                     config_service.get_ai_models().await.ok()?;
-                models.into_iter().find(|m| m.id == model_id)
+                let model = models.into_iter().find(|m| m.id == model_id)?;
+                let reasoning_preset_options = bitfun_core::get_ai_model_catalog()
+                    .await
+                    .ok()
+                    .and_then(|catalog| {
+                        catalog
+                            .models
+                            .into_iter()
+                            .find(|candidate| candidate.id == model.id)
+                    })
+                    .and_then(|model| model.reasoning)
+                    .map(|reasoning| {
+                        reasoning
+                            .presets
+                            .into_iter()
+                            .map(|preset| preset.id)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((model, reasoning_preset_options))
             })
         });
 
         match result {
-            Some(model) => {
-                let enable_thinking = crate::ui::model_config_form::is_reasoning_visibly_enabled(
-                    model.reasoning.as_ref(),
-                );
+            Some((model, reasoning_preset_options)) => {
                 let form_data = ModelFormResult {
                     editing_model_id: Some(model.id.clone()),
                     name: model.name,
@@ -161,7 +177,7 @@ impl ChatMode {
                     provider_format: model.provider.clone(),
                     context_window: model.context_window.unwrap_or(128000),
                     max_tokens: model.max_tokens.unwrap_or(8192),
-                    enable_thinking,
+                    reasoning_preset_options,
                     reasoning: model.reasoning,
                     inline_think_in_text: model.inline_think_in_text,
                     skip_ssl_verify: model.skip_ssl_verify,

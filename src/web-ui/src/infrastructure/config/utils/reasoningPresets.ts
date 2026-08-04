@@ -1,17 +1,9 @@
 import type {
   AIModelConfig,
   ReasoningConfig,
-  ReasoningMode,
   ReasoningPreset,
-  ReasoningPresetSetting,
+  ReasoningPresetAction,
 } from '../types';
-
-const REASONING_MODES = new Set<ReasoningMode>([
-  'default',
-  'enabled',
-  'disabled',
-  'adaptive',
-]);
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
@@ -32,7 +24,9 @@ export function normalizeReasoningConfig(config?: ReasoningConfig | null): Reaso
 export function clonePreset(preset: ReasoningPreset): ReasoningPreset {
   return {
     ...preset,
-    setting: preset.setting ? JSON.parse(JSON.stringify(preset.setting)) : undefined,
+    actions: Array.isArray(preset.actions)
+      ? JSON.parse(JSON.stringify(preset.actions)) as ReasoningPresetAction[]
+      : [],
   };
 }
 
@@ -44,22 +38,16 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function validSetting(setting: ReasoningPresetSetting): boolean {
-  switch (setting.type) {
-    case 'mode':
-      return REASONING_MODES.has(setting.value);
+function validAction(action: ReasoningPresetAction): boolean {
+  switch (action.type) {
     case 'effort':
-      return nonEmpty(setting.value) && (!setting.mode || REASONING_MODES.has(setting.mode));
+      return nonEmpty(action.value);
     case 'toggle':
-      return typeof setting.enabled === 'boolean';
+      return typeof action.enabled === 'boolean';
     case 'budget_tokens':
-      return Number.isSafeInteger(setting.value)
-        && setting.value > 0
-        && (!setting.mode || REASONING_MODES.has(setting.mode));
+      return Number.isSafeInteger(action.value) && action.value > 0;
     case 'request_patch':
-      return isJsonObject(setting.body);
-    case 'sequence':
-      return setting.settings.length > 0 && setting.settings.every(validSetting);
+      return isJsonObject(action.body);
   }
 }
 
@@ -91,10 +79,10 @@ export function validateReasoningConfig(
     if (!id) return 'preset_id';
     if (ids.has(id)) return 'duplicate_preset_id';
     ids.add(id);
-    if (!preset.disabled && (!preset.setting || !validSetting(preset.setting))) {
+    if (!preset.disabled && (!preset.actions?.length || !preset.actions.every(validAction))) {
       return 'preset_setting';
     }
-    if (!preset.disabled && preset.setting) selectableIds.add(id);
+    if (!preset.disabled && preset.actions?.length) selectableIds.add(id);
   }
 
   if (normalized.default_preset && !selectableIds.has(normalized.default_preset)) {

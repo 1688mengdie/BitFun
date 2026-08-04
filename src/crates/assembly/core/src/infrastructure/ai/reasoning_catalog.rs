@@ -4,10 +4,9 @@ use std::sync::{OnceLock, RwLock};
 #[cfg(feature = "product-full")]
 use std::time::{Duration, Instant};
 
-use bitfun_ai_adapters::models_dev::{project_reasoning_catalog, ModelsDevCatalog};
+use bitfun_ai_adapters::models_dev::{project_reasoning_catalog_with_limit, ModelsDevCatalog};
 use bitfun_core_types::{
     ReasoningCatalogBinding, ReasoningCatalogProjection, ReasoningPresetDescriptor,
-    ReasoningPresetSetting,
 };
 #[cfg(feature = "product-full")]
 use bitfun_events::{AIModelCatalogUpdatedEvent, AI_MODEL_CATALOG_UPDATED_EVENT};
@@ -201,10 +200,17 @@ pub(crate) fn project_model_reasoning_catalog(
     model: &AIModelConfig,
     models_dev: Option<&ModelsDevCatalog>,
 ) -> ReasoningCatalogProjection {
-    project_reasoning_catalog(
+    project_reasoning_catalog_with_limit(
         &model.provider,
         &model.model_name,
         &model.base_url,
+        model.max_tokens.unwrap_or_else(|| {
+            crate::service::config::types::automatic_max_output_tokens(
+                model
+                    .context_window
+                    .unwrap_or(crate::service::config::types::DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS),
+            )
+        }),
         model.reasoning.as_ref(),
         models_dev,
     )
@@ -268,22 +274,21 @@ pub(crate) fn normalize_reasoning_preset_for_model(
     .map(|preset| preset.id.clone())
 }
 
-pub(crate) fn resolve_default_reasoning_setting(
+pub(crate) fn resolve_default_reasoning_preset(
     projection: &ReasoningCatalogProjection,
-) -> Option<&ReasoningPresetSetting> {
+) -> Option<&ReasoningPresetDescriptor> {
     projection
         .default_preset
         .as_deref()
         .and_then(|preset_id| resolve_reasoning_preset(projection, preset_id))
-        .map(|preset| &preset.setting)
 }
 
 pub(crate) fn apply_default_reasoning_preset(
     client: AIClient,
     projection: &ReasoningCatalogProjection,
 ) -> AIClient {
-    match resolve_default_reasoning_setting(projection) {
-        Some(setting) => client.with_model_reasoning_preset(setting),
+    match resolve_default_reasoning_preset(projection) {
+        Some(preset) => client.with_model_reasoning_preset(preset),
         None => client,
     }
 }
@@ -294,20 +299,20 @@ pub(crate) fn apply_selected_reasoning_preset(
     preset_id: &str,
 ) -> Option<AIClient> {
     resolve_reasoning_preset(projection, preset_id)
-        .map(|preset| client.with_reasoning_preset(&preset.setting))
+        .map(|preset| client.with_reasoning_preset(preset))
 }
 
 #[cfg(test)]
 mod tests {
     use bitfun_core_types::{
-        ReasoningCatalogBinding, ReasoningConfig, ReasoningMode, ReasoningPreset,
-        ReasoningPresetSetting, ReasoningPresetSource,
+        ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset, ReasoningPresetAction,
+        ReasoningPresetSource,
     };
 
     use super::{
         apply_default_reasoning_preset, apply_selected_reasoning_preset,
         normalize_reasoning_preset_for_model, project_model_reasoning_catalog,
-        resolve_default_reasoning_setting, resolve_reasoning_preset, ModelsDevCatalog,
+        resolve_default_reasoning_preset, resolve_reasoning_preset, ModelsDevCatalog,
     };
     use crate::infrastructure::ai::AIClient;
     use crate::service::config::types::AIModelConfig;
@@ -349,20 +354,17 @@ mod tests {
             max_tokens: Some(8192),
             temperature: None,
             top_p: None,
-            reasoning_mode: ReasoningMode::Default,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
         }
     }
 
     #[test]
-    fn generated_preset_and_default_resolve_to_runtime_settings() {
+    fn generated_preset_and_default_resolve_to_actions() {
         let projection = project_model_reasoning_catalog(
             &model(Some(ReasoningConfig {
                 catalog: ReasoningCatalogBinding::Auto,
@@ -375,13 +377,10 @@ mod tests {
         let high = resolve_reasoning_preset(&projection, "high").expect("generated high");
         assert_eq!(high.source, ReasoningPresetSource::ModelsDev);
         assert!(matches!(
-            high.setting,
-            ReasoningPresetSetting::Effort { ref value, .. } if value == "high"
+            high.actions.as_slice(),
+            [ReasoningPresetAction::Effort { value }] if value == "high"
         ));
-        assert_eq!(
-            resolve_default_reasoning_setting(&projection),
-            Some(&high.setting)
-        );
+        assert_eq!(resolve_default_reasoning_preset(&projection), Some(high));
     }
 
     #[test]
@@ -402,14 +401,10 @@ mod tests {
         let high = resolve_reasoning_preset(&projection, "high").expect("fallback high");
 
         assert_eq!(high.source, ReasoningPresetSource::AdapterFallback);
-        assert_eq!(
-            resolve_default_reasoning_setting(&projection),
-            Some(&high.setting)
-        );
+        assert_eq!(resolve_default_reasoning_preset(&projection), Some(high));
 
         let client = apply_default_reasoning_preset(AIClient::new(runtime_config()), &projection);
-        assert_eq!(client.config.reasoning_mode, ReasoningMode::Adaptive);
-        assert_eq!(client.config.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(client.model_reasoning_preset(), Some(high));
     }
 
     #[test]
@@ -420,7 +415,7 @@ mod tests {
                 default_preset: Some("high".to_string()),
                 presets: vec![ReasoningPreset {
                     id: "high".to_string(),
-                    setting: Some(ReasoningPresetSetting::Toggle { enabled: false }),
+                    actions: vec![ReasoningPresetAction::Toggle { enabled: false }],
                     ..Default::default()
                 }],
             })),
@@ -429,8 +424,8 @@ mod tests {
         let high = resolve_reasoning_preset(&overridden, "high").expect("configured override");
         assert_eq!(high.source, ReasoningPresetSource::ModelConfig);
         assert_eq!(
-            high.setting,
-            ReasoningPresetSetting::Toggle { enabled: false }
+            high.actions,
+            vec![ReasoningPresetAction::Toggle { enabled: false }]
         );
 
         let disabled = project_model_reasoning_catalog(
@@ -446,7 +441,7 @@ mod tests {
             Some(&catalog()),
         );
         assert!(resolve_reasoning_preset(&disabled, "high").is_none());
-        assert!(resolve_default_reasoning_setting(&disabled).is_none());
+        assert!(resolve_default_reasoning_preset(&disabled).is_none());
     }
 
     #[test]
@@ -460,11 +455,20 @@ mod tests {
             Some(&catalog()),
         );
         let base = apply_default_reasoning_preset(AIClient::new(runtime_config()), &projection);
-        assert_eq!(base.config.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(
+            base.model_reasoning_preset()
+                .map(|preset| preset.id.as_str()),
+            Some("high")
+        );
 
         let selected = apply_selected_reasoning_preset(&base, &projection, "low")
             .expect("generated low session preset");
-        assert_eq!(selected.config.reasoning_effort.as_deref(), Some("low"));
+        assert_eq!(
+            selected
+                .selected_reasoning_preset()
+                .map(|preset| preset.id.as_str()),
+            Some("low")
+        );
     }
 
     #[test]
@@ -515,7 +519,7 @@ mod tests {
             catalog: ReasoningCatalogBinding::Auto,
             presets: vec![ReasoningPreset {
                 id: "custom".to_string(),
-                setting: Some(ReasoningPresetSetting::Toggle { enabled: true }),
+                actions: vec![ReasoningPresetAction::Toggle { enabled: true }],
                 ..Default::default()
             }],
             ..Default::default()

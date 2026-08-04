@@ -15,7 +15,7 @@ use crate::external_sources::safe_external_source_location;
 use crate::external_tools::{resolve_external_tool_for_workspace, workspace_route_key};
 use crate::infrastructure::ai::reasoning_catalog::{
     load_models_dev_reasoning_catalog_without_refresh, project_model_reasoning_catalog,
-    resolve_default_reasoning_setting,
+    resolve_default_reasoning_preset,
 };
 use crate::service::config::global::GlobalConfigManager;
 use crate::service::config::types::{model_runtime_binding_fingerprint, AIConfig, AIModelConfig};
@@ -497,9 +497,13 @@ fn configured_reasoning_effort(
     model: &AIModelConfig,
     models_dev: Option<&ModelsDevCatalog>,
 ) -> Option<String> {
-    resolve_default_reasoning_setting(&project_model_reasoning_catalog(model, models_dev))
-        .and_then(|setting| setting.application().parameters)
-        .and_then(|parameters| parameters.effort)
+    resolve_default_reasoning_preset(&project_model_reasoning_catalog(model, models_dev))
+        .and_then(|preset| {
+            preset.actions.iter().rev().find_map(|action| match action {
+                bitfun_core_types::ReasoningPresetAction::Effort { value } => Some(value.clone()),
+                _ => None,
+            })
+        })
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
@@ -1699,12 +1703,11 @@ mod tests {
             default_preset: Some("high".to_string()),
             presets: vec![crate::service::config::types::ReasoningPreset {
                 id: "high".to_string(),
-                setting: Some(
-                    crate::service::config::types::ReasoningPresetSetting::Effort {
+                actions: vec![
+                    crate::service::config::types::ReasoningPresetAction::Effort {
                         value: "high".to_string(),
-                        mode: Some(crate::service::config::types::ReasoningMode::Enabled),
                     },
-                ),
+                ],
                 ..Default::default()
             }],
             ..Default::default()

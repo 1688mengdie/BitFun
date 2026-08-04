@@ -37,7 +37,7 @@ export function resolveAcpReasoningState(
         id: candidate.value,
         label: candidate.name,
         order: index,
-        setting: { type: 'effort', value: candidate.value },
+        actions: [{ type: 'effort', value: candidate.value }],
         source: 'adapter_fallback',
       })),
     },

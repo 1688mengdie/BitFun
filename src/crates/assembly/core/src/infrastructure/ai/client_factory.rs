@@ -9,7 +9,7 @@
 use crate::infrastructure::ai::reasoning_catalog::{
     apply_default_reasoning_preset, apply_selected_reasoning_preset,
     load_models_dev_reasoning_catalog, project_model_reasoning_catalog,
-    resolve_default_reasoning_setting,
+    resolve_default_reasoning_preset,
 };
 use crate::infrastructure::ai::{build_stream_options_for_model, AIClient};
 use crate::infrastructure::subscription_auth::{self, SubscriptionProvider as AdapterProvider};
@@ -32,7 +32,7 @@ pub struct AIClientFactory {
 
 struct CachedAIClient {
     configuration_fingerprint: String,
-    default_reasoning_setting: Option<bitfun_core_types::ReasoningPresetSetting>,
+    default_reasoning_preset: Option<bitfun_core_types::ReasoningPresetDescriptor>,
     client: Arc<AIClient>,
     /// Unix seconds when the resolved subscription credential expires;
     /// `None` for API-key auth or non-expiring credentials.
@@ -283,8 +283,8 @@ impl AIClientFactory {
         let models_dev = load_models_dev_reasoning_catalog().await;
         let reasoning_projection =
             project_model_reasoning_catalog(model_config, models_dev.catalog.as_deref());
-        let default_reasoning_setting =
-            resolve_default_reasoning_setting(&reasoning_projection).cloned();
+        let default_reasoning_preset =
+            resolve_default_reasoning_preset(&reasoning_projection).cloned();
 
         {
             let cache = match self.client_cache.read() {
@@ -298,7 +298,7 @@ impl AIClientFactory {
             };
             if let Some(cached) = cache.get(&normalized_model_id) {
                 if cached.configuration_fingerprint == configuration_fingerprint
-                    && cached.default_reasoning_setting == default_reasoning_setting
+                    && cached.default_reasoning_preset == default_reasoning_preset
                     && !subscription_credential_stale(&model_config.auth, cached)
                 {
                     return Ok(cached.client.clone());
@@ -338,7 +338,7 @@ impl AIClientFactory {
                 model_config.id.clone(),
                 CachedAIClient {
                     configuration_fingerprint,
-                    default_reasoning_setting,
+                    default_reasoning_preset,
                     client: client.clone(),
                     credential_expires_at,
                 },

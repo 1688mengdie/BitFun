@@ -98,11 +98,14 @@ function buildCuratedSnapshot(source, provenance) {
       const reasoningOptions = normalizedOptions(sourceModel.reasoning_options);
       assert(reasoningOptions.length > 0,
         `${providerId}/${modelId} has no reasoning options`);
+      assert(Number.isSafeInteger(sourceModel.limit?.output) && sourceModel.limit.output > 0,
+        `${providerId}/${modelId} has no positive limit.output`);
       provider.models[modelId] = {
         id: sourceModel.id || modelId,
         name: sourceModel.name || modelId,
         reasoning: true,
         reasoning_options: reasoningOptions,
+        limit: { output: sourceModel.limit.output },
       };
     }
     snapshot[providerId] = provider;

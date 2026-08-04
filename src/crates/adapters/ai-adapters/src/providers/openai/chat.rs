@@ -9,13 +9,13 @@ use crate::types::{Message, ToolDefinition};
 use anyhow::Result;
 use log::{debug, warn};
 
-pub(crate) fn build_request_body(
+pub(crate) fn try_build_request_body(
     client: &AIClient,
     url: &str,
     openai_messages: Vec<serde_json::Value>,
     openai_tools: Option<Vec<serde_json::Value>>,
     extra_body: Option<serde_json::Value>,
-) -> serde_json::Value {
+) -> Result<serde_json::Value> {
     let mut request_body = serde_json::json!({
         "model": client.config.model,
         "messages": openai_messages,
@@ -28,9 +28,7 @@ pub(crate) fn build_request_body(
         request_body["tool_stream"] = serde_json::Value::Bool(true);
     }
 
-    common::apply_reasoning_fields(&mut request_body, client, url);
-    let selected_reasoning_fields = shared::capture_selected_reasoning_fields(
-        client,
+    let base_reasoning_fields = shared::capture_reasoning_fields(
         &request_body,
         &["thinking", "enable_thinking", "reasoning_effort"],
         &[],
@@ -40,19 +38,25 @@ pub(crate) fn build_request_body(
         request_body["max_tokens"] = serde_json::json!(max_tokens);
     }
 
-    shared::apply_model_reasoning_request_patches(
-        client,
-        &mut request_body,
-        &[
-            "model",
-            "messages",
-            "stream",
-            "max_tokens",
-            "tool_stream",
-            "tools",
-        ],
-        &[],
-    );
+    let protected_keys = &[
+        "model",
+        "messages",
+        "stream",
+        "max_tokens",
+        "tool_stream",
+        "tools",
+    ];
+    if let Some(preset) = client.model_reasoning_preset.as_ref() {
+        shared::apply_reasoning_actions(
+            preset,
+            &mut request_body,
+            protected_keys,
+            &[],
+            |action, body| {
+                common::compile_chat_reasoning_action(action, body, url, &client.config.model)
+            },
+        )?;
+    }
 
     let protected_body = shared::protect_request_body(
         client,
@@ -69,22 +73,23 @@ pub(crate) fn build_request_body(
     }
 
     shared::restore_protected_body(&mut request_body, protected_body);
-    shared::apply_selected_reasoning_overlay(
-        client,
-        &mut request_body,
-        selected_reasoning_fields,
-        &["thinking", "enable_thinking", "reasoning_effort"],
-        &[],
-        &[
-            "model",
-            "messages",
-            "stream",
-            "max_tokens",
-            "tool_stream",
-            "tools",
-        ],
-        &[],
-    );
+    if let Some(preset) = client.selected_reasoning_preset.as_ref() {
+        shared::reset_reasoning_fields(
+            &mut request_body,
+            base_reasoning_fields.as_ref(),
+            &["thinking", "enable_thinking", "reasoning_effort"],
+            &[],
+        );
+        shared::apply_reasoning_actions(
+            preset,
+            &mut request_body,
+            protected_keys,
+            &[],
+            |action, body| {
+                common::compile_chat_reasoning_action(action, body, url, &client.config.model)
+            },
+        )?;
+    }
 
     if let Some(request_obj) = request_body.as_object_mut() {
         if let Some(existing_n) = request_obj.remove("n") {
@@ -104,7 +109,19 @@ pub(crate) fn build_request_body(
 
     common::attach_tools(&mut request_body, openai_tools, "ai::openai_stream_request");
 
-    request_body
+    Ok(request_body)
+}
+
+#[cfg(test)]
+pub(crate) fn build_request_body(
+    client: &AIClient,
+    url: &str,
+    openai_messages: Vec<serde_json::Value>,
+    openai_tools: Option<Vec<serde_json::Value>>,
+    extra_body: Option<serde_json::Value>,
+) -> serde_json::Value {
+    try_build_request_body(client, url, openai_messages, openai_tools, extra_body)
+        .expect("request body should compile")
 }
 
 pub(crate) async fn send_stream(
@@ -123,7 +140,8 @@ pub(crate) async fn send_stream(
 
     let openai_messages = OpenAIMessageConverter::convert_messages(messages);
     let openai_tools = OpenAIMessageConverter::convert_tools(tools);
-    let request_body = build_request_body(client, &url, openai_messages, openai_tools, extra_body);
+    let request_body =
+        try_build_request_body(client, &url, openai_messages, openai_tools, extra_body)?;
     let inline_think_in_text = client.config.inline_think_in_text;
     let idle_timeout = client.stream_options.idle_timeout;
     let ttft_timeout = client.stream_options.ttft_timeout;

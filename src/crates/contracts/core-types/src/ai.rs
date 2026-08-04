@@ -3,20 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-const MAX_REASONING_SETTING_DEPTH: usize = 32;
-
 fn is_false(value: &bool) -> bool {
     !*value
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum ReasoningMode {
-    #[default]
-    Default,
-    Enabled,
-    Disabled,
-    Adaptive,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -32,36 +20,16 @@ pub enum ReasoningCatalogBinding {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ReasoningPresetSetting {
-    /// Sets a provider-neutral mode without inventing an effort or budget.
-    Mode {
-        value: ReasoningMode,
-    },
-    Effort {
-        value: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<ReasoningMode>,
-    },
-    Toggle {
-        enabled: bool,
-    },
-    BudgetTokens {
-        value: u32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        mode: Option<ReasoningMode>,
-    },
-    RequestPatch {
-        body: Value,
-    },
-    /// Applies multiple canonical settings in order for advanced presets.
-    Sequence {
-        settings: Vec<ReasoningPresetSetting>,
-    },
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReasoningPresetAction {
+    Effort { value: String },
+    Toggle { enabled: bool },
+    BudgetTokens { value: u32 },
+    RequestPatch { body: Value },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ReasoningPreset {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -70,12 +38,12 @@ pub struct ReasoningPreset {
     pub order: Option<i32>,
     #[serde(skip_serializing_if = "is_false")]
     pub disabled: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub setting: Option<ReasoningPresetSetting>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ReasoningPresetAction>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ReasoningConfig {
     pub catalog: ReasoningCatalogBinding,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,7 +59,7 @@ impl ReasoningConfig {
             .iter()
             .rev()
             .find(|preset| preset.id.trim() == preset_id)
-            .filter(|preset| !preset.disabled && preset.setting.is_some())
+            .filter(|preset| !preset.disabled && !preset.actions.is_empty())
     }
 
     pub fn default_preset(&self) -> Option<&ReasoningPreset> {
@@ -139,15 +107,17 @@ impl ReasoningConfig {
                 return Err(format!("duplicate preset ID '{preset_id}'"));
             }
 
-            match preset.setting.as_ref() {
-                Some(setting) if !preset.disabled => validate_reasoning_setting(setting, 0)
-                    .map_err(|message| format!("invalid preset '{preset_id}': {message}"))?,
-                None if !preset.disabled => {
+            if !preset.disabled {
+                if preset.actions.is_empty() {
                     return Err(format!(
-                        "enabled preset '{preset_id}' must define a setting"
+                        "enabled preset '{preset_id}' must define at least one action"
                     ));
                 }
-                Some(_) | None => {}
+                for (action_index, action) in preset.actions.iter().enumerate() {
+                    validate_reasoning_action(action).map_err(|message| {
+                        format!("invalid preset '{preset_id}' action {action_index}: {message}")
+                    })?;
+                }
             }
         }
 
@@ -155,41 +125,21 @@ impl ReasoningConfig {
     }
 }
 
-fn validate_reasoning_setting(
-    setting: &ReasoningPresetSetting,
-    depth: usize,
-) -> Result<(), String> {
-    if depth >= MAX_REASONING_SETTING_DEPTH {
-        return Err(format!(
-            "setting nesting must not exceed {MAX_REASONING_SETTING_DEPTH} levels"
-        ));
-    }
-
-    match setting {
-        ReasoningPresetSetting::Effort { value, .. } if value.trim().is_empty() => {
+fn validate_reasoning_action(action: &ReasoningPresetAction) -> Result<(), String> {
+    match action {
+        ReasoningPresetAction::Effort { value } if value.trim().is_empty() => {
             Err("effort value must not be empty".to_string())
         }
-        ReasoningPresetSetting::BudgetTokens { value: 0, .. } => {
+        ReasoningPresetAction::BudgetTokens { value: 0 } => {
             Err("budget_tokens value must be greater than 0".to_string())
         }
-        ReasoningPresetSetting::RequestPatch { body } if !body.is_object() => {
+        ReasoningPresetAction::RequestPatch { body } if !body.is_object() => {
             Err("request_patch body must be a JSON object".to_string())
         }
-        ReasoningPresetSetting::Sequence { settings } if settings.is_empty() => {
-            Err("sequence settings must not be empty".to_string())
-        }
-        ReasoningPresetSetting::Sequence { settings } => {
-            for (index, nested) in settings.iter().enumerate() {
-                validate_reasoning_setting(nested, depth + 1)
-                    .map_err(|message| format!("sequence item {index}: {message}"))?;
-            }
-            Ok(())
-        }
-        ReasoningPresetSetting::Mode { .. }
-        | ReasoningPresetSetting::Effort { .. }
-        | ReasoningPresetSetting::Toggle { .. }
-        | ReasoningPresetSetting::BudgetTokens { .. }
-        | ReasoningPresetSetting::RequestPatch { .. } => Ok(()),
+        ReasoningPresetAction::Effort { .. }
+        | ReasoningPresetAction::Toggle { .. }
+        | ReasoningPresetAction::BudgetTokens { .. }
+        | ReasoningPresetAction::RequestPatch { .. } => Ok(()),
     }
 }
 
@@ -206,8 +156,14 @@ pub struct ReasoningPresetDescriptor {
     pub id: String,
     pub label: String,
     pub order: i32,
-    pub setting: ReasoningPresetSetting,
+    pub actions: Vec<ReasoningPresetAction>,
     pub source: ReasoningPresetSource,
+    /// Catalog identity used only by the host-side adapter compiler. It is
+    /// intentionally omitted from Web/remote projections.
+    #[serde(skip)]
+    pub execution_provider: Option<String>,
+    #[serde(skip)]
+    pub execution_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -227,120 +183,22 @@ pub struct ReasoningCatalogProjection {
     pub presets: Vec<ReasoningPresetDescriptor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReasoningRuntimeParameters {
-    pub mode: ReasoningMode,
-    pub effort: Option<String>,
-    pub budget_tokens: Option<u32>,
-}
-
-impl Default for ReasoningRuntimeParameters {
-    fn default() -> Self {
-        Self {
-            mode: ReasoningMode::Default,
-            effort: None,
-            budget_tokens: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct ReasoningPresetApplication {
-    pub parameters: Option<ReasoningRuntimeParameters>,
-    pub request_patches: Vec<Value>,
-}
-
-impl ReasoningPresetSetting {
-    pub fn application(&self) -> ReasoningPresetApplication {
-        fn apply(
-            setting: &ReasoningPresetSetting,
-            parameters: &mut Option<ReasoningRuntimeParameters>,
-            request_patches: &mut Vec<Value>,
-        ) {
-            match setting {
-                ReasoningPresetSetting::Mode { value } => {
-                    parameters.get_or_insert_with(Default::default).mode = *value;
-                }
-                ReasoningPresetSetting::Effort { value, mode } => {
-                    let parameters = parameters.get_or_insert_with(Default::default);
-                    parameters.mode = mode.unwrap_or(ReasoningMode::Enabled);
-                    parameters.effort = Some(value.clone());
-                }
-                ReasoningPresetSetting::Toggle { enabled } => {
-                    parameters.get_or_insert_with(Default::default).mode = if *enabled {
-                        ReasoningMode::Enabled
-                    } else {
-                        ReasoningMode::Disabled
-                    };
-                }
-                ReasoningPresetSetting::BudgetTokens { value, mode } => {
-                    let parameters = parameters.get_or_insert_with(Default::default);
-                    parameters.mode = mode.unwrap_or(ReasoningMode::Enabled);
-                    parameters.budget_tokens = Some(*value);
-                }
-                ReasoningPresetSetting::RequestPatch { body } => {
-                    request_patches.push(body.clone());
-                }
-                ReasoningPresetSetting::Sequence { settings } => {
-                    for setting in settings {
-                        apply(setting, parameters, request_patches);
-                    }
-                }
-            }
-        }
-
-        let mut application = ReasoningPresetApplication::default();
-        apply(
-            self,
-            &mut application.parameters,
-            &mut application.request_patches,
-        );
-        application
-    }
-}
-
 #[cfg(test)]
 mod reasoning_tests {
     use serde_json::json;
 
-    use super::{
-        ReasoningCatalogBinding, ReasoningConfig, ReasoningMode, ReasoningPreset,
-        ReasoningPresetSetting,
-    };
+    use super::{ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset, ReasoningPresetAction};
 
-    fn config_with(setting: ReasoningPresetSetting) -> ReasoningConfig {
+    fn config_with(action: ReasoningPresetAction) -> ReasoningConfig {
         ReasoningConfig {
             default_preset: Some("custom".to_string()),
             presets: vec![ReasoningPreset {
                 id: "custom".to_string(),
-                setting: Some(setting),
+                actions: vec![action],
                 ..Default::default()
             }],
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn sequence_preserves_legacy_mode_effort_and_budget_parameters() {
-        let setting = ReasoningPresetSetting::Sequence {
-            settings: vec![
-                ReasoningPresetSetting::Effort {
-                    value: "high".to_string(),
-                    mode: Some(ReasoningMode::Adaptive),
-                },
-                ReasoningPresetSetting::BudgetTokens {
-                    value: 12000,
-                    mode: Some(ReasoningMode::Adaptive),
-                },
-            ],
-        };
-        let application = setting.application();
-        let parameters = application.parameters.expect("semantic parameters");
-
-        assert_eq!(parameters.mode, ReasoningMode::Adaptive);
-        assert_eq!(parameters.effort.as_deref(), Some("high"));
-        assert_eq!(parameters.budget_tokens, Some(12000));
-        assert!(application.request_patches.is_empty());
     }
 
     #[test]
@@ -350,18 +208,16 @@ mod reasoning_tests {
             presets: vec![
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: Some(ReasoningPresetSetting::Effort {
+                    actions: vec![ReasoningPresetAction::Effort {
                         value: "low".to_string(),
-                        mode: None,
-                    }),
+                    }],
                     ..Default::default()
                 },
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: Some(ReasoningPresetSetting::Effort {
+                    actions: vec![ReasoningPresetAction::Effort {
                         value: "high".to_string(),
-                        mode: None,
-                    }),
+                    }],
                     ..Default::default()
                 },
             ],
@@ -373,76 +229,46 @@ mod reasoning_tests {
             Err("duplicate preset ID 'same'".to_string())
         );
         assert!(matches!(
-            config.default_preset().and_then(|preset| preset.setting.as_ref()),
-            Some(ReasoningPresetSetting::Effort { value, .. }) if value == "high"
+            config.default_preset().and_then(|preset| preset.actions.first()),
+            Some(ReasoningPresetAction::Effort { value }) if value == "high"
         ));
     }
 
     #[test]
-    fn schema_rejects_non_positive_budget_empty_sequence_and_non_object_patch() {
+    fn schema_rejects_non_positive_budget_and_non_object_patch() {
         assert_eq!(
-            config_with(ReasoningPresetSetting::BudgetTokens {
-                value: 0,
-                mode: None,
-            })
-            .validate_schema(),
-            Err("invalid preset 'custom': budget_tokens value must be greater than 0".to_string())
+            config_with(ReasoningPresetAction::BudgetTokens { value: 0 }).validate_schema(),
+            Err(
+                "invalid preset 'custom' action 0: budget_tokens value must be greater than 0"
+                    .to_string()
+            )
         );
         assert_eq!(
-            config_with(ReasoningPresetSetting::Sequence {
-                settings: Vec::new(),
-            })
-            .validate_schema(),
-            Err("invalid preset 'custom': sequence settings must not be empty".to_string())
-        );
-        assert_eq!(
-            config_with(ReasoningPresetSetting::RequestPatch {
+            config_with(ReasoningPresetAction::RequestPatch {
                 body: json!(["not", "an", "object"]),
             })
             .validate_schema(),
-            Err("invalid preset 'custom': request_patch body must be a JSON object".to_string())
-        );
-    }
-
-    #[test]
-    fn schema_recursively_validates_sequence_items() {
-        let config = config_with(ReasoningPresetSetting::Sequence {
-            settings: vec![ReasoningPresetSetting::Sequence {
-                settings: vec![ReasoningPresetSetting::Effort {
-                    value: "  ".to_string(),
-                    mode: None,
-                }],
-            }],
-        });
-
-        assert_eq!(
-            config.validate_schema(),
             Err(
-                "invalid preset 'custom': sequence item 0: sequence item 0: effort value must not be empty"
+                "invalid preset 'custom' action 0: request_patch body must be a JSON object"
                     .to_string()
             )
         );
     }
 
     #[test]
-    fn schema_accepts_object_request_patch_and_non_empty_sequence() {
-        let config = config_with(ReasoningPresetSetting::Sequence {
-            settings: vec![
-                ReasoningPresetSetting::BudgetTokens {
-                    value: 4096,
-                    mode: Some(ReasoningMode::Enabled),
-                },
-                ReasoningPresetSetting::RequestPatch {
-                    body: json!({"reasoning": {"effort": "high"}}),
-                },
-            ],
-        });
+    fn schema_accepts_ordered_actions() {
+        let mut config = config_with(ReasoningPresetAction::BudgetTokens { value: 4096 });
+        config.presets[0]
+            .actions
+            .push(ReasoningPresetAction::RequestPatch {
+                body: json!({"reasoning": {"effort": "high"}}),
+            });
 
         assert_eq!(config.validate_schema(), Ok(()));
     }
 
     #[test]
-    fn schema_rejects_empty_catalog_binding_and_enabled_preset_without_setting() {
+    fn schema_rejects_empty_catalog_binding_and_enabled_preset_without_actions() {
         let invalid_binding = ReasoningConfig {
             catalog: ReasoningCatalogBinding::ModelsDev {
                 provider: "  ".to_string(),
@@ -464,8 +290,34 @@ mod reasoning_tests {
         };
         assert_eq!(
             missing_setting.validate_schema(),
-            Err("enabled preset 'custom' must define a setting".to_string())
+            Err("enabled preset 'custom' must define at least one action".to_string())
         );
+    }
+
+    #[test]
+    fn abandoned_setting_and_mode_shapes_are_rejected() {
+        for value in [
+            json!({
+                "presets": [{
+                    "id": "legacy",
+                    "setting": { "type": "toggle", "enabled": true }
+                }]
+            }),
+            json!({
+                "presets": [{
+                    "id": "legacy",
+                    "actions": [{ "type": "effort", "value": "high", "mode": "enabled" }]
+                }]
+            }),
+            json!({
+                "presets": [{
+                    "id": "legacy",
+                    "actions": [{ "type": "sequence", "settings": [] }]
+                }]
+            }),
+        ] {
+            assert!(serde_json::from_value::<ReasoningConfig>(value).is_err());
+        }
     }
 }
 
@@ -490,13 +342,10 @@ pub struct AIConfig {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
-    pub reasoning_mode: ReasoningMode,
     pub inline_think_in_text: bool,
     pub custom_headers: Option<HashMap<String, String>>,
     pub custom_headers_mode: Option<String>,
     pub skip_ssl_verify: bool,
-    pub reasoning_effort: Option<String>,
-    pub thinking_budget_tokens: Option<u32>,
     pub custom_request_body: Option<Value>,
     pub custom_request_body_mode: Option<String>,
 }

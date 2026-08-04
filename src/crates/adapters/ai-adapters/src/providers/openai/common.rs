@@ -1,9 +1,12 @@
-use crate::client::quirks::apply_openai_compatible_reasoning_fields;
+use crate::client::quirks::{
+    apply_openai_compatible_toggle, is_deepseek_reasoning_effort_model, is_deepseek_url,
+    normalize_deepseek_reasoning_effort,
+};
 use crate::client::utils::{dedupe_remote_models, normalize_base_url_for_discovery};
 use crate::client::AIClient;
 use crate::providers::shared;
-use crate::types::{RemoteModelInfo, ToolDefinition};
-use anyhow::Result;
+use crate::types::{ReasoningPresetAction, RemoteModelInfo, ToolDefinition};
+use anyhow::{anyhow, Result};
 use log::warn;
 use reqwest::RequestBuilder;
 use serde::Deserialize;
@@ -33,18 +36,36 @@ pub(crate) fn apply_headers(client: &AIClient, builder: RequestBuilder) -> Reque
     })
 }
 
-pub(crate) fn apply_reasoning_fields(
+pub(crate) fn compile_chat_reasoning_action(
+    action: &ReasoningPresetAction,
     request_body: &mut serde_json::Value,
-    client: &AIClient,
     url: &str,
-) {
-    apply_openai_compatible_reasoning_fields(
-        request_body,
-        client.config.reasoning_mode,
-        client.config.reasoning_effort.as_deref(),
-        url,
-        &client.config.model,
-    );
+    model: &str,
+) -> Result<bool> {
+    match action {
+        ReasoningPresetAction::Toggle { enabled } => {
+            Ok(apply_openai_compatible_toggle(request_body, *enabled, url))
+        }
+        ReasoningPresetAction::Effort { value }
+            if is_deepseek_url(url) || is_deepseek_reasoning_effort_model(model) =>
+        {
+            let normalized = normalize_deepseek_reasoning_effort(value).ok_or_else(|| {
+                anyhow!(
+                    "DeepSeek reasoning effort '{}' has no enabled mapping",
+                    value
+                )
+            })?;
+            request_body["thinking"] = serde_json::json!({ "type": "enabled" });
+            request_body["reasoning_effort"] = serde_json::json!(normalized);
+            Ok(true)
+        }
+        ReasoningPresetAction::Effort { .. } | ReasoningPresetAction::BudgetTokens { .. } => {
+            Ok(false)
+        }
+        ReasoningPresetAction::RequestPatch { .. } => {
+            unreachable!("patches are compiled by shared code")
+        }
+    }
 }
 
 pub(crate) fn resolve_models_url(client: &AIClient) -> String {

@@ -63,8 +63,8 @@ describe('ReasoningPresetSelector', () => {
             status: 'known',
             default_preset: 'medium',
             presets: [
-              { id: 'medium', label: 'Medium', order: 10, source: 'models_dev', setting: { type: 'effort', value: 'medium' } },
-              { id: 'high', label: 'High', order: 20, source: 'models_dev', setting: { type: 'effort', value: 'high' } },
+              { id: 'medium', label: 'Medium', order: 10, source: 'models_dev', actions: [{ type: 'effort', value: 'medium' }] },
+              { id: 'high', label: 'High', order: 20, source: 'models_dev', actions: [{ type: 'effort', value: 'high' }] },
             ],
           }}
           selectedPreset="high"
