@@ -17,7 +17,11 @@ import type {
   ReasoningPreset,
   ReasoningPresetAction,
 } from '../types';
-import { cloneReasoningConfig } from '../utils/reasoningPresets';
+import {
+  availableReasoningActionTypes,
+  cloneReasoningConfig,
+  nextReasoningActionType,
+} from '../utils/reasoningPresets';
 import './ReasoningPresetEditor.scss';
 
 interface ReasoningPresetEditorProps {
@@ -302,7 +306,10 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                           size="small"
                           value={action.type}
                           disabled={disabled}
-                          options={actionOptions}
+                          options={actionOptions.filter(option => (
+                            availableReasoningActionTypes(preset.actions ?? [], actionIndex)
+                              .includes(option.value as ReasoningPresetAction['type'])
+                          ))}
                           onChange={(next) => {
                             setJsonValidation(jsonKey, false);
                             updateAction(presetIndex, actionIndex, defaultAction(next as ReasoningPresetAction['type']));
@@ -356,7 +363,10 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                     size="small"
                     disabled={disabled}
                     onClick={() => updatePreset(presetIndex, {
-                      actions: [...(preset.actions ?? []), defaultAction('effort')],
+                      actions: [
+                        ...(preset.actions ?? []),
+                        defaultAction(nextReasoningActionType(preset.actions ?? [])),
+                      ],
                     })}
                   >
                     <Plus size={14} aria-hidden="true" />

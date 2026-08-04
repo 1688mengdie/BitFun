@@ -113,15 +113,32 @@ impl ReasoningConfig {
                         "enabled preset '{preset_id}' must define at least one action"
                     ));
                 }
+                let mut singleton_action_types = HashSet::new();
                 for (action_index, action) in preset.actions.iter().enumerate() {
                     validate_reasoning_action(action).map_err(|message| {
                         format!("invalid preset '{preset_id}' action {action_index}: {message}")
                     })?;
+                    if let Some(action_type) = singleton_reasoning_action_type(action) {
+                        if !singleton_action_types.insert(action_type) {
+                            return Err(format!(
+                                "preset '{preset_id}' must not contain more than one {action_type} action"
+                            ));
+                        }
+                    }
                 }
             }
         }
 
         Ok(())
+    }
+}
+
+fn singleton_reasoning_action_type(action: &ReasoningPresetAction) -> Option<&'static str> {
+    match action {
+        ReasoningPresetAction::Effort { .. } => Some("effort"),
+        ReasoningPresetAction::Toggle { .. } => Some("toggle"),
+        ReasoningPresetAction::BudgetTokens { .. } => Some("budget_tokens"),
+        ReasoningPresetAction::RequestPatch { .. } => None,
     }
 }
 
@@ -263,6 +280,69 @@ mod reasoning_tests {
             .push(ReasoningPresetAction::RequestPatch {
                 body: json!({"reasoning": {"effort": "high"}}),
             });
+
+        assert_eq!(config.validate_schema(), Ok(()));
+    }
+
+    #[test]
+    fn schema_rejects_duplicate_singleton_actions() {
+        let duplicate_actions = [
+            (
+                ReasoningPresetAction::Effort {
+                    value: "low".to_string(),
+                },
+                ReasoningPresetAction::Effort {
+                    value: "high".to_string(),
+                },
+                "effort",
+            ),
+            (
+                ReasoningPresetAction::Toggle { enabled: true },
+                ReasoningPresetAction::Toggle { enabled: false },
+                "toggle",
+            ),
+            (
+                ReasoningPresetAction::BudgetTokens { value: 4096 },
+                ReasoningPresetAction::BudgetTokens { value: 8192 },
+                "budget_tokens",
+            ),
+        ];
+
+        for (first, second, action_type) in duplicate_actions {
+            let mut config = config_with(first);
+            config.presets[0].actions.push(second);
+            assert_eq!(
+                config.validate_schema(),
+                Err(format!(
+                    "preset 'custom' must not contain more than one {action_type} action"
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn schema_accepts_multiple_request_patches_and_distinct_typed_actions() {
+        let config = ReasoningConfig {
+            default_preset: Some("custom".to_string()),
+            presets: vec![ReasoningPreset {
+                id: "custom".to_string(),
+                actions: vec![
+                    ReasoningPresetAction::Effort {
+                        value: "high".to_string(),
+                    },
+                    ReasoningPresetAction::Toggle { enabled: true },
+                    ReasoningPresetAction::BudgetTokens { value: 8192 },
+                    ReasoningPresetAction::RequestPatch {
+                        body: json!({"reasoning": {"summary": "detailed"}}),
+                    },
+                    ReasoningPresetAction::RequestPatch {
+                        body: json!({"reasoning": {"summary": "concise"}}),
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
 
         assert_eq!(config.validate_schema(), Ok(()));
     }

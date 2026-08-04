@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { AIModelConfig, ReasoningConfig } from '../types';
 import {
+  availableReasoningActionTypes,
   canonicalReasoningConfig,
+  nextReasoningActionType,
   validateReasoningConfig,
 } from './reasoningPresets';
 
@@ -60,5 +62,63 @@ describe('canonical reasoning presets', () => {
       default_preset: 'high',
       presets: [],
     }, ['low', 'high'])).toBeNull();
+  });
+
+  it('rejects duplicate singleton actions', () => {
+    expect(validateReasoningConfig({
+      catalog: { source: 'auto' },
+      presets: [{
+        id: 'custom',
+        actions: [
+          { type: 'effort', value: 'medium' },
+          { type: 'effort', value: 'high' },
+        ],
+      }],
+    })).toBe('preset_setting');
+  });
+
+  it('accepts multiple request patches and distinct typed actions', () => {
+    expect(validateReasoningConfig({
+      catalog: { source: 'auto' },
+      presets: [{
+        id: 'custom',
+        actions: [
+          { type: 'effort', value: 'high' },
+          { type: 'toggle', enabled: true },
+          { type: 'budget_tokens', value: 8192 },
+          { type: 'request_patch', body: { reasoning: { summary: 'detailed' } } },
+          { type: 'request_patch', body: { reasoning: { summary: 'concise' } } },
+        ],
+      }],
+    })).toBeNull();
+  });
+
+  it('offers only unused singleton action types while keeping request patches repeatable', () => {
+    const actions = [
+      { type: 'effort', value: 'medium' },
+      { type: 'request_patch', body: {} },
+    ] satisfies ReasoningConfig['presets'][number]['actions'];
+
+    expect(availableReasoningActionTypes(actions)).toEqual([
+      'toggle',
+      'budget_tokens',
+      'request_patch',
+    ]);
+    expect(availableReasoningActionTypes(actions, 0)).toEqual([
+      'effort',
+      'toggle',
+      'budget_tokens',
+      'request_patch',
+    ]);
+    expect(nextReasoningActionType(actions)).toBe('toggle');
+  });
+
+  it('adds request patches after every singleton action type is used', () => {
+    expect(nextReasoningActionType([
+      { type: 'effort', value: 'medium' },
+      { type: 'toggle', enabled: true },
+      { type: 'budget_tokens', value: 8192 },
+      { type: 'request_patch', body: {} },
+    ])).toBe('request_patch');
   });
 });
