@@ -189,6 +189,17 @@ pub trait AcpClientPort: RuntimeServicePort + std::fmt::Debug {
         request: AcpClientBitfunMessageRequest,
     ) -> PortResult<AcpClientMessageResult>;
 
+    /// Delete a temporary ACP session: release the external process (if one is
+    /// live) and remove the persisted flow-session record for `session_id`.
+    /// Used to recycle one-shot (`persistent=false`) ACP sessions created by
+    /// the Task tool; idempotent so a session with no live process or record is
+    /// a no-op success.
+    async fn delete_session_record(
+        &self,
+        session_id: String,
+        workspace_path: Option<String>,
+    ) -> PortResult<()>;
+
     /// Read the persisted transcript of an ACP session.
     async fn read_history(
         &self,

@@ -506,6 +506,11 @@ pub(crate) struct SubagentExecutionRequest {
     pub(crate) permission_runtime_ceiling: PermissionRuntimeCeiling,
     /// Execution policy for the child subagent session being launched.
     pub(crate) delegation_policy: DelegationPolicy,
+    /// Lifecycle mode: `true` keeps the spawned subagent session durable so it
+    /// can be continued with `send_input`; `false` creates a temporary
+    /// (ephemeral) subagent session that is automatically recycled when the
+    /// task reaches a terminal state.
+    pub(crate) persistent: bool,
     /// Pins an immutable external generation from Task validation until the
     /// queued or running invocation reaches a terminal state.
     pub(crate) external_generation_lease:
@@ -725,6 +730,9 @@ pub(crate) struct HiddenSubagentExecutionRequest {
     prompt_cache_source_session_id: Option<String>,
     session_kind: SessionKind,
     transient: bool,
+    /// Lifecycle mode for the spawned subagent session: `false` marks a
+    /// one-shot temporary subagent that is recycled when the task finishes.
+    persistent: bool,
     emit_lifecycle_events: bool,
     prepared_session_created: bool,
     /// Keeps scheduler maintenance fenced from the moment a hidden Session is
@@ -4150,6 +4158,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 context: child_context,
                 permission_runtime_ceiling,
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                persistent: true,
                 external_generation_lease: Some(external_generation_lease),
             };
 
@@ -7305,6 +7314,40 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await
     }
 
+    /// Recycle a temporary (`persistent=false`) subagent session once its task
+    /// reaches a terminal state. Best-effort: failures only warn so a finished
+    /// task can never be blocked by cleanup. The workspace path is required;
+    /// without it (defensive) the session is left for the regular cleanup pass.
+    pub(crate) async fn recycle_temporary_subagent_session(
+        &self,
+        workspace_path: Option<&Path>,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+        subagent_session_id: &str,
+    ) {
+        let Some(workspace_path) = workspace_path else {
+            debug!(
+                "Temporary subagent session has no workspace path; skipping immediate recycle: session_id={}",
+                subagent_session_id
+            );
+            return;
+        };
+        if let Err(error) = self
+            .delete_session_tree(
+                workspace_path,
+                remote_connection_id,
+                remote_ssh_host,
+                subagent_session_id,
+            )
+            .await
+        {
+            warn!(
+                "Failed to recycle temporary subagent session: session_id={}, error={}",
+                subagent_session_id, error
+            );
+        }
+    }
+
     pub async fn delete_hidden_subagent_sessions_for_parent_turns(
         &self,
         workspace_path: &Path,
@@ -8567,6 +8610,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             prompt_cache_source_session_id,
             session_kind,
             transient,
+            persistent: _persistent,
             emit_lifecycle_events,
             prepared_session_created,
             execution_lease,
@@ -10349,6 +10393,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         prompt_cache_source_session_id: None,
                         session_kind: SessionKind::Subagent,
                         transient,
+                        persistent: true,
                         emit_lifecycle_events: true,
                         prepared_session_created: false,
                         execution_lease: None,
@@ -10438,8 +10483,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         parent_transient,
                     ),
                     prompt_cache_source_session_id: None,
-                    session_kind: SessionKind::Subagent,
-                    transient: parent_transient,
+                    session_kind: if request.persistent {
+                        SessionKind::Subagent
+                    } else {
+                        SessionKind::EphemeralSubagent
+                    },
+                    transient: if request.persistent {
+                        parent_transient
+                    } else {
+                        true
+                    },
+                    persistent: request.persistent,
                     emit_lifecycle_events: true,
                     prepared_session_created: false,
                     execution_lease: None,
@@ -10525,8 +10579,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         parent_transient,
                     ),
                     prompt_cache_source_session_id: Some(snapshot.parent_session_id),
-                    session_kind: SessionKind::Subagent,
-                    transient: parent_transient,
+                    session_kind: if request.persistent {
+                        SessionKind::Subagent
+                    } else {
+                        SessionKind::EphemeralSubagent
+                    },
+                    transient: if request.persistent {
+                        parent_transient
+                    } else {
+                        true
+                    },
+                    persistent: request.persistent,
                     emit_lifecycle_events: true,
                     prepared_session_created: false,
                     execution_lease: None,
@@ -10918,6 +10981,25 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         } else {
             Self::await_hidden_subagent_receiver(receiver).await
         };
+        // A temporary (`persistent=false`) subagent whose execution failed
+        // (cancelled, timed out, or crashed) is recycled here so the one-shot
+        // session never accumulates; successful results are recycled by the
+        // caller (TaskTool foreground path / background completion block).
+        if result.is_err() && !request.persistent {
+            if let Some(target_session_id) = request.target_session_id() {
+                self.recycle_temporary_subagent_session(
+                    request
+                        .session_config
+                        .workspace_path
+                        .as_deref()
+                        .map(Path::new),
+                    request.session_config.remote_connection_id.as_deref(),
+                    request.session_config.remote_ssh_host.as_deref(),
+                    target_session_id,
+                )
+                .await;
+            }
+        }
         result
     }
 
@@ -10962,6 +11044,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             prompt_cache_source_session_id: None,
             session_kind: request.session_kind,
             transient: false,
+            persistent: true,
             emit_lifecycle_events: request.emit_lifecycle_events,
             prepared_session_created: false,
             execution_lease: None,
@@ -11127,6 +11210,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             let subagent_parent_info_for_emit = subagent_parent_info.clone();
             let subagent_session_id_for_emit = subagent_session_id.clone();
             let subagent_dialog_turn_id_for_emit = subagent_dialog_turn_id.clone();
+            let persistent_for_recycle = request.persistent;
+            let recycle_workspace_path = request
+                .session_config
+                .workspace_path
+                .clone()
+                .map(PathBuf::from);
+            let recycle_remote_connection_id = request.session_config.remote_connection_id.clone();
+            let recycle_remote_ssh_host = request.session_config.remote_ssh_host.clone();
 
             tokio::spawn(async move {
                 let result = match (parent_cancel_token, tool_cancellation_token) {
@@ -11179,6 +11270,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         "Suppressing cancelled background subagent result delivery: task_pk={}, parent_session_id={}",
                         task_pk, subagent_parent_info.session_id
                     );
+                    if !persistent_for_recycle {
+                        if let Some(coordinator) = get_global_coordinator() {
+                            coordinator
+                                .recycle_temporary_subagent_session(
+                                    recycle_workspace_path.as_deref().map(Path::new),
+                                    recycle_remote_connection_id.as_deref(),
+                                    recycle_remote_ssh_host.as_deref(),
+                                    &subagent_session_id_for_emit,
+                                )
+                                .await;
+                        }
+                    }
                     return;
                 }
 
@@ -11242,6 +11345,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     })
                     .await;
 
+                if !persistent_for_recycle {
+                    if let Some(coordinator) = get_global_coordinator() {
+                        coordinator
+                            .recycle_temporary_subagent_session(
+                                recycle_workspace_path.as_deref().map(Path::new),
+                                recycle_remote_connection_id.as_deref(),
+                                recycle_remote_ssh_host.as_deref(),
+                                &subagent_session_id_for_emit,
+                            )
+                            .await;
+                    }
+                }
                 background_subagent_tasks.remove(&task_pk);
             });
 
@@ -14920,6 +15035,7 @@ mod tests {
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            persistent: true,
             external_generation_lease: None,
         };
 
@@ -18844,6 +18960,7 @@ mod tests {
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                persistent: true,
                 external_generation_lease: None,
             })
             .await
@@ -18921,6 +19038,7 @@ mod tests {
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                persistent: true,
                 external_generation_lease: None,
             })
             .await
@@ -18988,6 +19106,7 @@ mod tests {
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                persistent: true,
                 external_generation_lease: None,
             })
             .await
@@ -19045,6 +19164,7 @@ mod tests {
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                persistent: true,
                 external_generation_lease: None,
             })
             .await
@@ -19248,6 +19368,7 @@ mod tests {
             ])
             .expect("test ceiling should be valid"),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            persistent: true,
             external_generation_lease: None,
         };
 
@@ -19307,6 +19428,7 @@ mod tests {
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            persistent: true,
             external_generation_lease: None,
         };
 
@@ -19381,6 +19503,7 @@ mod tests {
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            persistent: true,
             external_generation_lease: None,
         };
 
@@ -19426,6 +19549,7 @@ mod tests {
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
             delegation_policy: DelegationPolicy::top_level().spawn_child(),
+            persistent: true,
             external_generation_lease: None,
         };
 

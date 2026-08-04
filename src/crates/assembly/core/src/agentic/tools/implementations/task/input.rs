@@ -91,6 +91,13 @@ pub(super) struct TaskInvocation {
     pub(super) inherit_parent_model: bool,
     pub(super) timeout_seconds: Option<u64>,
     pub(super) run_in_background: bool,
+    /// Two lifecycle modes for a spawned background subagent:
+    /// - `true` (default): the subagent session is durable and can be continued
+    ///   later with `send_input` (existing behavior).
+    /// - `false`: one-shot temporary subagent — the session is automatically
+    ///   recycled when the task finishes (success, failure, or cancellation);
+    ///   the returned `agent_id` cannot be reused.
+    pub(super) persistent: bool,
     pub(super) is_retry: bool,
     pub(super) requested_auto_retry: bool,
     pub(super) max_turns: Option<u64>,
@@ -119,7 +126,12 @@ impl TaskTool {
                     "action is not supported for DeepReview Task calls".to_string(),
                 ));
             }
-            for field in ["fork_context", "agent_id", "run_in_background"] {
+            for field in [
+                "fork_context",
+                "agent_id",
+                "run_in_background",
+                "persistent",
+            ] {
                 if input.get(field).is_some() {
                     return Err(BitFunError::tool(format!(
                         "{field} is not allowed for DeepReview Task calls"
@@ -140,6 +152,7 @@ impl TaskTool {
                 inherit_parent_model,
                 timeout_seconds: Self::optional_timeout_seconds(input)?,
                 run_in_background: false,
+                persistent: true,
                 is_retry: input.get("retry").and_then(Value::as_bool).unwrap_or(false),
                 requested_auto_retry: input
                     .get("auto_retry")
@@ -199,6 +212,7 @@ impl TaskTool {
                 }
 
                 let (model_id, inherit_parent_model) = Self::optional_model_id(input)?;
+                let persistent = Self::optional_bool(input, "persistent")?.unwrap_or(true);
 
                 // R-14 B3: optional explicit target role. Unknown keys degrade
                 // to None (default executor target) so stale model output never
@@ -220,6 +234,7 @@ impl TaskTool {
                     inherit_parent_model,
                     timeout_seconds: None,
                     run_in_background,
+                    persistent,
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
@@ -235,6 +250,7 @@ impl TaskTool {
                     &[
                         "fork_context",
                         "subagent_type",
+                        "persistent",
                         "retry",
                         "auto_retry",
                         "retry_coverage",
@@ -255,6 +271,7 @@ impl TaskTool {
                     inherit_parent_model,
                     timeout_seconds: None,
                     run_in_background,
+                    persistent: true,
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
@@ -271,6 +288,7 @@ impl TaskTool {
                         "subagent_type",
                         "model_id",
                         "run_in_background",
+                        "persistent",
                         "retry",
                         "auto_retry",
                         "retry_coverage",
@@ -289,6 +307,7 @@ impl TaskTool {
                     inherit_parent_model: false,
                     timeout_seconds: None,
                     run_in_background: false,
+                    persistent: true,
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
@@ -306,6 +325,7 @@ impl TaskTool {
                         "subagent_type",
                         "model_id",
                         "run_in_background",
+                        "persistent",
                         "retry",
                         "auto_retry",
                         "retry_coverage",
@@ -324,6 +344,7 @@ impl TaskTool {
                     inherit_parent_model: false,
                     timeout_seconds: None,
                     run_in_background: false,
+                    persistent: true,
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
@@ -349,6 +370,7 @@ impl TaskTool {
                         "subagent_type",
                         "model_id",
                         "run_in_background",
+                        "persistent",
                         "retry",
                         "auto_retry",
                         "retry_coverage",
@@ -368,6 +390,7 @@ impl TaskTool {
                     inherit_parent_model: false,
                     timeout_seconds: None,
                     run_in_background: false,
+                    persistent: true,
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns,

@@ -872,6 +872,14 @@ mod tests {
             })
         }
 
+        async fn delete_session_record(
+            &self,
+            _session_id: String,
+            _workspace_path: Option<String>,
+        ) -> PortResult<()> {
+            Ok(())
+        }
+
         async fn read_history(
             &self,
             request: AcpClientHistoryRequest,

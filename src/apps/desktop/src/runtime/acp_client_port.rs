@@ -269,6 +269,29 @@ impl AcpClientPort for DesktopAcpClientPort {
         })
     }
 
+    async fn delete_session_record(
+        &self,
+        session_id: String,
+        workspace_path: Option<String>,
+    ) -> PortResult<()> {
+        let service = self.service()?.clone();
+        // Release the external process if one is bound to the session
+        // (idempotent), then remove the persisted flow-session record so the
+        // recycled session stops appearing in listings.
+        service.release_bitfun_session(&session_id).await;
+        let Some(workspace_path) = workspace_path.as_deref() else {
+            return Ok(());
+        };
+        let session_storage_path = self.session_storage_path(Some(workspace_path)).await?;
+        service
+            .delete_flow_session_record(&session_storage_path, &session_id)
+            .await
+            .map_err(|error| {
+                acp_backend_error(format!("failed to delete ACP session record: {error}"))
+            })?;
+        Ok(())
+    }
+
     async fn read_history(
         &self,
         request: AcpClientHistoryRequest,

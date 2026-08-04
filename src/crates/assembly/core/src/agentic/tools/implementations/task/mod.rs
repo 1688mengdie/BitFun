@@ -1,5 +1,5 @@
 use crate::agentic::agents::{
-    get_agent_registry, AgentInfo, SubagentListScope, SubagentQueryContext,
+    get_agent_registry, AcpAgent, AgentInfo, SubagentListScope, SubagentQueryContext,
 };
 use crate::agentic::coordination::{get_global_coordinator, SubagentExecutionRequest};
 use crate::agentic::deep_review::task_adapter::{
@@ -94,7 +94,7 @@ impl TaskTool {
         let registry = get_agent_registry();
         let workspace_root = context.and_then(|ctx| ctx.workspace_root());
         registry.load_custom_agents(workspace_root).await;
-        registry
+        let mut agents = registry
             .get_subagents_for_query(&SubagentQueryContext {
                 parent_agent_type: context.and_then(|ctx| ctx.agent_type.as_deref()),
                 workspace_root,
@@ -102,7 +102,19 @@ impl TaskTool {
                 include_disabled: false,
                 external_sources_supported: context.is_none_or(|ctx| !ctx.is_remote()),
             })
-            .await
+            .await;
+        // ACP bridge agents (`acp__<client>`) are registered as Mode entries,
+        // so the SubAgent-scoped TaskVisible query does not list them. Allow
+        // them as spawn targets so Task can delegate to external ACP agents —
+        // the same 口径 SessionControl / SessionMessage use for `acp__<client>`.
+        agents.extend(
+            registry
+                .get_modes_info()
+                .await
+                .into_iter()
+                .filter(|agent| agent.id.starts_with(AcpAgent::agent_id_prefix())),
+        );
+        agents
     }
 
     async fn get_agents_types(&self, context: Option<&ToolUseContext>) -> Vec<String> {

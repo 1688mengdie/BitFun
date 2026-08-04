@@ -71,6 +71,14 @@ impl TaskTool {
             }),
         );
         properties.insert(
+            "persistent".to_string(),
+            json!({
+                "type": "boolean",
+                "default": true,
+                "description": "Optional for action='spawn'. Defaults to true. When false the subagent is temporary: it is automatically recycled when the task finishes (success, failure, or cancellation), and the returned agent_id cannot be reused. When true the subagent session is retained and can be continued with 'send_input'."
+            }),
+        );
+        properties.insert(
             "max_turns".to_string(),
             json!({
                 "type": "integer",
@@ -121,6 +129,10 @@ The two modes are mutually exclusive: do not provide `subagent_type` when `fork_
 `run_in_background` usage:
 - false: Wait for the agent to finish and return its result to you.
 - true: Run the agent in the background without blocking you. The response includes a `bg_task_id`; use AgentWait when you need the results.
+
+`persistent` usage (action='spawn'):
+- true (default): the subagent session is durable; use `send_input` with the returned `agent_id` to continue it later.
+- false: one-shot temporary subagent. The session is automatically recycled when the task finishes (success, failure, or cancellation). The returned `agent_id` cannot be reused — treat the result as final.
 
 `model_id` usage:
 - Set it only when the user requests a particular model.

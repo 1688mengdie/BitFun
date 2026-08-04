@@ -1,10 +1,18 @@
 use super::*;
+use crate::agentic::coordination::{
+    get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
+};
 use crate::agentic::core::{SessionContinuationPolicy, SessionModelBindingPolicy};
 use crate::agentic::persistence::PersistenceManager;
 use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::infrastructure::PathManager;
 use crate::service::session::SessionTranscriptExportOptions;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
+use bitfun_runtime_ports::{
+    AcpClientCancelRequest, AcpClientCreateRequest, AcpClientMessageRequest,
+    AgentDialogPrependedReminder, AgentDialogTurnPort, AgentDialogTurnRequest,
+};
+use std::path::Path;
 use std::sync::Arc;
 
 fn resolve_focused_review_model_selection(
@@ -82,6 +90,35 @@ fn forward_subagent_invocation_context(
     }
 }
 
+/// Bounded window for external ACP task turns (seconds). A one-shot
+/// `acp__<client>` delegation forwards the prompt to the external agent with
+/// this timeout instead of an unbounded wait.
+const ACP_TASK_TIMEOUT_SECONDS: u64 = 600;
+
+/// Detect the ACP client id when `session_id` is a flow session id of the
+/// shape `acp_<client_id>_<uuid>` (created by the ACP port / SessionControl /
+/// the frontend `create_acp_flow_session`). Returns `None` for any other id.
+fn acp_flow_client_id_from_session_id(session_id: &str) -> Option<String> {
+    let rest = session_id.strip_prefix("acp_")?;
+    let (client_id, uuid_segment) = rest.rsplit_once('_')?;
+    if client_id.is_empty() || !looks_like_uuid(uuid_segment) {
+        return None;
+    }
+    Some(client_id.to_string())
+}
+
+/// Dependency-free canonical uuid shape guard for flow-session ids.
+fn looks_like_uuid(segment: &str) -> bool {
+    segment.len() == 36
+        && segment.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
+}
+
 struct BackgroundTaskStartRequest<'a> {
     coordinator: &'a std::sync::Arc<crate::agentic::coordination::ConversationCoordinator>,
     context: &'a ToolUseContext,
@@ -103,6 +140,9 @@ struct BackgroundTaskStartRequest<'a> {
     dialog_turn_id: String,
     /// Delegated RBAC role key (R-14 B4) for the child session.
     parent_role: Option<String>,
+    /// Lifecycle mode for the spawned subagent session (see
+    /// [`TaskInvocation::persistent`]).
+    persistent: bool,
     external_generation_lease: Option<crate::agentic::agents::ExternalSubagentGenerationLease>,
 }
 
@@ -329,6 +369,252 @@ impl TaskTool {
         }])
     }
 
+    /// Delegate to a real external ACP agent through a flow session.
+    ///
+    /// Covers both an `acp__<client>` spawn (creates a flow session via the ACP
+    /// client port, forwards the prompt to the external agent — no local model
+    /// turn) and continuation of an existing flow session (`send_input` /
+    /// `cancel` addressed by the flow session id returned by a previous ACP
+    /// spawn). Temporary spawns (`persistent=false`) recycle the flow session
+    /// (release the external process and delete the persisted record) as soon
+    /// as the task finishes.
+    async fn run_acp_subagent_invocation(
+        coordinator: &std::sync::Arc<crate::agentic::coordination::ConversationCoordinator>,
+        context: &ToolUseContext,
+        invocation: TaskInvocation,
+        spawn_client_id: Option<String>,
+        flow_target: Option<String>,
+        prompt: &str,
+        parent_session_id: &str,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let port = coordinator.acp_client_port().ok_or_else(|| {
+            BitFunError::tool(
+                "ACP client port is not available; the desktop host did not inject it".to_string(),
+            )
+        })?;
+        let workspace_path = context
+            .workspace_root()
+            .map(|path| path.to_string_lossy().into_owned());
+        let remote_connection_id = context
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.connection_id().map(ToOwned::to_owned));
+
+        // Continuation of an existing ACP flow session (send_input / cancel).
+        if let Some(flow_session_id) = flow_target {
+            return match invocation.action {
+                TaskAction::Cancel => {
+                    port.cancel_session(AcpClientCancelRequest {
+                        session_id: flow_session_id.clone(),
+                    })
+                    .await
+                    .map_err(|error| {
+                        BitFunError::tool(format!(
+                            "ACP client port failed ({:?}): {}",
+                            error.kind, error.message
+                        ))
+                    })?;
+                    Ok(vec![ToolResult::Result {
+                        data: json!({
+                            "action": "cancel",
+                            "status": "cancelled",
+                            "agent_id": flow_session_id,
+                        }),
+                        result_for_assistant: Some(
+                            "Cancelled the external ACP session.".to_string(),
+                        ),
+                        image_attachments: None,
+                    }])
+                }
+                TaskAction::SendInput => {
+                    let sent = port
+                        .send_message(AcpClientMessageRequest {
+                            session_id: flow_session_id.clone(),
+                            message: prompt.to_string(),
+                            workspace_path,
+                            timeout_seconds: Some(ACP_TASK_TIMEOUT_SECONDS),
+                        })
+                        .await
+                        .map_err(|error| {
+                            BitFunError::tool(format!(
+                                "ACP client port failed ({:?}): {}",
+                                error.kind, error.message
+                            ))
+                        })?;
+                    Ok(vec![ToolResult::Result {
+                        data: json!({
+                            "action": "send_input",
+                            "success": true,
+                            "agent_id": flow_session_id,
+                            "response": sent.response,
+                        }),
+                        result_for_assistant: Some(format!(
+                            "External ACP session responded:\n{}",
+                            sent.response
+                        )),
+                        image_attachments: None,
+                    }])
+                }
+                _ => Err(BitFunError::tool(
+                    "ACP flow sessions only support spawn, send_input, and cancel".to_string(),
+                )),
+            };
+        }
+
+        // Spawn: create a real external ACP flow session and forward the prompt.
+        let client_id = spawn_client_id.ok_or_else(|| {
+            BitFunError::tool(
+                "ACP subagent requires a subagent_type like 'acp__<client>'".to_string(),
+            )
+        })?;
+        let session_name = invocation.description.clone();
+        let created = port
+            .create_session(AcpClientCreateRequest {
+                client_id,
+                workspace_path: workspace_path.clone().unwrap_or_default(),
+                session_name,
+                remote_connection_id,
+            })
+            .await
+            .map_err(|error| {
+                BitFunError::tool(format!(
+                    "ACP client port failed ({:?}): {}",
+                    error.kind, error.message
+                ))
+            })?;
+        let flow_session_id = created.session_id;
+        let persistent = invocation.persistent;
+        let run_in_background = invocation.run_in_background;
+
+        if run_in_background {
+            let port_for_task = port.clone();
+            let flow_session_id_for_task = flow_session_id.clone();
+            let workspace_path_for_task = workspace_path.clone();
+            let prompt_for_task = prompt.to_string();
+            let parent_session_id_for_task = parent_session_id.to_string();
+            let scheduler = get_global_scheduler();
+            tokio::spawn(async move {
+                let sent = port_for_task
+                    .send_message(AcpClientMessageRequest {
+                        session_id: flow_session_id_for_task.clone(),
+                        message: prompt_for_task,
+                        workspace_path: workspace_path_for_task.clone(),
+                        timeout_seconds: Some(ACP_TASK_TIMEOUT_SECONDS),
+                    })
+                    .await;
+                let output_text = match &sent {
+                    Ok(result) => Some(result.response.clone()),
+                    Err(_) => None,
+                };
+                if let Some(scheduler) = scheduler.as_ref() {
+                    let _ = scheduler
+                        .submit_dialog_turn(AgentDialogTurnRequest {
+                            session_id: parent_session_id_for_task.clone(),
+                            message: output_text
+                                .clone()
+                                .unwrap_or_else(|| "ACP subagent task failed".to_string()),
+                            original_message: None,
+                            turn_id: None,
+                            execution: Default::default(),
+                            agent_type: String::new(),
+                            workspace_path: None,
+                            remote_connection_id: None,
+                            remote_ssh_host: None,
+                            policy: DialogSubmissionPolicy::for_source(
+                                DialogTriggerSource::AgentSession,
+                            ),
+                            reply_route: None,
+                            prepended_reminders: vec![AgentDialogPrependedReminder {
+                                kind: "task_subagent_result".to_string(),
+                                text: format!(
+                                    "Background ACP subagent task completed\nFrom ACP session: {}",
+                                    flow_session_id_for_task
+                                ),
+                            }],
+                            attachments: Vec::new(),
+                            metadata: serde_json::Map::new(),
+                        })
+                        .await;
+                }
+                if !persistent {
+                    let _ = port_for_task
+                        .delete_session_record(flow_session_id_for_task, workspace_path_for_task)
+                        .await;
+                }
+            });
+            return Ok(vec![ToolResult::Result {
+                data: json!({
+                    "action": "spawn",
+                    "status": "started",
+                    "run_in_background": true,
+                    "agent_id": flow_session_id,
+                    "agent_type": created.agent_type,
+                }),
+                result_for_assistant: Some(format!(
+                    "Background external ACP subagent started.\nagent_id: \"{}\"\nThe result will be delivered back to this session automatically.",
+                    flow_session_id
+                )),
+                image_attachments: None,
+            }]);
+        }
+
+        // Foreground: forward the prompt and return the external response. A
+        // one-shot session is recycled even when the external turn fails so a
+        // failed temporary ACP task never leaks its flow session/process.
+        let sent = match port
+            .send_message(AcpClientMessageRequest {
+                session_id: flow_session_id.clone(),
+                message: prompt.to_string(),
+                workspace_path: workspace_path.clone(),
+                timeout_seconds: Some(ACP_TASK_TIMEOUT_SECONDS),
+            })
+            .await
+        {
+            Ok(sent) => sent,
+            Err(error) => {
+                if !persistent {
+                    let _ = port
+                        .delete_session_record(flow_session_id.clone(), workspace_path)
+                        .await;
+                }
+                return Err(BitFunError::tool(format!(
+                    "ACP client port failed ({:?}): {}",
+                    error.kind, error.message
+                )));
+            }
+        };
+        if !persistent {
+            let _ = port
+                .delete_session_record(flow_session_id.clone(), workspace_path)
+                .await;
+        }
+        let mut data = json!({
+            "action": "spawn",
+            "success": true,
+            "status": "completed",
+            "agent_id": flow_session_id.clone(),
+            "agent_type": created.agent_type,
+            "response": sent.response,
+        });
+        let mut result_for_assistant = format!(
+            "External ACP session '{}' responded:\n{}",
+            flow_session_id, sent.response
+        );
+        if persistent {
+            result_for_assistant.push_str(&format!(
+                "\n<subagent id=\"{}\">Use this agent_id to continue the same external ACP subagent.</subagent>",
+                flow_session_id
+            ));
+        } else {
+            data["recycled"] = json!(true);
+        }
+        Ok(vec![ToolResult::Result {
+            data,
+            result_for_assistant: Some(result_for_assistant),
+            image_attachments: None,
+        }])
+    }
+
     async fn run_subagent_invocation(
         &self,
         input: &Value,
@@ -344,7 +630,7 @@ impl TaskTool {
         // the default subagent role (Executor); the creator's registered RBAC
         // role is read from the session registry (B2).
         let creator_role = context.session_id.as_deref().and_then(get_session_role);
-        let target_role = invocation.role.unwrap_or(AgentRole::Executor);
+        let target_role = invocation.role.clone().unwrap_or(AgentRole::Executor);
         validate_delegation(creator_role, target_role.clone())?;
 
         let coordinator = get_global_coordinator()
@@ -374,6 +660,33 @@ impl TaskTool {
             )
         })?;
         let context_mode = invocation.context_mode;
+        // ACP bridge delegation: a `acp__<client>` spawn targets a real
+        // external ACP flow session (same shape as SessionControl acp__ create)
+        // instead of a local model turn, and a flow-session agent_id from a
+        // previous ACP spawn continues through the same external channel. Both
+        // are routed before the local subagent machinery.
+        let acp_spawn_client_id = invocation
+            .subagent_type
+            .as_deref()
+            .and_then(|agent_type| agent_type.strip_prefix(AcpAgent::agent_id_prefix()))
+            .filter(|client_id| !client_id.trim().is_empty())
+            .map(ToOwned::to_owned);
+        let acp_flow_target = invocation
+            .target_agent_id
+            .as_deref()
+            .and_then(acp_flow_client_id_from_session_id);
+        if acp_spawn_client_id.is_some() || acp_flow_target.is_some() {
+            return Self::run_acp_subagent_invocation(
+                &coordinator,
+                context,
+                invocation,
+                acp_spawn_client_id,
+                acp_flow_target,
+                &prompt,
+                &session_id,
+            )
+            .await;
+        }
         let target_session_id = match invocation.target_agent_id.as_deref() {
             // spawn/send_input targets must resolve inside the caller's session
             // subtree; global fallback is forbidden so a conversation cannot
@@ -858,6 +1171,7 @@ impl TaskTool {
                 session_id,
                 dialog_turn_id,
                 parent_role: Some(target_role.as_str().to_string()),
+                persistent: invocation.persistent,
                 external_generation_lease,
             })
             .await;
@@ -884,6 +1198,7 @@ impl TaskTool {
             dialog_turn_id,
             Some(target_role.as_str().to_string()),
             delegate_target_label,
+            invocation.persistent,
             deep_review_subagent_role,
             deep_review_active_guard,
             deep_review_reviewer_configured_max_parallel_instances,
@@ -922,6 +1237,7 @@ impl TaskTool {
             session_id,
             dialog_turn_id,
             parent_role,
+            persistent,
             external_generation_lease,
         } = request;
         let parent_info = SubagentParentInfo {
@@ -946,6 +1262,7 @@ impl TaskTool {
             context: subagent_context.unwrap_or_default(),
             permission_runtime_ceiling,
             delegation_policy: context.delegation_policy().spawn_child(),
+            persistent,
             external_generation_lease,
         };
         let coordinator = coordinator.clone();
@@ -1000,6 +1317,7 @@ impl TaskTool {
         dialog_turn_id: String,
         parent_role: Option<String>,
         delegate_target_label: String,
+        persistent: bool,
         deep_review_subagent_role: Option<DeepReviewSubagentRole>,
         deep_review_active_guard: Option<DeepReviewActiveReviewerGuard<'static>>,
         deep_review_reviewer_configured_max_parallel_instances: Option<usize>,
@@ -1052,6 +1370,7 @@ impl TaskTool {
                 context: subagent_context.clone().unwrap_or_default(),
                 permission_runtime_ceiling: permission_runtime_ceiling.clone(),
                 delegation_policy: context.delegation_policy().spawn_child(),
+                persistent,
                 external_generation_lease: external_generation_lease.clone(),
             };
             let coordinator = coordinator.clone();
@@ -1336,7 +1655,10 @@ impl TaskTool {
                     session_id: result.session_id(),
                 },
             );
-        if supports_follow_up {
+        // One-shot spawns never hand out a continuation handle: the session is
+        // recycled right after this result, so a follow-up agent_id would be
+        // misleading.
+        if supports_follow_up && persistent {
             if let Some(subagent_session_id) = result.session_id() {
                 let agent_id = coordinator
                     .agent_id_for_subagent_session(&session_id, subagent_session_id)
@@ -1346,6 +1668,38 @@ impl TaskTool {
                 "\n<subagent id=\"{}\">Use this agent_id to continue the same subagent.</subagent>",
                 agent_id
             ));
+            }
+        }
+
+        // Temporary subagent (`persistent=false`): recycle the one-shot session
+        // as soon as the task finishes successfully, so it never accumulates.
+        // Best-effort — the coordinator logs cleanup failures and never fails
+        // the task result. Execution-error paths (cancellation, timeout,
+        // crash) are recycled inside `execute_subagent`.
+        if !persistent {
+            if let Some(subagent_session_id) = result.session_id() {
+                let (recycle_workspace, recycle_remote_connection_id, recycle_remote_ssh_host) =
+                    coordinator
+                        .get_session_manager()
+                        .get_session(subagent_session_id)
+                        .map(|session| {
+                            (
+                                session.config.workspace_path,
+                                session.config.remote_connection_id,
+                                session.config.remote_ssh_host,
+                            )
+                        })
+                        .unwrap_or_default();
+                if let Some(recycle_workspace) = recycle_workspace {
+                    coordinator
+                        .recycle_temporary_subagent_session(
+                            Some(Path::new(&recycle_workspace)),
+                            recycle_remote_connection_id.as_deref(),
+                            recycle_remote_ssh_host.as_deref(),
+                            subagent_session_id,
+                        )
+                        .await;
+                }
             }
         }
 

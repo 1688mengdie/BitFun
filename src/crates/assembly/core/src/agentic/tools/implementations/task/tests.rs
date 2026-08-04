@@ -134,6 +134,53 @@ fn task_schema_accepts_optional_model_id() {
 }
 
 #[test]
+fn task_persistent_defaults_to_true_for_spawn() {
+    let invocation = TaskTool::parse_invocation(
+        &json!({
+            "action": "spawn",
+            "description": "Inspect parser",
+            "prompt": "Inspect the parser flow.",
+            "subagent_type": "Explore",
+        }),
+        false,
+    )
+    .expect("spawn without persistent should parse");
+    assert!(invocation.persistent);
+}
+
+#[test]
+fn task_persistent_false_parses_one_shot_lifecycle() {
+    let invocation = TaskTool::parse_invocation(
+        &json!({
+            "action": "spawn",
+            "description": "One-shot report",
+            "prompt": "Produce a report.",
+            "subagent_type": "GeneralPurpose",
+            "persistent": false,
+        }),
+        false,
+    )
+    .expect("spawn with persistent=false should parse");
+    assert!(!invocation.persistent);
+}
+
+#[test]
+fn task_persistent_is_rejected_for_non_spawn_actions() {
+    let error = TaskTool::parse_invocation(
+        &json!({
+            "action": "send_input",
+            "agent_id": "a1",
+            "description": "Continue",
+            "prompt": "Continue the work.",
+            "persistent": true,
+        }),
+        false,
+    )
+    .expect_err("persistent is not allowed for send_input");
+    assert!(error.to_string().contains("persistent is not allowed"));
+}
+
+#[test]
 fn task_model_id_inherit_requests_parent_model_inheritance() {
     let invocation = TaskTool::parse_invocation(
         &json!({
