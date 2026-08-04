@@ -51,6 +51,59 @@ function validAction(action: ReasoningPresetAction): boolean {
   }
 }
 
+export const REASONING_ACTION_TYPES: ReasoningPresetAction['type'][] = [
+  'effort',
+  'toggle',
+  'budget_tokens',
+  'request_patch',
+];
+
+const SINGLETON_REASONING_ACTION_TYPES = new Set<ReasoningPresetAction['type']>([
+  'effort',
+  'toggle',
+  'budget_tokens',
+]);
+
+function isSingletonReasoningActionType(
+  type: ReasoningPresetAction['type'],
+): boolean {
+  return SINGLETON_REASONING_ACTION_TYPES.has(type);
+}
+
+export function availableReasoningActionTypes(
+  actions: ReasoningPresetAction[],
+  currentIndex?: number,
+): ReasoningPresetAction['type'][] {
+  const currentType = currentIndex === undefined ? undefined : actions[currentIndex]?.type;
+  const usedByOtherActions = new Set(
+    actions
+      .filter((_, index) => index !== currentIndex)
+      .map(action => action.type)
+      .filter(isSingletonReasoningActionType),
+  );
+
+  return REASONING_ACTION_TYPES.filter(type => (
+    !isSingletonReasoningActionType(type)
+    || type === currentType
+    || !usedByOtherActions.has(type)
+  ));
+}
+
+export function nextReasoningActionType(
+  actions: ReasoningPresetAction[],
+): ReasoningPresetAction['type'] {
+  return availableReasoningActionTypes(actions)[0] ?? 'request_patch';
+}
+
+function hasDuplicateSingletonActions(actions: ReasoningPresetAction[]): boolean {
+  const seen = new Set<ReasoningPresetAction['type']>();
+  for (const action of actions) {
+    if (isSingletonReasoningActionType(action.type) && seen.has(action.type)) return true;
+    seen.add(action.type);
+  }
+  return false;
+}
+
 export type ReasoningConfigValidationError =
   | 'catalog_binding'
   | 'preset_id'
@@ -79,7 +132,14 @@ export function validateReasoningConfig(
     if (!id) return 'preset_id';
     if (ids.has(id)) return 'duplicate_preset_id';
     ids.add(id);
-    if (!preset.disabled && (!preset.actions?.length || !preset.actions.every(validAction))) {
+    if (
+      !preset.disabled
+      && (
+        !preset.actions?.length
+        || !preset.actions.every(validAction)
+        || hasDuplicateSingletonActions(preset.actions)
+      )
+    ) {
       return 'preset_setting';
     }
     if (!preset.disabled && preset.actions?.length) selectableIds.add(id);
