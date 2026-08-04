@@ -62,8 +62,11 @@ pub fn parse_update_goal_status(raw: &str) -> Result<ThreadGoalStatus, ThreadGoa
     match raw.trim().to_ascii_lowercase().as_str() {
         "complete" => Ok(ThreadGoalStatus::Complete),
         "blocked" => Ok(ThreadGoalStatus::Blocked),
+        // `resume` maps to `Active`; the runtime transition gate enforces
+        // that only resumable statuses may move back to `Active`.
+        "resume" => Ok(ThreadGoalStatus::Active),
         other => Err(ThreadGoalToolError::validation(format!(
-            "update_goal status must be complete or blocked, got {other}"
+            "update_goal status must be complete, blocked, or resume, got {other}"
         ))),
     }
 }

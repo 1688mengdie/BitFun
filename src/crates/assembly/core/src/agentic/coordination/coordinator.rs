@@ -1,9 +1,35 @@
-//! Conversation coordinator
+//! Conversation coordinator — top-level component integrating all agentic subsystems.
 //!
-//! Top-level component that integrates all subsystems and provides a unified interface
+//! # Functional sections (ordered by appearance)
+//!
+//! | Section | Approx. lines | Description |
+//! |---|---|---|
+//! | Constants | 97–200 | Concurrency limits, tool names, timeouts, token budgets. |
+//! | Helper types | 202–713 | `AgentRoundInjectionSource`, `SubagentConcurrencyLimiter`, `SessionBackgroundSubagentState`. |
+//! | `ConversationCoordinator` struct | 715–800 | Central coordinator holding session manager, execution engine, event router, tool pipeline, thread goal runtime, session tree, etc. |
+//! | Construction & lifecycle | 802–1460 | `new()`, `set_terminal_port()`, `set_remote_exec_port()`, `session_tree()`, scheduler notifier wiring. |
+//! | Session config & model resolution | 1460–2948 | Workspace resolution, model binding, context profiles, session config defaults. |
+//! | Context compaction | 2948–4038 | Manual (`/compact`) and automatic context compression. |
+//! | Dialog turn submission & execution | 4038–4370 | Submitting user messages, background results, steering injections into running turns. |
+//! | Session lifecycle management | 4370–4810 | `delete_session()`, `delete_hidden_subagent_sessions_for_parent_turns()`, `list_sessions()`, `cancel_session()`. |
+//! | Event subscription | 4810–4828 | `subscribe_internal()`, `unsubscribe_internal()`. |
+//! | Subagent concurrency | 4828–6189 | Semaphore-based concurrency limiting, background subagent wait/outcome handling. |
+//! | Hidden subagent sessions | 6190–7200 | Hidden "behind-the-work" subagent sessions for background tasks. |
+//! | Thread goal management | 7200–8000 | Goal-mode continuation loop, token budget enforcement, thread goal status transitions. |
+//! | Workspace bootstrap | 8000–8089 | Persona file injection, workspace readiness checks. |
+//! | `AgentSessionManagementPort` impl | 8089–8666 | Port trait implementation for session create / list / cancel / delete / rename / fork. |
+//! | Global singleton & helpers | 8666–10680 | `get_global_coordinator()`, `runtime_session_summary()`, error mapping helpers. |
+//! | Tests | 10680–end | Unit tests for model resolution, session management, subagent delegation, etc. |
+//!
+//! # Key design notes
+//!
+//! - The coordinator is a **singleton** (`OnceLock<Arc<ConversationCoordinator>>`).
+//! - All mutable state lives behind `Arc<DashMap<…>>` or `Arc<RwLock<…>>` to support concurrent access.
+//! - The session tree (`SessionTreeManager`) is lazily populated from persisted metadata on first `list_sessions` (R-004).
+//! - Authorization for cancel/delete uses in-memory tree first, then falls back to persisted metadata chain query.
 
 use super::{
-    coordination_store::{BackgroundTaskRegistration, CoordinationStore},
+    coordination_store::{BackgroundTaskRecord, BackgroundTaskRegistration, CoordinationStore},
     scheduler::{
         abort_thread_goal_continuation_for_session, clear_thread_goal_continuation_abort,
         get_global_scheduler, DialogSubmissionPolicy, HiddenSubagentQueueCancelHandle,
@@ -50,9 +76,10 @@ use crate::agentic::tools::pipeline::{
     PrimaryModelFacts, SubagentParentInfo, ToolExecutionContext, ToolExecutionOptions, ToolPipeline,
 };
 use crate::agentic::tools::{
-    miniapp_agent_run_tool_restrictions,
+    clear_session_role, clear_session_restrictions, get_session_role, miniapp_agent_run_tool_restrictions,
+    set_session_role, subagent_tool_restrictions,
     tool_restrictions_for_delegation_policy as runtime_tool_restrictions_for_delegation_policy,
-    ToolRuntimeRestrictions,
+    AgentRole, ToolRuntimeRestrictions,
 };
 use crate::agentic::workspace::WorkspaceServices;
 use crate::agentic::WorkspaceBinding;
@@ -71,8 +98,8 @@ use crate::service::config::{
 };
 use crate::service::remote_ssh::normalize_remote_workspace_path;
 use crate::service::session::{
-    DialogTurnData, SessionMemoryMode, SessionRelationship, SessionRelationshipKind, SessionStatus,
-    ToolItemIdentityExt, TurnStatus,
+    DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
+    SessionRelationshipKind, SessionStatus, ToolItemIdentityExt, TurnStatus,
 };
 use crate::service::workspace::{
     get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions, WorkspaceInfo,
@@ -91,19 +118,23 @@ use bitfun_agent_runtime::remote_file_delivery::{
 };
 use bitfun_agent_runtime::sdk::PermissionReply;
 use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
+use bitfun_events::agentic::SubagentCompletionStatus;
 use bitfun_events::{ToolEventData, ToolEventIdentity};
 use bitfun_product_domains::external_sources::EcosystemId;
 use bitfun_runtime_ports::{
-    agent_workspace_references_from_metadata, AgentMessageWorkspaceReferencesRequest,
-    AgentSessionComposerUpdate, AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind,
-    AgentThreadGoalDeliveryRequest, AgentWorkspaceReference, AgentWorkspaceReferenceKind,
-    AgentWorkspaceReferenceSearchEntry, AgentWorkspaceReferenceSearchRequest,
-    AgentWorkspaceReferenceSearchResult, DelegationPolicy, PermissionDelegationContext,
-    PermissionRuntimeCeiling, RemoteExecPort, SessionStoragePathRequest,
-    SessionStoragePathResolution, SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal,
-    ThreadGoalContinuationPlan, ThreadGoalStatus,
+    AcpClientPort, agent_workspace_references_from_metadata, AgentDialogPrependedReminder,
+    AgentDialogTurnPort,
+    AgentDialogTurnRequest, AgentMessageWorkspaceReferencesRequest, AgentSessionComposerUpdate,
+    AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
+    AgentWorkspaceReference, AgentWorkspaceReferenceKind, AgentWorkspaceReferenceSearchEntry,
+    AgentWorkspaceReferenceSearchRequest, AgentWorkspaceReferenceSearchResult, DelegationPolicy,
+    PermissionDelegationContext, PermissionRuntimeCeiling, RemoteExecPort,
+    SessionStoragePathRequest, SessionStoragePathResolution, SessionStorePort, SubagentContextMode,
+    TerminalPort, ThreadGoal, ThreadGoalContinuationPlan, ThreadGoalStatus,
 };
 use bitfun_services_core::filesystem::{FileSearchOptions, FileSystemService, FileTreeNode};
+use bitfun_services_core::session::merge_session_custom_metadata;
+use bitfun_services_core::session::tree::SessionTreeManager;
 use bitfun_services_core::workspace_text::{
     normalize_workspace_relative_path, resolve_workspace_relative_entry, WorkspaceEntryKind,
     WorkspaceTextReadError,
@@ -421,6 +452,19 @@ fn runtime_tool_restrictions_for_session_lifetime(
     restrictions
 }
 
+/// Restrictions for a delegated subagent run: delegation-policy gate +
+/// subagent deny list (host surfaces, MiniApp lifecycle, AgentWait), then the
+/// transient-session lifetime gate. Computed once at request construction so
+/// runtime enforcement stays zero-overhead.
+fn runtime_tool_restrictions_for_subagent(
+    delegation_policy: DelegationPolicy,
+    transient: bool,
+) -> ToolRuntimeRestrictions {
+    let mut restrictions = runtime_tool_restrictions_for_delegation_policy(delegation_policy);
+    restrictions.merge(&subagent_tool_restrictions());
+    runtime_tool_restrictions_for_session_lifetime(restrictions, transient)
+}
+
 /// Subagent execution result
 ///
 /// Contains the text response after subagent execution
@@ -551,6 +595,7 @@ fn build_subagent_session_relationship(
     parent_info: Option<&SubagentParentInfo>,
     agent_type: &str,
     continuation_policy: SessionContinuationPolicy,
+    parent_depth: Option<u32>,
 ) -> SessionRelationship {
     SessionRelationship {
         kind: Some(SessionRelationshipKind::Subagent),
@@ -561,6 +606,7 @@ fn build_subagent_session_relationship(
         parent_tool_call_id: parent_info.map(|info| info.tool_call_id.clone()),
         subagent_type: Some(agent_type.to_string()),
         continuation_policy: Some(continuation_policy),
+        depth: Some(parent_depth.map(|d| d + 1).unwrap_or(1)),
     }
 }
 
@@ -612,6 +658,8 @@ fn subagent_parent_info_from_relationship(
         session_id: parent_session_id.to_string(),
         dialog_turn_id: parent_dialog_turn_id.to_string(),
         tool_call_id: parent_tool_call_id.to_string(),
+        depth: relationship.depth,
+        role: get_session_role(parent_session_id).map(|role| role.as_str().to_string()),
     })
 }
 
@@ -895,6 +943,56 @@ impl Drop for SubagentExecutionScope {
 
             session_manager
                 .reset_session_state_if_processing(&subagent_session_id, &subagent_dialog_turn_id);
+
+            // Release the transient subagent family. This drop path only runs
+            // for abandoned executions (not disarmed), so no reuse reference
+            // can remain: the parent await that would have consumed the child
+            // context is gone. Discard the whole in-memory transient family
+            // (cascade); Reusable children that are still owned by a live
+            // parent are left untouched because their parent session is not
+            // being dropped.
+            if session_manager.is_transient_session(&subagent_session_id) {
+                if let Some(session) = session_manager.get_session(&subagent_session_id) {
+                    match session.config.workspace_path.as_deref().map(Path::new) {
+                        Some(workspace_path) => {
+                            match session_manager
+                                .discard_transient_session(
+                                    workspace_path,
+                                    session.config.remote_connection_id.as_deref(),
+                                    session.config.remote_ssh_host.as_deref(),
+                                    &subagent_session_id,
+                                )
+                                .await
+                            {
+                                Ok(true) => {
+                                    info!(
+                                        "Discarded transient subagent family on scope drop: session_id={subagent_session_id}"
+                                    );
+                                }
+                                Ok(false) => {
+                                    debug!(
+                                        "Transient subagent family already released on scope drop: session_id={subagent_session_id}"
+                                    );
+                                }
+                                Err(error) => {
+                                    // A processing session cannot be discarded
+                                    // yet; the transient sweep releases it once
+                                    // it settles.
+                                    warn!(
+                                        "Failed to discard transient subagent family on scope drop: session_id={}, error={}",
+                                        subagent_session_id, error
+                                    );
+                                }
+                            }
+                        }
+                        None => {
+                            warn!(
+                                "Transient subagent workspace binding is missing on scope drop: session_id={subagent_session_id}"
+                            );
+                        }
+                    }
+                }
+            }
         });
     }
 }
@@ -1066,7 +1164,7 @@ fn lineage_post_admission_cancellation_error(
 
 /// Conversation coordinator
 pub struct ConversationCoordinator {
-    session_manager: Arc<SessionManager>,
+    pub(crate) session_manager: Arc<SessionManager>,
     runtime_ownership: Arc<CoreRuntimeOwnership>,
     execution_engine: Arc<ExecutionEngine>,
     tool_pipeline: Arc<ToolPipeline>,
@@ -1102,6 +1200,9 @@ pub struct ConversationCoordinator {
     thread_goal_runtime: Arc<ThreadGoalRuntime>,
     terminal_port: OnceLock<Arc<dyn TerminalPort>>,
     remote_exec_port: OnceLock<Arc<dyn RemoteExecPort>>,
+    acp_client_port: OnceLock<Arc<dyn AcpClientPort>>,
+    /// R-003: In-memory session tree for parent-child relationship tracking.
+    session_tree: Arc<SessionTreeManager>,
 }
 
 impl ConversationCoordinator {
@@ -2076,6 +2177,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             thread_goal_runtime: Arc::new(ThreadGoalRuntime::new()),
             terminal_port: OnceLock::new(),
             remote_exec_port: OnceLock::new(),
+            acp_client_port: OnceLock::new(),
+            session_tree: Arc::new(SessionTreeManager::new(
+                bitfun_core_types::session_tree::MAX_TREE_DEPTH,
+            )),
         }
     }
 
@@ -2207,6 +2312,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Arc::clone(&self.thread_goal_runtime)
     }
 
+    /// Accessor for the shared tool pipeline (used by the scheduler to inject
+    /// the Warden runtime for tool-level audit).
+    pub(crate) fn tool_pipeline(&self) -> Arc<ToolPipeline> {
+        Arc::clone(&self.tool_pipeline)
+    }
+
     pub fn set_terminal_port(&self, terminal_port: Arc<dyn TerminalPort>) {
         if self.terminal_port.set(terminal_port).is_err() {
             log::warn!("Terminal port is already configured; ignoring duplicate injection");
@@ -2225,6 +2336,24 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
     pub fn remote_exec_port(&self) -> Option<Arc<dyn RemoteExecPort>> {
         self.remote_exec_port.get().map(Arc::clone)
+    }
+
+    /// Injects the ACP client runtime port (desktop host implements it over
+    /// `AcpClientService`). Core tools reach the real external ACP process
+    /// only through this boundary.
+    pub fn set_acp_client_port(&self, acp_client_port: Arc<dyn AcpClientPort>) {
+        if self.acp_client_port.set(acp_client_port).is_err() {
+            log::warn!("ACP client port is already configured; ignoring duplicate injection");
+        }
+    }
+
+    pub fn acp_client_port(&self) -> Option<Arc<dyn AcpClientPort>> {
+        self.acp_client_port.get().map(Arc::clone)
+    }
+
+    /// R-003: Access the in-memory session tree manager.
+    pub fn session_tree(&self) -> &Arc<SessionTreeManager> {
+        &self.session_tree
     }
 
     pub(super) fn execution_cancel_token_for_dialog_turn(
@@ -2400,10 +2529,170 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace_path,
             created_by,
             false,
+            false,
+            None,
+            None,
         )
         .await
     }
 
+    /// Whether a restored session carries a persisted subagent marker.
+    ///
+    /// Subagent-marked sessions (SessionControl lineage `relationship.kind` or
+    /// the `subagent`/`subagentType` custom-metadata keys written by the create
+    /// chain) are always executors; a persisted `role=commander` on such a
+    /// session is a stale pre-fix value and must be overridden on restore.
+    fn is_subagent_marked_metadata(metadata: &SessionMetadata) -> bool {
+        metadata
+            .relationship
+            .as_ref()
+            .and_then(|relationship| relationship.kind.as_ref())
+            .is_some_and(|kind| *kind == SessionRelationshipKind::Subagent)
+            || metadata.tags.iter().any(|tag| tag == "subagent")
+            || metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get("subagent"))
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false)
+    }
+
+    /// Derive the RBAC role for a restored session whose persisted role key is
+    /// missing or unknown.
+    ///
+    /// Subagent-marked sessions restore as executors; everything else degrades
+    /// to the commander baseline.
+    fn derive_session_role_from_metadata(metadata: &SessionMetadata) -> AgentRole {
+        if Self::is_subagent_marked_metadata(metadata) {
+            AgentRole::Executor
+        } else {
+            AgentRole::Commander
+        }
+    }
+
+    /// Resolve the RBAC role assigned to a session at creation time (R-14 B2).
+    ///
+    /// - Subagent/EphemeralSubagent sessions are always executors: they run
+    ///   delegated work, so they carry the executor role semantics.
+    /// - Any other session inherits its creator's role; an unknown creator
+    ///   degrades to the commander (permissive) baseline.
+    /// - A main session (no creator) is the commander.
+    pub(crate) fn resolve_session_role(
+        kind: SessionKind,
+        creator_role: Option<AgentRole>,
+    ) -> AgentRole {
+        if kind == SessionKind::Subagent || kind == SessionKind::EphemeralSubagent {
+            AgentRole::Executor
+        } else {
+            creator_role.unwrap_or(AgentRole::Commander)
+        }
+    }
+
+    /// Register the RBAC role for a freshly created session (R-14 B2).
+    ///
+    /// The role is written to the in-memory `SESSION_ROLES` registry — the
+    /// fast, synchronous path used by delegation validation — and persisted
+    /// into the session metadata `custom_metadata.role` so it survives
+    /// restarts. Persistence is best-effort: a failure only degrades
+    /// restart-time re-registration, never session creation.
+    async fn register_session_role(
+        &self,
+        session_id: &str,
+        created_by: Option<&str>,
+        kind: SessionKind,
+        workspace_path: Option<&Path>,
+    ) {
+        let creator_role = created_by.and_then(get_session_role);
+        let role = Self::resolve_session_role(kind, creator_role);
+        let role_key = role.as_str().to_string();
+        if let Err(e) = set_session_role(session_id, role) {
+            warn!(
+                "Failed to register RBAC role for session {}: {}",
+                session_id, e
+            );
+            return;
+        }
+        let Some(workspace_path) = workspace_path else {
+            return;
+        };
+        if let Err(e) = self
+            .session_manager
+            .update_session_metadata(workspace_path, session_id, |metadata| {
+                merge_session_custom_metadata(metadata, serde_json::json!({ "role": role_key }));
+            })
+            .await
+        {
+            warn!(
+                "Failed to persist RBAC role for session {}: {}",
+                session_id, e
+            );
+        }
+    }
+
+    /// Re-register the persisted RBAC role (R-14 B2) after a session restore.
+    ///
+    /// Best-effort: a missing or unknown role key is derived from the
+    /// persisted lineage facts (subagent-marked sessions restore as executors,
+    /// everything else defaults to the commander baseline) so delegation
+    /// validation stays permissive instead of erroring on stale metadata.
+    async fn restore_session_role_best_effort(&self, workspace_path: &Path, session_id: &str) {
+        let Ok(Some(metadata)) = self
+            .session_manager
+            .load_session_metadata(workspace_path, session_id)
+            .await
+        else {
+            return;
+        };
+        let persisted_role = metadata
+            .custom_metadata
+            .as_ref()
+            .and_then(|value| value.get("role"))
+            .and_then(|value| value.as_str())
+            .and_then(AgentRole::from_str_key);
+        let (role, derived) = match persisted_role {
+            // A subagent-marked session can never be a commander: the persisted
+            // value is a stale pre-fix artifact and must be overridden so the
+            // session restores as executor.
+            Some(AgentRole::Commander) if Self::is_subagent_marked_metadata(&metadata) => {
+                (AgentRole::Executor, true)
+            }
+            Some(role) => (role, false),
+            // Legacy sessions created before role persistence carry no role
+            // key; derive it from the persisted lineage facts instead of
+            // silently leaving the session unregistered (which surfaces as a
+            // generic "Agent" label in the UI).
+            None => (Self::derive_session_role_from_metadata(&metadata), true),
+        };
+        let role_key = role.as_str().to_string();
+        if let Err(e) = set_session_role(session_id, role) {
+            warn!(
+                "Failed to re-register RBAC role for restored session {}: {}",
+                session_id, e
+            );
+            return;
+        }
+        if derived {
+            // Best-effort persist the derived role so the next restore reads
+            // the explicit key and skips re-derivation.
+            if let Err(e) = self
+                .session_manager
+                .update_session_metadata(workspace_path, session_id, |metadata| {
+                    merge_session_custom_metadata(
+                        metadata,
+                        serde_json::json!({ "role": role_key }),
+                    );
+                })
+                .await
+            {
+                warn!(
+                    "Failed to persist derived RBAC role for restored session {}: {}",
+                    session_id, e
+                );
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn create_session_with_workspace_and_creator_internal(
         &self,
         session_id: Option<String>,
@@ -2413,6 +2702,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         workspace_path: String,
         created_by: Option<String>,
         transient: bool,
+        skip_context_window_refresh: bool,
+        parent_session_id: Option<String>,
+        subagent_type: Option<String>,
     ) -> BitFunResult<Session> {
         // Persist the workspace binding inside the session config so execution can
         // consistently restore the correct workspace regardless of the entry point.
@@ -2444,6 +2736,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         );
         let defaults = Self::agent_model_defaults().await;
         snapshot_normal_session_model(&mut config, &defaults);
+        let creator = created_by.clone();
+        // Subagent-marked creations (the SessionControl create chain sets
+        // metadata.subagent=true and carries a subagent_type) map to the
+        // Subagent kind here so `resolve_session_role` yields the executor
+        // role instead of the commander baseline. Plain creations keep the
+        // SessionManager default Standard kind.
+        let session_kind = if subagent_type.is_some() || skip_context_window_refresh {
+            SessionKind::Subagent
+        } else {
+            SessionKind::Standard
+        };
         let session = if transient {
             self.session_manager
                 .create_transient_session_with_id_and_details(
@@ -2452,20 +2755,34 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     agent_type,
                     config,
                     created_by,
-                    SessionKind::Standard,
+                    session_kind,
                 )
                 .await?
         } else {
             self.session_manager
-                .create_session_with_id_and_creator(
+                .create_session_with_id_and_details(
                     session_id,
                     session_name,
                     agent_type,
                     config,
                     created_by,
+                    session_kind,
                 )
                 .await?
         };
+
+        // R-14 B2: assign the RBAC role at creation time (main session =>
+        // commander, subagent sessions => executor, otherwise inherit the
+        // creator role) and persist it with the session metadata. Transient
+        // sessions register in memory only; they are never persisted.
+        let role_workspace_path = (!transient).then(|| Path::new(&workspace_path));
+        self.register_session_role(
+            &session.session_id,
+            creator.as_deref(),
+            session.kind,
+            role_workspace_path,
+        )
+        .await;
 
         if !transient {
             Self::track_session_workspace_activity_best_effort(
@@ -2482,6 +2799,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // resolve to a different effective storage path and double-writing can leave
         // metadata/turn files split across two locations.
 
+        // Sync context window from AI config after session creation.
+        // SessionConfig::default() hardcodes max_context_tokens: 1M,
+        // but the selected model may support more (e.g. 1M for DeepSeek).
+        // Subagent sessions keep the forced 1M window and skip this refresh.
+        if !skip_context_window_refresh {
+            let _ = self
+                .session_manager
+                .refresh_session_context_window(&session.session_id)
+                .await;
+        }
+
         self.emit_event(AgenticEvent::SessionCreated {
             session_id: session.session_id.clone(),
             session_name: session.session_name.clone(),
@@ -2492,9 +2820,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             workspace_id: session.config.workspace_id.clone(),
             remote_connection_id: session.config.remote_connection_id.clone(),
             remote_ssh_host: session.config.remote_ssh_host.clone(),
+            parent_session_id,
+            subagent_type,
         })
         .await;
         Self::dispatch_session_start_hooks(&session, "startup").await;
+        // Custom SessionStart injection (outside hook gating): make the
+        // session's RBAC role visible to the model on startup.
+        self.inject_session_start_context(&session).await;
         Ok(session)
     }
 
@@ -2538,6 +2871,120 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         .await;
     }
 
+    /// Custom SessionStart injection (outside hook gating): make the RBAC role
+    /// visible to the model at session startup.
+    ///
+    /// The role was already registered by [`Self::register_session_role`]
+    /// during creation; this only adds the model-visible context. Best-effort:
+    /// a failed write degrades to a warning, never blocks session creation.
+    async fn inject_session_start_context(&self, session: &Session) {
+        let Some(role) = get_session_role(&session.session_id) else {
+            return;
+        };
+        let mut lines = vec![
+            "[Legion Context]".to_string(),
+            format!("Assigned role: {} — {}", role.as_str(), Self::role_duty_summary(role)),
+        ];
+        if let Some(creator_id) = session.created_by.as_deref() {
+            if let Some(creator_role) = get_session_role(creator_id) {
+                lines.push(format!(
+                    "Created by session {} with role {}",
+                    creator_id,
+                    creator_role.as_str()
+                ));
+            }
+        }
+        let context = lines.join("\n");
+        if let Err(err) = self
+            .session_manager
+            .add_message(
+                &session.session_id,
+                Message::internal_reminder(InternalReminderKind::LifecycleContext, context),
+            )
+            .await
+        {
+            warn!(
+                "Failed to inject SessionStart legion context for session {}: {}",
+                session.session_id, err
+            );
+        }
+    }
+
+    /// Custom SessionEnd cleanup (outside hook gating): unregister the RBAC
+    /// role and tool restrictions and drop the Warden per-session state.
+    ///
+    /// Called from durable deletion and from transient-family discard, so a
+    /// recycled session id cannot inherit stale lifecycle state.
+    async fn session_end_cleanup(&self, session_id: &str) {
+        clear_session_role(session_id);
+        clear_session_restrictions(session_id);
+        if let Some(scheduler) = get_global_scheduler() {
+            scheduler.cleanup_session_state(session_id).await;
+        }
+    }
+
+    /// Custom SubagentStart injection (outside hook gating): assemble the
+    /// legion chain context (subagent role, parent role, parent goal, depth)
+    /// for a subagent's first round. Returns `None` when nothing is known.
+    async fn build_subagent_legion_context(
+        &self,
+        parent_info: Option<&SubagentParentInfo>,
+        session_id: &str,
+    ) -> Option<String> {
+        let mut lines = Vec::new();
+
+        let subagent_role = get_session_role(session_id).or_else(|| {
+            parent_info
+                .and_then(|info| info.role.as_deref())
+                .and_then(AgentRole::from_str_key)
+        });
+        if let Some(role) = subagent_role {
+            lines.push(format!(
+                "Subagent role: {} — {}",
+                role.as_str(),
+                Self::role_duty_summary(role)
+            ));
+        }
+
+        if let Some(info) = parent_info {
+            if let Some(parent_role) = get_session_role(&info.session_id) {
+                lines.push(format!("Parent session role: {}", parent_role.as_str()));
+            }
+            if let Some(depth) = info.depth {
+                lines.push(format!("Legion depth: {depth}"));
+            }
+            match self.load_active_thread_goal(&info.session_id).await {
+                Ok(Some(goal)) => {
+                    lines.push(format!("Parent goal: {}", goal.objective.trim()));
+                }
+                Ok(None) => {}
+                Err(err) => debug!(
+                    "SubagentStart legion context: parent goal lookup failed for {}: {}",
+                    info.session_id, err
+                ),
+            }
+        }
+
+        if lines.is_empty() {
+            None
+        } else {
+            let mut context = String::from("[Legion Context]\n");
+            context.push_str(&lines.join("\n"));
+            Some(context)
+        }
+    }
+
+    /// One-line duty summary per RBAC role, shown in lifecycle context.
+    fn role_duty_summary(role: AgentRole) -> &'static str {
+        match role {
+            AgentRole::Commander => "orchestrates and dispatches; never executes",
+            AgentRole::Executor => "executes atomic steps end-to-end",
+            AgentRole::Reviewer => "reviews and audits; never executes",
+            AgentRole::Warden => "monitors and challenges violations",
+            AgentRole::PunishmentExecutor => "executes penalties",
+        }
+    }
+
     /// Create a hidden internal subagent session that is persisted but excluded
     /// from normal user-facing session lists.
     pub async fn create_hidden_subagent_session_with_workspace(
@@ -2568,6 +3015,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             agent_type,
             config,
             created_by,
+            false,
         )
         .await
     }
@@ -2583,6 +3031,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// data, because the spawned task always runs before the frontend receives
     /// the DialogTurnCompleted event via the transport layer, and the existing
     /// disk data from debounced saves may have incomplete model rounds.
+    #[allow(clippy::too_many_arguments)]
     async fn finalize_turn_in_workspace(
         session_id: &str,
         turn_id: &str,
@@ -2667,6 +3116,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 workspace_hostname: None,
                 unread_completion: None,
                 needs_user_attention: None,
+                runtime_state: None,
+                is_daemon: false,
             };
             if let Err(e) = persistence_manager
                 .create_session_metadata_if_absent(&workspace_path_buf, &metadata)
@@ -2734,9 +3185,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 &execution_result.new_messages,
                 TurnStats {
                     total_rounds: execution_result.total_rounds,
-                    total_tools: 0, // TODO: get from execution_result
-                    total_tokens: 0,
-                    duration_ms: 0,
+                    total_tools: execution_result.total_tools,
+                    total_tokens: execution_result.total_tokens,
+                    duration_ms: execution_result.duration_ms,
                 },
             )
             .await
@@ -2962,6 +3413,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         crate::service::session::TurnStatus::Error
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn finalize_persisted_turn_in_workspace_if_needed(
         session_manager: &SessionManager,
         session_id: &str,
@@ -2975,6 +3427,32 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         user_message_metadata: Option<serde_json::Value>,
     ) {
         if !session_manager.should_persist_session_id(session_id) {
+            return;
+        }
+        // A session being deleted (or already deleted) must not be resurrected
+        // by an in-flight turn finalization tail write: finalization would
+        // otherwise recreate on-disk session metadata as a ghost "Recovered
+        // Session" (root cause R1). The deleted marker is set by the session
+        // manager BEFORE the fallible deletion stage (R-FIX-2) so the whole
+        // deletion window is covered, and it is cleared again on failure
+        // (rollback) or on a successful re-create/restore of the same id
+        // (R-FIX-1). Once the marker is visible, finalization skips; once it is
+        // cleared, the session is live again. P2 leftover: strictly speaking a
+        // theoretical millisecond-scale interleaving remains between the check
+        // passing and the write completing when a delete starts in exactly that
+        // window; it is narrowed by the cancel-and-drain path and accepted as a
+        // P2 observation (P2-C), not a P1 race.
+        // P2-A: externally removed storage (directory-level GC / manual
+        // deletion) does not set the explicit deleted marker, so the
+        // disk-removed registry is checked here too to keep the same
+        // ghost-resurrection protection for that out-of-band path.
+        if session_manager.is_session_deleted(session_id)
+            || session_manager.is_session_disk_removed(session_id)
+        {
+            info!(
+                "Skipping turn finalization for removed session: session_id={}, turn_id={}",
+                session_id, turn_id
+            );
             return;
         }
 
@@ -3005,14 +3483,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         agent_type: String,
         config: SessionConfig,
         created_by: Option<String>,
+        is_ephemeral: bool,
     ) -> BitFunResult<Session> {
+        let kind = if is_ephemeral {
+            SessionKind::EphemeralSubagent
+        } else {
+            SessionKind::Subagent
+        };
         self.create_hidden_agent_session(
             session_id,
             session_name,
             agent_type,
             config,
             created_by,
-            SessionKind::Subagent,
+            kind,
         )
         .await
     }
@@ -3038,17 +3522,25 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn create_hidden_agent_session_with_durability(
         &self,
         session_id: Option<String>,
         session_name: String,
         agent_type: String,
-        config: SessionConfig,
+        mut config: SessionConfig,
         created_by: Option<String>,
         kind: SessionKind,
         transient: bool,
     ) -> BitFunResult<Session> {
-        if transient {
+        // Subagent sessions are forced to a 1M context window at creation and
+        // must never be downgraded by model-window refresh (which skips them).
+        if kind == SessionKind::Subagent || kind == SessionKind::EphemeralSubagent {
+            config.max_context_tokens = 1_000_000;
+        }
+        let workspace_path = config.workspace_path.clone();
+        let creator = created_by.clone();
+        let session = if transient {
             self.session_manager
                 .create_transient_session_with_id_and_details(
                     session_id,
@@ -3058,7 +3550,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     kind,
                 )
-                .await
+                .await?
         } else {
             self.session_manager
                 .create_session_with_id_and_details(
@@ -3069,8 +3561,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     created_by,
                     kind,
                 )
-                .await
-        }
+                .await?
+        };
+
+        // R-14 B2: register the RBAC role (subagent => executor, otherwise
+        // inherit the creator role) and persist it when durable. Transient
+        // sessions register in memory only; they are never persisted.
+        let role_workspace_path = (!transient)
+            .then_some(workspace_path.as_deref())
+            .flatten()
+            .map(Path::new);
+        self.register_session_role(&session.session_id, creator.as_deref(), kind, role_workspace_path)
+            .await;
+
+        Ok(session)
     }
 
     async fn load_session_context_messages(&self, session: &Session) -> BitFunResult<Vec<Message>> {
@@ -3113,6 +3617,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Ok(context_messages)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn wrap_user_input(
         &self,
         session_id: &str,
@@ -3639,6 +4144,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     tool_call_id: tool_call_id.clone(),
                     session_id: session_id.clone(),
                     dialog_turn_id: turn_id.clone(),
+                    depth: None,
+                    role: None,
                 },
                 context: child_context,
                 permission_runtime_ceiling,
@@ -3682,6 +4189,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                                     reason: result.reason.as_deref(),
                                     ledger_event_id: result.ledger_event_id(),
                                     partial_timeout_suffix: "",
+                                    session_id: child_session_id.as_deref(),
                                 },
                             );
                         coordinator
@@ -4103,7 +4611,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
         if matches!(
             session.kind,
-            SessionKind::Subagent | SessionKind::EphemeralChild
+            SessionKind::Subagent | SessionKind::EphemeralChild | SessionKind::EphemeralSubagent
         ) {
             return Err(BitFunError::Validation(
                 "Thread goals are only available for main sessions".to_string(),
@@ -4590,26 +5098,42 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Continue an active thread goal after a dialog turn completes (Codex-style).
+    ///
+    /// Idle-wakeup safety-net mode: the immediate after-turn continuation
+    /// channel is closed, so goals are no longer auto-continued right after a
+    /// user turn. The continuation state machine stays intact and is reused by
+    /// [`Self::prepare_goal_idle_wakeup`], which the dialog scheduler only
+    /// invokes after the session has been idle for GOAL_IDLE_WAKEUP_DELAY_MS.
     pub async fn prepare_goal_continuation_after_turn(
         &self,
-        session_id: &str,
-        source_turn_id: &str,
-        user_input: &str,
-        user_message_metadata: Option<&serde_json::Value>,
-        turn_completed: bool,
+        _session_id: &str,
+        _source_turn_id: &str,
+        _user_input: &str,
+        _user_message_metadata: Option<&serde_json::Value>,
+        _turn_completed: bool,
     ) -> BitFunResult<Option<ThreadGoalContinuationPlan>> {
-        if should_skip_goal_continuation_after_turn(user_input, user_message_metadata) {
+        if should_skip_goal_continuation_after_turn(_user_input, _user_message_metadata) {
             return Ok(None);
         }
+        Ok(None)
+    }
 
+    /// Build a thread goal continuation plan for the idle-wakeup safety net.
+    ///
+    /// Called by the dialog scheduler after a session with an active thread
+    /// goal has been idle for `GOAL_IDLE_WAKEUP_DELAY_MS` with no new user
+    /// submission. Runs the same continuation state machine as the (now
+    /// short-circuited) after-turn path with an empty turn id and zero tokens:
+    /// token accounting is skipped (no matching turn), but the plan and the
+    /// auto-continuation budget still apply.
+    pub async fn prepare_goal_idle_wakeup(
+        &self,
+        session_id: &str,
+    ) -> BitFunResult<Option<ThreadGoalContinuationPlan>> {
         let storage_path = match self.require_main_session_storage_path(session_id).await {
             Ok(path) => path,
             Err(_) => return Ok(None),
         };
-
-        let turn_tokens = self
-            .thread_goal_runtime
-            .turn_cumulative_billable_tokens(source_turn_id);
 
         let goal_before = self
             .thread_goal_store()
@@ -4621,9 +5145,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             self.thread_goal_runtime.as_ref(),
             session_id,
             storage_path.as_path(),
-            source_turn_id,
-            turn_tokens,
-            turn_completed,
+            "",
+            0,
+            true,
         )
         .await?;
 
@@ -5700,6 +6224,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
                 auto_approve_ask.to_string(),
             );
+        } else if session.kind == SessionKind::Subagent
+            || session.kind == SessionKind::EphemeralSubagent
+        {
+            // Subagent sessions default to auto-approve so unattended delegation
+            // never blocks on user approval prompts; an explicit message value
+            // still wins via the branch above.
+            context_vars.insert(
+                AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
+                "true".to_string(),
+            );
         }
         if needs_computer_links_for_source(submission_policy.trigger_source) {
             context_vars.insert(
@@ -6425,6 +6959,36 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await?;
         self.session_manager
             .validate_session_storage_path_binding(session_id, &session_storage_path)?;
+        // R-FIX-3: a session with a running turn is cancelled first, then we
+        // wait for its state to converge back to Idle so a turn that has been
+        // cancelled cannot block deletion. `cancel_active_turn_for_session`
+        // cancels the turn and drains the execution engine; the actual state
+        // convergence to Idle is carried by the bounded 50ms x 40 poll below
+        // (cancel does not itself reset the session state). If the state still
+        // has not converged within the deadline, the processing guard below
+        // rejects the deletion as before.
+        let _ = self
+            .cancel_active_turn_for_session(session_id, Duration::from_secs(2))
+            .await;
+        let state_converge_deadline = Instant::now() + Duration::from_millis(2000);
+        loop {
+            let still_processing = self
+                .session_manager
+                .get_session(session_id)
+                .map(|session| matches!(session.state, SessionState::Processing { .. }))
+                .unwrap_or(false);
+            if !still_processing || Instant::now() >= state_converge_deadline {
+                break;
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        // Reject deletion while the session is still running a turn (or is a
+        // daemon/warden session), mirroring the tree-path pre-check so the
+        // single-session path enforces the same lifecycle guard. The tree path
+        // (`delete_session_tree`) pre-checks every member before calling this
+        // method, so the duplicate check there is harmless.
+        self.ensure_session_tree_deletable(&session_storage_path, session_id)
+            .await?;
         self.reconcile_session_revert_locked(&session_storage_path, session_id)
             .await?;
         // SessionEnd hooks observe the session before its state is gone.
@@ -6458,10 +7022,227 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.background_subagent_outcomes
             .delete_session_references(session_id)
             .await?;
+        // Custom session-end cleanup (outside hook gating): RBAC role and
+        // tool-restriction unregistration plus Warden state cleanup, so a
+        // recycled session id cannot inherit stale lifecycle state.
+        self.session_end_cleanup(session_id).await;
         self.emit_event(AgenticEvent::SessionDeleted {
             session_id: session_id.to_string(),
         })
         .await;
+        Ok(())
+    }
+
+    /// Cascade-delete a session and its full descendant subtree (children
+    /// first), all-or-nothing on the root. Returns the deleted session ids in
+    /// deletion order (children before root).
+    ///
+    /// A transient root is released through the transient family cascade so
+    /// the whole in-memory family is discarded together. For a durable root,
+    /// the descendant set is discovered from persisted metadata (authoritative
+    /// source) plus in-memory transient descendants. Every member is
+    /// pre-checked by `ensure_session_tree_deletable`; deleting a session that
+    /// is currently processing or is a daemon/warden session anywhere in the
+    /// tree is rejected up-front with an explicit error. Any child failure
+    /// aborts the cascade before the root is touched, so persisted storage and
+    /// the in-memory session tree stay consistent.
+    pub async fn delete_session_tree(
+        &self,
+        workspace_path: &Path,
+        remote_connection_id: Option<&str>,
+        remote_ssh_host: Option<&str>,
+        session_id: &str,
+    ) -> BitFunResult<Vec<String>> {
+        bitfun_core_types::validate_session_id(session_id).map_err(BitFunError::Validation)?;
+
+        // Transient root: release the whole in-memory transient family.
+        if self.session_manager.is_transient_session(session_id) {
+            let family = self.session_manager.transient_session_family_postorder(
+                workspace_path,
+                remote_connection_id,
+                remote_ssh_host,
+                session_id,
+            )?;
+            if family.is_empty() {
+                return Err(BitFunError::NotFound(format!(
+                    "Session not found: {session_id}"
+                )));
+            }
+            for member_id in &family {
+                self.ensure_session_tree_deletable(workspace_path, member_id)
+                    .await?;
+            }
+            self.discard_transient_session(
+                workspace_path,
+                remote_connection_id,
+                remote_ssh_host,
+                session_id,
+            )
+            .await?;
+            return Ok(family);
+        }
+
+        let session_storage_path = Self::resolve_session_restore_path(
+            &workspace_path.to_string_lossy(),
+            remote_connection_id,
+            remote_ssh_host,
+        )
+        .await?;
+        let metadata = self
+            .session_manager
+            .persistence_manager()
+            .list_session_metadata_including_internal(&session_storage_path)
+            .await?;
+        // Durable subtree from persisted metadata, post-order (children first).
+        let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+        for member in &metadata {
+            if let Some(parent) = member
+                .relationship
+                .as_ref()
+                .and_then(|relationship| relationship.parent_session_id.as_deref())
+            {
+                children_map
+                    .entry(parent.to_string())
+                    .or_default()
+                    .push(member.session_id.clone());
+            }
+        }
+        // Supplement subtree discovery from the in-memory session tree so a
+        // broken/missing persisted relationship cannot orphan a loaded durable
+        // child session (root cause R3). Transient descendants are released
+        // separately below via `transient_descendants_postorder`, so only
+        // loaded durable sessions are added here; multi-level breaks are still
+        // covered because the added edges feed the same post-order traversal.
+        {
+            let loaded_sessions = self.session_manager.loaded_sessions_snapshot();
+            let mut memory_edges: HashMap<String, Vec<String>> = HashMap::new();
+            for session in &loaded_sessions {
+                if session.session_id == session_id
+                    || self
+                        .session_manager
+                        .is_transient_session(&session.session_id)
+                {
+                    continue;
+                }
+                if let Some(parent_id) = session
+                    .created_by
+                    .as_deref()
+                    .and_then(|marker| marker.strip_prefix("session-"))
+                {
+                    memory_edges
+                        .entry(parent_id.to_string())
+                        .or_default()
+                        .push(session.session_id.clone());
+                }
+            }
+            for (parent_id, children) in memory_edges {
+                let entry = children_map.entry(parent_id).or_default();
+                for child in children {
+                    if !entry.contains(&child) {
+                        entry.push(child);
+                    }
+                }
+            }
+        }
+        let mut postorder = Vec::new();
+        let mut visited = HashSet::new();
+        let mut stack = vec![session_id.to_string()];
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current.clone()) {
+                continue;
+            }
+            postorder.push(current.clone());
+            if let Some(children) = children_map.get(&current) {
+                stack.extend(children.iter().cloned());
+            }
+        }
+        postorder.reverse();
+        if !metadata.iter().any(|member| member.session_id == session_id)
+            && self.session_manager.get_session(session_id).is_none()
+        {
+            return Err(BitFunError::NotFound(format!(
+                "Session not found: {session_id}"
+            )));
+        }
+
+        // Release in-memory transient descendants first (children before
+        // parents; discard is idempotent and uses each member's own binding).
+        for transient_child in self
+            .session_manager
+            .transient_descendants_postorder(session_id)
+        {
+            self.discard_transient_session(
+                transient_child
+                    .config
+                    .workspace_path
+                    .as_deref()
+                    .map(Path::new)
+                    .unwrap_or(workspace_path),
+                transient_child.config.remote_connection_id.as_deref(),
+                transient_child.config.remote_ssh_host.as_deref(),
+                &transient_child.session_id,
+            )
+            .await?;
+        }
+
+        // Pre-check every member before deleting anything: a processing or
+        // daemon/warden session anywhere in the tree rejects the whole cascade.
+        for member_id in &postorder {
+            self.ensure_session_tree_deletable(&session_storage_path, member_id)
+                .await?;
+        }
+
+        // Children first, root last. Any failure aborts immediately, so the
+        // root (and every not-yet-deleted member) is left untouched.
+        let mut deleted = Vec::new();
+        for member_id in &postorder {
+            if member_id != session_id {
+                self.delete_session(&session_storage_path, member_id)
+                    .await?;
+                deleted.push(member_id.clone());
+            }
+        }
+        self.delete_session(&session_storage_path, session_id)
+            .await?;
+        deleted.push(session_id.to_string());
+
+        self.session_tree().remove_subtree(session_id);
+        Ok(deleted)
+    }
+
+    async fn ensure_session_tree_deletable(
+        &self,
+        session_storage_path: &Path,
+        session_id: &str,
+    ) -> BitFunResult<()> {
+        if let Some(session) = self.session_manager.get_session(session_id) {
+            if session.config.is_daemon || session.agent_type.starts_with("warden-") {
+                return Err(BitFunError::Validation(format!(
+                    "Cannot delete daemon/warden session: {session_id}"
+                )));
+            }
+            if let SessionState::Processing {
+                current_turn_id,
+                phase,
+            } = &session.state
+            {
+                return Err(BitFunError::Validation(format!(
+                    "Cannot delete a session with a running turn: session_id={session_id}, current_turn_id={current_turn_id}, phase={phase:?}"
+                )));
+            }
+            return Ok(());
+        }
+        if let Some(metadata) = self
+            .session_manager
+            .load_session_metadata(session_storage_path, session_id)
+            .await?
+        {
+            if metadata.is_daemon || metadata.agent_type.starts_with("warden-") {
+                return Err(BitFunError::Validation(format!(
+                    "Cannot delete daemon/warden session: {session_id}"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -6489,6 +7270,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             self.background_subagent_outcomes
                 .delete_session_references(related_session_id)
                 .await?;
+            // Transient sessions are discarded without a SessionEnd hook
+            // dispatch; run the custom cleanup so RBAC roles, tool
+            // restrictions and Warden state cannot leak into recycled ids.
+            self.session_end_cleanup(related_session_id).await;
         }
         self.session_manager
             .discard_transient_session(
@@ -7088,10 +7873,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
+        let workspace_path = request.workspace_path.clone();
         let session = self
             .session_manager
             .restore_session_for_workspace(request, session_id)
             .await?;
+        self.restore_session_role_best_effort(&workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -7105,10 +7893,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
+        let workspace_path = request.workspace_path.clone();
         let session = self
             .session_manager
             .restore_internal_session_for_workspace(request, session_id)
             .await?;
+        self.restore_session_role_best_effort(&workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -7122,6 +7913,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session(workspace_path, session_id)
             .await?;
+        self.restore_session_role_best_effort(workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -7136,6 +7929,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_with_turns(workspace_path, session_id)
             .await?;
+        self.restore_session_role_best_effort(workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -7173,10 +7968,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
+        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_session_with_turns_for_workspace(request, session_id)
             .await?;
+        self.restore_session_role_best_effort(&workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -7190,10 +7988,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
+        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_internal_session_with_turns_for_workspace(request, session_id)
             .await?;
+        self.restore_session_role_best_effort(&workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -7207,6 +8008,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_with_turns(workspace_path, session_id)
             .await?;
+        self.restore_session_role_best_effort(workspace_path, session_id)
+            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -7412,6 +8215,30 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// List all sessions
     pub async fn list_sessions(&self, workspace_path: &Path) -> BitFunResult<Vec<SessionSummary>> {
         self.session_manager.list_sessions(workspace_path).await
+    }
+
+    /// List session ids recorded in the workspace deletion tombstone registry.
+    /// The frontend initialization path pulls this registry to guard against
+    /// ghost resurrection of deleted subagent sessions after a restart.
+    pub async fn list_deleted_session_ids(
+        &self,
+        workspace_path: &Path,
+    ) -> BitFunResult<Vec<String>> {
+        self.session_manager
+            .list_deleted_session_ids(workspace_path)
+            .await
+    }
+
+    /// List all sessions, optionally including hidden Subagent/Ephemeral
+    /// sessions for full conversation management.
+    pub async fn list_sessions_with_options(
+        &self,
+        workspace_path: &Path,
+        include_internal: bool,
+    ) -> BitFunResult<Vec<SessionSummary>> {
+        self.session_manager
+            .list_sessions_with_options(workspace_path, include_internal)
+            .await
     }
 
     /// Get a best-effort message view for a session.
@@ -7872,7 +8699,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             Some(target_session_id) => match self.session_manager.get_session(&target_session_id) {
                 Some(session) => {
                     if session.kind != session_kind {
-                        let error = if session_kind == SessionKind::Subagent {
+                        let error = if session_kind == SessionKind::Subagent
+                            || session_kind == SessionKind::EphemeralSubagent
+                        {
                             BitFunError::Validation(format!(
                                 "Subagent execution target must be a subagent session: {}",
                                 target_session_id
@@ -7941,7 +8770,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let _execution_lease =
             execution_lease.unwrap_or_else(|| self.register_session_execution(&session_id));
         // Sync context window from AI config so subagents with large-context
-        // models are not prematurely capped at SessionConfig::default()'s 128128.
+        // models are not prematurely capped at SessionConfig::default()'s 1M.
         if let Err(error) = self
             .session_manager
             .refresh_session_context_window(&session_id)
@@ -7983,6 +8812,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     subagent_parent_info.as_ref(),
                     &logical_agent_type,
                     continuation_policy,
+                    subagent_parent_info.as_ref().and_then(|info| info.depth),
                 ),
             )
             .await
@@ -7993,6 +8823,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             )
             .await;
             return Err(error);
+        }
+
+        // R-003: Register in memory tree
+        if let Some(ref parent_info) = subagent_parent_info {
+            let child_depth = parent_info.depth.map(|d| d + 1).unwrap_or(1);
+            let _ =
+                self.session_tree
+                    .register_child(&parent_info.session_id, &session_id, child_depth);
         }
 
         // Register timeout handle so it can be adjusted at runtime.
@@ -8182,13 +9020,25 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 format!("<hook_context>\n{section}\n</hook_context>"),
             ));
         }
+        // Custom SubagentStart injection (outside hook gating): pass the
+        // legion chain (subagent role, parent role, parent goal, depth) into
+        // the subagent's first round as model-visible context.
+        if let Some(legion_context) = self
+            .build_subagent_legion_context(subagent_parent_info.as_ref(), &session_id)
+            .await
+        {
+            initial_messages.push(Message::internal_reminder(
+                InternalReminderKind::LifecycleContext,
+                format!("<legion_context>\n{legion_context}\n</legion_context>"),
+            ));
+        }
 
         let subagent_services = Self::build_workspace_services(&subagent_workspace).await;
         let execution_context = ExecutionContext {
             session_id: session_id.clone(),
             dialog_turn_id: dialog_turn_id.clone(),
             turn_index,
-            agent_type: agent_type.clone(),
+            agent_type: String::new(),
             workspace: subagent_workspace,
             context,
             subagent_parent_info: subagent_parent_info.clone(),
@@ -8723,6 +9573,52 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             );
         }
 
+        // Propagate subagent completion to review propagation manager so that
+        // parent sessions can be flagged for review when a leaf agent finishes.
+        {
+            use super::review_propagation::{ReviewPropagationAction, ReviewPropagationManager};
+            let parent_id = subagent_parent_info
+                .as_ref()
+                .map(|info| info.session_id.as_str());
+            let action = ReviewPropagationManager::on_leaf_completed(
+                &session_id,
+                &agent_type,
+                &response_text,
+                parent_id,
+            );
+            if let ReviewPropagationAction::ReviewNeeded {
+                parent_session_id,
+                child_session_id,
+            } = action
+            {
+                // Deliver the review signal to the parent session so the
+                // request is visible to the parent agent, not just a log line.
+                if let Err(error) = self
+                    .session_manager
+                    .add_message(
+                        &parent_session_id,
+                        Message::internal_reminder(
+                            InternalReminderKind::Generic,
+                            format!(
+                                "Subagent session {} has completed; review its output for correctness before continuing.",
+                                child_session_id
+                            ),
+                        ),
+                    )
+                    .await
+                {
+                    warn!(
+                        "ReviewPropagation: failed to deliver review reminder to parent session {}: {}",
+                        parent_session_id, error
+                    );
+                }
+                debug!(
+                    "ReviewPropagation: review needed for parent session {} from completed child {}",
+                    parent_session_id, child_session_id
+                );
+            }
+        }
+
         // Clean up subagent session resources after successful execution
         debug!(
             "Subagent successful execution produced final text: agent_type={}, session_id={}, dialog_turn_id={}, parent_session_id={}, parent_dialog_turn_id={}, parent_tool_call_id={}, text_len={}, duration_ms={}",
@@ -8901,6 +9797,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Ok(child_session)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_btw_turn(
         &self,
         request_id: &str,
@@ -9341,6 +10238,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let parent_transient = self
             .session_manager
             .is_transient_session(&request.subagent_parent_info.session_id);
+        if parent_transient {
+            return Err(BitFunError::Validation(format!(
+                "transient sessions cannot spawn subagent sessions: parent={}",
+                request.subagent_parent_info.session_id
+            )));
+        }
         let approved_model_binding = request
             .external_generation_lease
             .as_ref()
@@ -9419,10 +10322,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         context: request.context,
                         permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                         delegation_policy: request.delegation_policy,
-                        runtime_tool_restrictions: runtime_tool_restrictions_for_session_lifetime(
-                            runtime_tool_restrictions_for_delegation_policy(
-                                request.delegation_policy,
-                            ),
+                        runtime_tool_restrictions: runtime_tool_restrictions_for_subagent(
+                            request.delegation_policy,
                             transient,
                         ),
                         prompt_cache_source_session_id: None,
@@ -9512,8 +10413,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     context: request.context,
                     permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
-                    runtime_tool_restrictions: runtime_tool_restrictions_for_session_lifetime(
-                        runtime_tool_restrictions_for_delegation_policy(request.delegation_policy),
+                    runtime_tool_restrictions: runtime_tool_restrictions_for_subagent(
+                        request.delegation_policy,
                         parent_transient,
                     ),
                     prompt_cache_source_session_id: None,
@@ -9599,8 +10500,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     context: request.context,
                     permission_runtime_ceiling: Some(request.permission_runtime_ceiling),
                     delegation_policy: request.delegation_policy,
-                    runtime_tool_restrictions: runtime_tool_restrictions_for_session_lifetime(
-                        runtime_tool_restrictions_for_delegation_policy(request.delegation_policy),
+                    runtime_tool_restrictions: runtime_tool_restrictions_for_subagent(
+                        request.delegation_policy,
                         parent_transient,
                     ),
                     prompt_cache_source_session_id: Some(snapshot.parent_session_id),
@@ -9629,7 +10530,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         target_session_id
                     ))
                 })?;
-            if session.kind != SessionKind::Subagent {
+            if session.kind != SessionKind::Subagent
+                && session.kind != SessionKind::EphemeralSubagent
+            {
                 return Err(BitFunError::Validation(format!(
                     "Subagent execution target must be a subagent session: {}",
                     target_session_id
@@ -9800,9 +10703,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.ensure_subagent_session_loaded_for_reuse(subagent_session_id, parent_session_id)
             .await?;
 
+        // R-2: The target session was already resolved through global agent_id
+        // resolution (subtree-first, whole-database fallback), so cancellation
+        // matches the subagent session globally instead of requiring the
+        // caller to be the direct spawner. This is the intended widening for
+        // full background-task management.
         let controls = self.claim_background_subagent_controls(|control| {
-            control.parent_session_id == parent_session_id
-                && control.subagent_session_id == subagent_session_id
+            control.subagent_session_id == subagent_session_id
         });
         let task_pks = controls
             .iter()
@@ -9868,9 +10775,30 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         &self,
         parent_session_id: &str,
         agent_id: &str,
+        allow_global_fallback: bool,
     ) -> BitFunResult<String> {
+        // R-2: Global agent_id resolution. Prefer the caller's session subtree
+        // (parent + descendants). Whole-database fallback is only allowed when
+        // the caller opts in (e.g. read-only listing); mutating Task operations
+        // (cancel/send_input/history) pass false so a scope miss is "not found"
+        // instead of reaching subagents owned by other conversations.
+        let mut scope = vec![parent_session_id.to_string()];
+        scope.extend(self.session_tree.get_descendants(parent_session_id));
         self.background_subagent_outcomes
-            .resolve_agent_id(parent_session_id, agent_id)
+            .resolve_agent_id_in_scope(&scope, agent_id, allow_global_fallback)
+            .await
+    }
+
+    pub(crate) async fn list_background_subagents(
+        &self,
+        parent_session_id: &str,
+    ) -> BitFunResult<Vec<BackgroundTaskRecord>> {
+        // R-2: List background tasks spawned anywhere in the caller's session
+        // subtree so a conversation can manage every subagent task it owns.
+        let mut scope = vec![parent_session_id.to_string()];
+        scope.extend(self.session_tree.get_descendants(parent_session_id));
+        self.background_subagent_outcomes
+            .list_records_for_parents(&scope)
             .await
     }
 
@@ -10174,6 +11102,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             );
             let background_subagent_tasks = self.background_subagent_tasks.clone();
             let background_subagent_outcomes = self.background_subagent_outcomes.clone();
+            let event_queue = self.event_queue.clone();
+            let agent_type = request.agent_type.clone();
+            let subagent_parent_info_for_emit = subagent_parent_info.clone();
+            let subagent_session_id_for_emit = subagent_session_id.clone();
+            let subagent_dialog_turn_id_for_emit = subagent_dialog_turn_id.clone();
 
             tokio::spawn(async move {
                 let result = match (parent_cancel_token, tool_cancellation_token) {
@@ -10232,6 +11165,63 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 background_subagent_outcomes
                     .complete(task_pk, result.as_ref())
                     .await;
+
+                let (completion_status, output_text) = match &result {
+                    Ok(sr) => {
+                        let status = match sr.status {
+                            SubagentResultStatus::Completed => SubagentCompletionStatus::Completed,
+                            SubagentResultStatus::PartialTimeout => {
+                                SubagentCompletionStatus::PartialTimeout
+                            }
+                        };
+                        (status, Some(sr.text.clone()))
+                    }
+                    Err(_) => (SubagentCompletionStatus::Failed, None),
+                };
+                let _ = event_queue
+                    .enqueue(
+                        AgenticEvent::SubagentTurnCompleted {
+                            session_id: subagent_session_id_for_emit.clone(),
+                            subagent_dialog_turn_id: subagent_dialog_turn_id_for_emit.clone(),
+                            parent_session_id: subagent_parent_info_for_emit.session_id.clone(),
+                            parent_dialog_turn_id: subagent_parent_info_for_emit
+                                .dialog_turn_id
+                                .clone(),
+                            parent_tool_call_id: subagent_parent_info_for_emit.tool_call_id.clone(),
+                            agent_type: Some(agent_type.clone()),
+                            status: completion_status,
+                            output_text: output_text.clone(),
+                        },
+                        Some(EventPriority::Normal),
+                    )
+                    .await;
+                let _ = scheduler_for_cancel
+                    .submit_dialog_turn(AgentDialogTurnRequest {
+                        session_id: subagent_parent_info_for_emit.session_id.clone(),
+                        message: output_text.as_deref().unwrap_or("(no output)").to_string(),
+                        original_message: None,
+                        turn_id: None,
+                        execution: Default::default(),
+                        agent_type: String::new(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
+                        reply_route: None,
+                        prepended_reminders: vec![AgentDialogPrependedReminder {
+                            kind: "task_subagent_result".to_string(),
+                            text: format!(
+                                "Background subagent task completed\nFrom session: {} / From agent: {}",
+                                subagent_session_id_for_emit, agent_type
+                            ),
+                        }],
+                        attachments: Vec::new(),
+                        metadata: serde_json::Map::new(),
+                    })
+                    .await;
+
                 background_subagent_tasks.remove(&task_pk);
             });
 
@@ -10282,6 +11272,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         );
         let background_subagent_tasks = self.background_subagent_tasks.clone();
         let background_subagent_outcomes = self.background_subagent_outcomes.clone();
+        let event_queue = self.event_queue.clone();
+        let agent_type = request.agent_type.clone();
+        let subagent_parent_info_for_emit = subagent_parent_info.clone();
+        let subagent_session_id_for_emit = subagent_session_id.clone();
+        let subagent_dialog_turn_id_for_emit = subagent_dialog_turn_id.clone();
 
         tokio::spawn(async move {
             let result = coordinator
@@ -10304,6 +11299,63 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             background_subagent_outcomes
                 .complete(task_pk, result.as_ref())
                 .await;
+
+            let (completion_status, output_text) = match &result {
+                Ok(sr) => {
+                    let status = match sr.status {
+                        SubagentResultStatus::Completed => SubagentCompletionStatus::Completed,
+                        SubagentResultStatus::PartialTimeout => {
+                            SubagentCompletionStatus::PartialTimeout
+                        }
+                    };
+                    (status, Some(sr.text.clone()))
+                }
+                Err(_) => (SubagentCompletionStatus::Failed, None),
+            };
+            let _ = event_queue
+                .enqueue(
+                    AgenticEvent::SubagentTurnCompleted {
+                        session_id: subagent_session_id_for_emit.clone(),
+                        subagent_dialog_turn_id: subagent_dialog_turn_id_for_emit.clone(),
+                        parent_session_id: subagent_parent_info_for_emit.session_id.clone(),
+                        parent_dialog_turn_id: subagent_parent_info_for_emit.dialog_turn_id.clone(),
+                        parent_tool_call_id: subagent_parent_info_for_emit.tool_call_id.clone(),
+                        agent_type: Some(agent_type.clone()),
+                        status: completion_status,
+                        output_text: output_text.clone(),
+                    },
+                    Some(EventPriority::Normal),
+                )
+                .await;
+            if let Some(scheduler) = get_global_scheduler() {
+                let _ = scheduler
+                    .submit_dialog_turn(AgentDialogTurnRequest {
+                        session_id: subagent_parent_info_for_emit.session_id.clone(),
+                        message: output_text.as_deref().unwrap_or("(no output)").to_string(),
+                        original_message: None,
+                        turn_id: None,
+                        execution: Default::default(),
+                        agent_type: String::new(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
+                        reply_route: None,
+                        prepended_reminders: vec![AgentDialogPrependedReminder {
+                            kind: "task_subagent_result".to_string(),
+                            text: format!(
+                                "Background subagent task completed\nFrom session: {} / From agent: {}",
+                                subagent_session_id_for_emit, agent_type
+                            ),
+                        }],
+                        attachments: Vec::new(),
+                        metadata: serde_json::Map::new(),
+                    })
+                    .await;
+            }
+
             background_subagent_tasks.remove(&task_pk);
         });
 
@@ -10651,24 +11703,56 @@ async fn create_agent_session_from_runtime_request(
         )
     })?;
     let created_by = resolve_agent_session_create_created_by(&request.metadata);
+    // Parent lineage facts are carried by create callers (e.g. the SessionControl
+    // tool chain) through the free-form metadata map. Absent callers yield None
+    // and the SessionCreated event simply omits the optional fields.
+    let parent_session_id = request
+        .metadata
+        .get("parentSessionId")
+        .or_else(|| request.metadata.get("parent_session_id"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let subagent_type = request
+        .metadata
+        .get("subagentType")
+        .or_else(|| request.metadata.get("subagent_type"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    // Subagent sessions (marked by the SessionControl create chain) get a forced
+    // 1M context window and must not be downgraded by the post-create model-window
+    // refresh, which targets normal sessions only.
+    let subagent_forced_1m = request
+        .metadata
+        .get("subagent")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let mut session_config = SessionConfig {
+        workspace_path: Some(workspace_path.clone()),
+        project_workspace_path: request.project_workspace_path,
+        execution_target: request.execution_target,
+        workspace_id: request.workspace_id,
+        remote_connection_id: request.remote_connection_id,
+        remote_ssh_host: request.remote_ssh_host,
+        model_id: request.model_id,
+        ..Default::default()
+    };
+    if subagent_forced_1m {
+        session_config.max_context_tokens = 1_000_000;
+    }
     let session = coordinator
         .create_session_with_workspace_and_creator_internal(
             session_id,
             request.session_name,
             request.agent_type,
-            SessionConfig {
-                workspace_path: Some(workspace_path.clone()),
-                project_workspace_path: request.project_workspace_path,
-                execution_target: request.execution_target,
-                workspace_id: request.workspace_id,
-                remote_connection_id: request.remote_connection_id,
-                remote_ssh_host: request.remote_ssh_host,
-                model_id: request.model_id,
-                ..Default::default()
-            },
+            session_config,
             workspace_path,
             created_by,
             transient,
+            subagent_forced_1m,
+            parent_session_id,
+            subagent_type,
         )
         .await
         .map_err(map_core_error)?;
@@ -11001,6 +12085,14 @@ pub(crate) fn runtime_transcript_messages_from_turns(
 }
 
 fn runtime_session_summary(session: SessionSummary) -> bitfun_runtime_ports::AgentSessionSummary {
+    let status = Some(
+        match &session.state {
+            SessionState::Idle => "idle",
+            SessionState::Processing { .. } => "active",
+            SessionState::Error { .. } => "error",
+        }
+        .to_string(),
+    );
     bitfun_runtime_ports::AgentSessionSummary {
         session_id: session.session_id,
         session_name: session.session_name,
@@ -11011,6 +12103,9 @@ fn runtime_session_summary(session: SessionSummary) -> bitfun_runtime_ports::Age
         turn_count: session.turn_count,
         created_at_ms: runtime_session_time_ms(session.created_at),
         last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
+        parent_session_id: session.parent_session_id,
+        status,
+        is_daemon: session.is_daemon,
     }
 }
 
@@ -11097,12 +12192,38 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
             )
         })?;
 
-        self.list_sessions(&effective_storage_path)
-            .await
+        // R-004: Lazily populate the in-memory session tree from persisted
+        // metadata on first list so that parent-child relationships are visible.
+        {
+            let metadata_list = self
+                .session_manager
+                .persistence_manager()
+                .list_session_metadata_including_internal(&effective_storage_path)
+                .await
+                .unwrap_or_default();
+            self.session_tree.load_from_sessions(&metadata_list);
+        }
+
+        let sessions = if request.include_hidden {
+            // R-2: Full conversation management — include hidden Subagent/
+            // Ephemeral sessions in the listing.
+            self.list_sessions_with_options(&effective_storage_path, true)
+                .await
+        } else {
+            self.list_sessions(&effective_storage_path).await
+        };
+        sessions
             .map(|sessions| {
                 sessions
                     .into_iter()
-                    .map(runtime_session_summary)
+                    .map(|mut summary| {
+                        // Populate parent_session_id from the session tree if available.
+                        if summary.parent_session_id.is_none() {
+                            summary.parent_session_id =
+                                self.session_tree.get_parent(&summary.session_id);
+                        }
+                        runtime_session_summary(summary)
+                    })
                     .collect::<Vec<_>>()
             })
             .map_err(|error| {
@@ -11545,6 +12666,9 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for ConversationCoordina
                 turn_count: session.dialog_turn_ids.len(),
                 created_at_ms: runtime_session_time_ms(session.created_at),
                 last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
+                parent_session_id: None,
+                status: None,
+                is_daemon: session.config.is_daemon,
             },
             state: session.state,
         })
@@ -12640,6 +13764,414 @@ mod tests {
     use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
 
     #[test]
+    fn resolve_session_role_assigns_executor_to_subagents_and_inherits_creator() {
+        use crate::agentic::tools::AgentRole;
+        // Subagent/EphemeralSubagent sessions are always executors,
+        // regardless of the creator role.
+        assert_eq!(
+            super::ConversationCoordinator::resolve_session_role(
+                SessionKind::Subagent,
+                Some(AgentRole::Commander)
+            ),
+            AgentRole::Executor
+        );
+        assert_eq!(
+            super::ConversationCoordinator::resolve_session_role(
+                SessionKind::EphemeralSubagent,
+                None
+            ),
+            AgentRole::Executor
+        );
+        // Main sessions inherit the creator role; an unknown creator degrades
+        // to the commander (permissive) baseline.
+        assert_eq!(
+            super::ConversationCoordinator::resolve_session_role(
+                SessionKind::Standard,
+                Some(AgentRole::Reviewer)
+            ),
+            AgentRole::Reviewer
+        );
+        assert_eq!(
+            super::ConversationCoordinator::resolve_session_role(SessionKind::Standard, None),
+            AgentRole::Commander
+        );
+    }
+
+    #[tokio::test]
+    async fn session_creation_registers_rbac_role_in_registry() {
+        use crate::agentic::tools::{get_session_role, AgentRole};
+        let (coordinator, _session_manager) = test_coordinator();
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-rbac-role-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("create workspace dir");
+        let workspace_path = workspace.to_string_lossy().into_owned();
+
+        // Main session (no creator) => commander.
+        let main_session = coordinator
+            .create_session_with_workspace_and_creator(
+                Some("rbac-main-01".to_string()),
+                "main".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                None,
+            )
+            .await
+            .expect("create main session");
+        assert_eq!(
+            get_session_role(&main_session.session_id),
+            Some(AgentRole::Commander)
+        );
+
+        // Subagent session => executor (R-14 B2 role inheritance).
+        let subagent_session = coordinator
+            .create_hidden_agent_session(
+                Some("rbac-sub-01".to_string()),
+                "sub".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_path),
+                    ..Default::default()
+                },
+                Some("rbac-main-01".to_string()),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("create subagent session");
+        assert_eq!(
+            get_session_role(&subagent_session.session_id),
+            Some(AgentRole::Executor)
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_marked_creation_yields_executor_role() {
+        use crate::agentic::tools::{get_session_role, AgentRole};
+        let (coordinator, _session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let session_id = format!("sub-kind-{}", uuid::Uuid::new_v4());
+
+        // SessionControl-style creation: metadata.subagent=true + subagentType
+        // map to the Subagent kind, so the role resolves to executor.
+        let session = coordinator
+            .create_session_with_workspace_and_creator_internal(
+                Some(session_id),
+                "subagent".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                Some("parent-session".to_string()),
+                false, // transient
+                true,  // skip_context_window_refresh (subagent forced 1M)
+                Some("parent-session".to_string()),
+                Some("TestSubagent".to_string()),
+            )
+            .await
+            .expect("create subagent session");
+        assert_eq!(session.kind, SessionKind::Subagent);
+        assert_eq!(
+            get_session_role(&session.session_id),
+            Some(AgentRole::Executor),
+            "subagent-marked session must resolve as executor, not commander"
+        );
+        let metadata = coordinator
+            .session_manager
+            .load_session_metadata(workspace.path(), &session.session_id)
+            .await
+            .expect("load metadata")
+            .expect("metadata exists");
+        assert_eq!(
+            metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get("role"))
+                .and_then(|value| value.as_str()),
+            Some("executor"),
+            "executor role must be persisted with the session metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_derives_role_from_legacy_subagent_metadata() {
+        use crate::agentic::tools::{clear_session_role, get_session_role, AgentRole};
+        let (coordinator, _session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let sub_session_id = format!("restore-sub-{}", uuid::Uuid::new_v4());
+
+        // Legacy subagent session: created with the subagent marker so the
+        // lineage metadata carries relationship.kind=Subagent, then the role
+        // key is stripped to simulate pre-role-persistence state.
+        coordinator
+            .create_session_with_workspace_and_creator_internal(
+                Some(sub_session_id.clone()),
+                "subagent".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                Some("parent-session".to_string()),
+                false,
+                true,
+                Some("parent-session".to_string()),
+                Some("TestSubagent".to_string()),
+            )
+            .await
+            .expect("create subagent session");
+        coordinator
+            .session_manager
+            .update_session_metadata(workspace.path(), &sub_session_id, |metadata| {
+                if let Some(custom) = metadata.custom_metadata.as_mut() {
+                    if let Some(object) = custom.as_object_mut() {
+                        object.remove("role");
+                    }
+                }
+            })
+            .await
+            .expect("strip role key");
+        clear_session_role(&sub_session_id);
+
+        coordinator
+            .restore_session_role_best_effort(workspace.path(), &sub_session_id)
+            .await;
+        assert_eq!(
+            get_session_role(&sub_session_id),
+            Some(AgentRole::Executor),
+            "legacy subagent session must restore as executor"
+        );
+        // The derived role is persisted back so the next restore reads it directly.
+        let metadata = coordinator
+            .session_manager
+            .load_session_metadata(workspace.path(), &sub_session_id)
+            .await
+            .expect("load metadata")
+            .expect("metadata exists");
+        assert_eq!(
+            metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get("role"))
+                .and_then(|value| value.as_str()),
+            Some("executor")
+        );
+
+        // Plain session without any subagent marker restores as commander.
+        let plain_session_id = format!("restore-plain-{}", uuid::Uuid::new_v4());
+        coordinator
+            .create_session_with_workspace_and_creator_internal(
+                Some(plain_session_id.clone()),
+                "plain".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                None,
+                false,
+                false,
+                None,
+                None,
+            )
+            .await
+            .expect("create plain session");
+        coordinator
+            .session_manager
+            .update_session_metadata(workspace.path(), &plain_session_id, |metadata| {
+                if let Some(custom) = metadata.custom_metadata.as_mut() {
+                    if let Some(object) = custom.as_object_mut() {
+                        object.remove("role");
+                    }
+                }
+            })
+            .await
+            .expect("strip role key");
+        clear_session_role(&plain_session_id);
+
+        coordinator
+            .restore_session_role_best_effort(workspace.path(), &plain_session_id)
+            .await;
+        assert_eq!(
+            get_session_role(&plain_session_id),
+            Some(AgentRole::Commander),
+            "plain session without markers must default to commander"
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_overrides_stale_commander_role_for_subagent_sessions() {
+        use crate::agentic::tools::{clear_session_role, get_session_role, AgentRole};
+        let (coordinator, _session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let session_id = format!("restore-stale-{}", uuid::Uuid::new_v4());
+
+        // Create a subagent-marked session (persists role=executor), then
+        // rewrite the persisted role to "commander" to simulate the stale
+        // value written by the pre-fix creation chain.
+        coordinator
+            .create_session_with_workspace_and_creator_internal(
+                Some(session_id.clone()),
+                "subagent".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path.clone(),
+                Some("parent-session".to_string()),
+                false,
+                true,
+                Some("parent-session".to_string()),
+                Some("TestSubagent".to_string()),
+            )
+            .await
+            .expect("create subagent session");
+        coordinator
+            .session_manager
+            .update_session_metadata(workspace.path(), &session_id, |metadata| {
+                crate::service::session::merge_session_custom_metadata(
+                    metadata,
+                    serde_json::json!({ "role": "commander" }),
+                );
+            })
+            .await
+            .expect("write stale commander role");
+        clear_session_role(&session_id);
+
+        coordinator
+            .restore_session_role_best_effort(workspace.path(), &session_id)
+            .await;
+        assert_eq!(
+            get_session_role(&session_id),
+            Some(AgentRole::Executor),
+            "stale commander role on a subagent-marked session must be overridden"
+        );
+        // The override is persisted back so the next restore reads executor directly.
+        let metadata = coordinator
+            .session_manager
+            .load_session_metadata(workspace.path(), &session_id)
+            .await
+            .expect("load metadata")
+            .expect("metadata exists");
+        assert_eq!(
+            metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get("role"))
+                .and_then(|value| value.as_str()),
+            Some("executor")
+        );
+    }
+
+    #[tokio::test]
+    async fn session_lifecycle_injects_start_context_and_cleans_up() {
+        use crate::agentic::tools::{
+            clear_session_restrictions, get_session_restrictions, get_session_role,
+            set_session_role, update_restrictions, AgentRole, ToolRuntimeRestrictionsPatch,
+        };
+        let (coordinator, _session_manager) = test_coordinator();
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-lifecycle-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("create workspace dir");
+        let workspace_path = workspace.to_string_lossy().into_owned();
+
+        let session = coordinator
+            .create_session_with_workspace_and_creator(
+                Some("lc-main-01".to_string()),
+                "lifecycle main".to_string(),
+                "agentic".to_string(),
+                SessionConfig::default(),
+                workspace_path,
+                None,
+            )
+            .await
+            .expect("create main session");
+        let session_id = session.session_id.clone();
+        assert_eq!(get_session_role(&session_id), Some(AgentRole::Commander));
+
+        // SessionStart injection: the lifecycle context must be visible to the model.
+        let transcript = bitfun_runtime_ports::SessionTranscriptReader::read_session_transcript(
+            &coordinator,
+            bitfun_runtime_ports::SessionTranscriptRequest {
+                session_id: session_id.clone(),
+                turn_id: None,
+            },
+        )
+        .await
+        .expect("session transcript");
+        let injected = transcript.messages.iter().any(|message| {
+            matches!(
+                &message.content,
+                bitfun_runtime_ports::TranscriptContent::Text(text)
+                    if text.contains("[Legion Context]") && text.contains("commander")
+            )
+        });
+        assert!(injected, "SessionStart must inject the legion role context");
+
+        // Populate the registries so cleanup has something to remove.
+        set_session_role(&session_id, AgentRole::Reviewer).expect("set role");
+        update_restrictions(&session_id, None, ToolRuntimeRestrictionsPatch::default())
+            .expect("set restrictions");
+        assert!(get_session_restrictions(&session_id).is_some());
+
+        // SessionEnd cleanup: role + restrictions unregistered, idempotent.
+        coordinator.session_end_cleanup(&session_id).await;
+        assert_eq!(get_session_role(&session_id), None, "role must be unregistered");
+        assert_eq!(
+            get_session_restrictions(&session_id),
+            None,
+            "restrictions must be unregistered"
+        );
+        clear_session_restrictions(&session_id); // exercise the idempotent path
+        coordinator.session_end_cleanup(&session_id).await; // no-op, must not panic
+    }
+
+    #[tokio::test]
+    async fn subagent_start_builds_legion_context() {
+        use crate::agentic::tools::{get_session_role, set_session_role, AgentRole};
+        let (coordinator, _session_manager) = test_coordinator();
+
+        // Parent session with a registered role (no active thread goal on disk).
+        set_session_role("lc-parent-01", AgentRole::Commander).expect("set parent role");
+        let parent_info = SubagentParentInfo {
+            tool_call_id: "tool-call-1".to_string(),
+            session_id: "lc-parent-01".to_string(),
+            dialog_turn_id: "turn-1".to_string(),
+            depth: Some(2),
+            role: Some("reviewer".to_string()),
+        };
+
+        // Subagent role resolved from the session registry (takes precedence
+        // over the parent info role).
+        set_session_role("lc-sub-01", AgentRole::Reviewer).expect("set subagent role");
+        let context = coordinator
+            .build_subagent_legion_context(Some(&parent_info), "lc-sub-01")
+            .await
+            .expect("context must be built");
+        assert!(context.contains("[Legion Context]"), "got: {context}");
+        assert!(
+            context.contains("Subagent role: reviewer"),
+            "subagent role line missing, got: {context}"
+        );
+        assert!(
+            context.contains("Parent session role: commander"),
+            "parent role line missing, got: {context}"
+        );
+        assert!(
+            context.contains("Legion depth: 2"),
+            "depth line missing, got: {context}"
+        );
+
+        // No role and no parent info => nothing to inject.
+        let empty = coordinator
+            .build_subagent_legion_context(None, "lc-unknown")
+            .await;
+        assert!(empty.is_none(), "unknown session must yield no context");
+
+        // Registry wins over the parent-info role claim.
+        assert_eq!(get_session_role("lc-sub-01"), Some(AgentRole::Reviewer));
+    }
+
+    #[test]
     fn external_command_delegation_uses_the_resolved_primary_binding() {
         let source = include_str!("coordinator.rs").replace("\r\n", "\n");
         let delegation = source
@@ -12906,6 +14438,8 @@ mod tests {
             created_at: std::time::UNIX_EPOCH,
             last_activity_at: std::time::UNIX_EPOCH,
             state: bitfun_agent_runtime::session_state::SessionState::Idle,
+            parent_session_id: None,
+            is_daemon: false,
         });
 
         assert_eq!(summary.model_id.as_deref(), Some("fast"));
@@ -13316,7 +14850,6 @@ mod tests {
             Some("/projects/other")
         );
     }
-
     #[test]
     fn btw_session_memory_mode_requires_both_generation_switches() {
         assert_eq!(
@@ -13357,6 +14890,8 @@ mod tests {
                 session_id: "parent-session".to_string(),
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
+                depth: None,
+                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -14099,6 +15634,7 @@ mod tests {
         child.relationship = Some(SessionRelationship {
             kind: Some(SessionRelationshipKind::Subagent),
             parent_session_id: Some(local_session_id.clone()),
+            depth: Some(1),
             parent_request_id: None,
             parent_dialog_turn_id: Some("turn-1".to_string()),
             parent_turn_index: Some(1),
@@ -14122,6 +15658,7 @@ mod tests {
         grandchild.relationship = Some(SessionRelationship {
             kind: Some(SessionRelationshipKind::Subagent),
             parent_session_id: Some(child_session_id.clone()),
+            depth: Some(2),
             parent_request_id: None,
             parent_dialog_turn_id: Some("child-turn".to_string()),
             parent_turn_index: Some(0),
@@ -14352,6 +15889,671 @@ mod tests {
             .await
             .expect("deleted marker load")
             .is_none());
+    }
+
+    fn hidden_tree_child_metadata(
+        session_id: &str,
+        parent_session_id: &str,
+        workspace: &std::path::Path,
+        depth: u32,
+    ) -> SessionMetadata {
+        let mut metadata = SessionMetadata::new(
+            session_id.to_string(),
+            "Tree child".to_string(),
+            "Explore".to_string(),
+            "model".to_string(),
+        );
+        metadata.session_kind = SessionKind::Subagent;
+        metadata.relationship = Some(SessionRelationship {
+            kind: Some(SessionRelationshipKind::Subagent),
+            parent_session_id: Some(parent_session_id.to_string()),
+            depth: Some(depth),
+            parent_request_id: None,
+            parent_dialog_turn_id: None,
+            parent_turn_index: None,
+            parent_tool_call_id: None,
+            subagent_type: Some("Explore".to_string()),
+            continuation_policy: None,
+        });
+        metadata.workspace_path = Some(workspace.to_string_lossy().into_owned());
+        metadata
+    }
+
+    #[tokio::test]
+    async fn coordinator_delete_session_tree_removes_full_persistent_subtree() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root_id = format!("tree-root-{}", uuid::Uuid::new_v4());
+        let child_id = format!("{root_id}-child");
+        let grandchild_id = format!("{root_id}-grandchild");
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &root_id).await;
+
+        let child = hidden_tree_child_metadata(&child_id, &root_id, workspace.path(), 1);
+        session_manager
+            .persistence_manager()
+            .save_session_metadata(&storage_path, &child)
+            .await
+            .expect("child metadata");
+        let grandchild = hidden_tree_child_metadata(&grandchild_id, &child_id, workspace.path(), 2);
+        session_manager
+            .persistence_manager()
+            .save_session_metadata(&storage_path, &grandchild)
+            .await
+            .expect("grandchild metadata");
+
+        let deleted = coordinator
+            .delete_session_tree(workspace.path(), None, None, &root_id)
+            .await
+            .expect("cascade delete should succeed");
+
+        assert_eq!(
+            deleted,
+            vec![grandchild_id.clone(), child_id.clone(), root_id.clone()],
+            "children must be deleted before the root"
+        );
+        for member_id in [&root_id, &child_id, &grandchild_id] {
+            assert!(session_manager
+                .persistence_manager()
+                .load_session_metadata(&storage_path, member_id)
+                .await
+                .expect("metadata lookup")
+                .is_none(), "session {member_id} must be fully removed");
+            assert!(session_manager.get_session(member_id).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn coordinator_delete_session_tree_aborts_when_a_member_is_undeletable() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root_id = format!("tree-root-{}", uuid::Uuid::new_v4());
+        let child_id = format!("{root_id}-child");
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &root_id).await;
+
+        let mut child = hidden_tree_child_metadata(&child_id, &root_id, workspace.path(), 1);
+        child.is_daemon = true;
+        session_manager
+            .persistence_manager()
+            .save_session_metadata(&storage_path, &child)
+            .await
+            .expect("daemon child metadata");
+
+        let error = coordinator
+            .delete_session_tree(workspace.path(), None, None, &root_id)
+            .await
+            .expect_err("a daemon member must reject the whole cascade");
+        assert!(
+            error.to_string().contains("daemon"),
+            "unexpected error: {error}"
+        );
+
+        // Parent must be left untouched when any member rejects deletion.
+        assert!(session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &root_id)
+            .await
+            .expect("root metadata lookup")
+            .is_some());
+        assert!(session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &child_id)
+            .await
+            .expect("child metadata lookup")
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn coordinator_delete_session_tree_rejects_a_processing_member() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root_id = format!("tree-root-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &root_id).await;
+        session_manager
+            .start_dialog_turn(
+                &root_id,
+                "agentic".to_string(),
+                "pending".to_string(),
+                Some("turn-pending".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("start pending turn");
+
+        let error = coordinator
+            .delete_session_tree(workspace.path(), None, None, &root_id)
+            .await
+            .expect_err("a running turn must reject deletion");
+        assert!(
+            error.to_string().contains("running turn"),
+            "unexpected error: {error}"
+        );
+        assert!(session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &root_id)
+            .await
+            .expect("root metadata lookup")
+            .is_some());
+    }
+
+    // R-FIX-3 root-cause verification: the single-session delete path must
+    // cancel a running turn first and wait for the state to converge back to
+    // Idle, so a cancelled turn cannot block deletion. After the cancel the
+    // session is deleted normally (the processing guard only rejects when the
+    // state fails to converge, which the bounded poll then reports as a
+    // deletion error rather than a hang).
+    #[tokio::test]
+    async fn coordinator_delete_session_cancels_then_deletes_a_processing_session() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("delete-processing-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &session_id).await;
+        session_manager
+            .start_dialog_turn(
+                &session_id,
+                "agentic".to_string(),
+                "pending".to_string(),
+                Some("turn-pending".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("start pending turn");
+        assert!(
+            matches!(
+                session_manager.get_session(&session_id).expect("session").state,
+                SessionState::Processing { .. }
+            ),
+            "precondition: session must be Processing"
+        );
+
+        coordinator
+            .delete_session(workspace.path(), &session_id)
+            .await
+            .expect("a running turn must be cancelled first, then the session deleted");
+
+        // The cancelled session must be fully gone.
+        assert!(session_manager.get_session(&session_id).is_none());
+        assert!(session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &session_id)
+            .await
+            .expect("metadata lookup")
+            .is_none());
+    }
+
+    // R-FIX-1 root-cause verification: a re-created session id must not
+    // inherit the deleted marker from its previous incarnation, otherwise its
+    // turn finalization would be skipped and its data never persisted.
+    #[tokio::test]
+    async fn deleted_session_marker_is_cleared_when_session_id_is_recreated() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("recreate-marker-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &session_id).await;
+
+        coordinator
+            .delete_session(workspace.path(), &session_id)
+            .await
+            .expect("delete session");
+        assert!(
+            session_manager.is_session_deleted(&session_id),
+            "precondition: deleted marker must be set after deletion"
+        );
+
+        // Re-create the same session id.
+        session_manager
+            .create_session_with_id_and_details(
+                Some(session_id.clone()),
+                "Recreated".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                None,
+                SessionKind::Standard,
+            )
+            .await
+            .expect("re-create session with same id");
+        assert!(
+            !session_manager.is_session_deleted(&session_id),
+            "deleted marker must be cleared on re-creation"
+        );
+
+        // A tail write for the re-created session must be persisted normally.
+        let workspace_path_str = workspace.path().to_string_lossy().into_owned();
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &session_id,
+            "turn-2",
+            2,
+            "agentic",
+            "recreated input",
+            Some(&workspace_path_str),
+            Some(&storage_path),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&storage_path, &session_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_some(),
+            "re-created session tail write must be persisted (finalization must not be skipped)"
+        );
+    }
+
+    // R-31-2 root-cause verification: an in-flight turn finalization tail
+    // write that arrives after the session was deleted must NOT recreate
+    // on-disk session metadata (ghost "Recovered Session") nor persist any
+    // turn. The control scenario proves a live session still finalizes
+    // normally through the same entry point.
+    #[tokio::test]
+    async fn finalize_skips_recreating_metadata_for_deleted_session() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+
+        // Deleted-session scenario: delete first, then let the late tail
+        // write arrive exactly as a spawned finalization task would.
+        let deleted_id = format!("finalize-deleted-{}", uuid::Uuid::new_v4());
+        let deleted_storage =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &deleted_id).await;
+        coordinator
+            .delete_session(workspace.path(), &deleted_id)
+            .await
+            .expect("delete session before tail write");
+        assert!(
+            session_manager.is_session_deleted(&deleted_id),
+            "precondition: session must be marked deleted"
+        );
+        let workspace_path_str = workspace.path().to_string_lossy().into_owned();
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &deleted_id,
+            "turn-2",
+            2,
+            "agentic",
+            "late input",
+            Some(&workspace_path_str),
+            Some(&deleted_storage),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_session_metadata(&deleted_storage, &deleted_id)
+                .await
+                .expect("metadata lookup")
+                .is_none(),
+            "deleted session must not be recreated as a ghost 'Recovered Session'"
+        );
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&deleted_storage, &deleted_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_none(),
+            "no turn may be persisted for a deleted session"
+        );
+
+        // Control scenario: the same entry point persists the tail write for
+        // a live (never-deleted) session.
+        let live_id = format!("finalize-live-{}", uuid::Uuid::new_v4());
+        let live_storage =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &live_id).await;
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &live_id,
+            "turn-2",
+            2,
+            "agentic",
+            "live input",
+            Some(&workspace_path_str),
+            Some(&live_storage),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_session_metadata(&live_storage, &live_id)
+                .await
+                .expect("metadata lookup")
+                .is_some(),
+            "live session metadata must remain"
+        );
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&live_storage, &live_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_some(),
+            "live session tail write must be persisted"
+        );
+    }
+
+    // R-FIX-2 root-cause verification (deletion-window): the deleted marker is
+    // set BEFORE the fallible deletion stage, so a finalization tail write that
+    // arrives while the deletion is in progress (on-disk storage already gone,
+    // in-memory session still present) is skipped instead of recreating the
+    // ghost metadata.
+    #[tokio::test]
+    async fn finalize_skips_tail_write_during_in_progress_deletion() {
+        let (_coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("finalize-inprogress-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &session_id).await;
+
+        // Simulate the mid-deletion window: persisted storage removed, session
+        // still loaded in memory, deleted marker already set (R-FIX-2 sets it
+        // before the persistence delete stage).
+        session_manager
+            .persistence_manager()
+            .delete_session(&storage_path, &session_id)
+            .await
+            .expect("remove persisted session storage");
+        assert!(session_manager.get_session(&session_id).is_some());
+        session_manager.mark_session_deleted(&session_id);
+
+        let workspace_path_str = workspace.path().to_string_lossy().into_owned();
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &session_id,
+            "turn-2",
+            2,
+            "agentic",
+            "mid-delete input",
+            Some(&workspace_path_str),
+            Some(&storage_path),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_session_metadata(&storage_path, &session_id)
+                .await
+                .expect("metadata lookup")
+                .is_none(),
+            "in-progress deletion must not be resurrected by a mid-window tail write"
+        );
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&storage_path, &session_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_none(),
+            "no turn may be persisted during the deletion window"
+        );
+    }
+
+    // R-FIX-2 root-cause verification (rollback): when the deletion fails after
+    // the early marker was set, the marker must be rolled back so the session
+    // stays fully usable and later finalization persists normally.
+    #[tokio::test]
+    async fn failed_deletion_rolls_back_deleted_marker() {
+        let (_coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("delete-fail-rollback-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &session_id).await;
+        // An unfinished (non-staged) revert transition makes the persistence
+        // delete stage fail after the marker has been set.
+        session_manager
+            .persistence_manager()
+            .save_session_revert_state(
+                &storage_path,
+                &session_id,
+                &crate::agentic::session::revert::SessionRevertState {
+                    schema_version: crate::agentic::session::revert::SESSION_REVERT_SCHEMA_VERSION,
+                    boundary_turn: 1,
+                    original_turn_end: 2,
+                    phase: crate::agentic::session::revert::SessionRevertPhase::Applying,
+                    workspace_checkpoint: Vec::new(),
+                },
+            )
+            .await
+            .expect("persist unfinished revert transition");
+
+        let error = session_manager
+            .delete_session_locked(workspace.path(), &session_id)
+            .await
+            .expect_err("deletion must fail on an unfinished revert transition");
+        assert!(
+            !error.to_string().is_empty(),
+            "expected a deletion error"
+        );
+        assert!(
+            !session_manager.is_session_deleted(&session_id),
+            "failed deletion must roll back the deleted marker"
+        );
+
+        // The session stays fully usable: clear the revert marker (which would
+        // block any turn write by its own gate) and verify a later tail write
+        // persists normally through the same finalization entry point.
+        session_manager
+            .persistence_manager()
+            .delete_session_revert_state(&storage_path, &session_id)
+            .await
+            .expect("clear revert transition after failed delete");
+        let workspace_path_str = workspace.path().to_string_lossy().into_owned();
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &session_id,
+            "turn-2",
+            2,
+            "agentic",
+            "after failed delete",
+            Some(&workspace_path_str),
+            Some(&storage_path),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&storage_path, &session_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_some(),
+            "finalization must persist normally after a rolled-back deletion"
+        );
+    }
+
+    // P2-A root-cause verification: a loaded session whose on-disk storage was
+    // removed externally (no explicit delete marker) must also be skipped by
+    // turn finalization, otherwise the tail write resurrects the storage that
+    // the external removal deleted.
+    #[tokio::test]
+    async fn finalize_skips_tail_write_for_externally_disk_removed_session() {
+        let (_coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("finalize-disk-removed-{}", uuid::Uuid::new_v4());
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &session_id).await;
+        // A processing session is kept loaded by the reconcile while its
+        // storage is registered as externally removed.
+        session_manager
+            .start_dialog_turn(
+                &session_id,
+                "agentic".to_string(),
+                "pending".to_string(),
+                Some("turn-pending".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("start pending turn");
+        // External removal: delete the on-disk storage directly (no lifecycle
+        // marker), then reconcile to register the disk-removed id.
+        session_manager
+            .persistence_manager()
+            .delete_session(&storage_path, &session_id)
+            .await
+            .expect("externally remove session storage");
+        session_manager
+            .reconcile_loaded_sessions_with_disk(&storage_path)
+            .await
+            .expect("reconcile loaded sessions with disk");
+        assert!(
+            session_manager.is_session_disk_removed(&session_id),
+            "precondition: externally removed marker must be set"
+        );
+        assert!(
+            session_manager.get_session(&session_id).is_some(),
+            "precondition: processing session stays loaded"
+        );
+
+        // The tail write must not recreate the removed storage.
+        let workspace_path_str = workspace.path().to_string_lossy().into_owned();
+        ConversationCoordinator::finalize_persisted_turn_in_workspace_if_needed(
+            session_manager.as_ref(),
+            &session_id,
+            "turn-2",
+            2,
+            "agentic",
+            "late input",
+            Some(&workspace_path_str),
+            Some(&storage_path),
+            Some(crate::service::session::TurnStatus::Completed),
+            None,
+        )
+        .await;
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_session_metadata(&storage_path, &session_id)
+                .await
+                .expect("metadata lookup")
+                .is_none(),
+            "externally removed session must not be resurrected by a tail write"
+        );
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_dialog_turn(&storage_path, &session_id, 2)
+                .await
+                .expect("dialog turn lookup")
+                .is_none(),
+            "no turn may be persisted for an externally removed session"
+        );
+    }
+
+    // R-31-3 root-cause verification: cascade deletion must discover a loaded
+    // durable child even when its persisted relationship edge is broken/missing
+    // (in-memory creator marker "session-<parent>" is the only link). The
+    // persisted-relationship cascade is covered by
+    // `coordinator_delete_session_tree_removes_full_persistent_subtree`.
+    #[tokio::test]
+    async fn coordinator_delete_session_tree_removes_broken_relationship_child() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root_id = format!("tree-broken-root-{}", uuid::Uuid::new_v4());
+        let child_id = format!("{root_id}-child");
+        let storage_path =
+            create_two_turn_session(session_manager.as_ref(), workspace.path(), &root_id).await;
+
+        // Loaded durable child whose persisted relationship is broken but whose
+        // in-memory creator marker still links it to the root. Creation
+        // persists the relationship derived from the creator marker, so the
+        // broken-edge precondition is produced by rewriting the on-disk
+        // metadata without the relationship (simulating a corrupted/missing
+        // relationship record) while the loaded session keeps its marker.
+        session_manager
+            .create_session_with_id_and_details(
+                Some(child_id.clone()),
+                "Broken child".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+                Some(format!("session-{root_id}")),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("create child session");
+        let mut broken_child_metadata = session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &child_id)
+            .await
+            .expect("child metadata lookup")
+            .expect("child metadata exists");
+        assert!(
+            broken_child_metadata.relationship.is_some(),
+            "precondition: fresh child metadata must carry the derived relationship"
+        );
+        broken_child_metadata.relationship = None;
+        session_manager
+            .persistence_manager()
+            .save_session_metadata(&storage_path, &broken_child_metadata)
+            .await
+            .expect("rewrite child metadata without relationship");
+        assert!(
+            session_manager
+                .persistence_manager()
+                .load_session_metadata(&storage_path, &child_id)
+                .await
+                .expect("child metadata lookup")
+                .expect("child metadata exists")
+                .relationship
+                .is_none(),
+            "precondition: persisted relationship edge must be missing"
+        );
+        assert!(
+            session_manager.get_session(&child_id).is_some(),
+            "precondition: child must be loaded in memory"
+        );
+
+        let deleted = coordinator
+            .delete_session_tree(workspace.path(), None, None, &root_id)
+            .await
+            .expect("cascade delete should discover the in-memory child");
+        assert!(
+            deleted.contains(&child_id),
+            "in-memory child with broken persisted relationship must be cascade-deleted, got: {deleted:?}"
+        );
+        assert!(deleted.contains(&root_id), "root must be deleted last");
+        assert!(session_manager.get_session(&child_id).is_none());
+        assert!(session_manager.get_session(&root_id).is_none());
+        assert!(session_manager
+            .persistence_manager()
+            .load_session_metadata(&storage_path, &child_id)
+            .await
+            .expect("child metadata lookup")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn coordinator_delete_session_tree_returns_not_found_for_unknown_session() {
+        let (coordinator, _session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let error = coordinator
+            .delete_session_tree(workspace.path(), None, None, "missing-session")
+            .await
+            .expect_err("unknown session must be rejected");
+        assert!(
+            error.to_string().contains("not found"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]
@@ -15156,7 +17358,7 @@ mod tests {
         assert_eq!(other_parent_agent, "a1");
         assert_eq!(
             coordinator
-                .resolve_agent_id("parent-1", "a2")
+                .resolve_agent_id("parent-1", "a2", false)
                 .await
                 .expect("resolve agent id"),
             "subagent-session-2"
@@ -15195,7 +17397,7 @@ mod tests {
         assert_eq!(custom.bg_task_id, "reviewer_bg1");
         assert_eq!(
             coordinator
-                .resolve_agent_id("parent-1", "reviewer")
+                .resolve_agent_id("parent-1", "reviewer", false)
                 .await
                 .expect("resolve caller-named agent"),
             "reviewer-session"
@@ -15427,6 +17629,7 @@ mod tests {
             None,
             &logical_type,
             SessionContinuationPolicy::FreshOnly,
+            None,
         );
         assert_eq!(relationship.subagent_type.as_deref(), Some("Reviewer"));
         assert_eq!(
@@ -15484,6 +17687,7 @@ mod tests {
             parent_tool_call_id: None,
             subagent_type: None,
             continuation_policy: None,
+            depth: None,
         };
 
         assert!(super::session_lineage_matches_parent(
@@ -15513,6 +17717,7 @@ mod tests {
             parent_tool_call_id: Some("task-tool-call".to_string()),
             subagent_type: Some("Explore".to_string()),
             continuation_policy: None,
+            depth: None,
         };
 
         assert_eq!(
@@ -15542,6 +17747,7 @@ mod tests {
             parent_tool_call_id: Some("task-tool-call".to_string()),
             subagent_type: Some("Explore".to_string()),
             continuation_policy: None,
+            depth: None,
         };
 
         assert!(super::subagent_parent_info_from_relationship(Some(&relationship)).is_none());
@@ -16608,6 +18814,8 @@ mod tests {
                     session_id: parent_session.session_id,
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
+                    depth: None,
+                role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -16636,7 +18844,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_subagent_inherits_transient_parent_persistence_boundary() {
+    async fn fresh_subagent_rejects_transient_parent_fork() {
         let (coordinator, session_manager) = test_coordinator();
         let workspace_path = std::env::temp_dir().join(format!(
             "bitfun-fresh-subagent-transient-test-{}",
@@ -16667,6 +18875,73 @@ mod tests {
             .await
             .expect("transient parent should be created");
 
+        let err = coordinator
+            .resolve_hidden_subagent_execution_request(SubagentExecutionRequest {
+                task_description: "Inspect the workspace".to_string(),
+                context_mode: SubagentContextMode::Fresh,
+                target_session_id: None,
+                subagent_type: Some("Explore".to_string()),
+                logical_subagent_type: None,
+                continuation_policy: SessionContinuationPolicy::Reusable,
+                model_binding_policy: SessionModelBindingPolicy::Mutable,
+                workspace_path: Some(workspace.clone()),
+                model_id: Some("primary".to_string()),
+                inherit_parent_model: false,
+                subagent_parent_info: SubagentParentInfo {
+                    session_id: parent_session.session_id.clone(),
+                    dialog_turn_id: "parent-turn".to_string(),
+                    tool_call_id: "task-tool".to_string(),
+                    depth: None,
+                role: None,
+                },
+                context: HashMap::new(),
+                permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
+                delegation_policy: DelegationPolicy::top_level().spawn_child(),
+                external_generation_lease: None,
+            })
+            .await
+            .expect_err("a transient parent must not spawn subagent sessions");
+
+        assert!(
+            err.to_string()
+                .contains("transient sessions cannot spawn subagent sessions"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_prepare_subagent_execution_hidden_target_session_ok() {
+        let (coordinator, session_manager) = test_coordinator();
+        let workspace_path = std::env::temp_dir().join(format!(
+            "bitfun-hidden-target-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
+        struct TempWorkspaceGuard(std::path::PathBuf);
+        impl Drop for TempWorkspaceGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _workspace_guard = TempWorkspaceGuard(workspace_path.clone());
+        let workspace = workspace_path.to_string_lossy().into_owned();
+
+        let parent_session = session_manager
+            .create_session_with_id_and_details(
+                None,
+                "Persistent parent".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    model_id: Some("primary".to_string()),
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                None,
+                SessionKind::Standard,
+            )
+            .await
+            .expect("persistent parent should be created");
+
         let resolved = coordinator
             .resolve_hidden_subagent_execution_request(SubagentExecutionRequest {
                 task_description: "Inspect the workspace".to_string(),
@@ -16683,6 +18958,8 @@ mod tests {
                     session_id: parent_session.session_id.clone(),
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
+                    depth: None,
+                role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -16692,18 +18969,10 @@ mod tests {
             .await
             .expect("fresh subagent request should resolve");
 
-        assert!(resolved.transient);
-        assert!(!resolved
-            .runtime_tool_restrictions
-            .is_tool_allowed("SessionControl"));
-        assert!(!resolved
-            .runtime_tool_restrictions
-            .is_tool_allowed("SessionMessage"));
-
         let prepared = coordinator
             .prepare_hidden_subagent_execution_request(resolved)
             .await
-            .expect("transient child should prepare");
+            .expect("subagent child should prepare");
         let child_session_id = prepared
             .target_session_id()
             .expect("prepared child Session id")
@@ -16724,10 +18993,10 @@ mod tests {
         coordinator
             .cleanup_subagent_resources(&child_session_id)
             .await
-            .expect("transient child cleanup should succeed");
+            .expect("subagent child cleanup should succeed");
         assert!(
             session_manager.get_session(&child_session_id).is_some(),
-            "a reusable transient Subagent must remain available for send_input until its parent is discarded"
+            "a reusable subagent session must remain available for send_input until its parent is deleted"
         );
 
         let fresh_only = coordinator
@@ -16746,6 +19015,8 @@ mod tests {
                     session_id: parent_session.session_id,
                     dialog_turn_id: "parent-turn-2".to_string(),
                     tool_call_id: "task-tool-2".to_string(),
+                    depth: None,
+                role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -16753,11 +19024,11 @@ mod tests {
                 external_generation_lease: None,
             })
             .await
-            .expect("fresh-only transient child should resolve");
+            .expect("fresh-only subagent child should resolve");
         let fresh_only = coordinator
             .prepare_hidden_subagent_execution_request(fresh_only)
             .await
-            .expect("fresh-only transient child should prepare");
+            .expect("fresh-only subagent child should prepare");
         let fresh_only_session_id = fresh_only
             .target_session_id()
             .expect("fresh-only prepared child Session id")
@@ -16766,12 +19037,117 @@ mod tests {
         coordinator
             .cleanup_subagent_resources(&fresh_only_session_id)
             .await
-            .expect("fresh-only transient child cleanup should succeed");
+            .expect("fresh-only subagent child cleanup should succeed");
         assert!(
             session_manager
                 .get_session(&fresh_only_session_id)
-                .is_none(),
-            "a fresh-only transient Subagent should be released after terminal cleanup"
+                .is_some(),
+            "a persistent fresh-only subagent session survives cleanup (release applies to transient sessions only)"
+        );
+    }
+
+    #[tokio::test]
+    async fn scope_drop_discards_transient_subagent_family() {
+        use super::SubagentExecutionScope;
+        use tokio_util::sync::CancellationToken;
+        let (coordinator, session_manager) = test_coordinator();
+        let workspace_path = std::env::temp_dir().join(format!(
+            "bitfun-scope-drop-transient-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
+        struct TempWorkspaceGuard(std::path::PathBuf);
+        impl Drop for TempWorkspaceGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let _workspace_guard = TempWorkspaceGuard(workspace_path.clone());
+        let workspace = workspace_path.to_string_lossy().into_owned();
+
+        let parent_session = session_manager
+            .create_session_with_id_and_details(
+                None,
+                "Persistent parent".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    model_id: Some("primary".to_string()),
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                None,
+                SessionKind::Standard,
+            )
+            .await
+            .expect("persistent parent should be created");
+        let parent_session_id = parent_session.session_id.clone();
+        let child_session = session_manager
+            .create_transient_session_with_id_and_details(
+                None,
+                "Scope child".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    model_id: Some("primary".to_string()),
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                Some(format!("session-{parent_session_id}")),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient child should be created");
+        let child_session_id = child_session.session_id.clone();
+        let grandchild_session = session_manager
+            .create_transient_session_with_id_and_details(
+                None,
+                "Scope grandchild".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    model_id: Some("primary".to_string()),
+                    workspace_path: Some(workspace),
+                    ..Default::default()
+                },
+                Some(format!("session-{child_session_id}")),
+                SessionKind::EphemeralSubagent,
+            )
+            .await
+            .expect("transient grandchild should be created");
+        let grandchild_session_id = grandchild_session.session_id.clone();
+
+        let cancel_token = CancellationToken::new();
+        let abort_handle = tokio::spawn(async {}).abort_handle();
+
+        let scope = SubagentExecutionScope {
+            execution_engine: coordinator.execution_engine.clone(),
+            tool_pipeline: coordinator.tool_pipeline.clone(),
+            session_manager: session_manager.clone(),
+            active_subagent_executions: coordinator.active_subagent_executions.clone(),
+            subagent_session_id: child_session_id.clone(),
+            subagent_dialog_turn_id: "scope-drop-turn".to_string(),
+            subagent_cancel_token: cancel_token,
+            abort_handle,
+            disarmed: false,
+        };
+        drop(scope);
+
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            if session_manager.get_session(&child_session_id).is_none() {
+                break;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            session_manager.get_session(&child_session_id).is_none(),
+            "transient child must be discarded when its execution scope drops"
+        );
+        assert!(
+            session_manager.get_session(&grandchild_session_id).is_none(),
+            "transient grandchild must be discarded when its execution scope drops"
+        );
+        assert!(
+            session_manager.get_session(&parent_session_id).is_some(),
+            "the persistent parent must survive scope drop"
         );
     }
 
@@ -16835,6 +19211,8 @@ mod tests {
                 session_id: parent_session.session_id.clone(),
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
+                depth: None,
+                role: None,
             },
             context: HashMap::from([(
                 AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
@@ -16899,6 +19277,8 @@ mod tests {
                 session_id: parent_session.session_id.clone(),
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
+                depth: None,
+                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -16971,6 +19351,8 @@ mod tests {
                 session_id: parent_session.session_id.clone(),
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
+                depth: None,
+                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -17014,6 +19396,8 @@ mod tests {
                 session_id: parent_session.session_id.clone(),
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
+                depth: None,
+                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),

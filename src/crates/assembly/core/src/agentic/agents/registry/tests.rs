@@ -486,6 +486,85 @@ async fn task_visible_subagents_are_filtered_by_parent_agent() {
         .any(|agent| agent.id == "ReviewWorker"));
 }
 
+#[tokio::test]
+async fn session_creation_agent_ids_include_acp_bridge_modes_and_project_subagents() {
+    let registry = AgentRegistry::new();
+
+    // ACP bridge agents (`acp__<client_id>`) are registered as Mode entries,
+    // exactly like builtin modes, so session creation must be able to select them.
+    registry.register_agent(
+        Arc::new(TestAgent {
+            id: "acp__client-a".to_string(),
+        }),
+        AgentCategory::Mode,
+        AgentSource::Builtin,
+        None,
+        None,
+    );
+    registry.register_agent(
+        Arc::new(TestAgent {
+            id: "Plan".to_string(),
+        }),
+        AgentCategory::Mode,
+        AgentSource::Builtin,
+        None,
+        None,
+    );
+    registry.register_agent(
+        Arc::new(TestAgent {
+            id: "Explore".to_string(),
+        }),
+        AgentCategory::SubAgent,
+        AgentSource::Builtin,
+        Some(SubAgentSource::Builtin),
+        None,
+    );
+    // Hidden agents (not Modes/SubAgents) must stay out of the creation surface.
+    registry.register_agent(
+        Arc::new(TestAgent {
+            id: "ghost-hidden".to_string(),
+        }),
+        AgentCategory::Hidden,
+        AgentSource::Builtin,
+        None,
+        None,
+    );
+
+    let mut project_entries = HashMap::new();
+    project_entries.insert(
+        "zProject".to_string(),
+        test_project_entry("zProject", "fast"),
+    );
+    registry
+        .write_project_subagents()
+        .insert(PathBuf::from("D:/workspace/project-c"), project_entries);
+    registry.set_user_custom_agents_loaded(true);
+
+    let unscoped = registry.get_agent_ids_for_session_creation(None).await;
+    assert!(
+        unscoped.iter().any(|id| id == "acp__client-a"),
+        "acp bridge modes must be selectable for session creation"
+    );
+    assert!(unscoped.iter().any(|id| id == "Plan"));
+    assert!(unscoped.iter().any(|id| id == "Explore"));
+    assert!(
+        !unscoped.iter().any(|id| id == "ghost-hidden"),
+        "hidden agents must not be listed for session creation"
+    );
+    assert!(
+        !unscoped.iter().any(|id| id == "zProject"),
+        "project subagents are only listed for their own workspace"
+    );
+
+    let scoped = registry
+        .get_agent_ids_for_session_creation(Some(Path::new("D:/workspace/project-c")))
+        .await;
+    assert!(
+        scoped.iter().any(|id| id == "zProject"),
+        "project subagents merge in when the workspace is provided"
+    );
+}
+
 #[test]
 fn merge_dynamic_mcp_tools_appends_registered_mcp_tools_once() {
     let configured_tools = vec!["Read".to_string(), "ExecCommand".to_string()];
@@ -1335,6 +1414,34 @@ async fn external_routes_are_workspace_scoped_fail_closed_and_generation_leased(
     assert!(registry.is_external_subagent_route("Explore", Some(&workspace)));
     drop(binding);
     assert!(registry.get_agent(runtime_v1, Some(&workspace)).is_none());
+}
+
+#[tokio::test]
+async fn unregister_agents_by_prefix_removes_only_matching_agents() {
+    let registry = AgentRegistry::new();
+    for id in ["acp__client-a", "acp__client-b", "builtin", "acp"] {
+        registry.register_agent(
+            Arc::new(TestAgent { id: id.to_string() }),
+            AgentCategory::SubAgent,
+            AgentSource::Builtin,
+            Some(SubAgentSource::Builtin),
+            None,
+        );
+    }
+    assert_eq!(
+        registry.unregister_agents_by_prefix("acp__"),
+        2,
+        "only acp__-prefixed agents are removed"
+    );
+    assert!(registry.get_agent("acp__client-a", None).is_none());
+    assert!(registry.get_agent("acp__client-b", None).is_none());
+    assert!(registry.get_agent("builtin", None).is_some());
+    assert!(registry.get_agent("acp", None).is_some());
+    assert_eq!(
+        registry.unregister_agents_by_prefix("acp__"),
+        0,
+        "second cleanup removes nothing"
+    );
 }
 
 #[tokio::test]

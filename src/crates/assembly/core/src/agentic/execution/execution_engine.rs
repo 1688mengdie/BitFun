@@ -57,6 +57,7 @@ use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
 use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
 use bitfun_agent_runtime::output_surface::TOOL_CONTEXT_INLINE_MARKDOWN_IMAGE_DISPLAY_KEY;
+use bitfun_agent_runtime::prompt::RuntimeFactsUsage;
 use bitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY;
 use bitfun_ai_adapters::ModelExchangeTraceConfig;
 use bitfun_core_types::SessionModelBindingPolicy;
@@ -102,6 +103,21 @@ pub struct ContextCompactionOutcome {
 const MANUAL_COMPACTION_PLANNING: u8 = 0;
 const MANUAL_COMPACTION_CANCELLED: u8 = 1;
 const MANUAL_COMPACTION_COMMITTING: u8 = 2;
+
+/// Session metadata key for the pre-compaction progress snapshot. Written by
+/// the custom compaction checkpoint, which is intentionally not gated by
+/// `app.hooks.enabled` so long-running tasks keep a recoverable record of
+/// goal/role/todos state across context compaction.
+const COMPACTION_PROGRESS_SNAPSHOT_KEY: &str = "compactionProgressSnapshot";
+
+/// Current wall-clock time in milliseconds since the Unix epoch, used for
+/// compaction snapshot timestamps.
+fn compaction_snapshot_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Arbitrates the only race that matters for manual compaction: cancellation
 /// may win while the model is planning, but context commit must be atomic once
@@ -421,6 +437,7 @@ struct TurnPromptScaffoldInput<'a> {
     supports_image_understanding: bool,
     model_name: &'a str,
     current_agent: &'a dyn crate::agentic::agents::Agent,
+    runtime_facts_usage: RuntimeFactsUsage,
     context: &'a ExecutionContext,
 }
 
@@ -521,6 +538,19 @@ impl ExecutionEngine {
             trigger_budget,
             prepended_reminder_tokens,
         )
+    }
+
+    /// Map a token pressure snapshot to the prompt-level runtime facts used by
+    /// the Runtime Facts reminder: live usage ratio plus the dynamic
+    /// compression preview trigger point (input_limit / context_window).
+    fn runtime_facts_usage_from_pressure(pressure: &TokenPressureSnapshot) -> RuntimeFactsUsage {
+        let compression_preview_ratio = (pressure.context_window > 0).then(|| {
+            pressure.input_limit as f32 / pressure.context_window as f32
+        });
+        RuntimeFactsUsage {
+            context_usage_ratio: Some(pressure.usage_ratio),
+            compression_preview_ratio,
+        }
     }
 
     fn estimate_auto_compression_pressure_with_anchor(
@@ -1193,6 +1223,7 @@ impl ExecutionEngine {
         execution_context: &ExecutionContext,
         current_agent: &dyn crate::agentic::agents::Agent,
         prompt_context: Option<&PromptBuilderContext>,
+        runtime_facts_usage: RuntimeFactsUsage,
     ) -> PrependedPromptReminders {
         let Some(prompt_context) = prompt_context.cloned() else {
             return PrependedPromptReminders::default();
@@ -1292,6 +1323,7 @@ impl ExecutionEngine {
             built_user_context
         };
         let runtime_context = prompt_builder.build_runtime_context_reminder().await;
+        let runtime_facts = prompt_builder.build_runtime_facts_reminder(runtime_facts_usage);
 
         PrependedPromptReminders {
             deferred_tool_listing: prompt_builder.build_deferred_tool_listing_reminder(),
@@ -1302,6 +1334,7 @@ impl ExecutionEngine {
                 .as_ref()
                 .and_then(|sections| sections.render_agent_listing_reminder()),
             runtime_context,
+            runtime_facts,
             user_context,
         }
     }
@@ -1367,6 +1400,7 @@ impl ExecutionEngine {
                 input.context,
                 input.current_agent,
                 prompt_context.as_ref(),
+                input.runtime_facts_usage,
             )
             .await;
         let system_prompt = self
@@ -1399,7 +1433,7 @@ impl ExecutionEngine {
         prepended_prompt_reminders: &PrependedPromptReminders,
     ) {
         debug!(
-            "Turn prompt scaffold resolved: session_id={}, turn_id={}, stage={}, system_prompt_len={} bytes, skill_listing_len={}, agent_listing_len={}, deferred_tool_listing_len={}, user_context_len={}, runtime_context_len={}",
+            "Turn prompt scaffold resolved: session_id={}, turn_id={}, stage={}, system_prompt_len={} bytes, skill_listing_len={}, agent_listing_len={}, deferred_tool_listing_len={}, user_context_len={}, runtime_context_len={}, runtime_facts_len={}",
             session_id,
             turn_id,
             stage,
@@ -1426,6 +1460,11 @@ impl ExecutionEngine {
                 .unwrap_or(0),
             prepended_prompt_reminders
                 .runtime_context
+                .as_ref()
+                .map(|text| text.len())
+                .unwrap_or(0),
+            prepended_prompt_reminders
+                .runtime_facts
                 .as_ref()
                 .map(|text| text.len())
                 .unwrap_or(0)
@@ -2294,6 +2333,9 @@ impl ExecutionEngine {
                 supports_image_understanding: primary_supports_image_understanding,
                 tool_listing_sections,
                 runtime_context_needs,
+                // Compression model requests do not need per-turn runtime
+                // facts; the default keeps their prompt prefix stable.
+                runtime_facts_usage: RuntimeFactsUsage::default(),
                 stage: "compression_scaffold",
             })
             .await?;
@@ -2336,6 +2378,187 @@ impl ExecutionEngine {
         }
     }
 
+    /// Custom compaction checkpoint, intentionally outside the `app.hooks.enabled`
+    /// gate: persist a lightweight pre-compaction progress snapshot into session
+    /// metadata so long-running tasks can verify goal/role/todos state survived
+    /// context compaction.
+    async fn preserve_compaction_progress_snapshot(
+        &self,
+        session_id: &str,
+        trigger: &str,
+        session: &Session,
+    ) {
+        let Some(storage_path) = self
+            .session_manager
+            .effective_session_storage_path(session_id)
+            .await
+        else {
+            // Session persistence is disabled; there is nowhere to store the
+            // snapshot and post-compaction verification is skipped accordingly.
+            debug!(
+                "Compaction snapshot skipped (session storage unavailable): session_id={}",
+                session_id
+            );
+            return;
+        };
+
+        let mut has_thread_goal = false;
+        let mut todos_present = false;
+        let mut custom_metadata_present = false;
+        match self
+            .session_manager
+            .load_session_metadata(&storage_path, session_id)
+            .await
+        {
+            Ok(Some(metadata)) => {
+                has_thread_goal = metadata
+                    .custom_metadata
+                    .as_ref()
+                    .and_then(|value| value.get(bitfun_runtime_ports::THREAD_GOAL_METADATA_KEY))
+                    .is_some();
+                todos_present = metadata.todos.is_some();
+                custom_metadata_present = metadata.custom_metadata.is_some();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                debug!(
+                    "Compaction snapshot baseline unavailable: session_id={}, error={}",
+                    session_id, error
+                );
+            }
+        }
+
+        let snapshot = serde_json::json!({
+            "trigger": trigger,
+            "compressionCountBefore": session.compression_state.compression_count,
+            "agentType": session.agent_type,
+            "hasThreadGoal": has_thread_goal,
+            "todosPresent": todos_present,
+            "customMetadataPresent": custom_metadata_present,
+            "recordedAtMs": compaction_snapshot_timestamp_ms(),
+        });
+        if let Err(error) = self
+            .session_manager
+            .merge_session_custom_metadata(
+                session_id,
+                serde_json::json!({ COMPACTION_PROGRESS_SNAPSHOT_KEY: snapshot }),
+            )
+            .await
+        {
+            warn!(
+                "Failed to persist compaction progress snapshot: session_id={}, trigger={}, error={}",
+                session_id, trigger, error
+            );
+        } else {
+            // Registered: active subagent tracking is runtime-only (coordinator
+            // in-memory state) and is not persisted in session metadata;
+            // compaction does not clear it.
+            debug!(
+                "Compaction snapshot recorded: session_id={}, trigger={}, active_subagents=runtime_only_not_persisted",
+                session_id, trigger
+            );
+        }
+    }
+
+    /// Custom compaction checkpoint, intentionally outside the `app.hooks.enabled`
+    /// gate: read-only verification that goal/role/todos survived context
+    /// compaction. Only warns on missing state; never blocks or rewrites anything.
+    async fn verify_compaction_progress_state(
+        &self,
+        session_id: &str,
+        trigger: &str,
+        session: &Session,
+    ) {
+        let Some(storage_path) = self
+            .session_manager
+            .effective_session_storage_path(session_id)
+            .await
+        else {
+            return;
+        };
+        let metadata = match self
+            .session_manager
+            .load_session_metadata(&storage_path, session_id)
+            .await
+        {
+            Ok(Some(metadata)) => metadata,
+            Ok(None) => {
+                warn!(
+                    "Compaction verification: session metadata missing after compaction: session_id={}, trigger={}",
+                    session_id, trigger
+                );
+                return;
+            }
+            Err(error) => {
+                warn!(
+                    "Compaction verification: failed to load session metadata after compaction: session_id={}, trigger={}, error={}",
+                    session_id, trigger, error
+                );
+                return;
+            }
+        };
+
+        let Some(snapshot) = metadata
+            .custom_metadata
+            .as_ref()
+            .and_then(|value| value.get(COMPACTION_PROGRESS_SNAPSHOT_KEY))
+        else {
+            // No baseline was recorded (e.g. persistence disabled at snapshot
+            // time); verification is skipped without noise.
+            return;
+        };
+
+        let mut missing = Vec::new();
+        if session.agent_type
+            != snapshot
+                .get("agentType")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        {
+            missing.push("role(agent_type)");
+        }
+        if snapshot
+            .get("hasThreadGoal")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get(bitfun_runtime_ports::THREAD_GOAL_METADATA_KEY))
+                .is_none()
+        {
+            missing.push("thread_goal");
+        }
+        if snapshot
+            .get("todosPresent")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && metadata.todos.is_none()
+        {
+            missing.push("todos");
+        }
+        if snapshot
+            .get("customMetadataPresent")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            && metadata.custom_metadata.is_none()
+        {
+            missing.push("custom_metadata");
+        }
+
+        if missing.is_empty() {
+            debug!(
+                "Compaction verification passed: session_id={}, trigger={}",
+                session_id, trigger
+            );
+        } else {
+            warn!(
+                "Compaction verification: state lost across compaction: session_id={}, trigger={}, missing={}",
+                session_id, trigger, missing.join(",")
+            );
+        }
+    }
+
     /// Compress context, will emit compression events (Started, Completed, and Failed)
     #[allow(clippy::too_many_arguments)]
     async fn compress_messages(
@@ -2373,6 +2596,11 @@ impl ExecutionEngine {
         let compression_id = format!("compression_{}", uuid::Uuid::new_v4());
         // Captured before `ai_client` is consumed by summary generation.
         let ai_client_model = ai_client.config.model.clone();
+
+        // Capture pre-compaction progress state before native hook dispatch so
+        // long-running task state can be verified after compaction.
+        self.preserve_compaction_progress_snapshot(session_id, trigger, &session)
+            .await;
 
         native_hooks::dispatch_pre_compact(
             Self::native_hook_facts(session_id, dialog_turn_id, workspace, &ai_client_model),
@@ -2576,6 +2804,11 @@ impl ExecutionEngine {
                 )
                 .await;
 
+                // Verify goal/role/todos survived compaction after native hook
+                // dispatch; only warns on missing state.
+                self.verify_compaction_progress_state(session_id, trigger, &session)
+                    .await;
+
                 Ok(Some((compressed_tokens, new_messages)))
             }
             Ok(None) => Ok(None),
@@ -2619,6 +2852,10 @@ impl ExecutionEngine {
         let scaffold = self
             .resolve_compression_runtime_scaffold(&session, &context)
             .await?;
+        // Capture pre-compaction progress state before native hook dispatch so
+        // long-running task state can be verified after compaction.
+        self.preserve_compaction_progress_snapshot(&session_id, trigger, &session)
+            .await;
         native_hooks::dispatch_pre_compact(
             Self::native_hook_facts(
                 &session_id,
@@ -2840,6 +3077,11 @@ impl ExecutionEngine {
                     trigger,
                 )
                 .await;
+
+                // Verify goal/role/todos survived compaction after native hook
+                // dispatch; only warns on missing state.
+                self.verify_compaction_progress_state(&session_id, trigger, &session)
+                    .await;
 
                 Ok(ContextCompactionOutcome {
                     compression_id,
@@ -3244,6 +3486,9 @@ impl ExecutionEngine {
         // 4. Resolve the prompt scaffold used by model requests in this turn.
         // It is refreshed after successful context compression so the first
         // post-compaction request builds the new provider-side prefix cache.
+        // Runtime facts carry a turn-start usage estimate: system prompt and
+        // prepended reminder tokens are not yet measurable at this point, so
+        // it is a lower bound that gets refreshed after context compression.
         let mut turn_prompt_scaffold = self
             .resolve_turn_prompt_scaffold(TurnPromptScaffoldInput {
                 context: &context,
@@ -3252,6 +3497,18 @@ impl ExecutionEngine {
                 supports_image_understanding: primary_supports_image_understanding,
                 tool_listing_sections: tool_listing_sections.clone(),
                 runtime_context_needs,
+                runtime_facts_usage: Self::runtime_facts_usage_from_pressure(
+                    &Self::estimate_auto_compression_pressure(
+                        &initial_messages,
+                        tool_definitions.as_deref(),
+                        context_window,
+                        Self::compression_trigger_budget(
+                            context_window,
+                            ai_client.config.max_tokens,
+                        ),
+                        0,
+                    ),
+                ),
                 stage: "turn_start",
             })
             .await?;
@@ -3523,6 +3780,9 @@ impl ExecutionEngine {
                                 supports_image_understanding: primary_supports_image_understanding,
                                 tool_listing_sections: tool_listing_sections.clone(),
                                 runtime_context_needs,
+                                runtime_facts_usage: Self::runtime_facts_usage_from_pressure(
+                                    &token_pressure,
+                                ),
                                 stage: "after_context_compression",
                             })
                             .await?;
@@ -3750,6 +4010,9 @@ impl ExecutionEngine {
                                         primary_supports_image_understanding,
                                     tool_listing_sections: tool_listing_sections.clone(),
                                     runtime_context_needs,
+                                    runtime_facts_usage: Self::runtime_facts_usage_from_pressure(
+                                        &send_pressure,
+                                    ),
                                     stage: "after_context_overflow_recovery",
                                 })
                                 .await?;
@@ -4045,10 +4308,25 @@ impl ExecutionEngine {
                         let injection_id = injection.id.clone();
                         let injection_kind = injection.kind;
                         let wrapped = match injection.kind {
-                            RoundInjectionKind::UserSteering => format!(
-                                "<system_reminder>\nThe user sent a new message while this turn was running. You have just finished the previous atomic action; handle this new user message now as the current direction, while preserving the existing conversation and task context. Do not ignore it or wait for a separate future turn.\n\nNew user message:\n{}\n</system_reminder>",
-                                injection.content
-                            ),
+                            RoundInjectionKind::UserSteering => {
+                                let prepended_text = injection
+                                    .prepended_reminders
+                                    .iter()
+                                    .map(|reminder| reminder.text.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                if prepended_text.is_empty() {
+                                    format!(
+                                        "<system_reminder>\nThe user sent a new message while this turn was running. You have just finished the previous atomic action; handle this new user message now as the current direction, while preserving the existing conversation and task context. Do not ignore it or wait for a separate future turn.\n\nNew user message:\n{}\n</system_reminder>",
+                                        injection.content
+                                    )
+                                } else {
+                                    format!(
+                                        "<system_reminder>\n{}\n\nAn agent sent a new message while this turn was running. You have just finished the previous atomic action; handle this new message now as the current direction, while preserving the existing conversation and task context. Do not ignore it or wait for a separate future turn.\n\nNew message:\n{}\n</system_reminder>",
+                                        prepended_text, injection.content
+                                    )
+                                }
+                            }
                             RoundInjectionKind::BackgroundResult => format!(
                                 "<system_reminder>\nA background task has finished and returned new information while this turn was running. Incorporate it into your current work immediately when relevant. Do not wait for a separate future turn.\n\nBackground result:\n{}\n</system_reminder>",
                                 injection.content
@@ -4494,7 +4772,7 @@ impl ExecutionEngine {
         }
 
         // Print dialog turn token statistics (from model's last returned usage)
-        if let Some(usage) = last_usage {
+        if let Some(ref usage) = last_usage {
             info!(
                 "Dialog turn completed - Token stats: turn_id={}, rounds={}, tools={}, duration={}ms, prompt_tokens={}, completion_tokens={}, total_tokens={}",
                 context.dialog_turn_id,
@@ -4530,6 +4808,12 @@ impl ExecutionEngine {
                 .cloned()
                 .unwrap_or_else(|| Message::assistant(String::new())),
             total_rounds: completed_rounds,
+            total_tools,
+            total_tokens: last_usage
+                .as_ref()
+                .map(|usage| usage.total_token_count as usize)
+                .unwrap_or(0),
+            duration_ms,
             success,
             new_messages,
             finish_reason,
@@ -4822,6 +5106,7 @@ mod tests {
 
     #[cfg(feature = "external-sources")]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // environment lock is intentionally held for the whole test body
     async fn local_workspace_services_still_include_local_user_instruction_sources() {
         let _environment = lock_environment();
         let temp = tempfile::tempdir().expect("tempdir");
@@ -4867,6 +5152,7 @@ mod tests {
 
     #[cfg(feature = "external-sources")]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // environment lock is intentionally held for the whole test body
     async fn local_workspace_services_remain_the_project_instruction_io_owner() {
         let _environment = lock_environment();
         let temp = tempfile::tempdir().expect("tempdir");

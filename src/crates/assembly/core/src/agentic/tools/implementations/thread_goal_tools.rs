@@ -245,16 +245,17 @@ impl Tool for UpdateGoalTool {
 
     async fn description(&self) -> BitFunResult<String> {
         Ok(
-            "Update the existing goal. Use only to mark the goal achieved or genuinely blocked. \
+            "Update the existing goal. Use only to mark the goal achieved or genuinely blocked, or to resume a blocked goal. \
 Set status to complete only when the objective has actually been achieved and no required work remains. \
 Set status to blocked only when the same blocking condition has repeated for at least three consecutive goal turns and the agent cannot make meaningful progress without user input or an external-state change. \
-You cannot use this tool to pause, resume, budget-limit, or usage-limit a goal."
+Set status to resume only when the user explicitly asks to continue a blocked, paused, or usage-limited goal. \
+You cannot use this tool to pause, budget-limit, or usage-limit a goal."
                 .to_string(),
         )
     }
 
     fn short_description(&self) -> String {
-        "Mark the session thread goal complete or blocked.".to_string()
+        "Mark the session thread goal complete or blocked, or resume it.".to_string()
     }
 
     fn input_schema(&self) -> Value {
@@ -265,8 +266,8 @@ You cannot use this tool to pause, resume, budget-limit, or usage-limit a goal."
             "properties": {
                 "status": {
                     "type": "string",
-                    "enum": ["complete", "blocked"],
-                    "description": "Required. Set to complete only when the objective is achieved. Set to blocked only after the strict blocked audit is satisfied."
+                    "enum": ["complete", "blocked", "resume"],
+                    "description": "Required. Set to complete only when the objective is achieved. Set to blocked only after the strict blocked audit is satisfied. Set to resume to continue a blocked, paused, or usage-limited goal."
                 }
             }
         })

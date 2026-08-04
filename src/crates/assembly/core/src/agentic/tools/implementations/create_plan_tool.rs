@@ -90,7 +90,10 @@ Additional guidelines:
     }
 
     fn default_exposure(&self) -> ToolExposure {
-        ToolExposure::Deferred
+        // 2026-08-04 user calibration: plan tool family is a commander
+        // staple; Direct so no GetToolSpec unlock round-trip is needed.
+        // Also mirrored in `shared_coding_mode_tool_exposure_overrides()`.
+        ToolExposure::Direct
     }
 
     fn input_schema(&self) -> Value {
@@ -311,10 +314,10 @@ mod tests {
     use crate::agentic::tools::framework::{Tool, ToolExposure};
 
     #[test]
-    fn create_plan_is_deferred_and_plan_mode_specific() {
+    fn create_plan_is_direct_available() {
         let tool = CreatePlanTool::new();
 
-        assert_eq!(tool.default_exposure(), ToolExposure::Deferred);
+        assert_eq!(tool.default_exposure(), ToolExposure::Direct);
         assert_eq!(
             tool.short_description(),
             "Create and store a concise implementation plan; only for Plan mode."

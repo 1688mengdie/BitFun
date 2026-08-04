@@ -10,10 +10,15 @@ use bitfun_core::service::workspace::WorkspaceService;
 use bitfun_runtime_ports::LocalWorkspaceSnapshotPort;
 use tokio::sync::RwLock;
 
+mod acp_client_port;
+mod acp_session_lifecycle;
 mod session_application;
 mod session_host_effects;
 
 use session_host_effects::ProductionDesktopSessionHostEffects;
+
+pub(crate) use acp_client_port::DesktopAcpClientPort;
+pub(crate) use acp_session_lifecycle::AcpSessionLifecycleSubscriber;
 
 pub(crate) use session_application::{
     DesktopSessionApplication, DesktopSessionApplicationError, DesktopSessionScopeRequest,

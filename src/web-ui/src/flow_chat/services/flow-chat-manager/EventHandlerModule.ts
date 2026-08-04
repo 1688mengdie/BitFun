@@ -3,7 +3,7 @@
  * Initializes event listeners and handles various Agentic events
  */
 
-import { FlowChatStore, mergeModelRoundAttemptDiagnostics } from '../../store/FlowChatStore';
+import { FlowChatStore, isSessionConfirmedDeleted, markSessionsConfirmedDeleted, mergeModelRoundAttemptDiagnostics } from '../../store/FlowChatStore';
 import { stateMachineManager } from '../../state-machine';
 import { SessionExecutionEvent, SessionExecutionState } from '../../state-machine/types';
 import { agenticEventListener, type AgenticEventCallbacks } from '../AgenticEventListener';
@@ -36,6 +36,7 @@ import type {
   AcpContextUsageUpdatedEvent,
   SessionModelAutoMigratedEvent,
   SubagentSessionLinkedEvent,
+  SubagentTurnCompletedEvent,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
 import { ACPClientAPI, type AcpPermissionRequestEvent } from '@/infrastructure/api/service-api/ACPClientAPI';
@@ -51,6 +52,9 @@ import { useBackgroundCommandActivityStore } from '../../store/backgroundCommand
 import { useBackgroundSubagentActivityStore } from '../../store/backgroundSubagentActivityStore';
 import { createTab } from '@/shared/utils/tabUtils';
 import { splitFilePathAndContent } from '@/shared/utils/partialJsonParser';
+import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
+import { configManager } from '@/infrastructure/config/services/ConfigManager';
+import { i18nService } from '@/infrastructure/i18n';
 
 const pendingImageAnalysisTurns = new Map<string, string>();
 import { 
@@ -77,6 +81,7 @@ import {
   clearRuntimeStatus,
   scheduleModelResponseStatus,
 } from './RuntimeStatusModule';
+import { clearRuntimeStatusState } from '../../store/runtimeStatusStore';
 import { requestPeerSessionRefresh } from './PeerSessionRefreshModule';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import {
@@ -87,6 +92,11 @@ import {
 
 const log = createLogger('EventHandlerModule');
 const TURN_COMPLETION_QUIET_WINDOW_MS = 500;
+const SUBAGENT_NOTIFY_BODY_MAX_LENGTH = 200;
+const SUBAGENT_NOTIFY_SESSION_DEBOUNCE_MS = 3000;
+const SUBAGENT_NOTIFY_GLOBAL_THROTTLE_MS = 2000;
+const lastSubagentNotifyAt = new Map<string, number>();
+let lastSubagentGlobalNotifyAt = 0;
 
 interface MCPInteractionRequestEvent {
   interactionId: string;
@@ -162,6 +172,7 @@ export const __test_only__ = {
   handleDialogTurnFailed,
   handleSubagentSessionLinked,
   handleModelRoundStart,
+  handleSessionDeleted,
 };
 
 function shouldMarkUnreadCompletion(sessionId: string): boolean {
@@ -428,6 +439,16 @@ function ensureSubagentSession(
     return;
   }
 
+  // A session whose deletion was confirmed on the backend must not be
+  // resurrected as a placeholder shell by stale in-flight events.
+  if (isSessionConfirmedDeleted(subagentSessionId)) {
+    log.warn('SubagentSessionLinked: ignoring event for confirmed deleted session', {
+      subagentSessionId,
+      parentSessionId: parentInfo.sessionId,
+    });
+    return;
+  }
+
   const parentSession = store.getState().sessions.get(parentInfo.sessionId);
   const parentTurnIndex = parentSession
     ? absoluteSessionTurnIndexForId(parentSession, parentInfo.dialogTurnId)
@@ -533,6 +554,148 @@ function handleSubagentSessionLinked(
     FlowChatStore.getInstance().updateSessionModelName(childSessionId, modelId.trim());
   }
   reconcileBackgroundSubagentSession(childSessionId);
+}
+
+function resolveSubagentCompletionKind(
+  status: string | undefined,
+): 'completed' | 'error' | 'interrupted' {
+  switch (status) {
+    case 'failed':
+      return 'error';
+    case 'cancelled':
+    case 'partial_timeout':
+      return 'interrupted';
+    default:
+      return 'completed';
+  }
+}
+
+function resolveSubagentNotifyTitle(sessionId: string, agentType: string | undefined): string {
+  const session = FlowChatStore.getInstance().getState().sessions.get(sessionId);
+  const sessionTitle = session?.title?.trim();
+  if (sessionTitle) {
+    return sessionTitle;
+  }
+  return agentType?.trim() || sessionId;
+}
+
+function compactTextForNotification(text: string, maxLength: number): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) {
+    return compact;
+  }
+  return `${compact.slice(0, maxLength).trimEnd()}...`;
+}
+
+async function notifySubagentTurnCompleted(
+  childSessionId: string,
+  parentSessionId: string,
+  agentType: string | undefined,
+  outputText: string | undefined,
+  status: string | undefined,
+): Promise<void> {
+  const now = Date.now();
+
+  // Debounce repeated completion events for the same subagent, and throttle
+  // bursts when several subagents finish around the same time.
+  const lastForSession = lastSubagentNotifyAt.get(childSessionId) ?? 0;
+  if (now - lastForSession < SUBAGENT_NOTIFY_SESSION_DEBOUNCE_MS) {
+    return;
+  }
+  if (now - lastSubagentGlobalNotifyAt < SUBAGENT_NOTIFY_GLOBAL_THROTTLE_MS) {
+    return;
+  }
+  lastSubagentNotifyAt.set(childSessionId, now);
+  lastSubagentGlobalNotifyAt = now;
+
+  // Only notify when the parent conversation is not being watched right now.
+  const activeSessionId = FlowChatStore.getInstance().getState().activeSessionId;
+  if (activeSessionId === parentSessionId && isAppWindowFocused()) {
+    return;
+  }
+
+  let notificationsEnabled = true;
+  try {
+    notificationsEnabled = await configManager.getConfig<boolean>(
+      'app.notifications.dialog_completion_notify',
+    );
+  } catch (error) {
+    log.warn('Failed to read dialog_completion_notify config', error);
+  }
+  if (notificationsEnabled === false) {
+    return;
+  }
+
+  const completionKind = resolveSubagentCompletionKind(status);
+  const trimmedOutput = outputText?.trim();
+  const body = trimmedOutput
+    ? compactTextForNotification(trimmedOutput, SUBAGENT_NOTIFY_BODY_MAX_LENGTH)
+    : i18nService.t(`flow-chat:subagent.${completionKind}Notification`);
+
+  await systemAPI.sendSystemNotification(
+    resolveSubagentNotifyTitle(childSessionId, agentType),
+    body,
+  );
+}
+
+function handleSubagentTurnCompleted(
+  context: FlowChatContext,
+  event: SubagentTurnCompletedEvent,
+): void {
+  const childSessionId = event?.sessionId ?? (event as any)?.childSessionId;
+  const parentSessionId = event?.parentSessionId ?? (event as any)?.parent_session_id;
+  const parentDialogTurnId =
+    event?.parentDialogTurnId ?? (event as any)?.parent_dialog_turn_id;
+  const parentToolCallId = event?.parentToolCallId ?? (event as any)?.parent_tool_call_id;
+  const subagentDialogTurnId =
+    event?.subagentDialogTurnId ?? (event as any)?.subagent_dialog_turn_id;
+  const modelId = event?.modelId ?? (event as any)?.model_id;
+  const effectiveModelName = event?.effectiveModelName ?? (event as any)?.effective_model_name;
+
+  if (childSessionId && parentSessionId && parentDialogTurnId && parentToolCallId) {
+    const parentInfo: SubagentParentInfo = {
+      sessionId: parentSessionId,
+      dialogTurnId: parentDialogTurnId,
+      toolCallId: parentToolCallId,
+    };
+    attachSubagentSessionToParentTool(parentInfo, childSessionId, subagentDialogTurnId);
+    if (typeof modelId === 'string' && modelId.trim()) {
+      FlowChatStore.getInstance().updateSessionModelName(childSessionId, modelId.trim());
+    }
+  }
+
+  if (subagentDialogTurnId && parentSessionId && parentDialogTurnId && parentToolCallId) {
+    updateSubagentParentTaskModel(
+      context,
+      {
+        sessionId: parentSessionId,
+        dialogTurnId: parentDialogTurnId,
+        toolCallId: parentToolCallId,
+      },
+      typeof modelId === 'string' && modelId.trim() ? modelId.trim() : undefined,
+      typeof effectiveModelName === 'string' && effectiveModelName.trim()
+        ? effectiveModelName.trim()
+        : '',
+    );
+  }
+
+  reconcileBackgroundSubagentSession(childSessionId);
+
+  if (childSessionId && parentSessionId) {
+    const status = event?.status;
+    const outputText = event?.outputText ?? (event as any)?.output_text;
+    FlowChatStore.getInstance().markSessionUnreadCompletion(
+      childSessionId,
+      resolveSubagentCompletionKind(status),
+    );
+    void notifySubagentTurnCompleted(
+      childSessionId,
+      parentSessionId,
+      event?.agentType ?? (event as any)?.agent_type,
+      outputText,
+      status,
+    );
+  }
 }
 
 function getLinkedSubagentParentInfo(sessionId: string): SubagentParentInfo | undefined {
@@ -818,6 +981,9 @@ export async function initializeEventListeners(
     onSessionModelAutoMigrated: (event) => {
       handleSessionModelAutoMigrated(event);
     },
+    onSubagentTurnCompleted: (event) => {
+      handleSubagentTurnCompleted(context, event);
+    },
     onUserSteeringInjected: (event) => {
       handleUserSteeringInjected(context, event);
     }
@@ -918,6 +1084,14 @@ function handleSessionCreated(context: FlowChatContext, event: any): void {
   const remoteConnectionId = extractEventRemoteConnectionId(event);
   const remoteSshHost = extractEventRemoteSshHost(event);
 
+  // Subagent relationship fields are optional: the backend is adding them to
+  // the session-created payload; until they arrive they degrade to undefined
+  // and the session is treated as a normal external session.
+  const parentSessionId =
+    (typeof event.parentSessionId === 'string' && event.parentSessionId) || undefined;
+  const subagentType =
+    (typeof event.subagentType === 'string' && event.subagentType) || undefined;
+
   if (existing) return;
 
   store.addExternalSession(
@@ -929,6 +1103,9 @@ function handleSessionCreated(context: FlowChatContext, event: any): void {
       projectWorkspacePath,
       executionTarget,
       workspaceId,
+      sessionKind: parentSessionId ? 'subagent' : undefined,
+      parentSessionId,
+      subagentType,
     },
     remoteConnectionId,
     remoteSshHost
@@ -1313,10 +1490,10 @@ function handleUserSteeringInjected(_context: FlowChatContext, event: any): void
  */
 function handleSessionDeleted(context: FlowChatContext, event: any): void {
   const { sessionId } = event;
-  
+
   const store = FlowChatStore.getInstance();
   const removedSessionIds = store.getCascadeSessionIds(sessionId);
-  if (removedSessionIds.length === 0) return;
+  if (!sessionId) return;
 
   log.info('Remote session deleted', { sessionId });
   removedSessionIds.forEach(id => {
@@ -1326,8 +1503,30 @@ function handleSessionDeleted(context: FlowChatContext, event: any): void {
     context.processingManager.clearSessionStatus(id);
     cleanupSaveState(context, id);
     cleanupSessionBuffers(context, id);
+    // Drop transient runtime wait status so a stale event cannot re-render a
+    // deleted subagent's projection shell (same guard as the UI delete path).
+    clearRuntimeStatusState({ sessionId: id });
   });
+  // Backend-confirmed deletions must never be resurrected by stale events
+  // (same guard as the frontend UI delete path in FlowChatStore). Mark
+  // unconditionally: when the cascade is empty (the store never loaded the
+  // session, e.g. it was deleted while the tab was closed) the id must still
+  // be recorded so a later refresh cannot resurrect it from residual disk
+  // metadata or the backend deletion tombstone.
+  markSessionsConfirmedDeleted(
+    removedSessionIds.length > 0 ? removedSessionIds : [sessionId]
+  );
   store.removeSession(sessionId);
+
+  // Close any open btw-session panel tabs for the deleted sessions so the
+  // deleted thread placeholder does not linger in the canvas. Dynamic import
+  // keeps the module graph acyclic (btwSessionPane -> FlowChatManager -> index
+  // -> EventHandlerModule).
+  void import('../../services/btwSessionPane').then(({ closeBtwSessionInAuxPane }) => {
+    for (const id of removedSessionIds) {
+      closeBtwSessionInAuxPane(id);
+    }
+  });
 }
 
 /**
@@ -1540,6 +1739,15 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
   const session = state.sessions.get(sessionId);
 
   if (!session) {
+    // A session whose deletion was confirmed on the backend must not be
+    // resurrected as a placeholder shell by stale in-flight events.
+    if (isSessionConfirmedDeleted(sessionId)) {
+      log.warn('DialogTurnStarted: ignoring event for confirmed deleted session', {
+        sessionId,
+        sessionsCount: state.sessions.size,
+      });
+      return;
+    }
     // Hidden MiniApp agent runs (e.g. PPT Live) submit turns with
     // `surface: 'miniapp_agent'`. Register them as transient miniapp sessions
     // so they stay out of the session list and the agent companion bubbles.

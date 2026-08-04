@@ -1,0 +1,171 @@
+//! ACP client runtime port.
+//!
+//! Core-defined boundary for the dedicated ACP tool family (`acp_control`,
+//! `acp_message`, `acp_history`). The tools call these methods through the
+//! coordinator-injected port while the desktop host provides the concrete
+//! implementation backed by `AcpClientService`, so core keeps no dependency
+//! on the ACP crate (architecture boundary).
+//!
+//! Every request/result is `Serialize + Deserialize` so the boundary can be
+//! carried across process and workspace boundaries.
+
+use super::{PortError, PortErrorKind, PortResult, RuntimeServicePort};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+/// `acp_control` action `create` request.
+///
+/// Starts a real external ACP client process bound to a persisted session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientCreateRequest {
+    /// Registered ACP client id (for example `codex` or `claude-code`).
+    pub client_id: String,
+    /// Workspace path the external ACP process runs in.
+    pub workspace_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_connection_id: Option<String>,
+}
+
+/// Result of [`AcpClientPort::create_session`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientCreateResult {
+    pub session_id: String,
+    pub session_name: String,
+    pub agent_type: String,
+}
+
+/// One registered ACP client entry from [`AcpClientPort::list_clients`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientSummary {
+    pub client_id: String,
+    pub name: String,
+    /// Aggregated client status (wire string from the ACP service).
+    pub status: String,
+    pub session_count: usize,
+    pub readonly: bool,
+}
+
+/// Result of [`AcpClientPort::list_clients`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientListResult {
+    pub clients: Vec<AcpClientSummary>,
+}
+
+/// `acp_control` action `delete` request.
+///
+/// Releases the external ACP process/session bound to `session_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientReleaseRequest {
+    pub session_id: String,
+}
+
+/// `acp_control` action `cancel` request.
+///
+/// Cancels the running dialog turn of the external ACP session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientCancelRequest {
+    pub session_id: String,
+}
+
+/// `acp_message` request: forward one message to the external ACP process
+/// and synchronously return its response text (true bridge, not a local
+/// model consumption path).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientMessageRequest {
+    pub session_id: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+}
+
+/// Result of [`AcpClientPort::send_message`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientMessageResult {
+    pub session_id: String,
+    /// Full response text produced by the external ACP agent.
+    pub response: String,
+}
+
+/// `acp_history` request: read the persisted transcript of an ACP session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientHistoryRequest {
+    pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+}
+
+/// One transcript entry from [`AcpClientPort::read_history`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientHistoryEntry {
+    /// Message role (for example `user` or `assistant`).
+    pub role: String,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp_ms: Option<u64>,
+}
+
+/// Result of [`AcpClientPort::read_history`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientHistoryResult {
+    pub session_id: String,
+    pub entries: Vec<AcpClientHistoryEntry>,
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// ACP client runtime port.
+///
+/// Implementations live on the product host (desktop) and forward every call
+/// to the real `AcpClientService`; core tools never touch the ACP crate.
+#[async_trait]
+pub trait AcpClientPort: RuntimeServicePort + std::fmt::Debug {
+    /// Create a persisted ACP flow session and start the external client
+    /// process for it. Implementations must roll the record back when the
+    /// process start fails so no orphan record is left behind.
+    async fn create_session(
+        &self,
+        request: AcpClientCreateRequest,
+    ) -> PortResult<AcpClientCreateResult>;
+
+    /// List registered ACP clients with their current runtime facts.
+    async fn list_clients(&self) -> PortResult<AcpClientListResult>;
+
+    /// Release the external ACP process bound to `session_id`.
+    async fn release_session(&self, request: AcpClientReleaseRequest) -> PortResult<()>;
+
+    /// Cancel the running dialog turn of the external ACP session.
+    async fn cancel_session(&self, request: AcpClientCancelRequest) -> PortResult<()>;
+
+    /// Forward one message through the real channel and return the external
+    /// response synchronously.
+    async fn send_message(
+        &self,
+        request: AcpClientMessageRequest,
+    ) -> PortResult<AcpClientMessageResult>;
+
+    /// Read the persisted transcript of an ACP session.
+    async fn read_history(
+        &self,
+        request: AcpClientHistoryRequest,
+    ) -> PortResult<AcpClientHistoryResult>;
+}
+
+/// Error helper: wrap an implementation failure as a backend `PortError`.
+pub fn acp_backend_error(message: impl Into<String>) -> PortError {
+    PortError::new(PortErrorKind::Backend, message)
+}

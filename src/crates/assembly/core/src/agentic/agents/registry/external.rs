@@ -10,10 +10,18 @@ use bitfun_product_domains::external_sources::EcosystemId;
 use bitfun_product_domains::external_subagents::ExternalSubagentMode;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Weak};
+use tokio::sync::RwLock;
 
+/// Stable prefix for external subagent runtime keys within the agent registry.
+/// External subagents are registered under this namespace to avoid collisions with
+/// built-in agents (`builtin:`, `custom:`, etc.). The module itself is intentionally
+/// minimal — routing and lifecycle logic lives in `external_subagents.rs`.
 pub(crate) const EXTERNAL_SUBAGENT_RUNTIME_KEY_PREFIX: &str = "external_subagent_runtime:";
 
+/// Formats a stable runtime key for an external subagent given its content digest.
+/// Used by `install_active_candidate` to register generation-specific agent entries
+/// without re-parsing ecosystem manifests on every restart.
 pub(crate) fn external_subagent_runtime_key(digest: &str) -> String {
     format!("{EXTERNAL_SUBAGENT_RUNTIME_KEY_PREFIX}{digest}")
 }
@@ -100,38 +108,35 @@ impl ExternalSubagentRegistryState {
         }
     }
 
+    // Synchronous helper over a tokio RwLock (no await point); see
+    // super::spin_read for the bounded-retry contract. Guards must never be
+    // held across an await; a panic (spin cap exceeded) means a holder
+    // violated that.
     fn read_generations(
         &self,
-    ) -> std::sync::RwLockReadGuard<'_, HashMap<String, ExternalSubagentGenerationEntry>> {
-        self.generations
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<String, ExternalSubagentGenerationEntry>> {
+        super::spin_read(&self.generations, "ExternalSubagentRegistryState generations")
     }
 
     fn write_generations(
         &self,
-    ) -> std::sync::RwLockWriteGuard<'_, HashMap<String, ExternalSubagentGenerationEntry>> {
-        self.generations
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<String, ExternalSubagentGenerationEntry>> {
+        super::spin_write(&self.generations, "ExternalSubagentRegistryState generations")
     }
 
+    // Synchronous helper; see read_generations for the lock-contention contract.
     fn read_routes(
         &self,
-    ) -> std::sync::RwLockReadGuard<'_, HashMap<PathBuf, BTreeMap<String, ExternalSubagentRoute>>>
+    ) -> tokio::sync::RwLockReadGuard<'_, HashMap<PathBuf, BTreeMap<String, ExternalSubagentRoute>>>
     {
-        self.workspace_routes
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        super::spin_read(&self.workspace_routes, "ExternalSubagentRegistryState workspace_routes")
     }
 
     fn write_routes(
         &self,
-    ) -> std::sync::RwLockWriteGuard<'_, HashMap<PathBuf, BTreeMap<String, ExternalSubagentRoute>>>
+    ) -> tokio::sync::RwLockWriteGuard<'_, HashMap<PathBuf, BTreeMap<String, ExternalSubagentRoute>>>
     {
-        self.workspace_routes
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+        super::spin_write(&self.workspace_routes, "ExternalSubagentRegistryState workspace_routes")
     }
 
     pub(super) fn find_generation_entry(&self, runtime_key: &str) -> Option<AgentEntry> {

@@ -53,6 +53,7 @@ import { driverForCreation, driverForSession } from '../../session-drivers/regis
 const log = createLogger('SessionModule');
 const pendingSessionCreations = new Map<string, Promise<string>>();
 
+
 const getHydrationLocationKey = (
   location: SessionHistoryHydrationLocation | undefined,
 ): string => location?.workspacePath

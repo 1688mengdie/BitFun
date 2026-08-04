@@ -9,6 +9,7 @@ use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler}
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
+use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -24,20 +25,23 @@ use bitfun_agent_runtime::session_control::{
 };
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AgentSessionCreateRequest, AgentSessionDeleteRequest, AgentSessionListRequest,
-    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
-    AgentSubmissionSource, AgentTurnCancellationRequest,
+    AgentSessionCreateRequest, AgentSessionListRequest, AgentSessionSummary,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionSource,
+    AgentTurnCancellationRequest,
 };
+use bitfun_services_core::session::tree::SessionTreeManager;
 use serde_json::{json, Value};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// SessionControl tool - create, cancel, delete, or list persisted sessions
+/// list: list persistent sessions created by SessionControl.
+/// list_tasks: list child conversation sessions spawned by Task.
 pub struct SessionControlTool;
 
 const CANCEL_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone)]
-struct SessionControlWorkspaceTarget {
+pub(crate) struct SessionControlWorkspaceTarget {
     display_workspace: String,
     project_workspace: String,
     execution_target: Option<SessionExecutionTarget>,
@@ -74,18 +78,6 @@ impl SessionControlTool {
         }
     }
 
-    fn escape_markdown_table_cell(value: &str) -> String {
-        value
-            .replace('\\', "\\\\")
-            .replace('|', "\\|")
-            .replace('\n', "<br>")
-    }
-
-    fn format_system_time(time: SystemTime) -> String {
-        let datetime: chrono::DateTime<chrono::Local> = time.into();
-        datetime.format("%Y-%m-%dT%H:%M:%S").to_string()
-    }
-
     fn creator_session_marker(&self, context: &ToolUseContext) -> BitFunResult<String> {
         let creator_session_id = context.session_id.as_ref().ok_or_else(|| {
             BitFunError::tool("create requires a creator session in tool context".to_string())
@@ -97,6 +89,7 @@ impl SessionControlTool {
         &self,
         action: SessionControlAction,
         session_id: Option<&str>,
+        workspace_param: Option<&str>,
         context: &ToolUseContext,
         runtime: &AgentRuntime,
     ) -> BitFunResult<SessionControlWorkspaceTarget> {
@@ -122,6 +115,19 @@ impl SessionControlTool {
                 )))
             }
             SessionControlAction::Create | SessionControlAction::List => {
+                // Explicit workspace parameter wins; fall back to the current
+                // workspace binding from context when omitted, so the tool can
+                // list/create across workspaces.
+                if let Some(workspace) = workspace_param {
+                    return Ok(SessionControlWorkspaceTarget {
+                        display_workspace: normalize_path(workspace),
+                        project_workspace: normalize_path(workspace),
+                        execution_target: None,
+                        workspace_id: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                    });
+                }
                 let workspace = context.workspace.as_ref().ok_or_else(|| {
                     BitFunError::tool(format!(
                         "workspace is required for {} when the current workspace is unavailable",
@@ -133,7 +139,7 @@ impl SessionControlTool {
         }
     }
 
-    fn workspace_target_from_context(
+    pub(crate) fn workspace_target_from_context(
         workspace: &crate::agentic::WorkspaceBinding,
     ) -> SessionControlWorkspaceTarget {
         SessionControlWorkspaceTarget {
@@ -184,6 +190,7 @@ impl SessionControlTool {
         }
     }
 
+    #[allow(dead_code)]
     async fn ensure_session_exists(
         &self,
         runtime: &AgentRuntime,
@@ -195,6 +202,7 @@ impl SessionControlTool {
                 workspace_path: workspace.project_workspace.clone(),
                 remote_connection_id: workspace.remote_connection_id.clone(),
                 remote_ssh_host: workspace.remote_ssh_host.clone(),
+                include_hidden: false,
             })
             .await
             .map_err(|error| {
@@ -213,20 +221,23 @@ impl SessionControlTool {
         }
     }
 
-    fn system_time_from_epoch_ms(epoch_ms: u64) -> SystemTime {
-        UNIX_EPOCH + Duration::from_millis(epoch_ms)
-    }
-
     fn build_list_result_for_assistant(
         &self,
         workspace: &str,
         sessions: &[AgentSessionSummary],
         current_session_id: Option<&str>,
+        tree: Option<&SessionTreeManager>,
     ) -> String {
         if sessions.is_empty() {
             return format!("No sessions found in workspace '{}'.", workspace);
         }
 
+        // --- Build tree JSON from flat list ---
+        let tree_json = self.build_session_tree_json(sessions, tree);
+
+        // --- Compact tree JSON view (single source of truth for the model) ---
+        // The full `sessions` array and parsed `tree` remain available in the
+        // result `data` payload for programmatic consumers.
         let mut lines = vec![format!(
             "Found {} session(s) in workspace '{}'",
             sessions.len(),
@@ -237,24 +248,213 @@ impl SessionControlTool {
             lines.push(format!("Note: '{}' is your session_id", current_session_id));
             lines.push(String::new());
         }
-        lines.push(
-            "| session_id | session_name | agent_type | created_at | last_active_at |".to_string(),
-        );
-        lines.push("| --- | --- | --- | --- | --- |".to_string());
-        for session in sessions {
-            lines.push(format!(
-                "| {} | {} | {} | {} | {} |",
-                Self::escape_markdown_table_cell(&session.session_id),
-                Self::escape_markdown_table_cell(&session.session_name),
-                Self::escape_markdown_table_cell(&session.agent_type),
-                Self::format_system_time(Self::system_time_from_epoch_ms(session.created_at_ms)),
-                Self::format_system_time(Self::system_time_from_epoch_ms(
-                    session.last_active_at_ms
-                )),
-            ));
-        }
+
+        lines.push("## Session Tree (JSON)".to_string());
+        lines.push("```json".to_string());
+        lines.push(tree_json);
+        lines.push("```".to_string());
         lines.join("\n")
     }
+
+    /// Build a JSON tree structure from the flat session list.
+    /// Sessions are grouped by `parent_session_id` into a forest of root nodes.
+    fn build_session_tree_json(
+        &self,
+        sessions: &[AgentSessionSummary],
+        tree: Option<&SessionTreeManager>,
+    ) -> String {
+        build_session_tree_json_impl(sessions, tree)
+    }
+
+}
+
+/// Shared source for the agent_type enum of SessionControl/SessionMessage
+/// create (and LegionControl load validation).
+///
+/// Returns every agent id that can back a created session: builtin/user
+/// subagents, project subagents of the current workspace, builtin/user modes
+/// and ACP bridge agents (`acp__<client_id>`). Unlike the TaskVisible query,
+/// this deliberately includes Mode-category entries so external ACP
+/// conversations are selectable; the create path validates the final value
+/// through the registry anyway.
+pub(crate) async fn get_available_agent_type_ids_for_creation(
+    context: Option<&ToolUseContext>,
+) -> Vec<String> {
+    use crate::agentic::agents::get_agent_registry;
+    let registry = get_agent_registry();
+    let workspace_root = context.and_then(|ctx| ctx.workspace_root());
+    registry.load_custom_agents(workspace_root).await;
+    registry
+        .get_agent_ids_for_session_creation(workspace_root)
+        .await
+}
+
+/// R-26 / user-owner semantics: whether a calling session is exempt from the
+/// R-2 created_by/ancestor authorization gate for session deletion.
+///
+/// The human user's main session (Commander role) is the owner and may delete
+/// any session, including orphaned or detached children whose lineage was
+/// broken by an earlier external deletion. When the RBAC master switch is off,
+/// the gate is bypassed entirely.
+fn caller_is_owner_session(caller_session_id: &str) -> bool {
+    matches!(
+        get_session_role(caller_session_id),
+        Some(AgentRole::Commander)
+    ) || !crate::service::config::rbac_enabled()
+}
+
+/// Build the delete action result JSON.
+/// Cascade child-deletion failures are surfaced as a structured list
+/// (`cascade_failures`: `[{session_id, reason}, ...]`). Since the delete
+/// action now cascades through `coordinator.delete_session_tree` with
+/// all-or-nothing semantics, the list is always empty on success — any
+/// member that cannot be deleted aborts the whole tree and surfaces as a
+/// tool error instead. The field is kept for result-shape compatibility
+/// with callers that parse the JSON contract.
+fn build_delete_result_json(
+    session_id: &str,
+    workspace: &str,
+    cascade_failures: &[(String, String)],
+) -> Value {
+    json!({
+        "success": true,
+        "action": "delete",
+        "workspace": workspace,
+        "session_id": session_id,
+        "cascade_failures": cascade_failures
+            .iter()
+            .map(|(child_id, reason)| json!({
+                "session_id": child_id,
+                "reason": reason,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// Build a JSON tree structure from the flat session list.
+/// Sessions are grouped by `parent_session_id` into a forest of root nodes.
+pub(crate) fn build_session_tree_json_impl(
+    sessions: &[AgentSessionSummary],
+    tree: Option<&SessionTreeManager>,
+) -> String {
+    use std::collections::HashMap;
+
+    // children_by_parent: parent_session_id -> list of children
+    let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
+    let mut roots: Vec<&AgentSessionSummary> = Vec::new();
+    // Sessions whose parent chain is fully filtered out (no surviving ancestor
+    // in this list). They are promoted to roots but flagged as orphaned.
+    let mut orphaned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    let known_ids: std::collections::HashSet<&str> =
+        sessions.iter().map(|s| s.session_id.as_str()).collect();
+
+    // R-19: resolve the effective parent of a session - the nearest ancestor
+    // present in this (possibly filtered) list. When the direct parent is
+    // filtered out (e.g. daemon/warden sessions), the child is re-hung onto the
+    // nearest surviving ancestor instead of being promoted to a fake root,
+    // which would break the lineage. The in-memory tree is used to walk past
+    // filtered sessions.
+    let resolve_effective_parent = |session: &AgentSessionSummary| -> Option<String> {
+        let mut current = session.parent_session_id.clone()?;
+        loop {
+            if known_ids.contains(current.as_str()) {
+                return Some(current);
+            }
+            match tree.and_then(|tree| tree.get_parent(&current)) {
+                Some(parent) => current = parent,
+                None => return None,
+            }
+        }
+    };
+
+    for session in sessions {
+        match resolve_effective_parent(session) {
+            Some(parent_id) => {
+                children_by_parent
+                    .entry(parent_id)
+                    .or_default()
+                    .push(session);
+            }
+            None => {
+                if session.parent_session_id.is_some() {
+                    // No surviving ancestor in this list — promote to a root
+                    // but flag the broken lineage.
+                    orphaned.insert(session.session_id.as_str());
+                }
+                roots.push(session);
+            }
+        }
+    }
+
+    /// Maximum recursion depth for tree serialization to prevent stack overflow.
+    /// Authoritative value in `bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH`.
+    const TREE_SERIALIZE_MAX_DEPTH: usize =
+        bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH;
+
+    fn serialize_node(
+        session: &AgentSessionSummary,
+        children_by_parent: &HashMap<String, Vec<&AgentSessionSummary>>,
+        tree: Option<&SessionTreeManager>,
+        orphaned: &std::collections::HashSet<&str>,
+        recursion_depth: usize,
+    ) -> serde_json::Value {
+        let children: Vec<serde_json::Value> = if recursion_depth >= TREE_SERIALIZE_MAX_DEPTH {
+            Vec::new()
+        } else {
+            children_by_parent
+                .get(session.session_id.as_str())
+                .map(|list| {
+                    let mut sorted = list.to_vec();
+                    sorted.sort_by_key(|s| s.created_at_ms);
+                    sorted
+                        .iter()
+                        .map(|s| {
+                            serialize_node(
+                                s,
+                                children_by_parent,
+                                tree,
+                                orphaned,
+                                recursion_depth + 1,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        let depth = tree
+            .and_then(|t| t.get_depth(&session.session_id))
+            .unwrap_or(0);
+
+        let status = session
+            .status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
+
+        let mut map = serde_json::Map::new();
+        map.insert("sessionId".to_string(), json!(session.session_id));
+        map.insert("sessionName".to_string(), json!(session.session_name));
+        map.insert("agentType".to_string(), json!(session.agent_type));
+        map.insert("depth".to_string(), json!(depth));
+        map.insert("status".to_string(), json!(status));
+        if orphaned.contains(session.session_id.as_str()) {
+            map.insert("orphaned".to_string(), json!(true));
+        }
+        map.insert("children".to_string(), json!(children));
+        serde_json::Value::Object(map)
+    }
+
+    // Sort roots by created_at_ms descending (newest first)
+    let mut sorted_roots = roots;
+    sorted_roots.sort_by_key(|s| std::cmp::Reverse(s.created_at_ms));
+
+    let forest: Vec<serde_json::Value> = sorted_roots
+        .iter()
+        .map(|s| serialize_node(s, &children_by_parent, tree, &orphaned, 0))
+        .collect();
+
+    serde_json::to_string_pretty(&forest).unwrap_or_else(|_| "[]".to_string())
 }
 
 #[async_trait]
@@ -271,15 +471,17 @@ Actions:
 - "create": Create a new session. You may optionally provide session_name and agent_type.
 - "cancel": Cancel the target session's currently running dialog turn. This does not delete the session or clear any queued messages that may still run later.
 - "delete": Delete an existing session by session_id.
-- "list": List all sessions.
+- "list": List all sessions. Sessions are displayed in a tree structure showing parent-child relationships (created via Task tool).
+
+Related tools:
+- Use Task (spawn) to launch subagents that appear as children in the session tree.
+- Use SessionMessage to send messages to existing sessions.
+- Use SessionHistory to export a session transcript.
 
 Arguments:
-- "workspace": Absolute workspace path. Required for create and list. Ignored for cancel and delete.
+- "workspace": Absolute workspace path. Optional for create and list; defaults to the current workspace when omitted. Ignored for cancel and delete.
 - "session_name": Only used by create. Defaults to "New Session".
-- "agent_type": Only used by create. Defaults to "agentic".
-  - "agentic": Coding-focused agent for implementation, debugging, and code changes.
-  - "Plan": Planning agent for clarifying requirements and producing an implementation plan before coding.
-  - "Cowork": Collaborative agent for office-style work such as research, documentation, presentations, etc.
+- "agent_type": Only used by create. Defaults to "agentic". Allowed values are dynamically resolved from the available agent registry (common values include "agentic", "Plan", "Cowork", and any custom/external subagent types). Use "acp__<client_id>" to create a session backed by an enabled external ACP agent.
 - "session_id": Required for cancel and delete."#
                 .to_string(),
         )
@@ -304,7 +506,7 @@ Arguments:
                 },
                 "workspace": {
                     "type": "string",
-                    "description": "Required absolute workspace path for create and list. Ignored for cancel and delete."
+                    "description": "Optional absolute workspace path for create and list; defaults to the current workspace when omitted. Ignored for cancel and delete."
                 },
                 "session_id": {
                     "type": "string",
@@ -316,8 +518,42 @@ Arguments:
                 },
                 "agent_type": {
                     "type": "string",
-                    "enum": ["agentic", "Plan", "Cowork"],
-                    "description": "Optional agent type when creating a session. Defaults to agentic."
+                    "description": "Optional agent type when creating a session (defaults to \"agentic\"). Valid values are dynamically resolved from the available agent registry. Use \"acp__<client_id>\" to pull up an external ACP agent session."
+                }
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        })
+    }
+
+    /// Dynamically resolves allowed agent_type values from the agent registry.
+    async fn input_schema_for_model_with_context(&self, context: Option<&ToolUseContext>) -> Value {
+        let agent_type_ids = get_available_agent_type_ids_for_creation(context).await;
+        let agent_type_enum: Vec<&str> = agent_type_ids.iter().map(|s| s.as_str()).collect();
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "cancel", "delete", "list"],
+                    "description": "The session action to perform."
+                },
+                "workspace": {
+                    "type": "string",
+                    "description": "Optional absolute workspace path for create and list; defaults to the current workspace when omitted. Ignored for cancel and delete."
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Required for cancel and delete."
+                },
+                "session_name": {
+                    "type": "string",
+                    "description": "Optional display name when creating a session."
+                },
+                "agent_type": {
+                    "type": "string",
+                    "enum": agent_type_enum,
+                    "description": "Optional agent type when creating a session. Defaults to \"agentic\". Use \"acp__<client_id>\" to pull up an external ACP agent session."
                 }
             },
             "required": ["action"],
@@ -374,16 +610,38 @@ Arguments:
                     .resolve_effective_workspace(
                         SessionControlAction::Create,
                         None,
+                        params.workspace.as_deref(),
                         context,
                         &runtime,
                     )
                     .await?;
+                // R-14 B3: role-based delegation validation (fast fail). The
+                // SessionControl create chain registers the new session with the
+                // creator's role (B2), so the target is the inherited role; this
+                // is a defensive check that stays permissive today and guards a
+                // future explicit target-role channel from over-delegation.
+                let creator_role = context.session_id.as_deref().and_then(get_session_role);
+                let target_role = creator_role.clone().unwrap_or(AgentRole::Commander);
+                validate_delegation(creator_role, target_role)?;
                 let session_name =
                     session_control_session_name_or_default(params.session_name.as_deref());
                 let agent_type = session_control_agent_type_or_default(params.agent_type.as_ref());
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
+                // SessionControl-created sessions are subagent sessions: force a 1M
+                // context window and keep it stable across model-window refresh.
+                metadata.insert("subagent".to_string(), json!(true));
+                // Lineage facts forwarded through the free-form metadata map so the
+                // SessionCreated event can carry the parent relationship. The
+                // coordinator reads these keys defensively before emitting
+                // (parent_session_id / subagent_type), keeping the event contract
+                // in sync with the persisted SessionRelationship written below.
+                metadata.insert(
+                    "parentSessionId".to_string(),
+                    json!(context.session_id.clone()),
+                );
+                metadata.insert("subagentType".to_string(), json!(agent_type.clone()));
                 let session = runtime
                     .create_session(AgentSessionCreateRequest {
                         session_name,
@@ -404,6 +662,70 @@ Arguments:
                 let created_session_id = session.session_id.clone();
                 let created_session_name = session.session_name.clone();
                 let created_agent_type = session.agent_type.clone();
+
+                // --- R-001/R-002: write SessionRelationship, depth inherited from parent ---
+                {
+                    use bitfun_services_core::session::types::{
+                        SessionRelationship, SessionRelationshipKind,
+                    };
+                    let parent_session_id = context.session_id.clone();
+                    // Read parent depth from persisted metadata, default 0 for root
+                    let parent_depth = if let Some(ref pid) = parent_session_id {
+                        coordinator
+                            .session_manager
+                            .load_session_metadata(
+                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                pid,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .and_then(|m| m.relationship.and_then(|r| r.depth))
+                            .unwrap_or(0u32)
+                    } else {
+                        0u32
+                    };
+                    let child_depth = parent_depth + 1;
+                    // Guard against exceeding max depth (same as Task tool depth guard)
+                    let max_depth = coordinator.session_tree().max_depth;
+                    if child_depth > max_depth {
+                        return Err(BitFunError::tool(format!(
+                            "Session depth limit reached: child depth {} would exceed max allowed depth {}",
+                            child_depth, max_depth
+                        )));
+                    }
+                    let relationship = SessionRelationship {
+                        kind: Some(SessionRelationshipKind::Subagent),
+                        parent_session_id,
+                        depth: Some(child_depth),
+                        ..Default::default()
+                    };
+                    if let Err(e) = coordinator
+                        .session_manager
+                        .persist_session_lineage(&created_session_id, relationship)
+                        .await
+                    {
+                        log::error!(
+                            "SessionControl create: failed to persist session lineage for {}: {:?}",
+                            created_session_id,
+                            e
+                        );
+                    }
+
+                    // R-003: Register in memory tree
+                    if let Some(ref pid) = context.session_id {
+                        if let Err(e) = coordinator.session_tree().register_child(
+                            pid,
+                            &created_session_id,
+                            child_depth,
+                        ) {
+                            log::warn!(
+                                "SessionControl create: failed to register child {} under {} in tree: {:?}",
+                                created_session_id, pid, e
+                            );
+                        }
+                    }
+                }
                 let result_for_assistant = session_control_created_result_message(
                     &created_session_id,
                     &workspace.display_workspace,
@@ -434,6 +756,7 @@ Arguments:
                     .resolve_effective_workspace(
                         SessionControlAction::Cancel,
                         Some(session_id),
+                        None,
                         context,
                         &runtime,
                     )
@@ -446,8 +769,120 @@ Arguments:
                     ));
                 }
 
-                self.ensure_session_exists(&runtime, &workspace, session_id)
-                    .await?;
+                // R-A.04: Reject cancellation of daemon sessions.
+                {
+                    let session_manager = coordinator.get_session_manager();
+                    let is_daemon = if let Some(session) = session_manager.get_session(session_id) {
+                        session.config.is_daemon || session.agent_type.starts_with("warden-")
+                    } else {
+                        // Fall back to persisted metadata
+                        session_manager
+                            .load_session_metadata(
+                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                session_id,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+                            .unwrap_or(false)
+                    };
+                    if is_daemon {
+                        return Err(BitFunError::tool(format!(
+                            "cannot cancel daemon/warden session '{session_id}'"
+                        )));
+                    }
+                }
+
+                // R-011: Skip list-based pre-check so subagent (Task) sessions can be cancelled.
+                // The runtime's cancel_turn handles session-existence internally.
+
+                // R-2: Authorization intentionally widened for full conversation
+                // management: a caller may cancel a session it created (created_by
+                // marker matches) OR any session in its descendant subtree. The
+                // "cannot cancel the current session" guard above is preserved.
+                let current_session_id = context.session_id.as_ref().ok_or_else(|| {
+                    BitFunError::tool(
+                        "cannot cancel a session without a caller session in tool context"
+                            .to_string(),
+                    )
+                })?;
+                let created_by_match = {
+                    let session_manager = coordinator.get_session_manager();
+                    let target_metadata = session_manager
+                        .load_session_metadata(
+                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            session_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    target_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.created_by.as_deref())
+                        .is_some_and(|creator| {
+                            creator == session_control_creator_marker(current_session_id)
+                        })
+                };
+                if !created_by_match {
+                    // Ancestor authorization: verify the calling session is an
+                    // ancestor of the target session. First try the in-memory tree
+                    // (fast path). If the tree is not yet populated (walk_ancestors
+                    // returns empty), fall back to a persisted metadata chain query
+                    // so that an empty tree cannot be exploited to bypass
+                    // authorization.
+                    let tree = coordinator.session_tree();
+                    let tree_ancestors = tree.walk_ancestors(session_id);
+                    let ancestors: Vec<String> = if !tree_ancestors.is_empty() {
+                        // Fast path: tree is populated.
+                        tree_ancestors
+                    } else {
+                        // Fallback: tree is empty, walk persisted metadata chain.
+                        // Known optimization: could use batched queries instead of awaiting each ancestor session serially.
+                        let session_manager = coordinator.get_session_manager();
+                        let mut metadata_ancestors = Vec::new();
+                        // Guard against cyclic metadata chains: never revisit a
+                        // session id already seen during this walk.
+                        let mut visited = std::collections::HashSet::new();
+                        visited.insert(session_id.to_string());
+                        let mut current = session_id.to_string();
+                        loop {
+                            let metadata = session_manager
+                                .load_session_metadata(
+                                    &std::path::PathBuf::from(&workspace.display_workspace),
+                                    &current,
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                            match metadata
+                                .and_then(|m| m.relationship.and_then(|r| r.parent_session_id))
+                            {
+                                Some(parent_id) => {
+                                    if !visited.insert(parent_id.clone()) {
+                                        // Cycle detected; stop walking to avoid
+                                        // hanging on a corrupt lineage chain.
+                                        break;
+                                    }
+                                    metadata_ancestors.push(parent_id.clone());
+                                    current = parent_id;
+                                }
+                                None => break,
+                            }
+                        }
+                        metadata_ancestors
+                    };
+                    if ancestors.is_empty() {
+                        return Err(BitFunError::tool(format!(
+                            "cannot verify ancestor relationship for session '{session_id}': tree and metadata are both empty"
+                        )));
+                    }
+                    if !ancestors.contains(current_session_id) {
+                        return Err(BitFunError::tool(format!(
+                            "session '{current_session_id}' is not authorized to cancel session '{session_id}': not a parent/ancestor and not the creator"
+                        )));
+                    }
+                }
 
                 let scheduler = get_global_scheduler();
                 let cancel_route = resolve_session_control_cancel_route(
@@ -520,6 +955,7 @@ Arguments:
                     .resolve_effective_workspace(
                         SessionControlAction::Delete,
                         Some(session_id),
+                        None,
                         context,
                         &runtime,
                     )
@@ -532,37 +968,163 @@ Arguments:
                     ));
                 }
 
-                self.ensure_session_exists(&runtime, &workspace, session_id)
-                    .await?;
+                // R-A.04: Reject deletion of daemon sessions.
+                {
+                    let session_manager = coordinator.get_session_manager();
+                    let is_daemon = if let Some(session) = session_manager.get_session(session_id) {
+                        session.config.is_daemon || session.agent_type.starts_with("warden-")
+                    } else {
+                        // Fall back to persisted metadata
+                        session_manager
+                            .load_session_metadata(
+                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                session_id,
+                            )
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+                            .unwrap_or(false)
+                    };
+                    if is_daemon {
+                        return Err(BitFunError::tool(format!(
+                            "cannot delete daemon/warden session '{session_id}'"
+                        )));
+                    }
+                }
 
-                let scheduler = get_global_scheduler().ok_or_else(|| {
-                    BitFunError::tool("scheduler not initialized for session deletion".to_string())
+                // coordinator.delete_session() handles session-existence internally;
+                // skipping the list-based pre-check so subagent (Task) sessions are supported.
+
+                // R-2: Authorization intentionally widened for full conversation
+                // management: a caller may delete a session it created (created_by
+                // marker matches) OR any session in its descendant subtree. The
+                // "cannot delete the current session" and "cannot delete
+                // daemon/warden" guards above are preserved.
+                let current_session_id = context.session_id.as_ref().ok_or_else(|| {
+                    BitFunError::tool(
+                        "cannot delete a session without a caller session in tool context"
+                            .to_string(),
+                    )
                 })?;
-                let deletion_runtime = CoreServiceAgentRuntime::agent_runtime_with_scheduler_ports(
-                    coordinator.clone(),
-                    scheduler,
-                )
-                .map_err(BitFunError::tool)?;
 
-                deletion_runtime
-                    .delete_session(AgentSessionDeleteRequest {
-                        workspace_path: workspace.project_workspace.clone(),
-                        session_id: session_id.to_string(),
-                        remote_connection_id: workspace.remote_connection_id.clone(),
-                        remote_ssh_host: workspace.remote_ssh_host.clone(),
-                    })
+                // R-26 / user-owner semantics: the human user's main session
+                // (Commander role) is the owner and may delete any session,
+                // including orphaned or detached children whose lineage was
+                // broken by an earlier external deletion. When the RBAC master
+                // switch is off, the authorization gate is bypassed entirely.
+                let caller_is_owner = caller_is_owner_session(current_session_id);
+                let created_by_match = {
+                    let session_manager = coordinator.get_session_manager();
+                    let target_metadata = session_manager
+                        .load_session_metadata(
+                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            session_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    target_metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.created_by.as_deref())
+                        .is_some_and(|creator| {
+                            creator == session_control_creator_marker(current_session_id)
+                        })
+                };
+                if !caller_is_owner && !created_by_match {
+                    // Ancestor authorization: verify the calling session is an
+                    // ancestor of the target session. First try the in-memory tree
+                    // (fast path). If the tree is not yet populated (walk_ancestors
+                    // returns empty), fall back to a persisted metadata chain query
+                    // so that an empty tree cannot be exploited to bypass
+                    // authorization.
+                    let tree = coordinator.session_tree();
+                    let tree_ancestors = tree.walk_ancestors(session_id);
+                    let ancestors: Vec<String> = if !tree_ancestors.is_empty() {
+                        // Fast path: tree is populated.
+                        tree_ancestors
+                    } else {
+                        // Fallback: tree is empty, walk persisted metadata chain.
+                        // Known optimization: could use batched queries instead of awaiting each ancestor session serially.
+                        let session_manager = coordinator.get_session_manager();
+                        let mut metadata_ancestors = Vec::new();
+                        // Guard against cyclic metadata chains: never revisit a
+                        // session id already seen during this walk.
+                        let mut visited = std::collections::HashSet::new();
+                        visited.insert(session_id.to_string());
+                        let mut current = session_id.to_string();
+                        loop {
+                            let metadata = session_manager
+                                .load_session_metadata(
+                                    &std::path::PathBuf::from(&workspace.display_workspace),
+                                    &current,
+                                )
+                                .await
+                                .ok()
+                                .flatten();
+                            match metadata
+                                .and_then(|m| m.relationship.and_then(|r| r.parent_session_id))
+                            {
+                                Some(parent_id) => {
+                                    if !visited.insert(parent_id.clone()) {
+                                        // Cycle detected; stop walking to avoid
+                                        // hanging on a corrupt lineage chain.
+                                        break;
+                                    }
+                                    metadata_ancestors.push(parent_id.clone());
+                                    current = parent_id;
+                                }
+                                None => break,
+                            }
+                        }
+                        metadata_ancestors
+                    };
+                    if ancestors.is_empty() {
+                        return Err(BitFunError::tool(format!(
+                            "cannot verify ancestor relationship for session '{session_id}': tree and metadata are both empty"
+                        )));
+                    }
+                    if !ancestors.contains(current_session_id) {
+                        return Err(BitFunError::tool(format!(
+                            "session '{current_session_id}' is not authorized to delete session '{session_id}': not a parent/ancestor and not the creator"
+                        )));
+                    }
+                }
+
+                // R-012: Cascade-delete the full descendant subtree through
+                // `coordinator.delete_session_tree`, the same all-or-nothing
+                // path used by the frontend UI delete. It pre-checks every
+                // member (a processing or daemon/warden session anywhere in
+                // the tree rejects the whole cascade) and deletes children
+                // before the parent. The previous per-child failure-tolerant
+                // loop could return success while a running child session
+                // stayed on disk, which then resurrected as a ghost child
+                // session on the next restart (ghost-session root cause R2);
+                // the tree path aborts instead and reports which member is
+                // not deletable. Deletion of a daemon/warden session was
+                // already rejected above; the tree path enforces the same
+                // guard for every member.
+                coordinator
+                    .delete_session_tree(
+                        std::path::Path::new(&workspace.project_workspace),
+                        workspace.remote_connection_id.as_deref(),
+                        workspace.remote_ssh_host.as_deref(),
+                        session_id,
+                    )
                     .await
                     .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+                        BitFunError::tool(format!(
+                            "cannot delete session tree rooted at '{}': {}",
+                            session_id, error
+                        ))
                     })?;
 
                 Ok(vec![ToolResult::Result {
-                    data: json!({
-                        "success": true,
-                        "action": "delete",
-                        "workspace": workspace.display_workspace.clone(),
-                        "session_id": session_id,
-                    }),
+                    data: build_delete_result_json(
+                        session_id,
+                        &workspace.display_workspace,
+                        &[],
+                    ),
                     result_for_assistant: Some(session_control_deleted_result_message(
                         session_id,
                         &workspace.display_workspace,
@@ -575,6 +1137,7 @@ Arguments:
                     .resolve_effective_workspace(
                         SessionControlAction::List,
                         None,
+                        params.workspace.as_deref(),
                         context,
                         &runtime,
                     )
@@ -584,18 +1147,34 @@ Arguments:
                         workspace_path: workspace.project_workspace.clone(),
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
+                        // R-2: Full conversation management — include hidden
+                        // Subagent/Ephemeral sessions; daemon/warden sessions
+                        // are filtered below.
+                        include_hidden: true,
                     })
                     .await
                     .map_err(|error| {
                         BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
                     })?;
+
+                // Filter out daemon sessions (is_daemon=true or agent_type starts with "warden-")
+                let sessions: Vec<_> = sessions
+                    .into_iter()
+                    .filter(|s| !s.is_daemon && !s.agent_type.starts_with("warden-"))
+                    .collect();
+
                 let current_session_id =
                     self.current_workspace_session(context, &workspace.display_workspace);
                 let result_for_assistant = self.build_list_result_for_assistant(
                     &workspace.display_workspace,
                     &sessions,
                     current_session_id,
+                    Some(coordinator.session_tree().as_ref()),
                 );
+
+                let tree_json = self
+                    .build_session_tree_json(&sessions, Some(coordinator.session_tree().as_ref()));
+                let tree_value: Value = serde_json::from_str(&tree_json).unwrap_or(Value::Null);
 
                 Ok(vec![ToolResult::Result {
                     data: json!({
@@ -605,6 +1184,7 @@ Arguments:
                         "current_session_id": current_session_id,
                         "count": sessions.len(),
                         "sessions": sessions,
+                        "tree": tree_value,
                     }),
                     result_for_assistant: Some(result_for_assistant),
                     image_attachments: None,
@@ -823,5 +1403,186 @@ mod tests {
         );
 
         assert_eq!(message, "Cancel active turn for session worker_1");
+    }
+
+    // Cascade-failure surfacing (delete result JSON contract).
+    // Full end-to-end cascade execution requires a global coordinator and
+    // scheduler, which is not available in unit tests; these assert the
+    // serialization contract that the delete path relies on, including the
+    // session_id + reason shape for every failed child.
+    #[test]
+    fn delete_result_surfaces_cascade_failures() {
+        let failures = vec![
+            (
+                "child_1".to_string(),
+                "skipped: daemon/warden child session".to_string(),
+            ),
+            ("child_2".to_string(), "storage write failed".to_string()),
+        ];
+        let result = build_delete_result_json("parent", "/repo", &failures);
+
+        assert_eq!(result["success"], true);
+        assert_eq!(result["action"], "delete");
+        assert_eq!(result["session_id"], "parent");
+        let surfaced = result["cascade_failures"]
+            .as_array()
+            .expect("cascade_failures array");
+        assert_eq!(surfaced.len(), 2);
+        assert_eq!(surfaced[0]["session_id"], "child_1");
+        assert_eq!(surfaced[0]["reason"], "skipped: daemon/warden child session");
+        assert_eq!(surfaced[1]["session_id"], "child_2");
+        assert_eq!(surfaced[1]["reason"], "storage write failed");
+    }
+
+    #[test]
+    fn delete_result_has_empty_cascade_failures_when_clean() {
+        let result = build_delete_result_json("parent", "/repo", &[]);
+        let surfaced = result["cascade_failures"]
+            .as_array()
+            .expect("cascade_failures array present");
+        assert!(surfaced.is_empty());
+    }
+
+    #[test]
+    fn commander_caller_is_owner_for_session_deletion() {
+        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
+        let _ = set_session_role("delete-owner-commander", AgentRole::Commander);
+        assert!(
+            caller_is_owner_session("delete-owner-commander"),
+            "the user's main session (Commander) may delete any session"
+        );
+        clear_session_role("delete-owner-commander");
+    }
+
+    #[test]
+    fn unregistered_caller_degrades_to_non_owner_for_session_deletion() {
+        use crate::agentic::tools::restrictions::clear_session_role;
+        clear_session_role("delete-owner-unregistered");
+        assert!(
+            !caller_is_owner_session("delete-owner-unregistered"),
+            "an unregistered caller must not bypass the R-2 authorization gate"
+        );
+    }
+
+    #[test]
+    fn executor_caller_is_not_owner_for_session_deletion() {
+        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
+        let _ = set_session_role("delete-owner-executor", AgentRole::Executor);
+        assert!(
+            !caller_is_owner_session("delete-owner-executor"),
+            "a subagent (Executor) must still pass the created_by/ancestor gate"
+        );
+        clear_session_role("delete-owner-executor");
+    }
+
+    #[test]
+    fn reviewer_caller_is_not_owner_for_session_deletion() {
+        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
+        let _ = set_session_role("delete-owner-reviewer", AgentRole::Reviewer);
+        assert!(!caller_is_owner_session("delete-owner-reviewer"));
+        clear_session_role("delete-owner-reviewer");
+    }
+
+    fn summary(id: &str, parent: Option<&str>, is_daemon: bool, created_at_ms: u64) -> AgentSessionSummary {
+        AgentSessionSummary {
+            session_id: id.to_string(),
+            session_name: format!("Session {id}"),
+            agent_type: if is_daemon {
+                "warden-daemon".to_string()
+            } else {
+                "agentic".to_string()
+            },
+            model_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            turn_count: 0,
+            created_at_ms,
+            last_active_at_ms: created_at_ms,
+            parent_session_id: parent.map(str::to_string),
+            status: Some("active".to_string()),
+            is_daemon,
+        }
+    }
+
+    #[test]
+    fn tree_repairs_lineage_when_parent_filtered_out() {
+        // root <- daemon <- child; the daemon is filtered from the list, so the
+        // child must be re-hung onto root instead of becoming a fake root.
+        let tree = SessionTreeManager::new(8);
+        tree.register_child("root", "daemon", 1).unwrap();
+        tree.register_child("daemon", "child", 2).unwrap();
+
+        let sessions = vec![
+            summary("root", None, false, 1),
+            summary("child", Some("daemon"), false, 2),
+            summary("sibling", Some("root"), false, 3),
+        ];
+
+        let tree_json = build_session_tree_json_impl(&sessions, Some(&tree));
+        let value: Value = serde_json::from_str(&tree_json).expect("valid tree json");
+        let roots = value.as_array().expect("forest array");
+        assert_eq!(roots.len(), 1, "single root after re-hang: {tree_json}");
+        assert_eq!(roots[0]["sessionId"], "root");
+        assert!(roots[0].get("orphaned").is_none());
+
+        let children = roots[0]["children"].as_array().unwrap();
+        let child_ids: Vec<&str> = children
+            .iter()
+            .map(|c| c["sessionId"].as_str().unwrap())
+            .collect();
+        // children sorted by created_at_ms ascending: child(2) then sibling(3)
+        assert_eq!(child_ids, vec!["child", "sibling"]);
+        assert!(children[0].get("orphaned").is_none());
+        assert_eq!(
+            children[0]["depth"], 2,
+            "depth comes from the real tree, not the filtered list"
+        );
+    }
+
+    #[test]
+    fn tree_rehangs_to_nearest_surviving_ancestor() {
+        // root <- daemon1 <- daemon2 <- child; both daemon layers are filtered,
+        // so the child must be re-hung onto root (the nearest surviving ancestor).
+        let tree = SessionTreeManager::new(8);
+        tree.register_child("root", "daemon1", 1).unwrap();
+        tree.register_child("daemon1", "daemon2", 2).unwrap();
+        tree.register_child("daemon2", "child", 3).unwrap();
+
+        let sessions = vec![
+            summary("root", None, false, 1),
+            summary("child", Some("daemon2"), false, 2),
+        ];
+
+        let tree_json = build_session_tree_json_impl(&sessions, Some(&tree));
+        let value: Value = serde_json::from_str(&tree_json).expect("valid tree json");
+        let roots = value.as_array().unwrap();
+        assert_eq!(roots.len(), 1, "single root after multi-level re-hang: {tree_json}");
+        assert_eq!(roots[0]["sessionId"], "root");
+        let children = roots[0]["children"].as_array().unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0]["sessionId"], "child");
+        assert!(children[0].get("orphaned").is_none());
+        assert_eq!(children[0]["depth"], 3);
+    }
+
+    #[test]
+    fn tree_marks_orphan_when_no_surviving_ancestor() {
+        // The parent chain is entirely unknown (no tree, parent not in list):
+        // the session is promoted to a root but flagged as orphaned.
+        let sessions = vec![
+            summary("root", None, false, 1),
+            summary("child", Some("missing-parent"), false, 2),
+        ];
+
+        let tree_json = build_session_tree_json_impl(&sessions, None);
+        let value: Value = serde_json::from_str(&tree_json).expect("valid tree json");
+        let roots = value.as_array().unwrap();
+        assert_eq!(roots.len(), 2);
+
+        let root_node = roots.iter().find(|r| r["sessionId"] == "root").unwrap();
+        assert!(root_node.get("orphaned").is_none());
+
+        let orphan_node = roots.iter().find(|r| r["sessionId"] == "child").unwrap();
+        assert_eq!(orphan_node["orphaned"], true);
     }
 }

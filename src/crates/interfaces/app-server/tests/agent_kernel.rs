@@ -360,6 +360,7 @@ async fn list_sessions_maps_missing_port_to_internal_error() {
                             workspace_path: ".".to_string(),
                             remote_connection_id: None,
                             remote_ssh_host: None,
+                            include_hidden: false,
                         },
                     )))
                     .await;

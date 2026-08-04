@@ -34,6 +34,8 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
             workspace_id,
             remote_connection_id,
             remote_ssh_host,
+            parent_session_id,
+            subagent_type,
         } => Some(AgenticFrontendEvent::new(
             "agentic://session-created",
             json!({
@@ -46,6 +48,8 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "workspaceId": workspace_id,
                 "remoteConnectionId": remote_connection_id,
                 "remoteSshHost": remote_ssh_host,
+                "parentSessionId": parent_session_id,
+                "subagentType": subagent_type,
             }),
         )),
         AgenticEvent::SessionDeleted { session_id } => Some(AgenticFrontendEvent::new(
@@ -470,6 +474,35 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
             }),
         )),
         AgenticEvent::SystemError { .. } => None,
+        AgenticEvent::ReviewPropagationNeeded { .. } => None,
+        AgenticEvent::SubagentTurnCompleted {
+            session_id,
+            subagent_dialog_turn_id,
+            parent_session_id,
+            parent_dialog_turn_id,
+            parent_tool_call_id,
+            agent_type,
+            status,
+            output_text,
+        } => Some(AgenticFrontendEvent::new(
+            "agentic://subagent-turn-completed",
+            {
+                let mut p = serde_json::Map::new();
+                p.insert("sessionId".to_string(), json!(session_id));
+                p.insert("subagentDialogTurnId".to_string(), json!(subagent_dialog_turn_id));
+                p.insert("parentSessionId".to_string(), json!(parent_session_id));
+                p.insert("parentDialogTurnId".to_string(), json!(parent_dialog_turn_id));
+                p.insert("parentToolCallId".to_string(), json!(parent_tool_call_id));
+                if let Some(at) = agent_type {
+                    p.insert("agentType".to_string(), json!(at));
+                }
+                p.insert("status".to_string(), json!(status));
+                if let Some(text) = output_text {
+                    p.insert("outputText".to_string(), json!(text));
+                }
+                serde_json::Value::Object(p)
+            },
+        )),
     }
 }
 
@@ -504,6 +537,8 @@ mod tests {
             workspace_id: Some("workspace-wt-1".to_string()),
             remote_connection_id: None,
             remote_ssh_host: None,
+            parent_session_id: Some("parent-session".to_string()),
+            subagent_type: Some("Explore".to_string()),
         })
         .expect("projected");
 
@@ -511,6 +546,8 @@ mod tests {
         assert_eq!(projected.payload["projectWorkspacePath"], "/repo");
         assert_eq!(projected.payload["executionTarget"]["worktreeId"], "wt-1");
         assert_eq!(projected.payload["workspaceId"], "workspace-wt-1");
+        assert_eq!(projected.payload["parentSessionId"], "parent-session");
+        assert_eq!(projected.payload["subagentType"], "Explore");
     }
 
     #[test]

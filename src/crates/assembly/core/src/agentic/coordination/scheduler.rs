@@ -14,13 +14,16 @@ use super::coordinator::{
     session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
     HiddenSubagentExecutionRequest, SubagentResult,
 };
+use super::plan_todo_binding::{
+    auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
+};
 use super::turn_outcome::TurnOutcome;
 use super::turn_settlement::TurnSettlementRegistration;
 use crate::agentic::core::{InternalReminderKind, Message, SessionState};
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::goal_mode::{
     goal_continuation_submit_retry_delay_ms, goal_internal_context_message,
-    goal_objective_updated_message,
+    goal_objective_updated_message, GOAL_IDLE_WAKEUP_DELAY_MS,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
@@ -28,6 +31,9 @@ use crate::agentic::keyed_lock::{KeyedAsyncLock, KeyedAsyncLockGuard};
 use crate::agentic::round_preempt::{DialogRoundInjectionSource, SessionRoundInjectionBuffer};
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::SessionManager;
+use crate::agentic::tools::restrictions::get_session_role;
+use crate::agentic::warden::runtime::WardenRuntime;
+use crate::infrastructure::PathManager;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::{ThreadGoal, MAX_THREAD_GOAL_AUTO_CONTINUATIONS};
 use log::{debug, info, warn};
@@ -47,7 +53,7 @@ use bitfun_agent_runtime::scheduler::{
     resolve_agent_session_reply_action, resolve_background_delivery_action,
     resolve_background_delivery_injection, resolve_background_delivery_injection_for_turn,
     resolve_dialog_start_route, resolve_dialog_steering_action,
-    resolve_turn_outcome_lifecycle_plan, ActiveDialogTurn, ActiveDialogTurnStore,
+    resolve_turn_outcome_lifecycle_plan, utc_iso8601_now, ActiveDialogTurn, ActiveDialogTurnStore,
     ActiveDialogTurnTakeResult, AgentSessionReplyAction, AgentSessionReplyPlan,
     BackgroundDeliveryAction, BackgroundDeliveryFacts, BackgroundInjectionKind,
     DialogReplySuppressionSet, DialogStartRoute, DialogStartRouteFacts, DialogSteeringAction,
@@ -100,6 +106,7 @@ impl QueuedTurn {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum QueuedTurnExecution {
     #[default]
     Standard,
@@ -119,6 +126,31 @@ fn remove_queued_turn_by_id(
     turn_id: &str,
 ) -> Option<QueuedTurn> {
     queues.remove_first_matching(session_id, |turn| turn.turn_id.as_deref() == Some(turn_id))
+}
+
+/// Pure decision helper for the goal idle-wakeup safety net: the whole
+/// session tree (parent plus all subagent descendants at any depth) must be
+/// silent. Any node that is busy or has activity newer than `idle_delay`
+/// keeps the tree awake; a node that no longer exists contributes nothing.
+fn session_tree_is_silent(
+    tree_ids: &[String],
+    now: SystemTime,
+    idle_delay: Duration,
+    is_busy_or_queued: impl Fn(&str) -> bool,
+    last_activity_at: impl Fn(&str) -> Option<SystemTime>,
+) -> bool {
+    tree_ids.iter().all(|id| {
+        if is_busy_or_queued(id) {
+            return false;
+        }
+        match last_activity_at(id) {
+            None => true,
+            Some(activity) => now
+                .duration_since(activity)
+                .map(|elapsed| elapsed >= idle_delay)
+                .unwrap_or(true),
+        }
+    })
 }
 
 #[derive(Debug)]
@@ -346,6 +378,21 @@ pub struct DialogScheduler {
     /// not yet observed as drained. Retain them across retryable timeouts even
     /// after their one-shot cancellation controls have been claimed.
     maintenance_background_sessions: Arc<dashmap::DashMap<String, HashSet<String>>>,
+    /// Per-session generation counter for goal idle-wakeup tasks. Each user
+    /// submission bumps the generation; older wakeup tasks observe a stale
+    /// generation when they fire and exit without doing anything (re-entrancy
+    /// guard for the idle safety net).
+    goal_idle_wakeup_generations: Arc<dashmap::DashMap<String, u64>>,
+    /// Weak self-reference set after construction so spawned idle-wakeup tasks
+    /// can upgrade to a strong reference and submit continuation turns.
+    goal_idle_wakeup_self: OnceLock<std::sync::Weak<DialogScheduler>>,
+    /// Warden runtime driving turn-level penalties and challenge pokes.
+    /// Serialized behind a mutex because turns finalize concurrently.
+    warden_runtime: Arc<tokio::sync::Mutex<WardenRuntime>>,
+    /// Best-effort archive root for forwarded agent-session replies. Defaults
+    /// to `~/.bitfun/taiji/agent-replies` on first use; tests inject a tempdir
+    /// so outcome-handler tests never touch the real user home.
+    agent_reply_archive_root: std::sync::Mutex<Option<PathBuf>>,
 }
 
 /// Holds the scheduler's exclusive session-operation boundary while a caller
@@ -391,6 +438,21 @@ fn queued_submission_outcome(
     }
 }
 
+/// Whether a submission originates from a user-facing entry point. Agent-driven
+/// (continuation, subagent) and scheduled-job submissions must not reset the
+/// goal idle-wakeup timer.
+fn is_user_submission_source(source: DialogTriggerSource) -> bool {
+    matches!(
+        source,
+        DialogTriggerSource::DesktopUi
+            | DialogTriggerSource::DesktopApi
+            | DialogTriggerSource::Cli
+            | DialogTriggerSource::Bot
+            | DialogTriggerSource::RemoteRelay
+            | DialogTriggerSource::SdkHost
+    )
+}
+
 impl DialogScheduler {
     /// Create a new DialogScheduler and start its background outcome handler.
     ///
@@ -407,6 +469,14 @@ impl DialogScheduler {
             buffer: round_injection_buffer.clone(),
         });
 
+        let warden_session_manager = Arc::clone(&session_manager);
+        let warden_runtime = Arc::new(tokio::sync::Mutex::new(WardenRuntime::new(
+            warden_session_manager,
+        )));
+        // Inject the Warden runtime into the tool pipeline for tool-level
+        // audit (custom point outside the hook dispatch channel). Must happen
+        // before `coordinator` is moved into the struct below.
+        coordinator.tool_pipeline().set_warden_runtime(warden_runtime.clone());
         let scheduler = Arc::new(Self {
             coordinator,
             session_manager,
@@ -421,7 +491,14 @@ impl DialogScheduler {
             round_injection_buffer,
             round_injection_source,
             maintenance_background_sessions: Arc::new(dashmap::DashMap::new()),
+            goal_idle_wakeup_generations: Arc::new(dashmap::DashMap::new()),
+            goal_idle_wakeup_self: OnceLock::new(),
+            warden_runtime,
+            agent_reply_archive_root: std::sync::Mutex::new(None),
         });
+        let _ = scheduler
+            .goal_idle_wakeup_self
+            .set(std::sync::Arc::downgrade(&scheduler));
 
         let scheduler_for_handler = Arc::clone(&scheduler);
         tokio::spawn(async move {
@@ -436,6 +513,16 @@ impl DialogScheduler {
         self.outcome_tx.clone()
     }
 
+    /// Drop all per-session Warden state for `session_id` (session-end cleanup).
+    ///
+    /// Called by the coordinator when a session is deleted or discarded so a
+    /// recycled session id cannot inherit stale enforcement state (failure
+    /// counters, queued reminders, poke defer counts).
+    pub async fn cleanup_session_state(&self, session_id: &str) {
+        let mut warden = self.warden_runtime.lock().await;
+        warden.cleanup_session(session_id);
+    }
+
     async fn lock_session_operation(&self, session_id: &str) -> KeyedAsyncLockGuard {
         self.session_operation_locks.lock(session_id).await
     }
@@ -443,6 +530,24 @@ impl DialogScheduler {
     /// Pass to [`ConversationCoordinator::set_round_injection_source`](super::coordinator::ConversationCoordinator::set_round_injection_source).
     pub fn round_injection_monitor(&self) -> Arc<dyn DialogRoundInjectionSource> {
         self.round_injection_source.clone()
+    }
+
+    /// Current running turn id when the session is `Processing`, otherwise `None`.
+    ///
+    /// This is the exact turn [`AgentDialogTurnPort::steer_dialog_turn`] can target.
+    /// Callers that want to steer (e.g. an urgent agent-to-agent correction) query it
+    /// first and fall back to a normal `submit` when no turn is running.
+    pub fn current_processing_turn_id(&self, session_id: &str) -> Option<String> {
+        match self
+            .session_manager
+            .get_session(session_id)
+            .map(|s| s.state.clone())
+        {
+            Some(SessionState::Processing {
+                current_turn_id, ..
+            }) => Some(current_turn_id),
+            _ => None,
+        }
     }
 
     /// Submit a user "steering" message into the currently running dialog turn.
@@ -460,6 +565,7 @@ impl DialogScheduler {
         turn_id: String,
         content: String,
         display_content: Option<String>,
+        prepended_reminders: Vec<AgentDialogPrependedReminder>,
     ) -> Result<DialogSteerOutcome, String> {
         if content.trim().is_empty() {
             return Err("Steering content cannot be empty".to_string());
@@ -490,6 +596,7 @@ impl DialogScheduler {
             display_content,
             steering_id,
             SystemTime::now(),
+            prepended_reminders,
         ) {
             DialogSteeringAction::Reject { error } => {
                 warn!(
@@ -629,6 +736,7 @@ impl DialogScheduler {
     /// running turn at the next model-round boundary. Otherwise, start a new
     /// turn immediately so the result is handled without waiting for an
     /// unrelated future message.
+    #[allow(clippy::too_many_arguments)]
     pub async fn deliver_background_result(
         &self,
         session_id: String,
@@ -1027,9 +1135,19 @@ impl DialogScheduler {
         queued_turn: QueuedTurn,
         reject_if_busy: bool,
     ) -> Result<DialogSubmitOutcome, SchedulerSubmitError> {
+        let trigger_source = queued_turn.policy.trigger_source;
+        let wakeup_session_id = session_id.clone();
         let _operation_guard = self.lock_session_operation(&session_id).await;
-        self.submit_queued_turn_locked(session_id, resolved_turn_id, queued_turn, reject_if_busy)
-            .await
+        let outcome = self
+            .submit_queued_turn_locked(session_id, resolved_turn_id, queued_turn, reject_if_busy)
+            .await;
+        // A successful user-initiated submission resets the goal idle-wakeup
+        // safety net: a goal continuation is only considered again after the
+        // session has been idle for a full GOAL_IDLE_WAKEUP_DELAY_MS window.
+        if outcome.is_ok() && is_user_submission_source(trigger_source) {
+            self.schedule_goal_idle_wakeup(&wakeup_session_id);
+        }
+        outcome
     }
 
     async fn submit_queued_turn_locked(
@@ -1180,6 +1298,170 @@ impl DialogScheduler {
                 .session_manager
                 .get_session(session_id)
                 .is_some_and(|session| matches!(session.state, SessionState::Processing { .. }))
+    }
+
+    /// Whether every node of the session tree (the session itself plus all
+    /// subagent descendants at any depth) has been silent for at least
+    /// `idle_delay`: no node is busy (running or queued) and every node's
+    /// last activity is older than the window. A single active descendant —
+    /// e.g. a still-running subagent — keeps the whole tree awake.
+    fn is_session_tree_silent(
+        &self,
+        tree_ids: &[String],
+        now: SystemTime,
+        idle_delay: Duration,
+    ) -> bool {
+        session_tree_is_silent(tree_ids, now, idle_delay, |id| {
+            self.is_session_busy_or_queued(id)
+        }, |id| {
+            self.session_manager
+                .get_session(id)
+                .map(|session| session.last_activity_at)
+        })
+    }
+
+    /// Schedule a goal idle-wakeup check `GOAL_IDLE_WAKEUP_DELAY_MS` from now.
+    ///
+    /// Safety-net behavior only: when the session stays idle and an active
+    /// thread goal exists, the wakeup reuses the continuation state machine to
+    /// submit a "wake the commander" turn. A newer user submission bumps the
+    /// session generation and invalidates older wakeup tasks; the
+    /// auto-continuation budget additionally caps how often a wakeup can fire.
+    fn schedule_goal_idle_wakeup(&self, session_id: &str) {
+        let Some(weak) = self.goal_idle_wakeup_self.get().cloned() else {
+            return;
+        };
+        let Some(scheduler) = weak.upgrade() else {
+            return;
+        };
+        let generation = {
+            let mut entry = self
+                .goal_idle_wakeup_generations
+                .entry(session_id.to_string())
+                .or_insert(0u64);
+            *entry += 1;
+            *entry
+        };
+        let wakeup_session_id = session_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS)).await;
+            scheduler
+                .goal_idle_wakeup_check(&wakeup_session_id, generation)
+                .await;
+        });
+    }
+
+    /// Idle-wakeup check, called by a spawned task after the delay window.
+    async fn goal_idle_wakeup_check(&self, session_id: &str, generation: u64) {
+        if self
+            .goal_idle_wakeup_generations
+            .get(session_id)
+            .map(|value| *value)
+            != Some(generation)
+        {
+            // A newer user submission superseded this wakeup task.
+            return;
+        }
+        let Some(session) = self.session_manager.get_session(session_id) else {
+            return;
+        };
+        // The safety net only fires when the whole session tree is silent:
+        // a still-running subagent (or any other descendant activity) keeps
+        // the wakeup pending.
+        let descendant_ids = match self
+            .session_manager
+            .session_tree_descendants(
+                session.config.workspace_path.as_deref().map(Path::new),
+                session_id,
+            )
+            .await
+        {
+            Ok(ids) => ids,
+            Err(error) => {
+                warn!(
+                    "Goal idle wakeup session-tree lookup failed: session_id={}, error={}",
+                    session_id, error
+                );
+                return;
+            }
+        };
+        let mut tree_ids = Vec::with_capacity(descendant_ids.len() + 1);
+        tree_ids.push(session_id.to_string());
+        tree_ids.extend(descendant_ids);
+        if !self.is_session_tree_silent(
+            &tree_ids,
+            SystemTime::now(),
+            Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS),
+        ) {
+            // A node of the session tree is still active; re-check after
+            // another idle window.
+            self.schedule_goal_idle_wakeup(session_id);
+            return;
+        }
+        let plan = match self.coordinator.prepare_goal_idle_wakeup(session_id).await {
+            Ok(plan) => plan,
+            Err(error) => {
+                warn!(
+                    "Goal idle wakeup plan failed: session_id={}, error={}",
+                    session_id, error
+                );
+                return;
+            }
+        };
+        let Some(plan) = plan else {
+            // No continuation plan: goal missing, completed, paused, or the
+            // auto-continuation budget is exhausted. Stop the wakeup chain.
+            return;
+        };
+        let prepended: Vec<Message> = plan
+            .prepended_reminders
+            .iter()
+            .map(|text| Message::internal_reminder(InternalReminderKind::GoalContinuation, text))
+            .collect();
+        let agent_type = session.agent_type.trim();
+        let agent_type = if agent_type.is_empty() {
+            "agentic".to_string()
+        } else {
+            agent_type.to_string()
+        };
+        match self
+            .submit_with_prepended_messages(
+                session_id.to_string(),
+                format!(
+                    "The active thread goal has been idle for {} minutes. Wake up the commander and continue the remaining goal work.",
+                    GOAL_IDLE_WAKEUP_DELAY_MS / 60_000
+                ),
+                Some(plan.display_message.clone()),
+                None,
+                agent_type,
+                session.config.workspace_path.clone(),
+                session.config.remote_connection_id.clone(),
+                session.config.remote_ssh_host.clone(),
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                None,
+                Some(plan.user_message_metadata.clone()),
+                prepended,
+                None,
+            )
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    "Goal idle wakeup turn submitted: session_id={}, generation={}",
+                    session_id, generation
+                );
+                // The wakeup turn itself keeps the goal alive; schedule the
+                // next safety-net check so the goal is still picked up if the
+                // commander does not respond.
+                self.schedule_goal_idle_wakeup(session_id);
+            }
+            Err(error) => {
+                warn!(
+                    "Goal idle wakeup submit failed: session_id={}, error={}",
+                    session_id, error
+                );
+            }
+        }
     }
 
     async fn finish_removed_queued_turn(&self, session_id: &str, removed_turn: QueuedTurn) {
@@ -1454,9 +1736,7 @@ impl DialogScheduler {
     }
 
     fn retire_active_turn_for_maintenance(&self, session_id: &str) -> Option<String> {
-        let Some(active_turn) = self.active_turns.remove(session_id) else {
-            return None;
-        };
+        let active_turn = self.active_turns.remove(session_id)?;
         let turn_id = active_turn.turn_id().to_string();
         self.retired_maintenance_outcomes.mark(session_id, &turn_id);
         self.active_internal_turns.remove(session_id);
@@ -1647,9 +1927,26 @@ impl DialogScheduler {
             .image_contexts
             .as_ref()
             .filter(|imgs| !imgs.is_empty());
+        // Merge Warden pending reminders (penalty pokes / challenge pokes)
+        // with the turn's own prepended messages so pokes ride into the next
+        // dialog turn. Hidden-subagent turns return above and skip injection.
+        let prepended_messages: Option<Vec<Message>> = {
+            let mut warden_reminders = self
+                .warden_runtime
+                .lock()
+                .await
+                .take_pending_reminders(session_id);
+            if warden_reminders.is_empty() {
+                (!queued_turn.prepended_messages.is_empty())
+                    .then(|| queued_turn.prepended_messages.clone())
+            } else {
+                warden_reminders.extend(queued_turn.prepended_messages.iter().cloned());
+                Some(warden_reminders)
+            }
+        };
         let route = resolve_dialog_start_route(DialogStartRouteFacts {
             has_image_contexts: images.is_some(),
-            has_prepended_messages: !queued_turn.prepended_messages.is_empty(),
+            has_prepended_messages: prepended_messages.is_some(),
         });
 
         let res = match route {
@@ -1682,7 +1979,9 @@ impl DialogScheduler {
                         queued_turn.remote_ssh_host.clone(),
                         queued_turn.policy,
                         queued_turn.user_message_metadata.clone(),
-                        queued_turn.prepended_messages.clone(),
+                        prepended_messages
+                            .clone()
+                            .expect("prepended-messages route requires merged messages"),
                     )
                     .await
             }
@@ -1721,13 +2020,30 @@ impl DialogScheduler {
                         queued_turn.remote_ssh_host.clone(),
                         queued_turn.policy,
                         queued_turn.user_message_metadata.clone(),
-                        queued_turn.prepended_messages.clone(),
+                        prepended_messages
+                            .clone()
+                            .expect("prepended-messages route requires merged messages"),
                     )
                     .await
             }
         };
 
         res.map_err(SchedulerSubmitError::Core)?;
+
+        // Plan-todo binding auto-mark (best-effort): when an agent-session
+        // execution turn carries a planFile/todoId binding, mark the todo
+        // in_progress. Only execution turns (reply_route.is_some()) can carry
+        // a binding; reply turns have reply_route = None and never trigger
+        // this hook. Failures only warn; they never fail the turn.
+        if queued_turn.reply_route.is_some() {
+            auto_mark_todo_in_progress_if_bound(
+                queued_turn.user_message_metadata.as_ref(),
+                queued_turn.workspace_path.as_deref(),
+                queued_turn.remote_connection_id.as_deref(),
+                queued_turn.remote_ssh_host.as_deref(),
+            )
+            .await;
+        }
 
         // Standard scheduler submissions resolve and persist their turn ID
         // before entering the coordinator. Reading SessionState here races a
@@ -1897,11 +2213,128 @@ impl DialogScheduler {
         Ok(turn_id)
     }
 
+    /// Replace characters unsafe for file names in archive ids (session ids,
+    /// turn ids). Falls back to `unknown` when nothing safe remains.
+    fn sanitize_archive_id(value: &str) -> String {
+        let sanitized: String = value
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                    character
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let trimmed = sanitized.trim_matches('_');
+        if trimmed.is_empty() {
+            "unknown".to_string()
+        } else {
+            trimmed.chars().take(128).collect()
+        }
+    }
+
+    /// Extract the `Status: ...` line written into the reply reminder text by
+    /// `resolve_agent_session_reply_action`. Best-effort: falls back to
+    /// `unknown` when the line is missing.
+    fn extract_status_from_reminder(reminder_text: &str) -> String {
+        reminder_text
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("Status: ")
+                    .map(str::trim)
+                    .filter(|status| !status.is_empty())
+            })
+            .unwrap_or("unknown")
+            .to_string()
+    }
+
+    /// Default archive root: `~/.bitfun/taiji/agent-replies`, resolved through
+    /// the shared `PathManager` so `BITFUN_HOME`/`BITFUN_E2E_HOME` overrides
+    /// apply. Falls back to a temp location rather than panicking when the
+    /// path manager cannot be constructed.
+    fn resolve_default_agent_reply_archive_root() -> PathBuf {
+        PathManager::new()
+            .map(|path_manager| {
+                path_manager
+                    .bitfun_home_dir()
+                    .join("taiji")
+                    .join("agent-replies")
+            })
+            .unwrap_or_else(|_| {
+                std::env::temp_dir()
+                    .join("bitfun")
+                    .join("taiji")
+                    .join("agent-replies")
+            })
+    }
+
+    /// Best-effort archive of a forwarded agent-session reply.
+    ///
+    /// Writes `<root>/<YYYY-MM>/<session_id>-<turn_id>.md` (UTF-8, no BOM)
+    /// containing the reply facts already present on the plan: responder
+    /// session, target session, status, server time, and reply text. This is
+    /// an audit trail only — the caller must ignore failures so a full or
+    /// read-only disk can never block reply delivery.
+    async fn archive_agent_session_reply(
+        root: &Path,
+        responder_session_id: &str,
+        turn_id: &str,
+        plan: &AgentSessionReplyPlan,
+    ) -> std::io::Result<PathBuf> {
+        let month_dir = utc_iso8601_now();
+        let month_dir = month_dir.get(..7).unwrap_or("unknown");
+        let dir = root.join(month_dir);
+        tokio::fs::create_dir_all(&dir).await?;
+        let file_name = format!(
+            "{}-{}.md",
+            Self::sanitize_archive_id(responder_session_id),
+            Self::sanitize_archive_id(turn_id)
+        );
+        let path = dir.join(file_name);
+        let server_time = plan
+            .user_message_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("serverTime"))
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let content = format!(
+            "# Agent Session Reply Archive\n\n\
+             - source_session: {responder_session_id}\n\
+             - target_session: {}\n\
+             - status: {}\n\
+             - server_time: {server_time}\n\
+             - archived_at: {}\n\
+             - turn_id: {turn_id}\n\n\
+             ## Reply Text\n\n{}\n",
+            plan.target_session_id,
+            Self::extract_status_from_reminder(&plan.reminder_text),
+            utc_iso8601_now(),
+            plan.user_input,
+        );
+        tokio::fs::write(&path, content).await?;
+        Ok(path)
+    }
+
     async fn forward_agent_session_reply(
         &self,
         responder_session_id: &str,
+        turn_id: &str,
         plan: AgentSessionReplyPlan,
     ) {
+        if let Err(error) = Self::archive_agent_session_reply(
+            &self.agent_reply_archive_root(),
+            responder_session_id,
+            turn_id,
+            &plan,
+        )
+        .await
+        {
+            warn!(
+                "Failed to archive agent-session reply (best-effort): responder_session_id={}, target_session_id={}, turn_id={}, error={}",
+                responder_session_id, plan.target_session_id, turn_id, error
+            );
+        }
         let reply_user_input = plan.user_input;
         let target_session_id = plan.target_session_id;
         let target_workspace_path = plan.target_workspace_path;
@@ -1936,6 +2369,40 @@ impl DialogScheduler {
                 responder_session_id, target_session_id, error
             );
         }
+    }
+
+    /// Resolve the agent-reply archive root, defaulting to
+    /// `~/.bitfun/taiji/agent-replies` on first use. Poison recovery keeps the
+    /// best-effort archive path panic-free.
+    fn agent_reply_archive_root(&self) -> PathBuf {
+        let configured = {
+            let guard = self
+                .agent_reply_archive_root
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.clone()
+        };
+        if let Some(root) = configured {
+            return root;
+        }
+        let default = Self::resolve_default_agent_reply_archive_root();
+        let mut guard = self
+            .agent_reply_archive_root
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if guard.is_none() {
+            *guard = Some(default.clone());
+        }
+        default
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_agent_reply_archive_root(&self, root: PathBuf) {
+        let mut guard = self
+            .agent_reply_archive_root
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = Some(root);
     }
 
     fn take_suppressed_cancelled_reply(&self, session_id: &str, turn_id: &str) -> bool {
@@ -2004,6 +2471,15 @@ impl DialogScheduler {
             };
             let status = lifecycle_plan.status;
             let queue_action = lifecycle_plan.queue_action;
+            // Turn-driven Warden runtime: feed the finished turn outcome so
+            // consecutive-failure penalties and challenge pokes are queued for
+            // the next turn of this session.
+            {
+                let mut warden = self.warden_runtime.lock().await;
+                warden
+                    .on_turn_outcome(&session_id, status, outcome.turn_id())
+                    .await;
+            }
             // Only drop steering messages targeted at the *finished* turn. We
             // must NOT clear the entire session buffer here: a user might have
             // legitimately submitted steering against a brand-new follow-up
@@ -2021,6 +2497,8 @@ impl DialogScheduler {
                 if let Some(active_turn) = active_turn.as_ref() {
                     match resolve_agent_session_reply_action(
                         &session_id,
+                        get_session_role(&session_id).map(|role| role.as_str()),
+                        self.coordinator.session_tree().get_depth(&session_id),
                         active_turn,
                         &outcome,
                         suppressed_cancelled_reply,
@@ -2034,8 +2512,32 @@ impl DialogScheduler {
                         );
                         }
                         AgentSessionReplyAction::Forward(plan) => {
-                            self.forward_agent_session_reply(&session_id, plan).await;
+                            self.forward_agent_session_reply(
+                                &session_id,
+                                outcome.turn_id(),
+                                plan,
+                            )
+                            .await;
                         }
+                    }
+
+                    // Plan-todo binding auto-complete (best-effort): when the
+                    // finished turn is an agent-session execution turn bound
+                    // to a plan todo (reply_route.is_some()) and it completed
+                    // normally, mark the todo completed. Failed/Cancelled
+                    // outcomes are intentionally left untouched (kept pending
+                    // for the commander to adjudicate). Reply turns have
+                    // reply_route = None and never trigger this hook. Failures
+                    // only warn; they never affect the outcome pipeline.
+                    if active_turn.reply_route().is_some() {
+                        auto_mark_todo_completed_if_bound(
+                            active_turn.user_message_metadata(),
+                            active_turn.workspace_path(),
+                            active_turn.remote_connection_id(),
+                            active_turn.remote_ssh_host(),
+                            &outcome,
+                        )
+                        .await;
                     }
                 }
             }
@@ -2183,6 +2685,16 @@ impl DialogScheduler {
                 }
                 TurnOutcomeQueueAction::ClearQueue => {}
             }
+
+            // Top-level turn finished: restart the goal idle-wakeup safety net
+            // so it counts from turn end, not from submission. Subagent and
+            // other internal turns skip this; they carry no goal of their own.
+            // schedule_goal_idle_wakeup bumps the session generation, which
+            // invalidates any older wakeup task, so a user submission that
+            // raced in ahead of this outcome is still honored.
+            if !is_internal_turn {
+                self.schedule_goal_idle_wakeup(&session_id);
+            }
         }
     }
 }
@@ -2285,6 +2797,7 @@ fn agent_dialog_turn_prepended_messages(
         .map(|reminder| {
             let kind = match reminder.kind.as_str() {
                 "session_message_request" => InternalReminderKind::SessionMessageRequest,
+                "task_subagent_result" => InternalReminderKind::BackgroundResult,
                 "scheduled_job" => InternalReminderKind::ScheduledJob,
                 other => {
                     return Err(PortError::new(
@@ -2420,6 +2933,7 @@ impl AgentDialogTurnPort for DialogScheduler {
             request.turn_id,
             request.content,
             request.display_content,
+            request.prepended_reminders,
         )
         .await
         .map_err(|error| {
@@ -2701,20 +3215,168 @@ mod tests {
                 ),
             ),
         ));
-        (
-            DialogScheduler::new(coordinator, session_manager.clone()),
-            session_manager,
-            event_queue,
-            root,
-        )
+        let scheduler = DialogScheduler::new(coordinator, session_manager.clone());
+        // Isolate the best-effort agent-reply archive so outcome-handler
+        // tests never write into the real `~/.bitfun` home.
+        scheduler.set_agent_reply_archive_root(root.path().join("agent-replies"));
+        (scheduler, session_manager, event_queue, root)
     }
-
     #[test]
     fn queued_turn_execution_default_is_standard() {
         assert!(matches!(
             QueuedTurnExecution::default(),
             QueuedTurnExecution::Standard
         ));
+    }
+
+    #[test]
+    fn session_tree_silence_requires_every_descendant_idle() {
+        let now = SystemTime::now();
+        let idle_delay = Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS);
+        let idle = now - idle_delay - Duration::from_secs(60);
+        let active = now - Duration::from_secs(1);
+        let tree = vec![
+            "parent".to_string(),
+            "child".to_string(),
+            "grandchild".to_string(),
+        ];
+
+        // Every node idle -> the whole tree is silent.
+        assert!(session_tree_is_silent(&tree, now, idle_delay, |_| false, |_| {
+            Some(idle)
+        }));
+
+        // A descendant active within the idle window blocks the wakeup even
+        // when the parent itself is idle.
+        assert!(!session_tree_is_silent(&tree, now, idle_delay, |_| false, |id| {
+            if id == "child" { Some(active) } else { Some(idle) }
+        }));
+
+        // A busy descendant blocks the wakeup even when every node looks idle.
+        assert!(!session_tree_is_silent(&tree, now, idle_delay, |id| {
+            id == "grandchild"
+        }, |_| {
+            Some(idle)
+        }));
+
+        // A descendant that no longer exists contributes no activity.
+        assert!(session_tree_is_silent(&tree, now, idle_delay, |_| false, |id| {
+            if id == "grandchild" { None } else { Some(idle) }
+        }));
+
+        // Root-only tree follows the root activity.
+        let root_only = vec!["parent".to_string()];
+        assert!(session_tree_is_silent(&root_only, now, idle_delay, |_| false, |_| {
+            Some(idle)
+        }));
+        assert!(!session_tree_is_silent(&root_only, now, idle_delay, |_| false, |_| {
+            Some(active)
+        }));
+    }
+
+    #[tokio::test]
+    async fn top_level_turn_outcome_restarts_goal_idle_wakeup() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "goal-wakeup-session";
+        let turn_id = "goal-wakeup-turn";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "GoalWakeup".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        scheduler
+            .active_turns
+            .insert(session_id, desktop_active_turn(turn_id));
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "done".to_string(),
+                },
+            ))
+            .await
+            .expect("send outcome");
+
+        // The outcome handler runs on a background task. Wait until the turn
+        // is consumed, then require the idle-wakeup generation to have been
+        // bumped (the schedule_goal_idle_wakeup side effect of this hook).
+        for _ in 0..100 {
+            let turn_consumed = !scheduler.active_turns.matches_turn(session_id, turn_id);
+            let generation_bumped = scheduler
+                .goal_idle_wakeup_generations
+                .get(session_id)
+                .is_some_and(|generation| *generation >= 1);
+            if turn_consumed && generation_bumped {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("top-level turn outcome did not restart the goal idle-wakeup timer");
+    }
+
+    #[tokio::test]
+    async fn internal_turn_outcome_skips_goal_idle_wakeup() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "internal-wakeup-session";
+        let turn_id = "internal-wakeup-turn";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "InternalWakeup".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        scheduler
+            .active_turns
+            .insert(session_id, desktop_active_turn(turn_id));
+        scheduler
+            .active_internal_turns
+            .insert(session_id.to_string(), ActiveInternalTurn::HiddenSubagent);
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "done".to_string(),
+                },
+            ))
+            .await
+            .expect("send outcome");
+
+        for _ in 0..100 {
+            if !scheduler.active_turns.matches_turn(session_id, turn_id) {
+                // Turn consumed; the internal-turn guard must have skipped the
+                // idle-wakeup restart entirely.
+                assert!(scheduler
+                    .goal_idle_wakeup_generations
+                    .get(session_id)
+                    .is_none());
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("internal turn outcome was not consumed by the outcome handler");
     }
 
     #[tokio::test]
@@ -3597,6 +4259,7 @@ mod tests {
                 turn_id.to_string(),
                 "check tests".to_string(),
                 None,
+                Vec::new(),
             )
             .await
             .expect_err("stale processing state must not accept steering");
@@ -3619,6 +4282,7 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 content: "  ".to_string(),
                 display_content: None,
+                prepended_reminders: Vec::new(),
             },
         )
         .await
@@ -3646,6 +4310,7 @@ mod tests {
                     turn_id.to_string(),
                     "check tests".to_string(),
                     None,
+                    Vec::new(),
                 )
                 .await
         });
@@ -3826,15 +4491,36 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_agent_session_reply_action("session_b", &active_turn, &cancelled, true),
+            resolve_agent_session_reply_action(
+                "session_b",
+                None,
+                None,
+                &active_turn,
+                &cancelled,
+                true
+            ),
             AgentSessionReplyAction::SkipSuppressedCancelledReply
         );
         assert!(matches!(
-            resolve_agent_session_reply_action("session_b", &active_turn, &cancelled, false),
+            resolve_agent_session_reply_action(
+                "session_b",
+                None,
+                None,
+                &active_turn,
+                &cancelled,
+                false
+            ),
             AgentSessionReplyAction::Forward(_)
         ));
         assert!(matches!(
-            resolve_agent_session_reply_action("session_b", &active_turn, &completed, true),
+            resolve_agent_session_reply_action(
+                "session_b",
+                None,
+                None,
+                &active_turn,
+                &completed,
+                true
+            ),
             AgentSessionReplyAction::Forward(_)
         ));
     }
@@ -3984,5 +4670,438 @@ mod tests {
         assert!(err
             .message
             .contains("unsupported agent dialog prepended reminder kind"));
+    }
+
+    // ---------------------------------------------------------------------
+    // Plan-todo binding hooks (integration-level): verify the scheduler
+    // wiring (reply_route.is_some() gates) all the way to the on-disk plan
+    // file. The pure binding logic itself lives in plan_todo_binding.rs; these
+    // tests cover the scheduler-side hook trigger points:
+    //   - start_turn with a binding + reply_route marks the todo in_progress
+    //   - a Completed outcome marks the bound todo completed
+    //   - Failed/Cancelled outcomes keep the todo pending
+    //   - reply turns (reply_route = None) never trigger either hook
+    // ---------------------------------------------------------------------
+
+    fn write_bound_plan_file(root: &tempfile::TempDir, file_name: &str) -> (PathBuf, String) {
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        let plan_path = workspace.join(file_name);
+        let plan_file = plan_path.to_string_lossy().into_owned();
+        std::fs::write(
+            &plan_path,
+            "---\nname: My Plan\noverview: An overview\ntodos:\n- id: setup-auth\n  content: Set up auth\n  status: pending\n---\n\n# My Plan\n\nBody text here.\n",
+        )
+        .expect("write plan file");
+        (plan_path, plan_file)
+    }
+
+    fn plan_todo_status(plan_path: &Path) -> String {
+        let content = std::fs::read_to_string(plan_path).expect("read plan file");
+        let status_line = content
+            .lines()
+            .find(|line| line.trim_start().starts_with("status:"))
+            .expect("plan todo status line");
+        status_line
+            .split_once("status:")
+            .expect("status separator")
+            .1
+            .trim()
+            .to_string()
+    }
+
+    fn binding_metadata(plan_file: &str) -> Option<serde_json::Value> {
+        Some(serde_json::json!({
+            "planFile": plan_file,
+            "todoId": "setup-auth",
+        }))
+    }
+
+    fn bound_active_turn(
+        turn_id: &str,
+        workspace_path: &str,
+        plan_file: &str,
+        reply_route: Option<AgentSessionReplyRoute>,
+    ) -> ActiveDialogTurn {
+        ActiveDialogTurn::new(
+            turn_id.to_string(),
+            Some(workspace_path.to_string()),
+            None,
+            None,
+            "agentic".to_string(),
+            "bound execution turn".to_string(),
+            binding_metadata(plan_file),
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+            reply_route,
+        )
+    }
+
+    fn sample_reply_route() -> AgentSessionReplyRoute {
+        AgentSessionReplyRoute {
+            source_session_id: "source-session".to_string(),
+            source_workspace_path: "/workspace".to_string(),
+            source_remote_connection_id: None,
+            source_remote_ssh_host: None,
+        }
+    }
+
+    async fn create_bound_session(
+        session_manager: &SessionManager,
+        root: &tempfile::TempDir,
+        session_id: &str,
+    ) -> String {
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "Bound".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create bound session");
+        workspace.to_string_lossy().into_owned()
+    }
+
+    async fn wait_for_active_turn_consumed(
+        scheduler: &DialogScheduler,
+        session_id: &str,
+        turn_id: &str,
+    ) {
+        for _ in 0..100 {
+            if !scheduler.active_turns.matches_turn(session_id, turn_id) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("active turn was not consumed by the outcome handler: session_id={session_id}, turn_id={turn_id}");
+    }
+
+    /// The in_progress hook function itself, exercised against a real plan
+    /// file: binding metadata + workspace resolve the plan path and rewrite
+    /// the todo status on disk. (The scheduler-side gate that calls this hook
+    /// from start_turn is covered by
+    /// `start_turn_binding_hook_wiring_is_gated_on_reply_route`; the full
+    /// start_turn pipeline is not reachable in the test harness because it
+    /// resolves session storage through the global PathManager.)
+    #[tokio::test]
+    async fn in_progress_hook_direct_call_marks_real_plan_file() {
+        let root = tempfile::tempdir().expect("test root");
+        let (plan_path, plan_file) = write_bound_plan_file(&root, "hook_in_progress_plan.plan.md");
+        let workspace_path = root
+            .path()
+            .join("workspace")
+            .to_string_lossy()
+            .into_owned();
+
+        auto_mark_todo_in_progress_if_bound(
+            binding_metadata(&plan_file).as_ref(),
+            Some(&workspace_path),
+            None,
+            None,
+        )
+        .await;
+
+        assert_eq!(plan_todo_status(&plan_path), "in_progress");
+    }
+
+    /// Source-level wiring assertion (same pattern as
+    /// `submission_preflight_commits_a_persisted_revert_marker` above): the
+    /// start_turn in_progress hook must exist and must be gated on
+    /// `reply_route.is_some()` so reply turns (reply_route = None) never
+    /// trigger it. The full start_turn pipeline is not runnable in the test
+    /// harness (global PathManager storage resolution), so the wiring itself
+    /// is pinned against the source.
+    #[test]
+    fn start_turn_binding_hook_wiring_is_gated_on_reply_route() {
+        let source = include_str!("scheduler.rs");
+        let start_turn = source
+            .split_once("async fn start_turn(")
+            .expect("start_turn method")
+            .1
+            .split_once("async fn start_hidden_subagent_turn(")
+            .expect("start_turn boundary")
+            .0;
+        let gate_pos = start_turn
+            .find("if queued_turn.reply_route.is_some() {")
+            .expect("reply_route gate");
+        let hook_pos = start_turn
+            .find("auto_mark_todo_in_progress_if_bound(")
+            .expect("in_progress hook call");
+        assert!(
+            gate_pos < hook_pos,
+            "in_progress hook must be gated on reply_route.is_some()"
+        );
+        assert!(
+            start_turn.contains("// in_progress. Only execution turns (reply_route.is_some()) can carry"),
+            "missing gate comment explaining the reply_route condition"
+        );
+    }
+
+    #[tokio::test]
+    async fn bound_execution_turn_completed_marks_todo_completed() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "bound-complete-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (plan_path, plan_file) = write_bound_plan_file(&root, "bound_complete_plan.plan.md");
+        let turn_id = "bound-complete-turn";
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "done".to_string(),
+                },
+            ))
+            .await
+            .expect("send completed outcome");
+
+        for _ in 0..100 {
+            if plan_todo_status(&plan_path) == "completed" {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("bound todo was not marked completed");
+    }
+
+    #[tokio::test]
+    async fn bound_execution_turn_failed_keeps_todo_pending() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "bound-failed-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (plan_path, plan_file) = write_bound_plan_file(&root, "bound_failed_plan.plan.md");
+        let turn_id = "bound-failed-turn";
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Failed {
+                    turn_id: turn_id.to_string(),
+                    error: "boom".to_string(),
+                },
+            ))
+            .await
+            .expect("send failed outcome");
+
+        wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
+        assert_eq!(plan_todo_status(&plan_path), "pending");
+    }
+
+    #[tokio::test]
+    async fn bound_execution_turn_cancelled_keeps_todo_pending() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "bound-cancelled-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (plan_path, plan_file) = write_bound_plan_file(&root, "bound_cancelled_plan.plan.md");
+        let turn_id = "bound-cancelled-turn";
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Cancelled {
+                    turn_id: turn_id.to_string(),
+                },
+            ))
+            .await
+            .expect("send cancelled outcome");
+
+        wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
+        assert_eq!(plan_todo_status(&plan_path), "pending");
+    }
+
+    /// A Completed reply turn (reply_route = None) must not trigger the
+    /// completed hook even though the binding metadata is present. The
+    /// start_turn side of the same gate (reply_route = None → in_progress
+    /// hook not triggered) is covered by the source-level wiring assertion in
+    /// `start_turn_binding_hook_wiring_is_gated_on_reply_route` because the
+    /// full start_turn pipeline is not runnable in the test harness (global
+    /// PathManager storage resolution).
+    #[tokio::test]
+    async fn reply_turn_without_route_never_triggers_binding_hooks() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let reply_session_id = "bound-reply-outcome-session";
+        let reply_workspace_path =
+            create_bound_session(&session_manager, &root, reply_session_id).await;
+        let (reply_plan_path, reply_plan_file) =
+            write_bound_plan_file(&root, "bound_reply_outcome_plan.plan.md");
+        let reply_turn_id = "bound-reply-outcome-turn";
+        scheduler.active_turns.insert(
+            reply_session_id,
+            bound_active_turn(
+                reply_turn_id,
+                &reply_workspace_path,
+                &reply_plan_file,
+                None,
+            ),
+        );
+        scheduler
+            .outcome_tx
+            .send((
+                reply_session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: reply_turn_id.to_string(),
+                    final_response: "done".to_string(),
+                },
+            ))
+            .await
+            .expect("send completed reply outcome");
+
+        wait_for_active_turn_consumed(&scheduler, reply_session_id, reply_turn_id).await;
+        assert_eq!(plan_todo_status(&reply_plan_path), "pending");
+    }
+
+    // ---------------------------------------------------------------------
+    // Agent-session reply best-effort archiving (F9): forwarded replies are
+    // written to `<archive-root>/<YYYY-MM>/<session>-<turn>.md` with the
+    // reply facts, and archive failures never block reply delivery.
+    // ---------------------------------------------------------------------
+
+    fn reply_archive_files(root: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+        for month in std::fs::read_dir(root).into_iter().flatten().flatten() {
+            if !month.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            for entry in std::fs::read_dir(month.path()).into_iter().flatten().flatten() {
+                if entry.path().extension().and_then(|ext| ext.to_str()) == Some("md") {
+                    files.push(entry.path());
+                }
+            }
+        }
+        files
+    }
+
+    #[tokio::test]
+    async fn forwarded_agent_session_reply_is_archived_with_reply_facts() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "archive-reply-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (_, plan_file) = write_bound_plan_file(&root, "archive_reply_plan.plan.md");
+        let turn_id = "archive-reply-turn";
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "archive this reply".to_string(),
+                },
+            ))
+            .await
+            .expect("send completed outcome");
+
+        let archive_root = root.path().join("agent-replies");
+        for _ in 0..100 {
+            if !reply_archive_files(&archive_root).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let files = reply_archive_files(&archive_root);
+        assert_eq!(files.len(), 1, "exactly one reply archive must be written");
+        let content = std::fs::read_to_string(&files[0]).expect("read reply archive");
+        assert!(content.contains("source_session: archive-reply-session"));
+        assert!(content.contains("target_session: source-session"));
+        assert!(content.contains("status: completed"));
+        assert!(
+            content.contains("server_time: ") && !content.contains("server_time: unknown"),
+            "the serverTime written into the reply metadata must be archived"
+        );
+        assert!(content.contains("## Reply Text"));
+        assert!(content.contains("archive this reply"));
+    }
+
+    #[tokio::test]
+    async fn failed_reply_archive_write_does_not_block_delivery() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        // Point the archive root at an existing *file* so create_dir_all must
+        // fail; delivery must still proceed past the best-effort archive.
+        let blocking_file = root.path().join("blocking-file");
+        std::fs::write(&blocking_file, b"not a directory").expect("write blocking file");
+        scheduler.set_agent_reply_archive_root(blocking_file);
+        let session_id = "archive-blocked-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (_, plan_file) = write_bound_plan_file(&root, "archive_blocked_plan.plan.md");
+        let turn_id = "archive-blocked-turn";
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "deliver anyway".to_string(),
+                },
+            ))
+            .await
+            .expect("send completed outcome");
+
+        wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
+    }
+
+    #[test]
+    fn archive_id_sanitization_replaces_unsafe_characters() {
+        assert_eq!(DialogScheduler::sanitize_archive_id("session-1"), "session-1");
+        assert_eq!(DialogScheduler::sanitize_archive_id("../evil"), "evil");
+        assert_eq!(DialogScheduler::sanitize_archive_id("a b/c"), "a_b_c");
+        assert_eq!(DialogScheduler::sanitize_archive_id(""), "unknown");
+        assert_eq!(DialogScheduler::sanitize_archive_id(":::"), "unknown");
+        let long = "x".repeat(200);
+        assert_eq!(DialogScheduler::sanitize_archive_id(&long).len(), 128);
     }
 }

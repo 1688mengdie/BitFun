@@ -378,6 +378,30 @@ pub struct SetThreadGoalRequest {
     pub new_goal_id: String,
 }
 
+/// Explicit status transitions must respect the resume contract: only
+/// resumable statuses (`Paused`/`Blocked`/`UsageLimited`) may move back to
+/// `Active`, and a `Blocked -> Active` resume resets the auto-continuation
+/// counter so the resumed goal gets a fresh continuation budget instead of
+/// immediately re-blocking on the stale count.
+fn apply_goal_status_transition(
+    existing: &mut ThreadGoal,
+    status: ThreadGoalStatus,
+) -> Result<(), ThreadGoalRuntimeError> {
+    if status == ThreadGoalStatus::Active && existing.status != ThreadGoalStatus::Active {
+        if !thread_goal_status_is_resumable(existing.status) {
+            return Err(ThreadGoalRuntimeError::Validation(format!(
+                "cannot resume goal from status {}",
+                existing.status.as_str()
+            )));
+        }
+        if existing.status == ThreadGoalStatus::Blocked {
+            existing.auto_continuation_count = 0;
+        }
+    }
+    existing.status = status;
+    Ok(())
+}
+
 pub fn build_set_thread_goal_result(
     request: SetThreadGoalRequest,
 ) -> Result<SetThreadGoalResult, ThreadGoalRuntimeError> {
@@ -439,7 +463,7 @@ pub fn build_set_thread_goal_result(
             )));
         };
         if let Some(status) = request.status {
-            existing.status = status;
+            apply_goal_status_transition(&mut existing, status)?;
         }
         if let Some(token_budget) = request.token_budget {
             existing.token_budget = token_budget;

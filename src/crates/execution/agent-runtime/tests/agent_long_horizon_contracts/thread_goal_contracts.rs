@@ -148,6 +148,105 @@ fn set_thread_goal_rejects_invalid_budget_and_missing_update_target() {
 }
 
 #[test]
+fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
+    // Blocked -> resume (Active): succeeds and resets the auto-continuation
+    // counter so the resumed goal gets a fresh continuation budget.
+    let mut blocked = goal(ThreadGoalStatus::Blocked);
+    blocked.auto_continuation_count = MAX_THREAD_GOAL_AUTO_CONTINUATIONS;
+    let resumed = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(blocked),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 50,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("blocked goal should resume");
+    assert_eq!(resumed.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(resumed.goal.auto_continuation_count, 0);
+
+    // Paused -> resume: succeeds and preserves the continuation counter.
+    let mut paused = goal(ThreadGoalStatus::Paused);
+    paused.auto_continuation_count = 5;
+    let resumed_paused = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(paused),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 51,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("paused goal should resume");
+    assert_eq!(resumed_paused.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(resumed_paused.goal.auto_continuation_count, 5);
+
+    // UsageLimited -> resume: succeeds.
+    let mut usage_limited = goal(ThreadGoalStatus::UsageLimited);
+    usage_limited.auto_continuation_count = 3;
+    let resumed_usage = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(usage_limited),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 52,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("usage-limited goal should resume");
+    assert_eq!(resumed_usage.goal.status, ThreadGoalStatus::Active);
+    assert_eq!(resumed_usage.goal.auto_continuation_count, 3);
+
+    // Active -> Active: idempotent and succeeds.
+    let active = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(goal(ThreadGoalStatus::Active)),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 53,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("active goal should stay active");
+    assert_eq!(active.goal.status, ThreadGoalStatus::Active);
+
+    // Complete -> resume: rejected.
+    let complete_error = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(goal(ThreadGoalStatus::Complete)),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 54,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect_err("complete goal must not resume")
+    .to_string();
+    assert!(complete_error.contains("cannot resume goal from status complete"));
+
+    // BudgetLimited -> resume: rejected.
+    let budget_error = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(goal(ThreadGoalStatus::BudgetLimited)),
+        objective: None,
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        replace_existing: false,
+        now_epoch_seconds: 55,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect_err("budget-limited goal must not resume")
+    .to_string();
+    assert!(budget_error.contains("cannot resume goal from status budgetLimited"));
+}
+
+#[test]
 fn continuation_outcome_increments_active_goal_and_builds_plan() {
     let runtime = ThreadGoalRuntime::new();
     let goal = goal(ThreadGoalStatus::Active);
@@ -175,7 +274,7 @@ fn continuation_outcome_increments_active_goal_and_builds_plan() {
         .as_ref()
         .expect("active goal should schedule continuation")
         .display_message
-        .contains("1/100"));
+        .contains("1/10"));
 }
 
 #[test]
@@ -253,7 +352,7 @@ fn prompt_and_tool_response_contracts_match_thread_goal_wire_shape() {
     );
 
     let plan = build_thread_goal_continuation_plan(&goal(ThreadGoalStatus::Active));
-    assert_eq!(plan.user_message_metadata["autoContinuationMax"], 100);
+    assert_eq!(plan.user_message_metadata["autoContinuationMax"], 10);
 }
 
 #[test]
@@ -348,5 +447,5 @@ fn turn_filtering_and_retry_policies_preserve_goal_mode_semantics() {
         "insufficient_quota: billing hard limit"
     ));
     assert!(!is_usage_limit_message("tool failed"));
-    assert_eq!(MAX_GOAL_CONTINUATIONS, 100);
+    assert_eq!(MAX_GOAL_CONTINUATIONS, 10);
 }

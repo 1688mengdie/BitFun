@@ -29,8 +29,9 @@ import { FlowChatStore } from '../store/FlowChatStore';
 import { useAcpPlan } from '../hooks/useAcpPlan';
 import { filterSlashCommands, useAcpSlashCommands } from '../hooks/useAcpSlashCommands';
 import { acpSessionRef, acpSlashCommandText } from '../utils/acpSession';
+import { conversationLevelLabel } from '../utils/conversationLevelLabel';
 import { AcpPlanPanel } from './AcpPlanPanel';
-import type { FlowChatState } from '../types/flow-chat';
+import type { FlowChatState, Session } from '../types/flow-chat';
 import type {
   ContextItem,
   DirectoryContext,
@@ -274,7 +275,95 @@ type SlashPickerItem =
   | SlashAcpCommandItem
   | SlashSkillItem
   | SlashExternalPromptCommandItem;
-type ChatInputTarget = 'main' | 'btw';
+type ChatInputTarget = 'main' | 'btw' | { sessionId: string };
+
+export interface ConversationLevelEntry {
+  sessionId: string;
+  level: number;
+  session?: Session;
+  isDescendant: boolean;
+}
+
+/**
+ * Build the conversation hierarchy levels (L0..LN) around the current session:
+ * the ancestor chain from the root conversation down to the current session,
+ * then all descendant child sessions (BFS, ordered by createdAt then depth).
+ */
+export function buildConversationHierarchy(
+  sessions: ReadonlyMap<string, Session>,
+  currentSessionId?: string | null,
+): ConversationLevelEntry[] {
+  if (!currentSessionId) {
+    return [];
+  }
+
+  const chain: Session[] = [];
+  let cursorId: string | undefined = currentSessionId;
+  let guard = 0;
+  while (cursorId && guard++ < 128) {
+    const session = sessions.get(cursorId);
+    if (!session) {
+      break;
+    }
+    chain.unshift(session);
+    cursorId = resolveSessionRelationship(session).parentSessionId;
+  }
+  if (chain.length === 0) {
+    return [];
+  }
+
+  const childrenByParent = new Map<string, Session[]>();
+  for (const session of sessions.values()) {
+    const parentId = resolveSessionRelationship(session).parentSessionId;
+    if (!parentId) {
+      continue;
+    }
+    const list = childrenByParent.get(parentId);
+    if (list) {
+      list.push(session);
+    } else {
+      childrenByParent.set(parentId, [session]);
+    }
+  }
+  for (const list of childrenByParent.values()) {
+    list.sort(
+      (a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || (a.depth ?? 0) - (b.depth ?? 0),
+    );
+  }
+
+  const descendants: Session[] = [];
+  const queue: string[] = [currentSessionId];
+  const visited = new Set<string>([currentSessionId]);
+  while (queue.length > 0) {
+    const parentId = queue.shift()!;
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      if (visited.has(child.sessionId)) {
+        continue;
+      }
+      visited.add(child.sessionId);
+      descendants.push(child);
+      queue.push(child.sessionId);
+    }
+  }
+
+  const levels: ConversationLevelEntry[] = chain.map((session, index) => ({
+    sessionId: session.sessionId,
+    level: index,
+    session,
+    isDescendant: false,
+  }));
+  let nextLevel = chain.length;
+  for (const session of descendants) {
+    levels.push({
+      sessionId: session.sessionId,
+      level: nextLevel,
+      session,
+      isDescendant: true,
+    });
+    nextLevel += 1;
+  }
+  return levels;
+}
 
 function nativePromptCommandCandidateId(
   kind: Exclude<SlashPickerItem['kind'], 'externalCommand'>,
@@ -481,7 +570,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     ? activeBtwSessionData.childSessionId
     : undefined;
   const effectiveTargetSessionId =
-    inputTarget === 'btw' && activeBtwSessionId ? activeBtwSessionId : currentSessionId;
+    inputTarget === 'btw' && activeBtwSessionId
+      ? activeBtwSessionId
+      : typeof inputTarget === 'object'
+        ? inputTarget.sessionId
+        : currentSessionId;
   const effectiveTargetSessionIdRef = useRef<string | null>(effectiveTargetSessionId);
   effectiveTargetSessionIdRef.current = effectiveTargetSessionId;
 
@@ -566,7 +659,42 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     ? flowChatState.sessions.get(activeBtwSessionId)
     : undefined;
   const activeBtwRelationship = resolveSessionRelationship(activeBtwSession);
-  const showTargetSwitcher = !!activeBtwSessionId;
+  const conversationLevels = useMemo(
+    () => buildConversationHierarchy(flowChatState.sessions, currentSessionId),
+    [flowChatState.sessions, currentSessionId],
+  );
+  const showTargetSwitcher = !!activeBtwSessionId || conversationLevels.length > 1;
+  const handleSelectConversationLevel = useCallback(
+    (sessionId: string) => {
+      setInputTarget({ sessionId });
+      const session = flowChatState.sessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+      const relationship = resolveSessionRelationship(session);
+      if (!relationship.canOpenInAuxPane || !relationship.parentSessionId) {
+        return;
+      }
+      const kind = session.sessionKind;
+      openBtwSessionInAuxPane({
+        childSessionId: sessionId,
+        parentSessionId: relationship.parentSessionId,
+        workspacePath: session.workspacePath,
+        sessionKind:
+          kind === 'subagent' ||
+          kind === 'review' ||
+          kind === 'deep_review' ||
+          kind === 'miniapp' ||
+          kind === 'btw'
+            ? kind
+            : 'btw',
+        parentToolCallId: session.parentToolCallId,
+        subagentType: session.subagentType,
+        sessionTitle: session.title,
+      });
+    },
+    [flowChatState.sessions],
+  );
   const activeBtwKind =
     activeBtwRelationship.kind === 'review' ||
     activeBtwRelationship.kind === 'deep_review' ||
@@ -1082,12 +1210,18 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       (state: FlowChatState): string => {
         const parts: string[] = [state.activeSessionId ?? ''];
         // Track sessions that ChatInput reads in render body (lines 278, 288, 304, 619)
-        const sessionIds = [
-          state.activeSessionId,
-          currentSessionId,
-          effectiveTargetSessionId,
-          activeBtwSessionId,
-        ].filter((id): id is string => !!id);
+        const sessionIds = new Set<string>(
+          [
+            state.activeSessionId,
+            currentSessionId,
+            effectiveTargetSessionId,
+            activeBtwSessionId,
+          ].filter((id): id is string => !!id),
+        );
+        // Track every session in the conversation hierarchy so level tabs stay in sync.
+        for (const level of buildConversationHierarchy(state.sessions, currentSessionId)) {
+          sessionIds.add(level.sessionId);
+        }
         for (const id of sessionIds) {
           const s = state.sessions.get(id);
           if (s) {
@@ -1099,7 +1233,9 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               `${s.needsUserAttention ? '1':'0'}|${s.dialogTurns.length}|` +
               `${JSON.stringify(s.config.dispatchTarget ?? null)}|` +
               `${s.config.dispatchApprovalPolicy ?? ''}|${s.config.dispatchJobState ?? ''}|` +
-              `${sessionWorktreeBindingSubscriptionKey(s)}`
+              `${sessionWorktreeBindingSubscriptionKey(s)}|` +
+              `${s.parentSessionId ?? ''}|${s.sessionKind ?? ''}|${s.depth ?? ''}|` +
+              `${s.createdAt ?? ''}|${JSON.stringify(s.btwOrigin ?? null)}`
             );
           }
         }
@@ -1130,10 +1266,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   }, [currentSessionId, effectiveTargetSessionId, activeBtwSessionId]);
 
   useEffect(() => {
-    if (!showTargetSwitcher || !activeBtwSessionId) {
-      setInputTarget('main');
-    }
-  }, [activeBtwSessionId, showTargetSwitcher]);
+    setInputTarget(prev => {
+      if (typeof prev === 'object') {
+        const stillInHierarchy = conversationLevels.some(
+          level => level.sessionId === prev.sessionId,
+        );
+        return showTargetSwitcher && stillInHierarchy ? prev : 'main';
+      }
+      if (prev === 'btw' && !activeBtwSessionId) {
+        return 'main';
+      }
+      return prev;
+    });
+  }, [activeBtwSessionId, conversationLevels, showTargetSwitcher]);
 
   useEffect(() => {
     setChatInputActive(inputState.isActive);
@@ -1938,7 +2083,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     };
     const loadVisibility = async () => {
       try {
-        applyVisibility(await configManager.getOptionalConfig<boolean>(configPath));
+        applyVisibility(await configManager.getConfig<boolean | undefined>(configPath));
       } catch (error) {
         log.warn('Failed to load permission mode control visibility preference', error);
         applyVisibility(true);
@@ -5164,6 +5309,28 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                     <span className="bitfun-chat-input__target-tab-name" data-bf-component="chat-input" data-bf-part="targetName">{activeBtwSessionTitle}</span>
                   )}
                 </button>
+                {conversationLevels.map(entry => {
+                  const isLevelActive =
+                    typeof inputTarget === 'object' && inputTarget.sessionId === entry.sessionId;
+                  const levelTitle = isLevelActive
+                    ? entry.session?.title?.trim() || t('session.untitled')
+                    : '';
+                  return (
+                    <button
+                      key={entry.sessionId}
+                      type="button"
+                      tabIndex={-1}
+                      className={`bitfun-chat-input__target-tab ${isLevelActive ? 'bitfun-chat-input__target-tab--active' : ''}`}
+                      onClick={() => handleSelectConversationLevel(entry.sessionId)}
+                      title={entry.session?.title}
+                    >
+                      {conversationLevelLabel(entry)}
+                      {levelTitle && (
+                        <span className="bitfun-chat-input__target-tab-name">{levelTitle}</span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             )}
             <div ref={mentionAnchorRef} className="bitfun-chat-input__input-area" data-bf-component="chat-input" data-bf-part="area">
@@ -5240,9 +5407,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 isOpen={mentionState.isActive}
                 searchQuery={mentionState.query}
                 workspacePath={sessionBoundWorkspacePath}
-                workspaceId={hasRegisteredWorkspace
-                  ? undefined
-                  : effectiveTargetSession?.workspaceId || workspace?.id}
                 excludeSessionId={effectiveTargetSessionId || undefined}
                 anchorRef={mentionAnchorRef}
                 onSelect={(context: FileContext | DirectoryContext | SessionReferenceContext) => {
@@ -5972,6 +6136,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             ? {
                 visible: true,
                 goal: threadGoalController.goal,
+                goalChain: threadGoalController.goalChain,
                 onOpen: () => {
                   void threadGoalController.openGoalEntry();
                 },

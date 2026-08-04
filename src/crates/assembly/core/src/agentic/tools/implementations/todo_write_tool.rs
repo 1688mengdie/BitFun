@@ -53,6 +53,9 @@ Each item must include:
 - id: stable unique identifier
 - content: imperative description of the work
 - status: pending, in_progress, or completed
+
+Each item may include:
+- dependencies: optional array of todo item ids this item depends on; cyclic dependencies are rejected
 "###.to_string())
     }
 
@@ -86,6 +89,13 @@ Each item must include:
                                     "completed"
                                 ],
                                 "description": "Current status of the todo item"
+                            },
+                            "dependencies": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string"
+                                },
+                                "description": "Optional ids of todo items this item depends on. Parents are ordered and rendered before this item. Cyclic dependencies are rejected."
                             }
                         },
                         "required": [
@@ -143,6 +153,9 @@ Each item must include:
             processed_todos.push(todo_obj);
         }
 
+        // Topology validation: reject self-loops, unknown references, and cycles.
+        validate_todo_dependencies(&processed_todos)?;
+
         let todo_count = processed_todos.len();
         let mut status_counts = [0; 3];
         processed_todos.iter().for_each(|t| {
@@ -179,4 +192,116 @@ Each item must include:
             image_attachments: None,
         }])
     }
+}
+
+/// Validate the todo dependency topology.
+///
+/// Rejects self-loops, dependencies referencing unknown todo ids, and cycles.
+/// Mirrors the legion topology cycle rejection pattern (Kahn topological sort;
+/// when not every node is visited, the graph contains a cycle).
+fn validate_todo_dependencies(todos: &[Value]) -> BitFunResult<()> {
+    use std::collections::{BTreeSet, HashMap, HashSet};
+
+    let mut ids: HashSet<String> = HashSet::new();
+    for todo in todos {
+        if let Some(id) = todo.get("id").and_then(|v| v.as_str()) {
+            ids.insert(id.to_string());
+        }
+    }
+
+    // Edge validation: endpoints exist, no self-loops.
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    let mut in_degree: HashMap<String, usize> = HashMap::new();
+    for id in &ids {
+        adjacency.insert(id.clone(), Vec::new());
+        in_degree.insert(id.clone(), 0);
+    }
+    for todo in todos {
+        let Some(child) = todo.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(deps) = todo.get("dependencies").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        for dep_value in deps {
+            let Some(dep) = dep_value.as_str() else {
+                return Err(BitFunError::validation(
+                    "Todo dependency must be a string",
+                ));
+            };
+            if dep == child {
+                return Err(BitFunError::validation(format!(
+                    "Todo '{}' cannot depend on itself",
+                    child
+                )));
+            }
+            if !ids.contains(dep) {
+                return Err(BitFunError::validation(format!(
+                    "Todo dependency references unknown todo '{}'",
+                    dep
+                )));
+            }
+            let nexts = adjacency
+                .get_mut(dep)
+                .ok_or_else(|| {
+                    BitFunError::validation(format!(
+                        "Internal error: missing adjacency for '{}'",
+                        dep
+                    ))
+                })?;
+            nexts.push(child.to_string());
+            let degree = in_degree
+                .get_mut(child)
+                .ok_or_else(|| {
+                    BitFunError::validation(format!(
+                        "Internal error: missing in-degree for '{}'",
+                        child
+                    ))
+                })?;
+            *degree += 1;
+        }
+    }
+
+    // Kahn topological sort with deterministic (lexicographic) order.
+    let mut ready: BTreeSet<String> = ids
+        .iter()
+        .filter(|id| in_degree.get(*id).copied().unwrap_or(usize::MAX) == 0)
+        .cloned()
+        .collect();
+
+    let mut order: Vec<String> = Vec::with_capacity(ids.len());
+    while let Some(id) = ready.iter().next().cloned() {
+        ready.remove(&id);
+        order.push(id.clone());
+        let nexts = adjacency
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| {
+                BitFunError::validation(format!(
+                    "Internal error: missing adjacency for '{}'",
+                    id
+                ))
+            })?;
+        for next in nexts {
+            let degree = in_degree
+                .get_mut(&next)
+                .ok_or_else(|| {
+                    BitFunError::validation(format!(
+                        "Internal error: missing in-degree for '{}'",
+                        next
+                    ))
+                })?;
+            *degree -= 1;
+            if *degree == 0 {
+                ready.insert(next);
+            }
+        }
+    }
+    if order.len() != ids.len() {
+        return Err(BitFunError::validation(
+            "Todo dependencies contain a cycle",
+        ));
+    }
+
+    Ok(())
 }

@@ -251,6 +251,79 @@ pub fn render_runtime_context_reminder(facts: &RuntimeContextFacts) -> Option<St
     Some(lines.join("\n"))
 }
 
+/// Numeric runtime facts supplied by the execution engine each turn.
+///
+/// `context_usage_ratio` is `total_tokens / context_window` from the engine's
+/// token pressure snapshot; `compression_preview_ratio` is the dynamic
+/// compression trigger point `input_limit / context_window` (context_window -
+/// output reserve - safety reserve), never a hard-coded 75%. Both are `None`
+/// when the calling chain cannot provide a pressure snapshot.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct RuntimeFactsUsage {
+    pub context_usage_ratio: Option<f32>,
+    pub compression_preview_ratio: Option<f32>,
+}
+
+/// Fully formatted runtime facts for prompt injection. Time strings are
+/// formatted by the caller with `chrono::Local`, matching the GetTime tool
+/// shape (RFC3339 seconds precision, `%A` weekday, `%:z` offset).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeFactsInput {
+    pub local_time_rfc3339: String,
+    pub utc_time_rfc3339: String,
+    pub weekday_name: String,
+    pub weekday_number: u32,
+    pub local_hhmm: String,
+    pub timezone_offset: String,
+    pub context_usage_ratio: Option<f32>,
+    pub compression_preview_ratio: Option<f32>,
+}
+
+/// Render the per-turn runtime facts reminder: current time facts, live
+/// context usage percentage, and tiered semantic guidance.
+pub fn render_runtime_facts_reminder(facts: &RuntimeFactsInput) -> String {
+    let mut lines = vec![
+        "[Runtime Facts]".to_string(),
+        format!(
+            "- 当前本地时间: {}（周{} {}）",
+            facts.local_time_rfc3339, facts.weekday_number, facts.weekday_name
+        ),
+        format!("- UTC 时间: {}", facts.utc_time_rfc3339),
+        format!("- 时区偏移: {}", facts.timezone_offset),
+    ];
+
+    if let Some(usage_ratio) = facts.context_usage_ratio {
+        let percent = usage_percent(usage_ratio);
+        lines.push(format!("- 当前上下文占比: {}%", percent));
+        if percent > 30 {
+            lines.push(
+                "- 注意：上下文已超 30%，警惕幻觉/敷衍/自我欺骗劣根性，不确定必须查证".to_string(),
+            );
+        }
+        // Compression preview trigger point is the dynamic value
+        // input_limit / context_window (context_window - output reserve -
+        // safety reserve; see execution_engine.rs compression_trigger_budget).
+        // A hard-coded 75% is forbidden. 0.9 is a conservative fallback used
+        // only when the calling chain cannot provide the dynamic value.
+        let preview_ratio = facts.compression_preview_ratio.unwrap_or(0.9);
+        if usage_ratio >= preview_ratio {
+            lines.push("- 即将自动压缩，重要信息先落盘/总结".to_string());
+        }
+    }
+
+    lines.push(format!(
+        "- 当前为本地时间周{} {}——请按 DeepSeek 峰谷定价与用户在场情况自主安排：双倍价格时段优先做准备/规划（只读侦察、规划、文档），单倍价格时段执行大批量任务",
+        facts.weekday_number, facts.local_hhmm
+    ));
+
+    lines.join("\n")
+}
+
+/// 0-100 integer percentage, rounded; clamped at 100 defensively.
+fn usage_percent(usage_ratio: f32) -> u32 {
+    ((usage_ratio * 100.0).round() as u32).min(100)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptRelatedPath {
     pub path: String,
@@ -670,6 +743,7 @@ pub struct PrependedPromptReminders {
     pub skill_listing: Option<String>,
     pub agent_listing: Option<String>,
     pub runtime_context: Option<String>,
+    pub runtime_facts: Option<String>,
     pub user_context: Option<String>,
 }
 
@@ -687,6 +761,9 @@ impl PrependedPromptReminders {
         }
         if let Some(runtime_context) = self.runtime_context.as_deref() {
             reminders.push(runtime_context);
+        }
+        if let Some(runtime_facts) = self.runtime_facts.as_deref() {
+            reminders.push(runtime_facts);
         }
         if let Some(user_context) = self.user_context.as_deref() {
             reminders.push(user_context);

@@ -1,10 +1,13 @@
 use super::*;
+use crate::agentic::tools::restrictions::AgentRole;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskAction {
     Spawn,
     SendInput,
     Cancel,
+    List,
+    History,
 }
 
 impl TaskAction {
@@ -26,8 +29,10 @@ impl TaskAction {
             "spawn" => Ok(Self::Spawn),
             "send_input" => Ok(Self::SendInput),
             "cancel" => Ok(Self::Cancel),
+            "list" => Ok(Self::List),
+            "history" => Ok(Self::History),
             other => Err(BitFunError::tool(format!(
-                "action must be one of: spawn, send_input, cancel; got '{}'",
+                "action must be one of: spawn, send_input, cancel, list, history; got '{}'",
                 other
             ))),
         }
@@ -68,6 +73,8 @@ impl TaskAction {
             Self::Spawn => "spawn",
             Self::SendInput => "send_input",
             Self::Cancel => "cancel",
+            Self::List => "list",
+            Self::History => "history",
         }
     }
 }
@@ -86,6 +93,12 @@ pub(super) struct TaskInvocation {
     pub(super) run_in_background: bool,
     pub(super) is_retry: bool,
     pub(super) requested_auto_retry: bool,
+    pub(super) max_turns: Option<u64>,
+    /// Optional explicit target role for the spawned subagent (R-14 B3).
+    /// When `None`, the target defaults to `Executor` (the subagent role
+    /// assigned by session creation); a specified role is validated against
+    /// the creator's role and fails fast on violation.
+    pub(super) role: Option<AgentRole>,
 }
 
 impl TaskTool {
@@ -132,6 +145,8 @@ impl TaskTool {
                     .get("auto_retry")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                max_turns: None,
+                role: None,
             });
         }
 
@@ -185,6 +200,15 @@ impl TaskTool {
 
                 let (model_id, inherit_parent_model) = Self::optional_model_id(input)?;
 
+                // R-14 B3: optional explicit target role. Unknown keys degrade
+                // to None (default executor target) so stale model output never
+                // errors at parse time; the delegation validation runs at the
+                // spawn entry point and fails fast on a role violation.
+                let role = input
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .and_then(AgentRole::from_str_key);
+
                 Ok(TaskInvocation {
                     action,
                     description,
@@ -198,6 +222,8 @@ impl TaskTool {
                     run_in_background,
                     is_retry: false,
                     requested_auto_retry: false,
+                    max_turns: None,
+                    role,
                 })
             }
             TaskAction::SendInput => {
@@ -231,6 +257,8 @@ impl TaskTool {
                     run_in_background,
                     is_retry: false,
                     requested_auto_retry: false,
+                    max_turns: None,
+                    role: None,
                 })
             }
             TaskAction::Cancel => {
@@ -263,6 +291,87 @@ impl TaskTool {
                     run_in_background: false,
                     is_retry: false,
                     requested_auto_retry: false,
+                    max_turns: None,
+                    role: None,
+                })
+            }
+            TaskAction::List => {
+                Self::ensure_fields_absent(
+                    input,
+                    &[
+                        "agent_id",
+                        "prompt",
+                        "description",
+                        "fork_context",
+                        "subagent_type",
+                        "model_id",
+                        "run_in_background",
+                        "retry",
+                        "auto_retry",
+                        "retry_coverage",
+                    ],
+                    action,
+                )?;
+
+                Ok(TaskInvocation {
+                    action,
+                    description: None,
+                    prompt: None,
+                    context_mode: SubagentContextMode::Fresh,
+                    target_agent_id: None,
+                    subagent_type: None,
+                    model_id: None,
+                    inherit_parent_model: false,
+                    timeout_seconds: None,
+                    run_in_background: false,
+                    is_retry: false,
+                    requested_auto_retry: false,
+                    max_turns: None,
+                    role: None,
+                })
+            }
+            TaskAction::History => {
+                let target_agent_id =
+                    Self::optional_trimmed_string(input, "agent_id")?.or_else(|| {
+                        input
+                            .get("session_id")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(String::from)
+                    });
+                Self::ensure_fields_absent(
+                    input,
+                    &[
+                        "prompt",
+                        "description",
+                        "fork_context",
+                        "subagent_type",
+                        "model_id",
+                        "run_in_background",
+                        "retry",
+                        "auto_retry",
+                        "retry_coverage",
+                    ],
+                    action,
+                )?;
+                let max_turns = Self::optional_max_turns(input)?;
+
+                Ok(TaskInvocation {
+                    action,
+                    description: None,
+                    prompt: None,
+                    context_mode: SubagentContextMode::Fresh,
+                    target_agent_id,
+                    subagent_type: None,
+                    model_id: None,
+                    inherit_parent_model: false,
+                    timeout_seconds: None,
+                    run_in_background: false,
+                    is_retry: false,
+                    requested_auto_retry: false,
+                    max_turns,
+                    role: None,
                 })
             }
         }
@@ -365,6 +474,18 @@ impl TaskTool {
             Some(value) => {
                 let parsed = value.as_u64().ok_or_else(|| {
                     BitFunError::tool("timeout_seconds must be a non-negative integer".to_string())
+                })?;
+                Ok((parsed > 0).then_some(parsed))
+            }
+        }
+    }
+
+    fn optional_max_turns(input: &Value) -> BitFunResult<Option<u64>> {
+        match input.get("max_turns") {
+            None | Some(Value::Null) => Ok(None),
+            Some(value) => {
+                let parsed = value.as_u64().ok_or_else(|| {
+                    BitFunError::tool("max_turns must be a non-negative integer".to_string())
                 })?;
                 Ok((parsed > 0).then_some(parsed))
             }

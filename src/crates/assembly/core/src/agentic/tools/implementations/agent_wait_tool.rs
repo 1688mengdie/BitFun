@@ -11,9 +11,11 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use tokio::time::Duration;
 
-const DEFAULT_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
+const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const MAX_TIMEOUT_MS: u64 = 60 * 60 * 1_000;
 
+/// DEPRECATED. Use SessionMessage for sub-agent communication (async, no waiting needed).
+/// Max 10min, only for short waits confirming session creation, not for long-running tasks.
 pub struct AgentWaitTool;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -190,7 +192,7 @@ The selected task set is fixed when the call starts. wait_mode defaults to `all`
                 },
                 "timeout_ms": {
                     "type": "integer",
-                    "description": "Maximum time to wait in milliseconds. Defaults to ten minutes."
+                    "description": "Maximum time to wait in milliseconds. Defaults to 10 minutes."
                 }
             },
             "additionalProperties": false

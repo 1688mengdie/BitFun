@@ -301,6 +301,7 @@ pub(crate) struct CliAgentRuntimeClient {
     shared_pending_permissions: Arc<RwLock<HashMap<String, PermissionRequest>>>,
 }
 
+#[allow(clippy::large_enum_variant)] // embedded runtime holds the full agent stack; boxing would churn every dispatch site
 enum CliAgentRuntimeBackend {
     Embedded(AgentRuntime),
     Shared(RuntimeIpcClient),
@@ -568,6 +569,7 @@ impl CliAgentRuntimeClient {
             workspace_path: workspace_path.to_string_lossy().to_string(),
             remote_connection_id: None,
             remote_ssh_host: None,
+            include_hidden: false,
         };
         match &self.backend {
             CliAgentRuntimeBackend::Embedded(runtime) => runtime
@@ -1165,6 +1167,7 @@ impl CliAgentRuntimeClient {
                 workspace_path: project_workspace.to_string_lossy().to_string(),
                 remote_connection_id: None,
                 remote_ssh_host: None,
+                include_hidden: false,
             })
             .await
         {
@@ -1356,7 +1359,7 @@ impl CliAgentRuntimeClient {
                     } if accepted_session == session_id && accepted_turn == turn_id => {
                         Ok(accepted_turn)
                     }
-                    _ => return Err(unexpected_shared_result("compact_session")),
+                    _ => Err(unexpected_shared_result("compact_session")),
                 },
             }
         }
@@ -1542,6 +1545,7 @@ impl CliAgentRuntimeClient {
             turn_id: turn_id.clone(),
             content,
             display_content,
+            prepended_reminders: Vec::new(),
         };
 
         match &self.backend {
@@ -2439,6 +2443,9 @@ mod tests {
             turn_count: 1,
             created_at_ms: 1,
             last_active_at_ms: 2,
+            is_daemon: false,
+            parent_session_id: None,
+            status: None,
         }
     }
 

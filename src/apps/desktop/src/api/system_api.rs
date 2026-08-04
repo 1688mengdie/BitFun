@@ -71,7 +71,7 @@ async fn endpoints_fastest_first() -> Vec<tauri::Url> {
     if ranked.is_empty() {
         return default_endpoints();
     }
-    ranked.sort_by(|left, right| right.1.cmp(&left.1));
+    ranked.sort_by_key(|right| std::cmp::Reverse(right.1));
     if ranked[0].1 < HEALTHY_THROUGHPUT {
         log::info!(
             "Fastest updater origin is {} KB/s, under the {} KB/s bar; the download will be slow.",

@@ -45,6 +45,7 @@ pub(crate) struct ModelFormResult {
 
 /// Action returned by the form
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // form result carries the full model entry; boxing adds indirection per save
 pub(crate) enum ModelFormAction {
     /// No action, key consumed
     None,
@@ -120,7 +121,7 @@ impl ModelConfigFormState {
             base_url: String::new(),
             api_key: String::new(),
             provider_format_index: 0,
-            context_window: "128000".into(),
+            context_window: "1048576".into(),
             max_tokens: "8192".into(),
             enable_thinking: false,
             support_preserved_thinking: false,
@@ -148,7 +149,7 @@ impl ModelConfigFormState {
         self.base_url = "https://".into();
         self.api_key.clear();
         self.provider_format_index = 0;
-        self.context_window = "128000".into();
+        self.context_window = "1048576".into();
         self.max_tokens = "8192".into();
         self.enable_thinking = false;
         self.support_preserved_thinking = false;
@@ -185,7 +186,7 @@ impl ModelConfigFormState {
             .iter()
             .position(|&f| f == format)
             .unwrap_or(0);
-        self.context_window = "128000".into();
+        self.context_window = "1048576".into();
         self.max_tokens = "8192".into();
         self.enable_thinking = false;
         self.support_preserved_thinking = false;
@@ -461,7 +462,7 @@ impl ModelConfigFormState {
             base_url: self.base_url.trim().to_string(),
             api_key: self.api_key.trim().to_string(),
             provider_format: PROVIDER_FORMATS[self.provider_format_index].to_string(),
-            context_window: self.context_window.trim().parse().unwrap_or(128000),
+            context_window: self.context_window.trim().parse().unwrap_or(1048576),
             max_tokens: self.max_tokens.trim().parse().unwrap_or(8192),
             enable_thinking: self.enable_thinking,
             support_preserved_thinking: self.support_preserved_thinking,
@@ -1091,7 +1092,7 @@ impl ModelConfigFormState {
             FormField::BaseUrl => "https://api.example.com/v1/chat/completions",
             FormField::ApiKey => "Enter your API key",
             FormField::ProviderFormat => "",
-            FormField::ContextWindow => "128000",
+            FormField::ContextWindow => "1048576",
             FormField::MaxTokens => "8192",
             FormField::EnableThinking => "",
             FormField::PreservedThinking => "",

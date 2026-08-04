@@ -260,13 +260,18 @@ pub async fn create_acp_flow_session(
     Ok(response)
 }
 
-#[tauri::command]
-pub async fn start_acp_dialog_turn(
-    state: State<'_, AppState>,
+/// Shared implementation for starting an ACP dialog turn.
+///
+/// Used by both the FlowChat path (`start_acp_dialog_turn` command) and the
+/// agentic path (`start_dialog_turn` ACP branch). Emits the standard
+/// `agentic://dialog-turn-*` Tauri events while streaming
+/// `prompt_agent_stream` output; no internal executor is started.
+pub(crate) async fn start_acp_dialog_turn_impl(
     app_handle: AppHandle,
+    app_state: &AppState,
     request: StartAcpDialogTurnRequest,
 ) -> Result<(), String> {
-    let service = state
+    let service = app_state
         .acp_client_service
         .as_ref()
         .ok_or_else(|| "ACP client service not initialized".to_string())?
@@ -282,7 +287,7 @@ pub async fn start_acp_dialog_turn(
     let session_storage_path = match request.workspace_path.as_deref() {
         Some(workspace_path) => Some(
             desktop_effective_session_storage_path(
-                &state,
+                app_state,
                 workspace_path,
                 request.remote_connection_id.as_deref(),
                 request.remote_ssh_host.as_deref(),
@@ -549,6 +554,15 @@ pub async fn start_acp_dialog_turn(
     });
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn start_acp_dialog_turn(
+    state: State<'_, AppState>,
+    app_handle: AppHandle,
+    request: StartAcpDialogTurnRequest,
+) -> Result<(), String> {
+    start_acp_dialog_turn_impl(app_handle, &state, request).await
 }
 
 #[tauri::command]

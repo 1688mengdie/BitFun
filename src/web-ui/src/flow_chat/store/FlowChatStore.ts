@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Flow Chat global state store
  * Prevents state loss when components remount
  */
@@ -78,6 +78,7 @@ import { sessionMatchesWorkspace } from '../utils/workspaceScope';
 import { resolveThreadGoalUserMessageDisplay } from '../utils/threadGoalDisplay';
 import { cleanRemoteUserInput } from '../utils/userInputText';
 import { useBackgroundSubagentActivityStore } from './backgroundSubagentActivityStore';
+import { clearRuntimeStatusState } from './runtimeStatusStore';
 import { sessionComposerStore } from './sessionComposerStore';
 import { recordHistorySessionDiagnosticEvent } from '../services/historySessionDiagnostics';
 import {
@@ -88,6 +89,112 @@ import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
 import { resolveSessionDriverId } from '../session-drivers/resolve';
 
 const log = createLogger('FlowChatStore');
+
+/**
+ * Session IDs whose deletion was confirmed by the backend. Stale in-flight
+ * events that still reference these IDs (a session deleted while processing,
+ * or a directory-level removal on disk) must not resurrect placeholder shells
+ * in the UI. Every creation path guards against them: event handler entry
+ * checks, the addExternalSession entry filter, and initializeFromDisk.
+ *
+ * The set is persisted to localStorage so a page refresh cannot resurrect a
+ * confirmed-deleted session from residual backend disk state.
+ */
+const CONFIRMED_DELETED_STORAGE_KEY = 'flowchat.confirmedDeletedSessionIds';
+const CONFIRMED_DELETED_MAX_ENTRIES = 500;
+
+const loadConfirmedDeletedSessionIds = (): Set<string> => {
+  const loaded = new Set<string>();
+  try {
+    const raw = localStorage.getItem(CONFIRMED_DELETED_STORAGE_KEY);
+    if (!raw) {
+      return loaded;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (typeof entry === 'string' && entry) {
+          loaded.add(entry);
+        }
+      }
+    }
+  } catch (error) {
+    log.warn('Failed to load confirmed deleted session ids from localStorage', error);
+  }
+  return loaded;
+};
+
+const trimConfirmedDeletedSessionIds = (ids: Set<string>): void => {
+  // Keep at most CONFIRMED_DELETED_MAX_ENTRIES, dropping the oldest entries
+  // (Set iteration follows insertion order, so the head is the oldest).
+  while (ids.size > CONFIRMED_DELETED_MAX_ENTRIES) {
+    const oldest = ids.values().next().value;
+    if (oldest === undefined) break;
+    ids.delete(oldest);
+  }
+};
+
+const persistConfirmedDeletedSessionIds = (ids: ReadonlySet<string>): void => {
+  try {
+    localStorage.setItem(CONFIRMED_DELETED_STORAGE_KEY, JSON.stringify(Array.from(ids)));
+  } catch (error) {
+    log.warn('Failed to persist confirmed deleted session ids to localStorage', error);
+  }
+};
+
+const confirmedDeletedSessionIds: Set<string> = loadConfirmedDeletedSessionIds();
+trimConfirmedDeletedSessionIds(confirmedDeletedSessionIds);
+
+/**
+ * Merge deletions confirmed in another tab into the in-memory set. The merge
+ * is a union (never an overwrite) so deletions made in this tab are not lost
+ * when another tab writes its own set.
+ */
+const syncConfirmedDeletedSessionIdsFromStorage = (): void => {
+  const remoteIds = loadConfirmedDeletedSessionIds();
+  if (remoteIds.size === 0) {
+    return;
+  }
+  let changed = false;
+  for (const sessionId of remoteIds) {
+    if (!confirmedDeletedSessionIds.has(sessionId)) {
+      confirmedDeletedSessionIds.add(sessionId);
+      changed = true;
+    }
+  }
+  if (changed) {
+    trimConfirmedDeletedSessionIds(confirmedDeletedSessionIds);
+    persistConfirmedDeletedSessionIds(confirmedDeletedSessionIds);
+  }
+};
+
+// Keep the set in sync across tabs: a deletion confirmed in another tab must
+// also block resurrection here. The 'storage' event only fires in other tabs
+// (never in the tab that wrote), so this cannot self-trigger.
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('storage', (event: StorageEvent) => {
+    if (event.key !== CONFIRMED_DELETED_STORAGE_KEY || event.newValue === null) {
+      return;
+    }
+    syncConfirmedDeletedSessionIdsFromStorage();
+  });
+}
+
+export const isSessionConfirmedDeleted = (sessionId: string | null | undefined): boolean =>
+  Boolean(sessionId && confirmedDeletedSessionIds.has(sessionId));
+
+/**
+ * Record session IDs whose deletion was confirmed (by the backend or by an
+ * explicit local removal) so stale in-flight events cannot resurrect them.
+ * The in-memory set and its localStorage mirror are both updated.
+ */
+export const markSessionsConfirmedDeleted = (sessionIds: Iterable<string>): void => {
+  for (const sessionId of sessionIds) {
+    confirmedDeletedSessionIds.add(sessionId);
+  }
+  trimConfirmedDeletedSessionIds(confirmedDeletedSessionIds);
+  persistConfirmedDeletedSessionIds(confirmedDeletedSessionIds);
+};
 
 function firstNonEmptyString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -1345,6 +1452,52 @@ interface SelectorListener<T = any> {
   hasLastValue: boolean;
 }
 
+export interface SessionTreeNode {
+  sessionId: string;
+  sessionName: string;
+  agentType: string;
+  agentDisplayName: string;
+  depth: number;
+  status: 'running' | 'completed' | 'error' | 'cancelled';
+  children: SessionTreeNode[];
+  isAcpExternal: boolean;
+  externalProviderLabel?: string;
+  /** Default tool list for a SubAgent, fetched from the Agent registry. */
+  tools?: string[];
+  /** Number of dialog turns. */
+  turnCount?: number;
+}
+
+function sessionTreeNodeStatus(session: Session): SessionTreeNode['status'] {
+  if (session.status === 'error') return 'error';
+  if (session.persistedStatus === 'completed') return 'completed';
+  if (session.persistedStatus === 'archived') return 'completed';
+  if (session.status === 'active') return 'running';
+  return 'running';
+}
+
+const SUBAGENT_TOOLS: Record<string, string[]> = {
+  'Explore': ['Read', 'Grep', 'Glob', 'LS'],
+  'FileFinder': ['Read', 'Grep', 'Glob', 'LS'],
+  'GeneralPurpose': ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'Task'],
+  'ResearchSpecialist': ['WebSearch', 'WebFetch', 'Read'],
+  'CodeReview': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewSecurity': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewArchitecture': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewBusinessLogic': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewFrontend': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewPerformance': ['Read', 'Grep', 'Glob', 'GetFileDiff'],
+  'ReviewJudge': ['Read', 'Grep', 'Glob'],
+};
+
+function inferSessionTools(session: Session): string[] {
+  const type = session.subagentType || session.mode || '';
+  if (SUBAGENT_TOOLS[type]) return SUBAGENT_TOOLS[type];
+  if (type.startsWith('acp__')) return ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'Task', 'SessionControl'];
+  if (type.startsWith('Review')) return ['Read', 'Grep', 'Glob', 'GetFileDiff'];
+  return [];
+}
+
 export class FlowChatStore {
   private static instance: FlowChatStore;
   private state: FlowChatState;
@@ -2135,6 +2288,7 @@ export class FlowChatStore {
     cursor?: string,
     remoteConnectionId?: string,
     remoteSshHost?: string,
+    includeHidden = false,
   ): string {
     return JSON.stringify([
       workspacePath,
@@ -2142,6 +2296,7 @@ export class FlowChatStore {
       remoteSshHost || '',
       cursor || '',
       limit,
+      includeHidden === true,
     ]);
   }
 
@@ -3357,25 +3512,79 @@ export class FlowChatStore {
     const visited = new Set<string>();
     const orderedSessionIds: string[] = [];
 
-    const visit = (sessionId: string): void => {
+    const MAX_CASCADE_DEPTH = 256;
+    const visit = (sessionId: string, depth: number = 0): void => {
       if (visited.has(sessionId)) {
+        return;
+      }
+      if (depth > MAX_CASCADE_DEPTH) {
         return;
       }
 
       visited.add(sessionId);
       const childSessionIds = childSessionIdsByParent.get(sessionId) || [];
       childSessionIds.forEach(childSessionId => {
-        visit(childSessionId);
+        visit(childSessionId, depth + 1);
       });
       orderedSessionIds.push(sessionId);
     };
 
-    visit(rootSessionId);
+    visit(rootSessionId, 0);
     return orderedSessionIds;
   }
 
   public getCascadeSessionIds(sessionId: string): string[] {
     return this.collectCascadeSessionIds(sessionId, this.state.sessions);
+  }
+
+  public getSessionTree(sessionId: string): SessionTreeNode | null {
+    const sessions = this.state.sessions;
+    const rootSession = sessions.get(sessionId);
+    if (!rootSession) return null;
+    return this.buildSessionTreeNode(sessionId, sessions, 0);
+  }
+
+  private buildSessionTreeNode(
+    sessionId: string,
+    sessions: Map<string, Session>,
+    depth: number,
+  ): SessionTreeNode {
+    const MAX_TREE_BUILD_DEPTH = 256;
+    if (depth > MAX_TREE_BUILD_DEPTH) {
+      const s = sessions.get(sessionId);
+      return {
+        sessionId,
+        sessionName: s?.title ?? sessionId,
+        agentType: s?.mode ?? 'unknown',
+        agentDisplayName: s?.subagentType ?? s?.mode ?? 'unknown',
+        depth,
+        status: 'running' as const,
+        children: [],
+        isAcpExternal: (s?.mode ?? '').startsWith('acp__'),
+        externalProviderLabel: s?.subagentType ?? undefined,
+        turnCount: s?.dialogTurns?.length ?? 0,
+        tools: s ? inferSessionTools(s) : undefined,
+      };
+    }
+
+    const session = sessions.get(sessionId)!;
+    const childIds = Array.from(sessions.values())
+      .filter(s => s.parentSessionId === sessionId)
+      .map(s => s.sessionId);
+
+    return {
+      sessionId: session.sessionId,
+      sessionName: session.title || session.sessionId,
+      agentType: session.mode || 'unknown',
+      agentDisplayName: session.subagentType || session.mode || 'unknown',
+      depth,
+      status: sessionTreeNodeStatus(session),
+      children: childIds.map(id => this.buildSessionTreeNode(id, sessions, depth + 1)),
+      isAcpExternal: (session.mode || '').startsWith('acp__'),
+      externalProviderLabel: session.subagentType ?? undefined,
+      turnCount: session.dialogTurns?.length ?? 0,
+      tools: inferSessionTools(session),
+    };
   }
 
   public subscribe(listener: (state: FlowChatState) => void): () => void {
@@ -3463,7 +3672,7 @@ export class FlowChatStore {
         lastFinishedAt: undefined,
         error: null,
         historyState: 'new',
-        maxContextTokens: maxContextTokens || 128128,
+        maxContextTokens: maxContextTokens || 1048576,
         mode: mode || 'agentic',
         lastUserDialogMode: undefined,
         lastSubmittedMode: undefined,
@@ -3476,6 +3685,7 @@ export class FlowChatStore {
         sessionKind: relationship.sessionKind,
         parentToolCallId: relationship.parentToolCallId,
         subagentType: relationship.subagentType,
+        depth: relationship.depth,
         btwThreads: [],
         btwOrigin: relationship.btwOrigin,
         isTransient: false,
@@ -3507,6 +3717,7 @@ export class FlowChatStore {
       btwOrigin?: Session['btwOrigin'];
       parentToolCallId?: string;
       subagentType?: string;
+      depth?: number;
       isTransient?: boolean;
       agentBackedTransient?: boolean;
       deepReviewRunManifest?: Session['deepReviewRunManifest'];
@@ -3520,6 +3731,13 @@ export class FlowChatStore {
     remoteConnectionId?: string,
     remoteSshHost?: string
   ): void {
+    // A session whose deletion was confirmed must not be resurrected by stale
+    // in-flight events or panel rebuilds (same guard as initializeFromDisk).
+    if (isSessionConfirmedDeleted(sessionId)) {
+      log.warn('addExternalSession: ignoring confirmed deleted session', { sessionId });
+      return;
+    }
+
     import('../state-machine').then(({ stateMachineManager }) => {
       stateMachineManager.getOrCreate(sessionId);
     });
@@ -3539,8 +3757,9 @@ export class FlowChatStore {
         titleStatus: 'generated',
         dialogTurns: [],
         status: 'idle',
-        config: {
-          maxContextTokens: 128128,
+        
+config: {
+          maxContextTokens: 1048576,
           autoCompact: true,
           enableTools: true,
           workspacePath,
@@ -3552,7 +3771,7 @@ export class FlowChatStore {
         lastActiveAt: Date.now(),
         lastFinishedAt: undefined,
         error: null,
-        maxContextTokens: 128128,
+        maxContextTokens: 1048576,
         mode: mode || 'agentic',
         lastUserDialogMode: undefined,
         lastSubmittedMode: undefined,
@@ -3567,6 +3786,7 @@ export class FlowChatStore {
         sessionKind: relationship.sessionKind,
         parentToolCallId: relationship.parentToolCallId,
         subagentType: relationship.subagentType,
+        depth: relationship.depth,
         btwThreads: [],
         btwOrigin: relationship.btwOrigin,
         deepReviewRunManifest: meta?.deepReviewRunManifest,
@@ -4215,6 +4435,7 @@ export class FlowChatStore {
           updates.subagentType !== undefined
             ? updates.subagentType
             : session.subagentType,
+        depth: session.depth,
       });
       const next: Session = {
         ...session,
@@ -4222,6 +4443,7 @@ export class FlowChatStore {
         sessionKind: relationship.sessionKind,
         parentToolCallId: relationship.parentToolCallId,
         subagentType: relationship.subagentType,
+        depth: relationship.depth,
         btwOrigin: relationship.btwOrigin,
       };
 
@@ -4245,11 +4467,13 @@ export class FlowChatStore {
         sessionKind,
         parentSessionId: origin?.parentSessionId ?? session.parentSessionId,
         btwOrigin: { ...(session.btwOrigin || {}), ...(origin || {}) },
+        depth: session.depth,
       });
       const next: Session = {
         ...session,
         parentSessionId: relationship.parentSessionId,
         sessionKind: relationship.sessionKind,
+        depth: relationship.depth,
         btwOrigin: relationship.btwOrigin,
       };
 
@@ -4357,53 +4581,67 @@ export class FlowChatStore {
   }
 
   public async deleteSession(sessionId: string, options?: RemoveSessionOptions): Promise<void> {
-    const sessionIdsToDelete = this.getCascadeSessionIds(sessionId);
-    if (sessionIdsToDelete.length === 0) {
+    if (!this.state.sessions.has(sessionId)) {
       return;
     }
     if (options) {
       this.pendingRemoveSessionOptions.set(sessionId, options);
     }
 
+    let deletedSessionIds: string[];
+    try {
+      const { agentAPI } = await import('@/infrastructure/api/service-api/AgentAPI');
+      const sess = this.state.sessions.get(sessionId);
+      if (!sess) {
+        // A concurrent local remove already won the race (deleteSession started
+        // before removeSession took the session out of state); the pending
+        // delete intent is fulfilled below without a backend round-trip.
+        deletedSessionIds = [];
+      } else {
+        const workspacePath = sessionProjectWorkspacePath(sess);
+        if (!workspacePath) {
+          throw new Error(`Workspace path not found for session ${sessionId}`);
+        }
+        // Cascade deletion is owned by the backend; only the root session id is
+        // sent so pagination gaps in the local session map cannot leak disk state.
+        deletedSessionIds = await agentAPI.deleteSessionTree(
+          sessionId,
+          workspacePath,
+          sess.remoteConnectionId,
+          sess.remoteSshHost
+        );
+      }
+    } catch (error) {
+      log.error('Failed to delete session tree on backend', { sessionId, error });
+      throw error;
+    }
+
     const { stateMachineManager } = await import('../state-machine');
-    sessionIdsToDelete.forEach(id => {
+    deletedSessionIds.forEach(id => {
       stateMachineManager.delete(id);
     });
 
-    try {
-      const { agentAPI } = await import('@/infrastructure/api/service-api/AgentAPI');
-      const deleteResults = await Promise.allSettled(
-        sessionIdsToDelete.map(async id => {
-          const sess = this.state.sessions.get(id);
-          const workspacePath = sess ? sessionProjectWorkspacePath(sess) : undefined;
-          if (!workspacePath) {
-            throw new Error(`Workspace path not found for session ${id}`);
-          }
-
-          await agentAPI.deleteSession(
-            id,
-            workspacePath,
-            sess?.remoteConnectionId,
-            sess?.remoteSshHost
-          );
-        })
-      );
-
-      deleteResults.forEach((result, index) => {
-        if (result.status === 'rejected') {
-          log.error('Failed to delete session on backend', {
-            sessionId: sessionIdsToDelete[index],
-            error: result.reason,
-          });
-        }
-      });
-    } catch (error) {
-      log.error('Failed to delete session on backend', { sessionId, error });
-    }
-
     const removedSessionIds = this.removeSession(sessionId, options);
-    sessionComposerStore.getState().removeDrafts(removedSessionIds);
+    const allRemovedIds = new Set([...removedSessionIds, ...deletedSessionIds]);
+    // Backend-confirmed deletions must never be resurrected by stale events.
+    markSessionsConfirmedDeleted(allRemovedIds);
+    // Close any open btw-session panel tabs for the deleted sessions so the
+    // deleted thread placeholder does not linger in the canvas.
+    const { closeBtwSessionInAuxPane } = await import('../services/btwSessionPane');
+    for (const id of allRemovedIds) {
+      closeBtwSessionInAuxPane(id);
+    }
+    sessionComposerStore.getState().removeDrafts(Array.from(allRemovedIds));
     this.pendingRemoveSessionOptions.delete(sessionId);
+    // Backend-confirmed deletions must not be hidden by the metadata request
+    // dedupe caches: an in-flight or recently-completed list/page request
+    // (METADATA_LIST_RECENT_DEDUPE_TTL_MS) keyed the same way would otherwise
+    // return the pre-deletion page on the next refresh, making the deleted
+    // session look like it is still there. Both caches are dropped so the
+    // next list/page request always re-reads from the backend (which now
+    // also filters the deletion tombstone).
+    this.metadataListRequests.clear();
+    this.metadataPageRequests.clear();
   }
 
   public removeSession(sessionId: string, options?: RemoveSessionOptions): string[] {
@@ -4416,6 +4654,11 @@ export class FlowChatStore {
     this.pendingRemoveSessionOptions.delete(sessionId);
     this.clearRemovedSessionHistoryState(removedSessionIds, 'session-removed');
     useBackgroundSubagentActivityStore.getState().removeSessions(removedSessionIds);
+    // Drop transient runtime wait status for every removed session so a stale
+    // event cannot re-render a deleted subagent's projection shell.
+    removedSessionIds.forEach(id => {
+      clearRuntimeStatusState({ sessionId: id });
+    });
 
     this.setState(prev => {
       const removedSessionIdSet = new Set(removedSessionIds);
@@ -6008,6 +6251,14 @@ export class FlowChatStore {
         if (existingSession) {
           return;
         }
+        // A session whose deletion was confirmed (locally or on the backend)
+        // must not be resurrected by residual disk metadata on refresh. The
+        // tombstone registry is pre-warmed by the caller
+        // (`loadSessionMetadataPageUncached`) before this list is processed,
+        // mirroring the legacy `initializeFromDiskUncached` path.
+        if (isSessionConfirmedDeleted(metadata.sessionId)) {
+          return;
+        }
         // Skip archived sessions - they are managed in the settings page.
         if (metadata.status === 'archived') {
           return;
@@ -6015,7 +6266,7 @@ export class FlowChatStore {
 
         stateMachineManager.getOrCreate(metadata.sessionId);
 
-        let maxContextTokens = 128128;
+        let maxContextTokens = 1048576;
         if (metadata.modelName) {
           const model = models.find((m: any) => m.name === metadata.modelName || m.id === metadata.modelName);
           if (model?.context_window) {
@@ -6023,7 +6274,7 @@ export class FlowChatStore {
           }
         }
 
-        if (maxContextTokens === 128128) {
+        if (maxContextTokens === 1048576) {
           const primaryModelId = defaultModels?.primary;
 
           if (primaryModelId) {
@@ -6096,6 +6347,7 @@ export class FlowChatStore {
             sessionKind: relationship.sessionKind,
             parentToolCallId: relationship.parentToolCallId,
             subagentType: relationship.subagentType,
+            depth: relationship.depth,
             btwThreads: [],
             btwOrigin: relationship.btwOrigin,
             hasUnreadCompletion: metadata.unreadCompletion,
@@ -6130,7 +6382,8 @@ export class FlowChatStore {
     cursor?: string,
     remoteConnectionId?: string,
     remoteSshHost?: string,
-    traceSource = 'unknown'
+    traceSource = 'unknown',
+    includeHidden = false,
   ): Promise<SessionMetadataPage> {
     const requestKey = this.getMetadataPageRequestKey(
       workspacePath,
@@ -6138,6 +6391,7 @@ export class FlowChatStore {
       cursor,
       remoteConnectionId,
       remoteSshHost,
+      includeHidden,
     );
     const existingRequest = this.metadataPageRequests.get(requestKey);
     const remote = isRemoteTraceContext(remoteConnectionId, remoteSshHost);
@@ -6171,6 +6425,7 @@ export class FlowChatStore {
       remoteConnectionId,
       remoteSshHost,
       traceSource,
+      includeHidden,
     );
 
     const request: MetadataPageRequest = { promise: loadPromise };
@@ -6205,7 +6460,8 @@ export class FlowChatStore {
     cursor?: string,
     remoteConnectionId?: string,
     remoteSshHost?: string,
-    traceSource = 'unknown'
+    traceSource = 'unknown',
+    includeHidden = false,
   ): Promise<SessionMetadataPage> {
     const traceStartedAt = nowMs();
     const remote = isRemoteTraceContext(remoteConnectionId, remoteSshHost);
@@ -6237,6 +6493,30 @@ export class FlowChatStore {
         models: any[];
         defaultModels: Record<string, string>;
       }> | undefined;
+      // Pre-warm the confirmed-deleted registry from the backend deletion
+      // tombstone so sessions deleted while this client was not watching
+      // (for example while the tab was closed) are filtered by
+      // `isSessionConfirmedDeleted` during metadata processing below and
+      // cannot resurrect as ghosts from residual disk metadata. Runs in
+      // parallel with the page request and is awaited before the metadata
+      // list is processed, mirroring the legacy `initializeFromDiskUncached`
+      // pre-warm. A failed pre-warm only degrades to the event/UI guards.
+      const deletedSessionIdsPromise = (async () => {
+        try {
+          const ids = await sessionAPI.listDeletedSessionIds(
+            workspacePath,
+            remoteConnectionId,
+            remoteSshHost,
+          );
+          return Array.isArray(ids) ? ids : [];
+        } catch (error) {
+          log.warn(
+            'Failed to pre-warm confirmed deleted session ids from backend tombstone',
+            error,
+          );
+          return [] as string[];
+        }
+      })();
       const pageRequestStartedAt = nowMs();
       try {
         startupTrace.markPhase('session_metadata_page_request_start', {
@@ -6245,13 +6525,16 @@ export class FlowChatStore {
           metadataListTraceId,
           command: 'list_persisted_sessions_page',
         });
-        const pagePromise = sessionAPI.listSessionsPage({
-          workspacePath,
-          limit,
-          cursor,
-          remoteConnectionId,
-          remoteSshHost,
-        });
+        const pagePromise = sessionAPI.listSessionsPage(
+          {
+            workspacePath,
+            limit,
+            cursor,
+            remoteConnectionId,
+            remoteSshHost,
+          },
+          includeHidden,
+        );
         modelConfigPromise = this.loadSessionMetadataModelConfig();
         page = await pagePromise;
         startupTrace.markPhase('session_metadata_page_request_end', {
@@ -6281,7 +6564,12 @@ export class FlowChatStore {
           command: 'list_persisted_sessions',
           fallback: true,
         });
-        const sessions = await sessionAPI.listSessions(workspacePath, remoteConnectionId, remoteSshHost);
+        const sessions = await sessionAPI.listSessions(
+          workspacePath,
+          remoteConnectionId,
+          remoteSshHost,
+          includeHidden,
+        );
         startupTrace.markPhase('session_metadata_page_request_end', {
           remote,
           source: traceSource,
@@ -6297,6 +6585,11 @@ export class FlowChatStore {
           nextCursor: undefined,
           hasMore: false,
         };
+      }
+
+      const deletedSessionIds = await deletedSessionIdsPromise;
+      if (deletedSessionIds.length > 0) {
+        markSessionsConfirmedDeleted(deletedSessionIds);
       }
 
       await this.processPersistedSessionMetadataList(
@@ -6355,6 +6648,24 @@ export class FlowChatStore {
         sessionCount,
       });
 
+      // Pre-warm the confirmed-deleted registry from the backend deletion
+      // tombstone so sessions deleted while this client was not watching
+      // (for example while the tab was closed) are filtered by
+      // `isSessionConfirmedDeleted` below and cannot resurrect as ghosts
+      // from residual disk metadata.
+      try {
+        const deletedSessionIds = await sessionAPI.listDeletedSessionIds(
+          workspacePath,
+          remoteConnectionId,
+          remoteSshHost,
+        );
+        if (deletedSessionIds.length > 0) {
+          markSessionsConfirmedDeleted(deletedSessionIds);
+        }
+      } catch (error) {
+        log.warn('Failed to pre-warm confirmed deleted session ids from backend tombstone', error);
+      }
+
       const { stateMachineManager } = await import('../state-machine');
 
       let models: any[] = [];
@@ -6386,6 +6697,11 @@ export class FlowChatStore {
           if (existingSession) {
             return;
           }
+          // A session whose deletion was confirmed (locally or on the backend)
+          // must not be resurrected by residual disk metadata on refresh.
+          if (isSessionConfirmedDeleted(metadata.sessionId)) {
+            return;
+          }
           // Skip archived sessions - they are managed in the settings page
           if (metadata.status === 'archived') {
             return;
@@ -6393,7 +6709,7 @@ export class FlowChatStore {
 
           stateMachineManager.getOrCreate(metadata.sessionId);
 
-          let maxContextTokens = 128128;
+          let maxContextTokens = 1048576;
           if (metadata.modelName) {
             const model = models.find((m: any) => m.name === metadata.modelName || m.id === metadata.modelName);
             if (model?.context_window) {
@@ -6401,7 +6717,7 @@ export class FlowChatStore {
             }
           }
 
-          if (maxContextTokens === 128128) {
+          if (maxContextTokens === 1048576) {
             const primaryModelId = defaultModels?.primary;
 
             if (primaryModelId) {
@@ -6471,6 +6787,7 @@ export class FlowChatStore {
               sessionKind: relationship.sessionKind,
               parentToolCallId: relationship.parentToolCallId,
               subagentType: relationship.subagentType,
+              depth: relationship.depth,
               btwThreads: [],
               btwOrigin: relationship.btwOrigin,
               hasUnreadCompletion: metadata.unreadCompletion,
