@@ -128,7 +128,6 @@ describe('ModelSelector external transport reuse', () => {
         model_name: 'friendly-model-a',
         enabled: true,
         capabilities: ['text_chat'],
-        enable_thinking_process: true,
         reasoning: {
           status: 'known',
           default_preset: 'high',
@@ -240,7 +239,6 @@ describe('ModelSelector external transport reuse', () => {
                 model_name: 'model-a',
                 enabled: true,
                 capabilities: ['text_chat'],
-                enable_thinking_process: true,
                 reasoning: {
                   status: 'known',
                   default_preset: 'medium',

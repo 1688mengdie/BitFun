@@ -1,6 +1,6 @@
 use crate::service::config::types::AIModelConfig;
 use crate::service::config::types::{
-    automatic_max_output_tokens, is_valid_configured_max_output_tokens,
+    automatic_max_output_tokens, is_valid_configured_max_output_tokens, ReasoningMode,
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS, MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT,
     MIN_MODEL_CONTEXT_WINDOW_TOKENS,
 };
@@ -74,9 +74,9 @@ impl TryFrom<AIModelConfig> for AIConfig {
     type Error = String;
 
     fn try_from(other: AIModelConfig) -> Result<Self, Self::Error> {
-        let mut reasoning_mode = other.effective_reasoning_mode();
-        let mut reasoning_effort = other.reasoning_effort.clone();
-        let mut thinking_budget_tokens = other.thinking_budget_tokens;
+        let mut reasoning_mode = ReasoningMode::Default;
+        let mut reasoning_effort = None;
+        let mut thinking_budget_tokens = None;
         if let Some(parameters) = other
             .default_reasoning_setting()
             .and_then(|setting| setting.application().parameters)
@@ -259,15 +259,11 @@ mod tests {
             capabilities: vec![],
             recommended_for: vec![],
             metadata: None,
-            enable_thinking_process: false,
-            reasoning_mode: None,
             reasoning: None,
             inline_think_in_text: false,
             custom_headers: None,
             custom_headers_mode: None,
             skip_ssl_verify: false,
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             custom_request_body: None,
             custom_request_body_mode: None,
             auth: Default::default(),
@@ -275,15 +271,24 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_false_thinking_maps_to_default_mode() {
+    fn missing_reasoning_default_maps_to_provider_default_mode() {
         let config = AIConfig::try_from(base_model_config()).expect("conversion should succeed");
         assert_eq!(config.reasoning_mode, ReasoningMode::Default);
     }
 
     #[test]
-    fn compatibility_true_thinking_maps_to_enabled_mode() {
+    fn canonical_reasoning_default_maps_to_runtime_parameters() {
         let mut model = base_model_config();
-        model.enable_thinking_process = true;
+        model.reasoning = Some(bitfun_core_types::ReasoningConfig {
+            default_preset: Some("on".to_string()),
+            presets: vec![bitfun_core_types::ReasoningPreset {
+                id: "on".to_string(),
+                label: Some("On".to_string()),
+                setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle { enabled: true }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
 
         let config = AIConfig::try_from(model).expect("conversion should succeed");
         assert_eq!(config.reasoning_mode, ReasoningMode::Enabled);

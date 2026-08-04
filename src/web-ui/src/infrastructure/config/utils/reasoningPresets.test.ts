@@ -19,40 +19,20 @@ function model(overrides: Partial<AIModelConfig> = {}): AIModelConfig {
 }
 
 describe('canonical reasoning presets', () => {
-  it('converts legacy mode, effort, and budget into one canonical preset', () => {
-    const reasoning = canonicalReasoningConfig(model({
-      reasoning_mode: 'adaptive',
-      reasoning_effort: 'high',
-      thinking_budget_tokens: 12_000,
-    }));
-
-    expect(reasoning).toMatchObject({
+  it('uses Auto when canonical reasoning is absent', () => {
+    expect(canonicalReasoningConfig(model())).toEqual({
       catalog: { source: 'auto' },
-      default_preset: 'adaptive',
-      presets: [{
-        id: 'adaptive',
-        setting: {
-          type: 'sequence',
-          settings: [
-            { type: 'effort', value: 'high', mode: 'adaptive' },
-            { type: 'budget_tokens', value: 12_000, mode: 'adaptive' },
-          ],
-        },
-      }],
+      presets: [],
     });
   });
 
-  it('keeps canonical reasoning authoritative when legacy fields also exist', () => {
+  it('keeps canonical reasoning authoritative', () => {
     const canonical: ReasoningConfig = {
       catalog: { source: 'disabled' },
       default_preset: 'custom',
       presets: [{ id: 'custom', setting: { type: 'toggle', enabled: false } }],
     };
-    expect(canonicalReasoningConfig(model({
-      reasoning: canonical,
-      reasoning_mode: 'enabled',
-      reasoning_effort: 'high',
-    }))).toEqual(canonical);
+    expect(canonicalReasoningConfig(model({ reasoning: canonical }))).toEqual(canonical);
   });
 
   it('rejects duplicate IDs, invalid explicit catalog bindings, and missing defaults', () => {

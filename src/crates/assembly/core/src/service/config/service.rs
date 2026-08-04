@@ -991,7 +991,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_migrates_legacy_model_reasoning_and_persists_canonical_only_config() {
+    async fn startup_discards_removed_model_reasoning_fields_without_creating_a_preset() {
         let dir = tempfile::tempdir().expect("tempdir");
         let user_root = dir.path().join("legacy-model-reasoning-startup");
         let path_manager = Arc::new(PathManager::with_user_root_for_tests(user_root));
@@ -1039,8 +1039,7 @@ mod tests {
         )
         .expect("persisted config should be valid JSON");
         let model = &persisted["ai"]["models"][0];
-        assert_eq!(model["reasoning"]["default_preset"], "on");
-        assert_eq!(model["reasoning"]["presets"][0]["setting"]["value"], "high");
+        assert!(model.get("reasoning").is_none());
         assert!(model.get("reasoning_mode").is_none());
         assert!(model.get("reasoning_effort").is_none());
         assert!(model.get("thinking_budget_tokens").is_none());

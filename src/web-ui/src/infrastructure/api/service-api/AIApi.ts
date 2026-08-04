@@ -6,7 +6,6 @@ import type { SendMessageRequest } from './tauri-commands';
 import type { ConnectionTestMessageCode } from '@/shared/utils/aiConnectionTestMessages';
 import type {
   ReasoningCatalogProjection,
-  ReasoningMode,
   SubscriptionProvider,
 } from '@/infrastructure/config/types';
 export type {
@@ -54,10 +53,6 @@ export interface AIModelCatalogEntry {
   context_window?: number;
   enabled: boolean;
   capabilities: string[];
-  enable_thinking_process: boolean;
-  reasoning_mode?: ReasoningMode;
-  reasoning_effort?: string;
-  thinking_budget_tokens?: number;
   reasoning?: ReasoningCatalogProjection;
 }
 
