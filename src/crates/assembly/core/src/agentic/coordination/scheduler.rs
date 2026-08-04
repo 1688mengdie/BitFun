@@ -19,11 +19,13 @@ use super::plan_todo_binding::{
 };
 use super::turn_outcome::TurnOutcome;
 use super::turn_settlement::TurnSettlementRegistration;
-use crate::agentic::core::{InternalReminderKind, Message, SessionState};
+use crate::agentic::core::{
+    InternalReminderKind, Message, Session, SessionKind, SessionState, SessionSummary,
+};
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::goal_mode::{
     goal_continuation_submit_retry_delay_ms, goal_internal_context_message,
-    goal_objective_updated_message, GOAL_IDLE_WAKEUP_DELAY_MS,
+    goal_objective_updated_message, thread_goal_from_custom_metadata, GOAL_IDLE_WAKEUP_DELAY_MS,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
@@ -34,6 +36,7 @@ use crate::agentic::session::SessionManager;
 use crate::agentic::tools::restrictions::get_session_role;
 use crate::agentic::warden::runtime::WardenRuntime;
 use crate::infrastructure::PathManager;
+use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::{ThreadGoal, MAX_THREAD_GOAL_AUTO_CONTINUATIONS};
 use log::{debug, info, warn};
@@ -151,6 +154,60 @@ fn session_tree_is_silent(
                 .unwrap_or(true),
         }
     })
+}
+
+/// Walk up the parent-session chain to find the tree root (the primary
+/// conversation). Thread goals are only attachable to main sessions, so in
+/// practice this returns `session_id` itself; the walk keeps the primary
+/// condition robust if subagent goal support is ever added.
+fn session_tree_root_id(summaries: &[SessionSummary], session_id: &str) -> String {
+    let mut current = session_id.to_string();
+    let mut hops = 0u32;
+    loop {
+        let parent = summaries
+            .iter()
+            .find(|summary| summary.session_id == current)
+            .and_then(|summary| summary.parent_session_id.clone());
+        match parent {
+            Some(parent) if parent != current && hops < 64 => {
+                current = parent;
+                hops += 1;
+            }
+            _ => break,
+        }
+    }
+    current
+}
+
+/// Pure decision helper: every conversation in the workspace is quiescent —
+/// no session is busy (running or queued). This is the immediate branch of the
+/// dual goal trigger: it does NOT require the `GOAL_IDLE_WAKEUP_DELAY_MS`
+/// window, so the goal wakes up as soon as nothing in the workspace is running
+/// or queued.
+fn all_sessions_quiescent(
+    all_ids: &[String],
+    is_busy_or_queued: impl Fn(&str) -> bool,
+) -> bool {
+    all_ids.iter().all(|id| !is_busy_or_queued(id))
+}
+
+/// Pure decision helper for the dual-trigger goal idle-wakeup: the safety net
+/// fires when the primary (tree-root) conversation has been silent for a full
+/// idle window, OR every conversation in the workspace is quiescent (no
+/// running or queued turn anywhere). Returns `(primary_silent,
+/// all_sessions_silent)` so callers can log which condition (if any) held.
+fn goal_idle_wakeup_conditions_met(
+    primary_ids: &[String],
+    all_ids: &[String],
+    now: SystemTime,
+    idle_delay: Duration,
+    is_busy_or_queued: impl Fn(&str) -> bool,
+    last_activity_at: impl Fn(&str) -> Option<SystemTime>,
+) -> (bool, bool) {
+    let primary_silent =
+        session_tree_is_silent(primary_ids, now, idle_delay, &is_busy_or_queued, &last_activity_at);
+    let all_silent = all_sessions_quiescent(all_ids, &is_busy_or_queued);
+    (primary_silent, all_silent)
 }
 
 #[derive(Debug)]
@@ -503,6 +560,13 @@ impl DialogScheduler {
         let scheduler_for_handler = Arc::clone(&scheduler);
         tokio::spawn(async move {
             scheduler_for_handler.run_outcome_handler(outcome_rx).await;
+        });
+
+        // Best-effort recovery for goal idle-wakeup timers lost on process
+        // restart (see `rearm_goal_idle_wakeups_after_startup`).
+        let scheduler_for_rearm = Arc::clone(&scheduler);
+        tokio::spawn(async move {
+            scheduler_for_rearm.rearm_goal_idle_wakeups_after_startup().await;
         });
 
         scheduler
@@ -1147,6 +1211,11 @@ impl DialogScheduler {
         if outcome.is_ok() && is_user_submission_source(trigger_source) {
             self.schedule_goal_idle_wakeup(&wakeup_session_id);
         }
+        // Note: the immediate workspace-quiescent condition is evaluated at the
+        // outcome handler instead of here — a just-submitted session is busy,
+        // so the workspace cannot be quiescent at this point, and spawning a
+        // quiescence check from here would create a cyclic Send obligation
+        // (the wakeup submit path routes back through this method).
         outcome
     }
 
@@ -1300,26 +1369,6 @@ impl DialogScheduler {
                 .is_some_and(|session| matches!(session.state, SessionState::Processing { .. }))
     }
 
-    /// Whether every node of the session tree (the session itself plus all
-    /// subagent descendants at any depth) has been silent for at least
-    /// `idle_delay`: no node is busy (running or queued) and every node's
-    /// last activity is older than the window. A single active descendant —
-    /// e.g. a still-running subagent — keeps the whole tree awake.
-    fn is_session_tree_silent(
-        &self,
-        tree_ids: &[String],
-        now: SystemTime,
-        idle_delay: Duration,
-    ) -> bool {
-        session_tree_is_silent(tree_ids, now, idle_delay, |id| {
-            self.is_session_busy_or_queued(id)
-        }, |id| {
-            self.session_manager
-                .get_session(id)
-                .map(|session| session.last_activity_at)
-        })
-    }
-
     /// Schedule a goal idle-wakeup check `GOAL_IDLE_WAKEUP_DELAY_MS` from now.
     ///
     /// Safety-net behavior only: when the session stays idle and an active
@@ -1327,7 +1376,9 @@ impl DialogScheduler {
     /// submit a "wake the commander" turn. A newer user submission bumps the
     /// session generation and invalidates older wakeup tasks; the
     /// auto-continuation budget additionally caps how often a wakeup can fire.
-    fn schedule_goal_idle_wakeup(&self, session_id: &str) {
+    /// Safe to call repeatedly: each call re-arms the timer so only the newest
+    /// wakeup task fires.
+    pub fn schedule_goal_idle_wakeup(&self, session_id: &str) {
         let Some(weak) = self.goal_idle_wakeup_self.get().cloned() else {
             return;
         };
@@ -1360,44 +1411,122 @@ impl DialogScheduler {
             != Some(generation)
         {
             // A newer user submission superseded this wakeup task.
+            debug!(
+                "Goal idle wakeup skipped (superseded by a newer schedule): session_id={}, generation={}",
+                session_id, generation
+            );
             return;
         }
         let Some(session) = self.session_manager.get_session(session_id) else {
+            debug!(
+                "Goal idle wakeup skipped (session no longer loaded): session_id={}",
+                session_id
+            );
             return;
         };
-        // The safety net only fires when the whole session tree is silent:
-        // a still-running subagent (or any other descendant activity) keeps
-        // the wakeup pending.
-        let descendant_ids = match self
-            .session_manager
-            .session_tree_descendants(
-                session.config.workspace_path.as_deref().map(Path::new),
-                session_id,
-            )
+        let Some(workspace_path) = session.config.workspace_path.as_deref().map(Path::new) else {
+            debug!(
+                "Goal idle wakeup skipped (session has no workspace path): session_id={}",
+                session_id
+            );
+            return;
+        };
+        // Cheap guard before the workspace-wide silence scan: a session without
+        // an active thread goal cannot produce a wakeup plan, so stop the chain
+        // here instead of listing the whole workspace.
+        let has_active_goal = match self
+            .coordinator
+            .get_thread_goal(session_id, workspace_path)
             .await
         {
-            Ok(ids) => ids,
+            Ok(Some(goal)) => goal.is_active(),
+            Ok(None) => false,
             Err(error) => {
                 warn!(
-                    "Goal idle wakeup session-tree lookup failed: session_id={}, error={}",
+                    "Goal idle wakeup goal lookup failed: session_id={}, error={}",
                     session_id, error
                 );
                 return;
             }
         };
-        let mut tree_ids = Vec::with_capacity(descendant_ids.len() + 1);
-        tree_ids.push(session_id.to_string());
-        tree_ids.extend(descendant_ids);
-        if !self.is_session_tree_silent(
-            &tree_ids,
-            SystemTime::now(),
-            Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS),
-        ) {
-            // A node of the session tree is still active; re-check after
-            // another idle window.
+        if !has_active_goal {
+            debug!(
+                "Goal idle wakeup skipped (no active thread goal): session_id={}, generation={}",
+                session_id, generation
+            );
+            return;
+        }
+        // Dual trigger condition: the safety net fires when EITHER the primary
+        // (tree-root / main) conversation has been silent for a full idle
+        // window, OR every conversation in the workspace is quiescent (no
+        // running or queued turn anywhere). A still-active node keeps the
+        // wakeup pending and re-arms the timer.
+        let summaries = match self
+            .session_manager
+            .list_sessions_with_options(workspace_path, true)
+            .await
+        {
+            Ok(summaries) => summaries,
+            Err(error) => {
+                warn!(
+                    "Goal idle wakeup workspace session listing failed: session_id={}, error={}",
+                    session_id, error
+                );
+                return;
+            }
+        };
+        let now = SystemTime::now();
+        let idle_delay = Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS);
+        let is_busy = |id: &str| self.is_session_busy_or_queued(id);
+        let last_activity = |id: &str| {
+            self.session_manager
+                .get_session(id)
+                .map(|session| session.last_activity_at)
+                .or_else(|| {
+                    summaries
+                        .iter()
+                        .find(|summary| summary.session_id == id)
+                        .map(|summary| summary.last_activity_at)
+                })
+        };
+        let primary_id = session_tree_root_id(&summaries, session_id);
+        let all_ids: Vec<String> = summaries
+            .iter()
+            .map(|summary| summary.session_id.clone())
+            .collect();
+        let (primary_silent, all_sessions_silent) = goal_idle_wakeup_conditions_met(
+            &[primary_id],
+            &all_ids,
+            now,
+            idle_delay,
+            is_busy,
+            last_activity,
+        );
+        if !(primary_silent || all_sessions_silent) {
+            debug!(
+                "Goal idle wakeup deferred; neither trigger condition met: session_id={}, generation={}, primary_silent={}, all_sessions_silent={}",
+                session_id, generation, primary_silent, all_sessions_silent
+            );
             self.schedule_goal_idle_wakeup(session_id);
             return;
         }
+        let _ = self
+            .trigger_goal_idle_wakeup(session_id, &session, "idle_timer")
+            .await;
+    }
+
+    /// Build and submit a goal wakeup turn for `session_id` (the continuation
+    /// state machine in `prepare_goal_idle_wakeup`, then a normal submit).
+    /// Returns true when a wakeup turn was submitted. Shared by the idle-wakeup
+    /// timer check and the immediate workspace-quiescent trigger. The
+    /// auto-continuation budget (`prepare_goal_idle_wakeup`) caps how often a
+    /// wakeup can fire, so this cannot loop indefinitely.
+    async fn trigger_goal_idle_wakeup(
+        &self,
+        session_id: &str,
+        session: &Session,
+        trigger: &str,
+    ) -> bool {
         let plan = match self.coordinator.prepare_goal_idle_wakeup(session_id).await {
             Ok(plan) => plan,
             Err(error) => {
@@ -1405,13 +1534,17 @@ impl DialogScheduler {
                     "Goal idle wakeup plan failed: session_id={}, error={}",
                     session_id, error
                 );
-                return;
+                return false;
             }
         };
         let Some(plan) = plan else {
             // No continuation plan: goal missing, completed, paused, or the
             // auto-continuation budget is exhausted. Stop the wakeup chain.
-            return;
+            debug!(
+                "Goal idle wakeup produced no continuation plan; stopping wakeup chain: session_id={}",
+                session_id
+            );
+            return false;
         };
         let prepended: Vec<Message> = plan
             .prepended_reminders
@@ -1447,21 +1580,166 @@ impl DialogScheduler {
         {
             Ok(_) => {
                 info!(
-                    "Goal idle wakeup turn submitted: session_id={}, generation={}",
-                    session_id, generation
+                    "Goal idle wakeup turn submitted: session_id={}, trigger={}",
+                    session_id, trigger
                 );
                 // The wakeup turn itself keeps the goal alive; schedule the
                 // next safety-net check so the goal is still picked up if the
                 // commander does not respond.
                 self.schedule_goal_idle_wakeup(session_id);
+                true
             }
             Err(error) => {
                 warn!(
                     "Goal idle wakeup submit failed: session_id={}, error={}",
                     session_id, error
                 );
+                false
             }
         }
+    }
+
+    /// Immediate goal-wakeup trigger for the workspace-quiescent condition:
+    /// after a scheduling event (a top-level turn finished or a submission was
+    /// accepted) a session holding an active thread goal is woken up as soon
+    /// as every conversation in its workspace has no running or queued turn.
+    /// Unlike the primary (10-minute) condition this fires immediately; the
+    /// auto-continuation budget caps how often it can fire.
+    async fn maybe_trigger_goal_wakeup_when_workspace_quiescent(&self, session_id: &str) {
+        // If the goal session itself is still busy or queued, the workspace
+        // cannot be quiescent; skip the (relatively expensive) workspace scan.
+        if self.is_session_busy_or_queued(session_id) {
+            return;
+        }
+        let Some(session) = self.session_manager.get_session(session_id) else {
+            return;
+        };
+        let Some(workspace_path) = session.config.workspace_path.as_deref().map(Path::new) else {
+            return;
+        };
+        let has_active_goal = match self
+            .coordinator
+            .get_thread_goal(session_id, workspace_path)
+            .await
+        {
+            Ok(Some(goal)) => goal.is_active(),
+            _ => return,
+        };
+        if !has_active_goal {
+            return;
+        }
+        let Ok(summaries) = self
+            .session_manager
+            .list_sessions_with_options(workspace_path, true)
+            .await
+        else {
+            return;
+        };
+        let all_ids: Vec<String> = summaries
+            .iter()
+            .map(|summary| summary.session_id.clone())
+            .collect();
+        if !all_sessions_quiescent(&all_ids, |id| self.is_session_busy_or_queued(id)) {
+            return;
+        }
+        debug!(
+            "Goal wakeup immediate trigger: every conversation in workspace is silent: session_id={}",
+            session_id
+        );
+        let _ = self
+            .trigger_goal_idle_wakeup(session_id, &session, "workspace_quiescent")
+            .await;
+    }
+
+    /// Best-effort recovery for goal idle-wakeup timers lost on process
+    /// restart.
+    ///
+    /// The wakeup chain is purely in-memory (spawned timers), so a restart
+    /// silently orphans every pending goal. This scans the persisted workspace
+    /// sessions for active thread goals and re-arms the safety net. Hosts
+    /// register the global workspace service shortly after the scheduler is
+    /// constructed (see desktop/server bootstraps), so this polls briefly for
+    /// it before giving up quietly.
+    async fn rearm_goal_idle_wakeups_after_startup(&self) {
+        const REARM_MAX_ATTEMPTS: u32 = 30;
+        const REARM_POLL_INTERVAL: Duration = Duration::from_millis(1_000);
+        let workspace_service = {
+            let mut attempts = 0u32;
+            loop {
+                if let Some(service) = get_global_workspace_service() {
+                    break service;
+                }
+                attempts += 1;
+                if attempts >= REARM_MAX_ATTEMPTS {
+                    debug!(
+                        "Goal idle-wakeup rearm skipped: global workspace service unavailable"
+                    );
+                    return;
+                }
+                tokio::time::sleep(REARM_POLL_INTERVAL).await;
+            }
+        };
+        for workspace in workspace_service.list_workspace_infos().await {
+            let workspace_path = workspace.root_path;
+            let goal_session_ids = match self
+                .active_goal_session_ids(&workspace_path)
+                .await
+            {
+                Ok(ids) => ids,
+                Err(error) => {
+                    debug!(
+                        "Goal idle-wakeup rearm workspace scan failed: workspace={}, error={}",
+                        workspace_path.display(),
+                        error
+                    );
+                    continue;
+                }
+            };
+            for session_id in goal_session_ids {
+                debug!(
+                    "Rearming goal idle-wakeup after restart: session_id={}",
+                    session_id
+                );
+                self.schedule_goal_idle_wakeup(&session_id);
+            }
+        }
+    }
+
+    /// Enumerate sessions in `workspace` that currently hold an active thread
+    /// goal. Best-effort: requires persistence to observe goals on sessions
+    /// that are not loaded in memory; individual metadata read failures are
+    /// skipped rather than aborting the scan.
+    async fn active_goal_session_ids(&self, workspace_path: &Path) -> BitFunResult<Vec<String>> {
+        let summaries = self
+            .session_manager
+            .list_sessions_with_options(workspace_path, true)
+            .await?;
+        let mut goal_session_ids = Vec::new();
+        for summary in summaries {
+            // Only main sessions can carry thread goals; skip subagent and
+            // ephemeral children to keep the startup scan cheap.
+            if matches!(
+                summary.kind,
+                SessionKind::Subagent | SessionKind::EphemeralChild | SessionKind::EphemeralSubagent
+            ) {
+                continue;
+            }
+            let Ok(Some(metadata)) = self
+                .session_manager
+                .load_session_metadata(workspace_path, &summary.session_id)
+                .await
+            else {
+                continue;
+            };
+            let Some(goal) = thread_goal_from_custom_metadata(metadata.custom_metadata.as_ref())
+            else {
+                continue;
+            };
+            if goal.is_active() {
+                goal_session_ids.push(summary.session_id);
+            }
+        }
+        Ok(goal_session_ids)
     }
 
     async fn finish_removed_queued_turn(&self, session_id: &str, removed_turn: QueuedTurn) {
@@ -2694,6 +2972,13 @@ impl DialogScheduler {
             // raced in ahead of this outcome is still honored.
             if !is_internal_turn {
                 self.schedule_goal_idle_wakeup(&session_id);
+                // Immediate workspace-quiescent condition: this top-level turn
+                // just finished and (when nothing else is running or queued)
+                // every conversation in the workspace is now silent, so wake
+                // the goal right away instead of waiting for the 10-minute
+                // timer.
+                self.maybe_trigger_goal_wakeup_when_workspace_quiescent(&session_id)
+                    .await;
             }
         }
     }
@@ -3272,6 +3557,131 @@ mod tests {
         assert!(!session_tree_is_silent(&root_only, now, idle_delay, |_| false, |_| {
             Some(active)
         }));
+    }
+
+    fn session_summary(session_id: &str, parent_session_id: Option<&str>) -> SessionSummary {
+        SessionSummary {
+            session_id: session_id.to_string(),
+            session_name: session_id.to_string(),
+            agent_type: "agentic".to_string(),
+            model_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            created_by: None,
+            kind: SessionKind::Standard,
+            turn_count: 0,
+            created_at: SystemTime::now(),
+            last_activity_at: SystemTime::now(),
+            state: SessionState::Idle,
+            parent_session_id: parent_session_id.map(ToOwned::to_owned),
+            is_daemon: false,
+        }
+    }
+
+    #[test]
+    fn session_tree_root_walks_up_parent_chain() {
+        let summaries = vec![
+            session_summary("root", None),
+            session_summary("child", Some("root")),
+            session_summary("grandchild", Some("child")),
+        ];
+        // The deepest descendant resolves to the tree root (primary
+        // conversation).
+        assert_eq!(session_tree_root_id(&summaries, "grandchild"), "root");
+        assert_eq!(session_tree_root_id(&summaries, "child"), "root");
+        assert_eq!(session_tree_root_id(&summaries, "root"), "root");
+        // Unknown sessions fall back to themselves.
+        assert_eq!(session_tree_root_id(&summaries, "unknown"), "unknown");
+        // A parent chain that never terminates is capped at 64 hops.
+        let self_cycle = vec![session_summary("a", Some("b")), session_summary("b", Some("a"))];
+        let _ = session_tree_root_id(&self_cycle, "a");
+    }
+
+    #[test]
+    fn goal_idle_wakeup_fires_when_primary_or_all_conversations_silent() {
+        let now = SystemTime::now();
+        let idle_delay = Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS);
+        let idle = now - idle_delay - Duration::from_secs(60);
+        let active = now - Duration::from_secs(1);
+        let primary = vec!["primary".to_string()];
+        let all = vec!["primary".to_string(), "subagent".to_string()];
+
+        // Primary silent while a subagent is still busy -> condition 1 fires,
+        // condition 2 (workspace quiescent) does not.
+        let (primary_silent, all_silent) = goal_idle_wakeup_conditions_met(
+            &primary,
+            &all,
+            now,
+            idle_delay,
+            |id| id == "subagent",
+            |_| Some(idle),
+        );
+        assert!(primary_silent);
+        assert!(!all_silent);
+
+        // Everything old-idle -> both conditions fire.
+        let (primary_silent, all_silent) = goal_idle_wakeup_conditions_met(
+            &primary,
+            &all,
+            now,
+            idle_delay,
+            |_| false,
+            |_| Some(idle),
+        );
+        assert!(primary_silent && all_silent);
+
+        // Primary busy -> neither condition fires.
+        let (primary_silent, all_silent) = goal_idle_wakeup_conditions_met(
+            &primary,
+            &all,
+            now,
+            idle_delay,
+            |id| id == "primary",
+            |_| Some(idle),
+        );
+        assert!(!primary_silent && !all_silent);
+
+        // Primary had activity within the window (so condition 1 does not
+        // fire) but nothing is busy/queued -> condition 2 fires immediately.
+        let (primary_silent, all_silent) = goal_idle_wakeup_conditions_met(
+            &primary,
+            &all,
+            now,
+            idle_delay,
+            |_| false,
+            |id| {
+                if id == "primary" { Some(active) } else { Some(idle) }
+            },
+        );
+        assert!(!primary_silent && all_silent);
+    }
+
+    #[test]
+    fn goal_idle_wakeup_all_sessions_condition_ignores_idle_window() {
+        let now = SystemTime::now();
+        let idle_delay = Duration::from_millis(GOAL_IDLE_WAKEUP_DELAY_MS);
+        // Activity within the idle window: under the old semantics this blocked
+        // the whole-workspace condition; the immediate condition-2 fires on
+        // quiescence alone.
+        let recent = now - Duration::from_secs(1);
+        let all = vec!["session-a".to_string(), "session-b".to_string()];
+
+        // No session busy/queued, even with recent activity -> immediate.
+        assert!(all_sessions_quiescent(&all, |_| false));
+
+        // Any busy or queued session keeps the workspace from being quiescent.
+        assert!(!all_sessions_quiescent(&all, |id| id == "session-b"));
+
+        // Condition-2 helper does not consult last activity.
+        let (_, all_silent) = goal_idle_wakeup_conditions_met(
+            &["session-a".to_string()],
+            &all,
+            now,
+            idle_delay,
+            |_| false,
+            |_| Some(recent),
+        );
+        assert!(all_silent);
     }
 
     #[tokio::test]

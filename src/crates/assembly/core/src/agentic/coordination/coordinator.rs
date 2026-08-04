@@ -4697,6 +4697,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.thread_goal_runtime.mark_turn_started("", Some(&goal));
         self.emit_thread_goal_updated(session_id, Some(goal.clone()))
             .await;
+        self.arm_goal_idle_wakeup(session_id);
         Ok(goal)
     }
 
@@ -4744,7 +4745,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             self.apply_objective_updated_steering(session_id, &result.goal)
                 .await;
         }
+        if result.goal.is_active() {
+            self.arm_goal_idle_wakeup(session_id);
+        }
         Ok(result.goal)
+    }
+
+    /// Arm the goal idle-wakeup safety net for `session_id` when a thread goal
+    /// is active, so the timer starts immediately after the goal is set rather
+    /// than only after the next turn outcome. Safe to call repeatedly: each
+    /// call re-arms the timer so only the newest wakeup task fires.
+    fn arm_goal_idle_wakeup(&self, session_id: &str) {
+        if let Some(scheduler) = get_global_scheduler() {
+            scheduler.schedule_goal_idle_wakeup(session_id);
+        }
     }
 
     pub async fn set_thread_goal_objective(
@@ -4788,6 +4802,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         if objective_changed && result.goal.is_active() {
             self.apply_objective_updated_steering(session_id, &result.goal)
                 .await;
+        }
+        if result.goal.is_active() {
+            self.arm_goal_idle_wakeup(session_id);
         }
         Ok(result.goal)
     }
@@ -4926,6 +4943,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         if resuming && result.goal.is_active() {
             clear_thread_goal_continuation_abort(session_id);
             self.schedule_thread_goal_resumed_steering(session_id, &result.goal);
+        }
+        if result.goal.is_active() {
+            self.arm_goal_idle_wakeup(session_id);
         }
         Ok(result.goal)
     }
