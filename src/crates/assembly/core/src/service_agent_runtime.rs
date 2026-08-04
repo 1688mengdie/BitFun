@@ -1197,6 +1197,7 @@ impl CoreServiceAgentRuntime {
         let workspace_references: Arc<dyn AgentWorkspaceReferencePort> = coordinator.clone();
         let session_revert = scheduled_session_revert_port(coordinator.clone(), scheduler.clone());
         let session_model: Arc<dyn AgentSessionModelPort> = coordinator.clone();
+        let session_mode: Arc<dyn AgentSessionModePort> = coordinator.clone();
         let session_compaction: Arc<dyn AgentSessionCompactionPort> = coordinator.clone();
         let local_command_turn: Arc<dyn AgentLocalCommandTurnPort> = coordinator.clone();
         let interaction_response: Arc<dyn AgentInteractionResponsePort> = coordinator;
@@ -1209,6 +1210,7 @@ impl CoreServiceAgentRuntime {
             .with_workspace_reference_port(workspace_references)
             .with_session_revert_port(session_revert)
             .with_session_model_port(session_model)
+            .with_session_mode_port(session_mode)
             .with_session_compaction_port(session_compaction)
             .with_local_command_turn_port(local_command_turn)
             .with_dialog_turn_port(dialog_turn)
