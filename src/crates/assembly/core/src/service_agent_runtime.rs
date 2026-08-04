@@ -38,12 +38,11 @@ use bitfun_services_integrations::remote_connect::{
     RemoteDialogSubmitOutcome, RemoteDialogWorkspaceBinding, RemoteImageContext,
     RemoteInitialSyncRuntimeHost, RemoteInteractionRuntimeHost, RemoteModelCapabilityFact,
     RemoteModelCatalog, RemoteModelCatalogFacts, RemoteModelFacts, RemotePermissionMode,
-    RemotePollRuntimeHost, RemoteReasoningModeFact, RemoteRecentWorkspaceFacts,
-    RemoteSessionMetadata, RemoteSessionModelSelection, RemoteSessionRuntimeHost,
-    RemoteSessionStateTracker, RemoteSessionTrackerHost, RemoteTerminalPrewarmRequest,
-    RemoteWorkspaceFacts, RemoteWorkspaceFileRuntimeHost,
-    RemoteWorkspaceKind as RemoteConnectWorkspaceKind, RemoteWorkspaceRuntimeHost,
-    RemoteWorkspaceUpdate,
+    RemotePollRuntimeHost, RemoteRecentWorkspaceFacts, RemoteSessionMetadata,
+    RemoteSessionModelSelection, RemoteSessionRuntimeHost, RemoteSessionStateTracker,
+    RemoteSessionTrackerHost, RemoteTerminalPrewarmRequest, RemoteWorkspaceFacts,
+    RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind as RemoteConnectWorkspaceKind,
+    RemoteWorkspaceRuntimeHost, RemoteWorkspaceUpdate,
 };
 use log::{debug, info};
 use std::sync::Arc;
@@ -58,12 +57,11 @@ use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::workspace::WorkspaceBinding;
 use crate::infrastructure::ai::reasoning_catalog::{
-    load_models_dev_reasoning_catalog, project_model_reasoning_catalog,
-    resolve_default_reasoning_setting, resolve_reasoning_preset,
+    load_models_dev_reasoning_catalog, project_model_reasoning_catalog, resolve_reasoning_preset,
 };
 use crate::service::remote_connect::remote_server::RemoteExecutionDispatcher;
 
-use crate::service::config::types::{AIConfig, GlobalConfig, ModelCapability, ReasoningMode};
+use crate::service::config::types::{AIConfig, GlobalConfig, ModelCapability};
 use crate::service::session::{DialogTurnData, ToolItemIdentityExt, TurnStatus};
 
 fn current_workspace_path() -> Option<std::path::PathBuf> {
@@ -249,15 +247,6 @@ fn remote_model_capability_fact(capability: ModelCapability) -> RemoteModelCapab
         ModelCapability::CodeSpecialized => RemoteModelCapabilityFact::CodeSpecialized,
         ModelCapability::FunctionCalling => RemoteModelCapabilityFact::FunctionCalling,
         ModelCapability::SpeechRecognition => RemoteModelCapabilityFact::SpeechRecognition,
-    }
-}
-
-fn remote_reasoning_mode_fact(reasoning_mode: ReasoningMode) -> RemoteReasoningModeFact {
-    match reasoning_mode {
-        ReasoningMode::Default => RemoteReasoningModeFact::Default,
-        ReasoningMode::Enabled => RemoteReasoningModeFact::Enabled,
-        ReasoningMode::Disabled => RemoteReasoningModeFact::Disabled,
-        ReasoningMode::Adaptive => RemoteReasoningModeFact::Adaptive,
     }
 }
 
@@ -957,11 +946,6 @@ impl CoreServiceAgentRuntime {
             .map(|model| {
                 let reasoning =
                     project_model_reasoning_catalog(&model, models_dev.catalog.as_deref());
-                let reasoning_mode = resolve_default_reasoning_setting(&reasoning)
-                    .and_then(|setting| setting.application().parameters)
-                    .map(|parameters| parameters.mode)
-                    .unwrap_or_else(|| model.effective_reasoning_mode());
-
                 RemoteModelFacts {
                     id: model.id,
                     name: model.name,
@@ -975,10 +959,6 @@ impl CoreServiceAgentRuntime {
                         .into_iter()
                         .map(remote_model_capability_fact)
                         .collect(),
-                    enable_thinking_process: model.enable_thinking_process,
-                    reasoning_mode: Some(remote_reasoning_mode_fact(reasoning_mode)),
-                    reasoning_effort: model.reasoning_effort,
-                    thinking_budget_tokens: model.thinking_budget_tokens,
                     reasoning: Some(reasoning),
                 }
             })

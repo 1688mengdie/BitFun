@@ -54,7 +54,7 @@ pub enum ReasoningPresetSetting {
     RequestPatch {
         body: Value,
     },
-    /// Preserves combinations such as a legacy mode + effort + token budget.
+    /// Applies multiple canonical settings in order for advanced presets.
     Sequence {
         settings: Vec<ReasoningPresetSetting>,
     },

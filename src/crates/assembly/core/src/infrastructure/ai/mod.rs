@@ -40,10 +40,10 @@ mod tests {
     use crate::service::config::types::AIModelConfig;
 
     #[test]
-    fn model_reasoning_mode_does_not_override_stream_timeouts() {
+    fn model_reasoning_config_does_not_override_stream_timeouts() {
         let config = AIConfig::default();
         let model = AIModelConfig {
-            reasoning_mode: Some(crate::service::config::types::ReasoningMode::Enabled),
+            reasoning: Some(bitfun_core_types::ReasoningConfig::default()),
             ..Default::default()
         };
 

@@ -273,9 +273,20 @@ export interface RemoteModelConfig {
   context_window?: number;
   enabled: boolean;
   capabilities: string[];
-  enable_thinking_process?: boolean;
-  reasoning_mode?: string;
-  reasoning_effort?: string;
+  reasoning?: RemoteReasoningCatalogProjection;
+}
+
+export interface RemoteReasoningPresetDescriptor {
+  id: string;
+  label: string;
+  order: number;
+  source: string;
+}
+
+export interface RemoteReasoningCatalogProjection {
+  status: string;
+  default_preset?: string;
+  presets?: RemoteReasoningPresetDescriptor[];
 }
 
 export interface RemoteDefaultModels {

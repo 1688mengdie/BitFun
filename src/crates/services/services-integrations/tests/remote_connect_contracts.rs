@@ -41,13 +41,12 @@ use bitfun_services_integrations::remote_connect::{
     RemoteDialogSubmissionPolicy, RemoteDialogSubmissionRequest, RemoteDialogSubmitOutcome,
     RemoteDialogWorkspaceBinding, RemoteImageContext, RemoteImageContextAdapter,
     RemoteModelCapabilityFact, RemoteModelCatalog, RemoteModelCatalogFacts, RemoteModelConfig,
-    RemoteModelFacts, RemoteReasoningModeFact, RemoteRecentWorkspaceFacts, RemoteResponse,
-    RemoteSessionMetadata, RemoteSessionModelSelection, RemoteSessionStateTracker,
-    RemoteSessionTrackerHost, RemoteSessionTrackerRegistry, RemoteSessionWorkspaceIdentity,
-    RemoteTerminalPrewarmRequest, RemoteToolStatus, RemoteWorkspaceFacts, RemoteWorkspaceFileChunk,
-    RemoteWorkspaceFileContent, RemoteWorkspaceFileInfo, RemoteWorkspaceFileRuntimeHost,
-    RemoteWorkspaceKind, RemoteWorkspaceUpdate, TrackerEvent, REMOTE_FILE_MAX_CHUNK_BYTES,
-    REMOTE_FILE_MAX_READ_BYTES,
+    RemoteModelFacts, RemoteRecentWorkspaceFacts, RemoteResponse, RemoteSessionMetadata,
+    RemoteSessionModelSelection, RemoteSessionStateTracker, RemoteSessionTrackerHost,
+    RemoteSessionTrackerRegistry, RemoteSessionWorkspaceIdentity, RemoteTerminalPrewarmRequest,
+    RemoteToolStatus, RemoteWorkspaceFacts, RemoteWorkspaceFileChunk, RemoteWorkspaceFileContent,
+    RemoteWorkspaceFileInfo, RemoteWorkspaceFileRuntimeHost, RemoteWorkspaceKind,
+    RemoteWorkspaceUpdate, TrackerEvent, REMOTE_FILE_MAX_CHUNK_BYTES, REMOTE_FILE_MAX_READ_BYTES,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -2170,10 +2169,6 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
             context_window: Some(128_000),
             enabled: true,
             capabilities: vec!["text_chat".to_string()],
-            enable_thinking_process: false,
-            reasoning_mode: Some("default".to_string()),
-            reasoning_effort: None,
-            thinking_budget_tokens: None,
             reasoning: None,
         }],
         default_models: RemoteDefaultModelsConfig {
@@ -2204,10 +2199,6 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
                 RemoteModelCapabilityFact::ImageUnderstanding,
                 RemoteModelCapabilityFact::FunctionCalling,
             ],
-            enable_thinking_process: true,
-            reasoning_mode: Some(RemoteReasoningModeFact::Adaptive),
-            reasoning_effort: Some("medium".to_string()),
-            thinking_budget_tokens: Some(4096),
             reasoning: Some(ReasoningCatalogProjection {
                 status: ReasoningCapabilityStatus::Known,
                 default_preset: Some("high".to_string()),
@@ -2248,10 +2239,6 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
             "function_calling".to_string(),
         ]
     );
-    assert!(model.enable_thinking_process);
-    assert_eq!(model.reasoning_mode.as_deref(), Some("adaptive"));
-    assert_eq!(model.reasoning_effort.as_deref(), Some("medium"));
-    assert_eq!(model.thinking_budget_tokens, Some(4096));
     let reasoning = model.reasoning.as_ref().expect("reasoning projection");
     assert_eq!(reasoning.status, ReasoningCapabilityStatus::Known);
     assert_eq!(reasoning.default_preset.as_deref(), Some("high"));

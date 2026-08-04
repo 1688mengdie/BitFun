@@ -13,10 +13,15 @@ use crate::agentic::agents::{
 use crate::agentic::tools::registry::get_all_registered_tools;
 use crate::external_sources::safe_external_source_location;
 use crate::external_tools::{resolve_external_tool_for_workspace, workspace_route_key};
+use crate::infrastructure::ai::reasoning_catalog::{
+    load_models_dev_reasoning_catalog_without_refresh, project_model_reasoning_catalog,
+    resolve_default_reasoning_setting,
+};
 use crate::service::config::global::GlobalConfigManager;
 use crate::service::config::types::{model_runtime_binding_fingerprint, AIConfig, AIModelConfig};
 use crate::service::config::SubagentModelSelection;
 use crate::util::BitFunError;
+use bitfun_ai_adapters::models_dev::ModelsDevCatalog;
 use bitfun_external_sources::ExternalSubagentCoordinatorSnapshot;
 use bitfun_product_domains::external_sources::EcosystemId;
 use bitfun_product_domains::external_sources::{ExternalSourceScope, ProviderId, SourceKey};
@@ -78,6 +83,7 @@ struct LocalCandidateFact {
 #[derive(Default)]
 struct ProductFacts {
     ai_config: Option<AIConfig>,
+    models_dev: Option<Arc<ModelsDevCatalog>>,
     tools: BTreeMap<String, ResolvedToolFact>,
     locals: BTreeMap<String, LocalCandidateFact>,
 }
@@ -230,6 +236,13 @@ async fn gather_product_facts(
             None
         }
     };
+    let models_dev = if ai_config.is_some() {
+        load_models_dev_reasoning_catalog_without_refresh()
+            .await
+            .catalog
+    } else {
+        None
+    };
 
     let requested_names = definitions
         .iter()
@@ -311,6 +324,7 @@ async fn gather_product_facts(
 
     ProductFacts {
         ai_config,
+        models_dev,
         tools,
         locals,
     }
@@ -479,13 +493,15 @@ fn resolved_model_fact(model: &AIModelConfig) -> ResolvedModelFact {
     }
 }
 
-fn configured_reasoning_effort(model: &AIModelConfig) -> Option<String> {
-    model
-        .reasoning_effort
-        .as_deref()
-        .map(str::trim)
+fn configured_reasoning_effort(
+    model: &AIModelConfig,
+    models_dev: Option<&ModelsDevCatalog>,
+) -> Option<String> {
+    resolve_default_reasoning_setting(&project_model_reasoning_catalog(model, models_dev))
+        .and_then(|setting| setting.application().parameters)
+        .and_then(|parameters| parameters.effort)
+        .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .map(str::to_string)
 }
 
 fn resolve_model_binding_target(
@@ -508,7 +524,10 @@ fn resolve_model_binding_target(
         .map(resolved_model_fact)
 }
 
-fn external_model_binding_options(ai_config: &AIConfig) -> Vec<ExternalSubagentModelBindingOption> {
+fn external_model_binding_options(
+    ai_config: &AIConfig,
+    models_dev: Option<&ModelsDevCatalog>,
+) -> Vec<ExternalSubagentModelBindingOption> {
     let mut options = Vec::new();
     for target in [
         ExternalSubagentModelBindingTarget::Primary,
@@ -522,7 +541,7 @@ fn external_model_binding_options(ai_config: &AIConfig) -> Vec<ExternalSubagentM
                     .models
                     .iter()
                     .find(|candidate| candidate.enabled && candidate.id == model.runtime_id)
-                    .and_then(configured_reasoning_effort),
+                    .and_then(|model| configured_reasoning_effort(model, models_dev)),
             });
         }
     }
@@ -535,7 +554,7 @@ fn external_model_binding_options(ai_config: &AIConfig) -> Vec<ExternalSubagentM
                 model_id: model.id.clone(),
             },
             effective_model_label: model_display_label(model),
-            configured_reasoning_effort: configured_reasoning_effort(model),
+            configured_reasoning_effort: configured_reasoning_effort(model, models_dev),
         })
         .collect::<Vec<_>>();
     let label_counts =
@@ -779,7 +798,12 @@ fn reconcile_with_facts(
                 .cmp(&right.logical_id)
                 .then(left.candidate_id.cmp(&right.candidate_id))
         });
-        finalize_model_binding_catalog(&mut state, model_binding_groups, facts.ai_config.as_ref());
+        finalize_model_binding_catalog(
+            &mut state,
+            model_binding_groups,
+            facts.ai_config.as_ref(),
+            facts.models_dev.as_deref(),
+        );
         return state;
     }
 
@@ -857,7 +881,12 @@ fn reconcile_with_facts(
     });
     state.pending_approvals.sort();
     state.pending_approvals.dedup();
-    finalize_model_binding_catalog(&mut state, model_binding_groups, facts.ai_config.as_ref());
+    finalize_model_binding_catalog(
+        &mut state,
+        model_binding_groups,
+        facts.ai_config.as_ref(),
+        facts.models_dev.as_deref(),
+    );
     state
 }
 
@@ -865,6 +894,7 @@ fn finalize_model_binding_catalog(
     state: &mut ExternalSubagentProductState,
     groups: BTreeMap<String, ExternalSubagentModelBindingGroup>,
     ai_config: Option<&AIConfig>,
+    models_dev: Option<&ModelsDevCatalog>,
 ) {
     state.model_binding_groups = finalized_model_binding_groups(groups);
     if state.model_binding_groups.iter().any(|group| {
@@ -876,7 +906,7 @@ fn finalize_model_binding_catalog(
         )
     }) {
         state.model_binding_options = ai_config
-            .map(external_model_binding_options)
+            .map(|config| external_model_binding_options(config, models_dev))
             .unwrap_or_default();
     }
 }
@@ -1555,6 +1585,7 @@ mod tests {
         ai_config.default_models.fast = Some("model_fast".to_string());
         ProductFacts {
             ai_config: Some(ai_config),
+            models_dev: None,
             tools: BTreeMap::from([(
                 "Read".to_string(),
                 ResolvedToolFact {
@@ -1618,7 +1649,7 @@ mod tests {
         };
 
         assert!(resolve_exact_external_model(None, "anthropic/claude-sonnet-4", &config).is_none());
-        let options = external_model_binding_options(&config)
+        let options = external_model_binding_options(&config, None)
             .into_iter()
             .filter(|option| {
                 matches!(
@@ -1664,8 +1695,20 @@ mod tests {
             });
         let mut product_facts = facts();
         let model = &mut product_facts.ai_config.as_mut().unwrap().models[0];
-        model.reasoning_effort = Some("high".to_string());
-        model.reasoning_mode = Some(crate::service::config::types::ReasoningMode::Enabled);
+        model.reasoning = Some(crate::service::config::types::ReasoningConfig {
+            default_preset: Some("high".to_string()),
+            presets: vec![crate::service::config::types::ReasoningPreset {
+                id: "high".to_string(),
+                setting: Some(
+                    crate::service::config::types::ReasoningPresetSetting::Effort {
+                        value: "high".to_string(),
+                        mode: Some(crate::service::config::types::ReasoningMode::Enabled),
+                    },
+                ),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
         let empty_set = BTreeSet::new();
         let empty_decisions = BTreeMap::new();
         let empty_bindings = BTreeMap::new();
@@ -1741,6 +1784,41 @@ mod tests {
             default_unbound.summaries[0].model_binding_method,
             ExternalSubagentModelBindingMethod::BindingRequired,
             "a matching configured value is not proof that the selected provider sends it"
+        );
+    }
+
+    #[test]
+    fn generated_default_reasoning_effort_is_projected_from_models_dev() {
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{
+                "fake": {"models": {
+                    "fast-model": {
+                        "id": "fast-model",
+                        "reasoning": true,
+                        "reasoning_options": {"type": "effort", "values": ["low", "high"]}
+                    }
+                }}
+            }"#,
+        )
+        .expect("models.dev fixture");
+        let model = AIModelConfig {
+            provider: "responses".to_string(),
+            model_name: "fast-model".to_string(),
+            base_url: "https://api.fake.example/v1".to_string(),
+            reasoning: Some(crate::service::config::types::ReasoningConfig {
+                catalog: bitfun_core_types::ReasoningCatalogBinding::ModelsDev {
+                    provider: "fake".to_string(),
+                    model: "fast-model".to_string(),
+                },
+                default_preset: Some("high".to_string()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            configured_reasoning_effort(&model, Some(&catalog)).as_deref(),
+            Some("high")
         );
     }
 

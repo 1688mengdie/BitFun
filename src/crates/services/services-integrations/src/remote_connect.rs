@@ -1601,13 +1601,6 @@ pub struct RemoteModelConfig {
     pub context_window: Option<u32>,
     pub enabled: bool,
     pub capabilities: Vec<String>,
-    pub enable_thinking_process: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking_budget_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningCatalogProjection>,
 }
@@ -1652,25 +1645,6 @@ impl RemoteModelCapabilityFact {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteReasoningModeFact {
-    Default,
-    Enabled,
-    Disabled,
-    Adaptive,
-}
-
-impl RemoteReasoningModeFact {
-    const fn wire_value(self) -> &'static str {
-        match self {
-            RemoteReasoningModeFact::Default => "default",
-            RemoteReasoningModeFact::Enabled => "enabled",
-            RemoteReasoningModeFact::Disabled => "disabled",
-            RemoteReasoningModeFact::Adaptive => "adaptive",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct RemoteModelFacts {
     pub id: String,
@@ -1681,10 +1655,6 @@ pub struct RemoteModelFacts {
     pub context_window: Option<u32>,
     pub enabled: bool,
     pub capabilities: Vec<RemoteModelCapabilityFact>,
-    pub enable_thinking_process: bool,
-    pub reasoning_mode: Option<RemoteReasoningModeFact>,
-    pub reasoning_effort: Option<String>,
-    pub thinking_budget_tokens: Option<u32>,
     pub reasoning: Option<ReasoningCatalogProjection>,
 }
 
@@ -1729,12 +1699,6 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
                     .into_iter()
                     .map(|capability| capability.wire_value().to_string())
                     .collect(),
-                enable_thinking_process: model.enable_thinking_process,
-                reasoning_mode: model
-                    .reasoning_mode
-                    .map(|reasoning_mode| reasoning_mode.wire_value().to_string()),
-                reasoning_effort: model.reasoning_effort,
-                thinking_budget_tokens: model.thinking_budget_tokens,
                 reasoning: model.reasoning,
             })
             .collect(),

@@ -17,57 +17,8 @@ function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-export function legacyReasoningConfig(config?: Pick<
-  AIModelConfig,
-  'reasoning' | 'reasoning_mode' | 'reasoning_effort' | 'thinking_budget_tokens' | 'enable_thinking_process'
-> | null): ReasoningConfig | undefined {
-  if (config?.reasoning) return config.reasoning;
-
-  const mode: ReasoningMode | undefined = config?.reasoning_mode ?? (
-    config?.enable_thinking_process === true ? 'enabled' : undefined
-  );
-  const effort = nonEmpty(config?.reasoning_effort) ? config.reasoning_effort.trim() : undefined;
-  const budget = typeof config?.thinking_budget_tokens === 'number'
-    ? config.thinking_budget_tokens
-    : undefined;
-
-  if (!mode && !effort && !budget) return undefined;
-
-  const effectiveMode = mode ?? 'default';
-  const settings: ReasoningPresetSetting[] = [
-    effort
-      ? { type: 'effort', value: effort, mode: effectiveMode }
-      : { type: 'mode', value: effectiveMode },
-    ...(budget
-      ? [{ type: 'budget_tokens' as const, value: budget, mode: effectiveMode }]
-      : []),
-  ];
-  const id = effectiveMode === 'disabled'
-    ? 'off'
-    : effectiveMode === 'adaptive'
-      ? 'adaptive'
-      : effort
-        ? 'legacy-effort'
-        : effectiveMode === 'enabled'
-          ? 'on'
-          : 'auto';
-
-  return {
-    catalog: { source: 'auto' },
-    default_preset: id,
-    presets: [{
-      id,
-      label: id === 'auto' ? 'Auto' : undefined,
-      order: 0,
-      setting: settings.length === 1
-        ? settings[0]
-        : { type: 'sequence', settings },
-    }],
-  };
-}
-
 export function canonicalReasoningConfig(config?: Partial<AIModelConfig> | null): ReasoningConfig {
-  return normalizeReasoningConfig(legacyReasoningConfig(config));
+  return normalizeReasoningConfig(config?.reasoning);
 }
 
 export function normalizeReasoningConfig(config?: ReasoningConfig | null): ReasoningConfig {

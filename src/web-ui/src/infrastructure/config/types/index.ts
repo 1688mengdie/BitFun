@@ -288,15 +288,8 @@ export interface AIModelConfig {
   metadata?: Record<string, any>;
   /** Canonical reasoning preset configuration. */
   reasoning?: ReasoningConfig;
-  /** Compatibility-only input for old model configs. */
-  enable_thinking_process?: boolean;
-  reasoning_mode?: ReasoningMode;
   /** Parse `<think>...</think>` text chunks into streaming reasoning content. */
   inline_think_in_text?: boolean;
-  /** Provider-specific reasoning effort. */
-  reasoning_effort?: string;
-  /** Optional Anthropic manual thinking token budget. */
-  thinking_budget_tokens?: number;
   /** Authentication source. Defaults to inline `api_key`. */
   auth?: AuthConfig;
 }

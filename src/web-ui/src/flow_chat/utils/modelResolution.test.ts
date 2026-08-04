@@ -26,7 +26,6 @@ describe('reasoning preset session creation resolution', () => {
           model_name: 'gpt-primary',
           enabled: true,
           capabilities: ['text_chat'],
-          enable_thinking_process: true,
           reasoning: {
             status: 'known',
             presets: [{
@@ -46,7 +45,6 @@ describe('reasoning preset session creation resolution', () => {
           model_name: 'gpt-fast',
           enabled: true,
           capabilities: ['text_chat'],
-          enable_thinking_process: false,
           reasoning: { status: 'unsupported', presets: [] },
         },
       ],
