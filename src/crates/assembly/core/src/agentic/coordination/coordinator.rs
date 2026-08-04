@@ -11602,8 +11602,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await
     }
 
-    /// Emit event
-    pub(crate) async fn emit_event(&self, event: AgenticEvent) {
+    /// Emit event through the shared agentic event queue.
+    ///
+    /// Public so product hosts (for example the desktop ACP client port) can
+    /// broadcast `agentic://*` events for external sessions that are not owned
+    /// by the internal session store.
+    pub async fn emit_event(&self, event: AgenticEvent) {
         let _ = self
             .event_queue
             .enqueue(event, Some(EventPriority::Normal))

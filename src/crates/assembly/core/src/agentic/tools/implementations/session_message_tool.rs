@@ -8,6 +8,7 @@ use crate::agentic::coordination::{
     get_global_coordinator, get_global_scheduler, ConversationCoordinator, DialogScheduler,
     DialogSubmissionPolicy, DialogTriggerSource,
 };
+use crate::agentic::events::AgenticEvent;
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
@@ -18,16 +19,18 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientPort, AgentDialogPrependedReminder,
-    AgentDialogSteerRequest, AgentDialogTurnPort, AgentDialogTurnRequest, AgentSessionCreateRequest,
-    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
+    AgentDialogPrependedReminder, AgentDialogSteerRequest, AgentDialogTurnPort, AgentDialogTurnRequest,
+    AgentSessionCreateRequest, AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, PortResult,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 use log::{info, warn};
+use uuid::Uuid;
 
 /// Primary channel for legion communication. With a session_id, messages can be sent and received across conversations.
 /// Obtain session_id via Task spawn or SessionControl list_tasks.
@@ -65,7 +68,35 @@ struct DispatchOutcome {
     delivery: &'static str,
     result_text: String,
     /// External response of the ACP direct path; `None` for local dispatches.
+    /// The ACP direct path now runs asynchronously, so this is always `None`
+    /// for ACP targets (the response streams back through events and the
+    /// follow-up reply instead).
     acp_response: Option<String>,
+}
+
+/// Bounded window for background ACP direct deliveries (seconds). The old
+/// direct path passed `timeout_seconds: None` (unbounded), which could hold
+/// the tool call open indefinitely; the async delivery runs in a background
+/// task with this window instead.
+const ACP_DIRECT_TIMEOUT_SECONDS: u64 = 300;
+
+/// One of the two ACP direct send shapes: a flow session
+/// (`acp_<client>_<uuid>` addressed via `send_message`) or an internal
+/// `acp__<client>` session addressed via `send_message_to_bitfun_session`.
+enum AcpDirectSendOp {
+    Flow(AcpClientMessageRequest),
+    Bitfun(AcpClientBitfunMessageRequest),
+}
+
+/// Source-session facts captured for the follow-up reply of an ACP direct
+/// delivery (AgentSessionReplyRoute semantics: the external response is
+/// delivered back to the sender session as a follow-up).
+#[derive(Debug, Clone)]
+struct AcpDirectReplySource {
+    source_session_id: String,
+    source_workspace: String,
+    source_remote_connection_id: Option<String>,
+    source_remote_ssh_host: Option<String>,
 }
 
 impl Default for SessionMessageTool {
@@ -1181,37 +1212,161 @@ impl SessionMessageTool {
         Some(client_id)
     }
 
-    /// ACP direct path: forward the message to the external agent through the
-    /// port, addressed by the internal BitFun session id (the same session
-    /// identity the `acp__<client>__prompt` bridge tool uses), and return the
-    /// external response verbatim. No local model turn is involved.
-    ///
-    /// 参考 bitfun-acp interfaces/acp/src/client/tool.rs:157-168 —
-    /// AcpAgentTool::call_impl → service.prompt_agent（内部 session 键），
-    /// Rust 翻译实现，非 Cargo 依赖。
-    async fn dispatch_acp_direct(
+    /// Forward one ACP direct message through the real channel. Both send
+    /// shapes return the full external response; failures are port errors.
+    async fn acp_direct_send(
         port: &dyn AcpClientPort,
-        client_id: &str,
-        bitfun_session_id: &str,
-        message: &str,
-        workspace_path: Option<String>,
-    ) -> BitFunResult<String> {
-        let sent = port
-            .send_message_to_bitfun_session(AcpClientBitfunMessageRequest {
-                client_id: client_id.to_string(),
-                bitfun_session_id: bitfun_session_id.to_string(),
-                message: message.to_string(),
-                workspace_path,
-                timeout_seconds: None,
+        op: AcpDirectSendOp,
+    ) -> PortResult<AcpClientMessageResult> {
+        match op {
+            AcpDirectSendOp::Flow(request) => port.send_message(request).await,
+            AcpDirectSendOp::Bitfun(request) => port.send_message_to_bitfun_session(request).await,
+        }
+    }
+
+    /// Async ACP direct delivery: spawn a background task that forwards the
+    /// message through the port and, once the external turn completes, streams
+    /// the response back through `agentic://` turn events for the target
+    /// session and delivers the response to the sender session as a follow-up.
+    ///
+    /// The tool call itself returns immediately with an acceptance text; it no
+    /// longer blocks on the external agent's full turn.
+    fn spawn_acp_direct_delivery(
+        port: Arc<dyn AcpClientPort>,
+        op: AcpDirectSendOp,
+        coordinator: Arc<ConversationCoordinator>,
+        scheduler: Arc<DialogScheduler>,
+        target_session_id: String,
+        user_input: String,
+        source: AcpDirectReplySource,
+    ) {
+        tokio::spawn(async move {
+            Self::run_acp_direct_delivery(
+                port.as_ref(),
+                op,
+                coordinator.as_ref(),
+                scheduler.as_ref(),
+                &target_session_id,
+                &user_input,
+                &source,
+            )
+            .await;
+        });
+    }
+
+    /// Completion path of one ACP direct delivery: emit the streaming turn
+    /// events for the target session and route the external response back to
+    /// the sender session (follow-up), or emit a failure event on port error.
+    async fn run_acp_direct_delivery(
+        port: &dyn AcpClientPort,
+        op: AcpDirectSendOp,
+        coordinator: &ConversationCoordinator,
+        scheduler: &DialogScheduler,
+        target_session_id: &str,
+        user_input: &str,
+        source: &AcpDirectReplySource,
+    ) {
+        let turn_id = Uuid::new_v4().to_string();
+        let round_id = Uuid::new_v4().to_string();
+        let started_at = Instant::now();
+        coordinator
+            .emit_event(AgenticEvent::DialogTurnStarted {
+                session_id: target_session_id.to_string(),
+                turn_id: turn_id.clone(),
+                turn_index: 0,
+                user_input: user_input.to_string(),
+                original_user_input: Some(user_input.to_string()),
+                user_message_metadata: None,
             })
-            .await
-            .map_err(|error| {
-                BitFunError::tool(format!(
-                    "ACP client port failed ({:?}): {}",
-                    error.kind, error.message
-                ))
-            })?;
-        Ok(sent.response)
+            .await;
+        match Self::acp_direct_send(port, op).await {
+            Ok(sent) => {
+                let duration_ms = started_at.elapsed().as_millis() as u64;
+                coordinator
+                    .emit_event(AgenticEvent::TextChunk {
+                        session_id: target_session_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        round_id: round_id.clone(),
+                        attempt_id: None,
+                        attempt_index: None,
+                        text: sent.response.clone(),
+                    })
+                    .await;
+                coordinator
+                    .emit_event(AgenticEvent::DialogTurnCompleted {
+                        session_id: target_session_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        total_rounds: 1,
+                        total_tools: 0,
+                        duration_ms,
+                        partial_recovery_reason: None,
+                        success: Some(true),
+                        finish_reason: Some("stop".to_string()),
+                        has_final_response: Some(true),
+                    })
+                    .await;
+                // AgentSessionReplyRoute semantics: deliver the external
+                // response back to the sender session as a follow-up.
+                let display = format!(
+                    "External ACP session '{}' responded:\n{}",
+                    target_session_id, sent.response
+                );
+                if let Err(error) = scheduler
+                    .deliver_background_result(
+                        source.source_session_id.clone(),
+                        String::new(),
+                        Some(source.source_workspace.clone()),
+                        source.source_remote_connection_id.clone(),
+                        source.source_remote_ssh_host.clone(),
+                        sent.response.clone(),
+                        Some(display),
+                        None,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to deliver ACP direct response back to source: source_session_id={}, target_session_id={}, error={}",
+                        source.source_session_id, target_session_id, error
+                    );
+                }
+            }
+            Err(error) => {
+                coordinator
+                    .emit_event(AgenticEvent::DialogTurnFailed {
+                        session_id: target_session_id.to_string(),
+                        turn_id: turn_id.clone(),
+                        error: format!(
+                            "ACP direct delivery failed for session '{}': {}",
+                            target_session_id, error
+                        ),
+                        error_category: None,
+                        error_detail: None,
+                    })
+                    .await;
+                let error_text = format!(
+                    "ACP direct delivery failed for session '{}': {}",
+                    target_session_id, error
+                );
+                if let Err(delivery_error) = scheduler
+                    .deliver_background_result(
+                        source.source_session_id.clone(),
+                        String::new(),
+                        Some(source.source_workspace.clone()),
+                        source.source_remote_connection_id.clone(),
+                        source.source_remote_ssh_host.clone(),
+                        error_text,
+                        None,
+                        None,
+                    )
+                    .await
+                {
+                    warn!(
+                        "Failed to deliver ACP direct failure back to source: source_session_id={}, error={}",
+                        source.source_session_id, delivery_error
+                    );
+                }
+            }
+        }
     }
 
     /// Performs one create+send (or send-to-existing) dispatch and returns the
@@ -1247,7 +1402,8 @@ impl SessionMessageTool {
                 // create_acp_flow_session / acp_control / SessionControl acp__ 创建的
                 // 真外部 ACP 会话）。流会话不在内部 session store，无法走 workspace
                 // binding / list_sessions 解析；直接经 AcpClientPort::send_message 真
-                // 通道转发并返回外部响应原文（与 acp_message 同通道，无本地模型 turn）。
+                // 通道转发（与 acp_message 同通道，无本地模型 turn）。投递即返回，
+                // 外部响应经事件流 + follow-up 回传。
                 if let Some(flow_client_id) =
                     Self::acp_flow_client_id_from_session_id(&target_session_id)
                 {
@@ -1262,31 +1418,42 @@ impl SessionMessageTool {
                             .workspace_root()
                             .map(|path| path.to_string_lossy().to_string())
                     });
-                    let sent = port
-                        .send_message(AcpClientMessageRequest {
-                            session_id: target_session_id.clone(),
-                            message: message.clone(),
-                            workspace_path: workspace_path.clone(),
-                            timeout_seconds: None,
-                        })
-                        .await
-                        .map_err(|error| {
-                            BitFunError::tool(format!(
-                                "ACP client port failed ({:?}): {}",
-                                error.kind, error.message
-                            ))
-                        })?;
                     // Resolve before the move below: the flow client id borrows
                     // from `target_session_id`, which is moved into the outcome.
                     let target_agent_type = format!("acp:{}", flow_client_id);
+                    let resolved_workspace = workspace_path.clone().unwrap_or_default();
+                    let result_text = format!(
+                        "Message accepted for external ACP session '{}' in workspace '{}' using agent type '{}'. The external agent response will stream back once it completes.",
+                        target_session_id, resolved_workspace, target_agent_type
+                    );
+                    let source = AcpDirectReplySource {
+                        source_session_id: source_session_id.clone(),
+                        source_workspace: source_workspace.clone(),
+                        source_remote_connection_id: source_remote_connection_id.map(ToOwned::to_owned),
+                        source_remote_ssh_host: source_remote_ssh_host.map(ToOwned::to_owned),
+                    };
+                    Self::spawn_acp_direct_delivery(
+                        port,
+                        AcpDirectSendOp::Flow(AcpClientMessageRequest {
+                            session_id: target_session_id.clone(),
+                            message: message.clone(),
+                            workspace_path: workspace_path.clone(),
+                            timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+                        }),
+                        coordinator.clone(),
+                        scheduler.clone(),
+                        target_session_id.clone(),
+                        message.clone(),
+                        source,
+                    );
                     return Ok(DispatchOutcome {
                         target_session_id,
                         target_agent_type,
                         created_session_id: None,
-                        workspace_path: workspace_path.unwrap_or_default(),
+                        workspace_path: resolved_workspace,
                         delivery: "acp_direct",
-                        result_text: sent.response.clone(),
-                        acp_response: Some(sent.response),
+                        result_text,
+                        acp_response: None,
                     });
                 }
 
@@ -1422,10 +1589,12 @@ impl SessionMessageTool {
         // ACP direct path: `acp__<client>` targets are external agents.
         // Forward the message through the ACP client port (addressed by the
         // internal BitFun session id, same identity the AcpAgentTool bridge
-        // uses) and return the external response verbatim — no local model
-        // turn, no bridge re-translation. When the port is unavailable the
-        // dispatch fails loudly instead of falling back to the local model
-        // (a fallback would re-introduce the double-billing path).
+        // uses) — no local model turn, no bridge re-translation. Delivery
+        // returns immediately; the external response streams back through
+        // `agentic://` turn events and a follow-up reply to the sender.
+        // When the port is unavailable the dispatch fails loudly instead of
+        // falling back to the local model (a fallback would re-introduce the
+        // double-billing path).
         if let Some(client_id) = Self::acp_client_id_from_agent_type(&target_agent_type) {
             let port = coordinator.acp_client_port().ok_or_else(|| {
                 BitFunError::tool(
@@ -1433,22 +1602,39 @@ impl SessionMessageTool {
                         .to_string(),
                 )
             })?;
-            let response = Self::dispatch_acp_direct(
-                port.as_ref(),
-                client_id,
-                &target_session_id,
-                &message,
-                Some(workspace_target.workspace_path.clone()),
-            )
-            .await?;
+            let result_text = format!(
+                "Message accepted for external ACP session '{}' in workspace '{}' using agent type '{}'. The external agent response will stream back once it completes.",
+                target_session_id, workspace_target.workspace_path, target_agent_type
+            );
+            let source = AcpDirectReplySource {
+                source_session_id: source_session_id.clone(),
+                source_workspace: source_workspace.clone(),
+                source_remote_connection_id: source_remote_connection_id.map(ToOwned::to_owned),
+                source_remote_ssh_host: source_remote_ssh_host.map(ToOwned::to_owned),
+            };
+            Self::spawn_acp_direct_delivery(
+                port,
+                AcpDirectSendOp::Bitfun(AcpClientBitfunMessageRequest {
+                    client_id: client_id.to_string(),
+                    bitfun_session_id: target_session_id.clone(),
+                    message: message.clone(),
+                    workspace_path: Some(workspace_target.workspace_path.clone()),
+                    timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+                }),
+                coordinator.clone(),
+                scheduler.clone(),
+                target_session_id.clone(),
+                message.clone(),
+                source,
+            );
             return Ok(DispatchOutcome {
                 target_session_id,
                 target_agent_type,
                 created_session_id,
                 workspace_path: workspace_target.workspace_path,
                 delivery: "acp_direct",
-                result_text: response.clone(),
-                acp_response: Some(response),
+                result_text,
+                acp_response: None,
             });
         }
 
@@ -1685,8 +1871,21 @@ impl SessionMessageTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agentic::core::SessionConfig;
+    use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+    use crate::agentic::execution::{
+        ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+    };
+    use crate::agentic::persistence::PersistenceManager;
+    use crate::agentic::session::{
+        compression::{CompressionConfig, ContextCompressor},
+        PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
+    };
     use crate::agentic::tools::framework::ToolUseContext;
+    use crate::agentic::tools::registry::ToolRegistry;
+    use crate::agentic::tools::{ToolPipeline, ToolStateManager};
     use crate::agentic::WorkspaceBinding;
+    use crate::infrastructure::PathManager;
     use bitfun_core_types::{
         SessionExecutionTarget, SessionExecutionTargetKind, WorktreeLifecycle,
     };
@@ -1698,6 +1897,8 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Mutex;
+    use std::time::Duration;
+    use tokio::sync::RwLock as TokioRwLock;
     use uuid::Uuid;
 
     fn empty_context() -> ToolUseContext {
@@ -2882,6 +3083,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeAcpPort {
         bitfun_messages: Mutex<Vec<AcpClientBitfunMessageRequest>>,
+        flow_messages: Mutex<Vec<AcpClientMessageRequest>>,
         fail_send: bool,
     }
 
@@ -2934,12 +3136,19 @@ mod tests {
 
         async fn send_message(
             &self,
-            _request: bitfun_runtime_ports::AcpClientMessageRequest,
+            request: bitfun_runtime_ports::AcpClientMessageRequest,
         ) -> PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
-            Err(PortError::new(
-                PortErrorKind::Backend,
-                "not exercised by the ACP direct-path tests",
-            ))
+            if self.fail_send {
+                return Err(PortError::new(
+                    PortErrorKind::Backend,
+                    "simulated external agent failure",
+                ));
+            }
+            self.flow_messages.lock().unwrap().push(request.clone());
+            Ok(bitfun_runtime_ports::AcpClientMessageResult {
+                session_id: request.session_id,
+                response: "external response".to_string(),
+            })
         }
 
         async fn send_message_to_bitfun_session(
@@ -2970,6 +3179,73 @@ mod tests {
         }
     }
 
+    /// Builds a real coordinator + scheduler harness so the async ACP direct
+    /// delivery can be observed end to end (events + port forwarding). Mirrors
+    /// the scheduler test harness.
+    #[allow(clippy::type_complexity)]
+    fn test_acp_delivery_harness() -> (
+        Arc<ConversationCoordinator>,
+        Arc<DialogScheduler>,
+        Arc<SessionManager>,
+        Arc<EventQueue>,
+        tempfile::TempDir,
+    ) {
+        let root = tempfile::tempdir().expect("test root");
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(
+                PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+                    root.path().join("user-root"),
+                )))
+                .expect("persistence manager"),
+            ),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: false,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(TokioRwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let coordinator = Arc::new(ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue.clone(),
+            Arc::new(EventRouter::new()),
+            Arc::new(
+                crate::runtime_ownership::CoreRuntimeOwnership::embedded_with_facts(
+                    std::env::temp_dir().join(format!(
+                        "bitfun-session-message-ownership-test-{}",
+                        Uuid::new_v4()
+                    )),
+                    "bitfun".to_string(),
+                    "test",
+                ),
+            ),
+        ));
+        let scheduler = DialogScheduler::new(coordinator.clone(), session_manager.clone());
+        scheduler.set_agent_reply_archive_root(root.path().join("agent-replies"));
+        (coordinator, scheduler, session_manager, event_queue, root)
+    }
+
     #[test]
     fn acp_client_id_is_extracted_from_agent_type_prefix() {
         assert_eq!(
@@ -2996,14 +3272,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acp_direct_forwards_through_port_and_returns_response_verbatim() {
+    async fn acp_direct_send_forwards_through_bitfun_port() {
         let port = FakeAcpPort::default();
-        let response = SessionMessageTool::dispatch_acp_direct(
+        let request = AcpClientBitfunMessageRequest {
+            client_id: "codex".to_string(),
+            bitfun_session_id: "session-internal-1".to_string(),
+            message: "hello external agent".to_string(),
+            workspace_path: Some("/repo/project".to_string()),
+            timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+        };
+        let response = SessionMessageTool::acp_direct_send(
             &port,
-            "codex",
-            "session-internal-1",
-            "hello external agent",
-            Some("/repo/project".to_string()),
+            AcpDirectSendOp::Bitfun(request.clone()),
         )
         .await
         .expect("direct path should succeed");
@@ -3014,27 +3294,124 @@ mod tests {
         assert_eq!(messages[0].bitfun_session_id, "session-internal-1");
         assert_eq!(messages[0].message, "hello external agent");
         assert_eq!(messages[0].workspace_path.as_deref(), Some("/repo/project"));
-        assert_eq!(messages[0].timeout_seconds, None);
+        // The async direct path now carries a bounded window instead of the
+        // old unbounded `None`.
+        assert_eq!(messages[0].timeout_seconds, Some(ACP_DIRECT_TIMEOUT_SECONDS));
 
         // The external response is returned verbatim, no re-translation.
-        assert_eq!(response, "external response");
+        assert_eq!(response.response, "external response");
     }
 
     #[tokio::test]
-    async fn acp_direct_propagates_port_failure() {
+    async fn acp_direct_send_propagates_port_failure() {
         let port = FakeAcpPort {
             fail_send: true,
             ..FakeAcpPort::default()
         };
-        let error = SessionMessageTool::dispatch_acp_direct(
+        let error = SessionMessageTool::acp_direct_send(
             &port,
-            "codex",
-            "session-internal-1",
-            "hello",
-            None,
+            AcpDirectSendOp::Bitfun(AcpClientBitfunMessageRequest {
+                client_id: "codex".to_string(),
+                bitfun_session_id: "session-internal-1".to_string(),
+                message: "hello".to_string(),
+                workspace_path: None,
+                timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+            }),
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("simulated external agent failure"));
+        assert!(error.message.contains("simulated external agent failure"));
+    }
+
+    #[tokio::test]
+    async fn acp_direct_delivery_streams_events_and_forwards_port_call() {
+        let (coordinator, _scheduler, session_manager, event_queue, root) =
+            test_acp_delivery_harness();
+        let source_session_id = "source-session";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(source_session_id.to_string()),
+                "Source".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create source session");
+
+        let port = Arc::new(FakeAcpPort::default());
+        let target_session_id = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b".to_string();
+        let mut event_rx = event_queue.subscribe();
+
+        SessionMessageTool::spawn_acp_direct_delivery(
+            port.clone(),
+            AcpDirectSendOp::Flow(AcpClientMessageRequest {
+                session_id: target_session_id.clone(),
+                message: "hello external agent".to_string(),
+                workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+            }),
+            coordinator,
+            _scheduler.clone(),
+            target_session_id.clone(),
+            "hello external agent".to_string(),
+            AcpDirectReplySource {
+                source_session_id: source_session_id.to_string(),
+                source_workspace: workspace.to_string_lossy().into_owned(),
+                source_remote_connection_id: None,
+                source_remote_ssh_host: None,
+            },
+        );
+
+        // The delivery runs in a background task; wait for the streamed turn
+        // events and the port call (bounded timeout, not the old `None`).
+        // Note: the follow-up reply back to the source session is not asserted
+        // here because a model-less unit-test host cannot run the follow-up
+        // turn; it is covered by `deliver_background_result`'s own tests.
+        let mut saw_started = false;
+        let mut saw_text = false;
+        let mut saw_completed = false;
+        for _ in 0..200 {
+            while let Ok(envelope) = event_rx.try_recv() {
+                match &envelope.event {
+                    AgenticEvent::DialogTurnStarted { session_id, .. }
+                        if session_id == &target_session_id =>
+                    {
+                        saw_started = true;
+                    }
+                    AgenticEvent::TextChunk { session_id, text, .. }
+                        if session_id == &target_session_id =>
+                    {
+                        saw_text = text == "external response";
+                    }
+                    AgenticEvent::DialogTurnCompleted { session_id, .. }
+                        if session_id == &target_session_id =>
+                    {
+                        saw_completed = true;
+                    }
+                    _ => {}
+                }
+            }
+            let delivered = {
+                let messages = port.flow_messages.lock().unwrap();
+                saw_started
+                    && saw_text
+                    && saw_completed
+                    && messages.len() == 1
+                    && messages[0].timeout_seconds == Some(ACP_DIRECT_TIMEOUT_SECONDS)
+            };
+            if delivered {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!(
+            "ACP direct delivery did not stream turn events and forward the port call: saw_started={}, saw_text={}, saw_completed={}",
+            saw_started, saw_text, saw_completed
+        );
     }
 }

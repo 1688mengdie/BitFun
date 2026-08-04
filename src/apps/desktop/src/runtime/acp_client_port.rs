@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use bitfun_acp::AcpClientService;
 use bitfun_core::agentic::coordination::ConversationCoordinator;
 use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
+use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{
     acp_backend_error, AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientCreateRequest,
     AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult,
@@ -139,6 +140,28 @@ impl AcpClientPort for DesktopAcpClientPort {
             return Err(acp_backend_error(format!(
                 "failed to start ACP client for session: {error}"
             )));
+        }
+
+        // Broadcast `agentic://session-created` so the frontend can register
+        // the external ACP session (payload shape mirrors the FlowChat
+        // `create_acp_flow_session` emit in acp_client_api.rs). Best-effort:
+        // a missing coordinator only drops the UI event, never the session.
+        if let Some(coordinator) = self.coordinator.as_ref() {
+            coordinator
+                .emit_event(AgenticEvent::SessionCreated {
+                    session_id: response.session_id.clone(),
+                    session_name: response.session_name.clone(),
+                    agent_type: response.agent_type.clone(),
+                    workspace_path: Some(request.workspace_path.clone()),
+                    project_workspace_path: None,
+                    execution_target: None,
+                    workspace_id: None,
+                    remote_connection_id: request.remote_connection_id.clone(),
+                    remote_ssh_host: None,
+                    parent_session_id: None,
+                    subagent_type: None,
+                })
+                .await;
         }
 
         Ok(AcpClientCreateResult {
