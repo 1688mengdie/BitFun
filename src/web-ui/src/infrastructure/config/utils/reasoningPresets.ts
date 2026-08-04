@@ -1,9 +1,51 @@
 import type {
   AIModelConfig,
   ReasoningConfig,
+  ReasoningCatalogProjection,
   ReasoningPreset,
   ReasoningPresetAction,
 } from '../types';
+
+export const COMMON_REASONING_EFFORT_VALUES = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+] as const;
+
+export function resolveReasoningEffortValues(
+  projection?: ReasoningCatalogProjection | null,
+): string[] {
+  const catalogValues = projection?.presets
+    ?.filter(preset => preset.source !== 'model_config')
+    .flatMap(preset => preset.actions ?? [])
+    .filter((action): action is Extract<ReasoningPresetAction, { type: 'effort' }> => action.type === 'effort')
+    .map(action => action.value.trim())
+    .filter(Boolean) ?? [];
+  const values = Array.from(new Set(catalogValues));
+  return values.length > 0 ? values : [...COMMON_REASONING_EFFORT_VALUES];
+}
+
+export function resolveDefaultReasoningEffortValue(
+  projection?: ReasoningCatalogProjection | null,
+): string {
+  const effortValues = resolveReasoningEffortValues(projection);
+  const projectedDefault = projection?.presets
+    ?.find(preset => (
+      preset.source !== 'model_config'
+      && preset.id === projection.default_preset
+    ))
+    ?.actions.find(
+      (action): action is Extract<ReasoningPresetAction, { type: 'effort' }> => action.type === 'effort',
+    )
+    ?.value.trim();
+
+  if (projectedDefault && effortValues.includes(projectedDefault)) return projectedDefault;
+  return effortValues.includes('medium') ? 'medium' : effortValues[0];
+}
 
 function nonEmpty(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;

@@ -273,6 +273,13 @@
         bottom: 0;
       }
     }
+
+    &--portal {
+      position: fixed;
+      right: auto;
+      bottom: auto;
+      z-index: tokens.$z-modal-active;
+    }
   }
 
   &__search {
