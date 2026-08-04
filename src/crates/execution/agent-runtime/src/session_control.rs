@@ -34,6 +34,14 @@ pub struct SessionControlInput {
     pub session_id: Option<String>,
     pub session_name: Option<String>,
     pub agent_type: Option<SessionControlAgentType>,
+    /// Optional compact display name used by `list` compact output. Only
+    /// meaningful for `create`; the value is persisted as `shortName` in the
+    /// session's custom metadata so it survives restarts.
+    pub short_name: Option<String>,
+    /// When true, `list` emits the full session tree (session_name included)
+    /// instead of the compact per-session line output. Only meaningful for
+    /// `list`.
+    pub detail: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -103,6 +111,29 @@ pub fn session_control_session_name_or_default(session_name: Option<&str>) -> St
         .to_string()
 }
 
+/// Maximum number of characters a compact display name keeps from the full
+/// session name when no explicit short name is set.
+pub const COMPACT_SESSION_NAME_MAX_CHARS: usize = 60;
+
+/// Resolve the compact display name used by `list` compact output: the
+/// explicit short name wins; otherwise the full session name is truncated to
+/// [`COMPACT_SESSION_NAME_MAX_CHARS`] characters with a trailing ellipsis.
+/// Character-based truncation keeps multi-byte (CJK) names intact.
+pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>) -> String {
+    if let Some(short_name) = short_name.filter(|value| !value.trim().is_empty()) {
+        return short_name.trim().to_string();
+    }
+    let trimmed = session_name.trim();
+    if trimmed.chars().count() <= COMPACT_SESSION_NAME_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let truncated: String = trimmed
+        .chars()
+        .take(COMPACT_SESSION_NAME_MAX_CHARS)
+        .collect();
+    format!("{truncated}...")
+}
+
 pub fn session_control_agent_type_or_default(
     agent_type: Option<&SessionControlAgentType>,
 ) -> String {
@@ -137,6 +168,12 @@ fn validate_mutating_action_target(
     }
     if input.session_name.is_some() {
         return invalid("session_name is only allowed for create");
+    }
+    if input.short_name.is_some() {
+        return invalid("short_name is only allowed for create");
+    }
+    if input.detail.is_some() {
+        return invalid("detail is only allowed for list");
     }
 
     let Some(session_id) = input.session_id.as_deref() else {
@@ -185,6 +222,9 @@ pub fn validate_session_control_input(
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for create");
             }
+            if input.detail.is_some() {
+                return invalid("detail is only allowed for list");
+            }
             if context.current_session_id.is_none() {
                 return invalid("create requires a creator session in tool context");
             }
@@ -203,6 +243,9 @@ pub fn validate_session_control_input(
             }
             if input.session_name.is_some() {
                 return invalid("session_name is only allowed for create");
+            }
+            if input.short_name.is_some() {
+                return invalid("short_name is only allowed for create");
             }
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for list");

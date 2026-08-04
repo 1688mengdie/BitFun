@@ -16,13 +16,14 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_agent_runtime::sdk::AgentRuntime;
 use bitfun_agent_runtime::session_control::{
-    render_session_control_tool_use_message, resolve_session_control_cancel_route,
-    session_control_agent_type_or_default, session_control_cancel_result_message,
-    session_control_cancel_status, session_control_created_result_message,
-    session_control_creator_marker, session_control_deleted_result_message,
-    session_control_session_name_or_default, validate_session_control_input, validate_session_id,
-    SessionControlAction, SessionControlCancelRoute, SessionControlInput,
-    SessionControlValidationContext, SessionControlValidationResult,
+    compact_session_display_name, render_session_control_tool_use_message,
+    resolve_session_control_cancel_route, session_control_agent_type_or_default,
+    session_control_cancel_result_message, session_control_cancel_status,
+    session_control_created_result_message, session_control_creator_marker,
+    session_control_deleted_result_message, session_control_session_name_or_default,
+    validate_session_control_input, validate_session_id, SessionControlAction,
+    SessionControlCancelRoute, SessionControlInput, SessionControlValidationContext,
+    SessionControlValidationResult,
 };
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
@@ -30,8 +31,10 @@ use bitfun_runtime_ports::{
     AgentSessionListRequest, AgentSessionSummary, AgentSessionWorkspaceBinding,
     AgentSessionWorkspaceRequest, AgentSubmissionSource, AgentTurnCancellationRequest,
 };
+use bitfun_services_core::session::merge_session_custom_metadata;
 use bitfun_services_core::session::tree::SessionTreeManager;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::time::Duration;
 
 /// SessionControl tool - create, cancel, delete, or list persisted sessions
@@ -251,23 +254,27 @@ impl SessionControlTool {
         }
     }
 
+    /// Build the `result_for_assistant` text for the `list` action.
+    ///
+    /// Default (`detail == false`) is the compact tree output: one line per
+    /// session with `sessionId | agentType | status | compact name` so the
+    /// model context stays small even when session names are long task
+    /// descriptions. Full session names (and the JSON tree) are still
+    /// available through the `data` payload and through `detail == true`,
+    /// which preserves the legacy verbose tree output.
     fn build_list_result_for_assistant(
         &self,
         workspace: &str,
         sessions: &[AgentSessionSummary],
         current_session_id: Option<&str>,
         tree: Option<&SessionTreeManager>,
+        short_names: &HashMap<String, Option<String>>,
+        detail: bool,
     ) -> String {
         if sessions.is_empty() {
             return format!("No sessions found in workspace '{}'.", workspace);
         }
 
-        // --- Build tree JSON from flat list ---
-        let tree_json = self.build_session_tree_json(sessions, tree);
-
-        // --- Compact tree JSON view (single source of truth for the model) ---
-        // The full `sessions` array and parsed `tree` remain available in the
-        // result `data` payload for programmatic consumers.
         let mut lines = vec![format!(
             "Found {} session(s) in workspace '{}'",
             sessions.len(),
@@ -279,10 +286,20 @@ impl SessionControlTool {
             lines.push(String::new());
         }
 
-        lines.push("## Session Tree (JSON)".to_string());
-        lines.push("```json".to_string());
-        lines.push(tree_json);
-        lines.push("```".to_string());
+        if detail {
+            // --- Full tree JSON view (legacy verbose output) ---
+            // The full `sessions` array and parsed `tree` remain available in the
+            // result `data` payload for programmatic consumers.
+            lines.push("## Session Tree (JSON)".to_string());
+            lines.push("```json".to_string());
+            lines.push(self.build_session_tree_json(sessions, tree));
+            lines.push("```".to_string());
+        } else {
+            // --- Compact tree text view (default) ---
+            lines.push("## Sessions (compact)".to_string());
+            lines.push("format: [sessionId] agentType | status | name".to_string());
+            lines.extend(build_compact_tree_lines(sessions, tree, short_names));
+        }
         lines.join("\n")
     }
 
@@ -295,7 +312,6 @@ impl SessionControlTool {
     ) -> String {
         build_session_tree_json_impl(sessions, tree)
     }
-
 }
 
 /// Shared source for the agent_type enum of SessionControl/SessionMessage
@@ -367,8 +383,6 @@ pub(crate) fn build_session_tree_json_impl(
     sessions: &[AgentSessionSummary],
     tree: Option<&SessionTreeManager>,
 ) -> String {
-    use std::collections::HashMap;
-
     // children_by_parent: parent_session_id -> list of children
     let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
     let mut roots: Vec<&AgentSessionSummary> = Vec::new();
@@ -487,6 +501,96 @@ pub(crate) fn build_session_tree_json_impl(
     serde_json::to_string_pretty(&forest).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// Build the compact text tree used by the default `list` output: one line per
+/// session with `sessionId | agentType | status | compact name`. The tree
+/// shape mirrors [`build_session_tree_json_impl`] (same grouping, orphan
+/// promotion, and sort orders); only the per-node rendering is text.
+fn build_compact_tree_lines(
+    sessions: &[AgentSessionSummary],
+    tree: Option<&SessionTreeManager>,
+    short_names: &HashMap<String, Option<String>>,
+) -> Vec<String> {
+    // children_by_parent: parent_session_id -> list of children
+    let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
+    let mut roots: Vec<&AgentSessionSummary> = Vec::new();
+    let known_ids: std::collections::HashSet<&str> =
+        sessions.iter().map(|s| s.session_id.as_str()).collect();
+
+    // R-19: resolve the effective parent of a session - the nearest ancestor
+    // present in this (possibly filtered) list.
+    let resolve_effective_parent = |session: &AgentSessionSummary| -> Option<String> {
+        let mut current = session.parent_session_id.clone()?;
+        loop {
+            if known_ids.contains(current.as_str()) {
+                return Some(current);
+            }
+            match tree.and_then(|tree| tree.get_parent(&current)) {
+                Some(parent) => current = parent,
+                None => return None,
+            }
+        }
+    };
+
+    for session in sessions {
+        match resolve_effective_parent(session) {
+            Some(parent_id) => {
+                children_by_parent
+                    .entry(parent_id)
+                    .or_default()
+                    .push(session);
+            }
+            None => roots.push(session),
+        }
+    }
+
+    fn compact_line(
+        session: &AgentSessionSummary,
+        short_names: &HashMap<String, Option<String>>,
+    ) -> String {
+        let status = session
+            .status
+            .clone()
+            .unwrap_or_else(|| "active".to_string());
+        let display_name = compact_session_display_name(
+            &session.session_name,
+            short_names
+                .get(&session.session_id)
+                .and_then(Option::as_deref),
+        );
+        format!(
+            "- [{}] {} | {} | {}",
+            session.session_id, session.agent_type, status, display_name
+        )
+    }
+
+    fn collect_lines(
+        session: &AgentSessionSummary,
+        depth: usize,
+        children_by_parent: &HashMap<String, Vec<&AgentSessionSummary>>,
+        short_names: &HashMap<String, Option<String>>,
+        lines: &mut Vec<String>,
+    ) {
+        let indent = "  ".repeat(depth);
+        lines.push(format!("{indent}{}", compact_line(session, short_names)));
+        if let Some(children) = children_by_parent.get(session.session_id.as_str()) {
+            let mut sorted = children.to_vec();
+            sorted.sort_by_key(|s| s.created_at_ms);
+            for child in sorted {
+                collect_lines(child, depth + 1, children_by_parent, short_names, lines);
+            }
+        }
+    }
+
+    let mut sorted_roots = roots;
+    sorted_roots.sort_by_key(|s| std::cmp::Reverse(s.created_at_ms));
+
+    let mut lines = Vec::new();
+    for root in sorted_roots {
+        collect_lines(root, 0, &children_by_parent, short_names, &mut lines);
+    }
+    lines
+}
+
 #[async_trait]
 impl Tool for SessionControlTool {
     fn name(&self) -> &str {
@@ -498,10 +602,10 @@ impl Tool for SessionControlTool {
             r#"Manage persisted workspace-scoped agent sessions.
 
 Actions:
-- "create": Create a new session. You may optionally provide session_name and agent_type.
+- "create": Create a new session. You may optionally provide session_name, short_name and agent_type.
 - "cancel": Cancel the target session's currently running dialog turn. This does not delete the session or clear any queued messages that may still run later.
 - "delete": Delete an existing session by session_id.
-- "list": List all sessions. Sessions are displayed in a tree structure showing parent-child relationships (created via Task tool).
+- "list": List all sessions. Sessions are displayed in a tree structure showing parent-child relationships (created via Task tool). By default the output is compact (sessionId | agentType | status | short name); pass "detail": true to expand the full session tree including full session names.
 
 Related tools:
 - Use Task (spawn) to launch subagents that appear as children in the session tree.
@@ -511,6 +615,8 @@ Related tools:
 Arguments:
 - "workspace": Absolute workspace path. Optional for create and list; defaults to the current workspace when omitted. Ignored for cancel and delete.
 - "session_name": Only used by create. Defaults to "New Session".
+- "short_name": Only used by create. Optional compact display name (e.g. "secretary-standing"); it becomes the name shown in the compact list output, keeping the model context small. Ignored for ACP flow sessions.
+- "detail": Only used by list. When true, the full session tree with full session names is returned instead of the compact output. Defaults to false.
 - "agent_type": Only used by create. Defaults to "agentic". Allowed values are dynamically resolved from the available agent registry (common values include "agentic", "Plan", "Cowork", and any custom/external subagent types). Use "acp__<client_id>" to create a real external ACP agent session: the external client process is started immediately (same shape as the frontend create_acp_flow_session path).
 - "session_id": Required for cancel and delete."#
                 .to_string(),
@@ -546,6 +652,14 @@ Arguments:
                     "type": "string",
                     "description": "Optional display name when creating a session."
                 },
+                "short_name": {
+                    "type": "string",
+                    "description": "Optional compact display name when creating a session (used by compact list output; ignored for ACP flow sessions)."
+                },
+                "detail": {
+                    "type": "boolean",
+                    "description": "When true, list returns the full session tree with full session names instead of the compact output."
+                },
                 "agent_type": {
                     "type": "string",
                     "description": "Optional agent type when creating a session (defaults to \"agentic\"). Valid values are dynamically resolved from the available agent registry. Use \"acp__<client_id>\" to create a real external ACP agent session (the external client process starts immediately)."
@@ -579,6 +693,14 @@ Arguments:
                 "session_name": {
                     "type": "string",
                     "description": "Optional display name when creating a session."
+                },
+                "short_name": {
+                    "type": "string",
+                    "description": "Optional compact display name when creating a session (used by compact list output; ignored for ACP flow sessions)."
+                },
+                "detail": {
+                    "type": "boolean",
+                    "description": "When true, list returns the full session tree with full session names instead of the compact output."
                 },
                 "agent_type": {
                     "type": "string",
@@ -800,6 +922,38 @@ Arguments:
                             log::warn!(
                                 "SessionControl create: failed to register child {} under {} in tree: {:?}",
                                 created_session_id, pid, e
+                            );
+                        }
+                    }
+
+                    // Short name persistence: write `shortName` into the session
+                    // custom metadata (same best-effort pattern as the RBAC role
+                    // persistence) so the compact `list` output can show it
+                    // without pulling the full session name into the context.
+                    if let Some(short_name) = params
+                        .short_name
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        if let Err(e) = coordinator
+                            .session_manager
+                            .update_session_metadata(
+                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                &created_session_id,
+                                |metadata| {
+                                    merge_session_custom_metadata(
+                                        metadata,
+                                        serde_json::json!({ "shortName": short_name }),
+                                    );
+                                },
+                            )
+                            .await
+                        {
+                            log::warn!(
+                                "SessionControl create: failed to persist short name for {}: {:?}",
+                                created_session_id,
+                                e
                             );
                         }
                     }
@@ -1198,11 +1352,7 @@ Arguments:
                     })?;
 
                 Ok(vec![ToolResult::Result {
-                    data: build_delete_result_json(
-                        session_id,
-                        &workspace.display_workspace,
-                        &[],
-                    ),
+                    data: build_delete_result_json(session_id, &workspace.display_workspace, &[]),
                     result_for_assistant: Some(session_control_deleted_result_message(
                         session_id,
                         &workspace.display_workspace,
@@ -1241,6 +1391,34 @@ Arguments:
                     .filter(|s| !s.is_daemon && !s.agent_type.starts_with("warden-"))
                     .collect();
 
+                // Resolve compact short names from persisted session metadata
+                // (custom_metadata.shortName, written by create when a
+                // short_name argument was provided). Best-effort: sessions
+                // without metadata or without a shortName fall back to the
+                // truncated full name in the compact output.
+                let mut short_names: HashMap<String, Option<String>> = HashMap::new();
+                for session in &sessions {
+                    let short_name = coordinator
+                        .session_manager
+                        .load_session_metadata(
+                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            &session.session_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|metadata| {
+                            metadata
+                                .custom_metadata
+                                .as_ref()
+                                .and_then(|custom| custom.get("shortName"))
+                                .and_then(|value| value.as_str())
+                                .map(str::to_string)
+                        });
+                    short_names.insert(session.session_id.clone(), short_name);
+                }
+
+                let detail = params.detail.unwrap_or(false);
                 let current_session_id =
                     self.current_workspace_session(context, &workspace.display_workspace);
                 let result_for_assistant = self.build_list_result_for_assistant(
@@ -1248,6 +1426,8 @@ Arguments:
                     &sessions,
                     current_session_id,
                     Some(coordinator.session_tree().as_ref()),
+                    &short_names,
+                    detail,
                 );
 
                 let tree_json = self
@@ -1263,6 +1443,7 @@ Arguments:
                         "count": sessions.len(),
                         "sessions": sessions,
                         "tree": tree_value,
+                        "short_names": short_names,
                     }),
                     result_for_assistant: Some(result_for_assistant),
                     image_attachments: None,
@@ -1662,7 +1843,10 @@ mod tests {
             .expect("cascade_failures array");
         assert_eq!(surfaced.len(), 2);
         assert_eq!(surfaced[0]["session_id"], "child_1");
-        assert_eq!(surfaced[0]["reason"], "skipped: daemon/warden child session");
+        assert_eq!(
+            surfaced[0]["reason"],
+            "skipped: daemon/warden child session"
+        );
         assert_eq!(surfaced[1]["session_id"], "child_2");
         assert_eq!(surfaced[1]["reason"], "storage write failed");
     }
@@ -1716,7 +1900,12 @@ mod tests {
         clear_session_role("delete-owner-reviewer");
     }
 
-    fn summary(id: &str, parent: Option<&str>, is_daemon: bool, created_at_ms: u64) -> AgentSessionSummary {
+    fn summary(
+        id: &str,
+        parent: Option<&str>,
+        is_daemon: bool,
+        created_at_ms: u64,
+    ) -> AgentSessionSummary {
         AgentSessionSummary {
             session_id: id.to_string(),
             session_name: format!("Session {id}"),
@@ -1789,7 +1978,11 @@ mod tests {
         let tree_json = build_session_tree_json_impl(&sessions, Some(&tree));
         let value: Value = serde_json::from_str(&tree_json).expect("valid tree json");
         let roots = value.as_array().unwrap();
-        assert_eq!(roots.len(), 1, "single root after multi-level re-hang: {tree_json}");
+        assert_eq!(
+            roots.len(),
+            1,
+            "single root after multi-level re-hang: {tree_json}"
+        );
         assert_eq!(roots[0]["sessionId"], "root");
         let children = roots[0]["children"].as_array().unwrap();
         assert_eq!(children.len(), 1);
@@ -1817,5 +2010,208 @@ mod tests {
 
         let orphan_node = roots.iter().find(|r| r["sessionId"] == "child").unwrap();
         assert_eq!(orphan_node["orphaned"], true);
+    }
+
+    // --- short_name / detail / compact output ---
+
+    #[tokio::test]
+    async fn validate_list_rejects_short_name() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "list",
+                    "workspace": workspace.as_string(),
+                    "short_name": "secretary",
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("short_name is only allowed for create")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_list_allows_detail_flag() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "list",
+                    "workspace": workspace.as_string(),
+                    "detail": true,
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_cancel_rejects_detail_flag() {
+        let tool = SessionControlTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "cancel",
+                    "session_id": "worker_1",
+                    "detail": true,
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("detail is only allowed for list")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_create_allows_short_name() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let mut context = empty_context();
+        context.session_id = Some("creator-1".to_string());
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "create",
+                    "workspace": workspace.as_string(),
+                    "short_name": "secretary-standing",
+                }),
+                Some(&context),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_create_rejects_detail_flag() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let mut context = empty_context();
+        context.session_id = Some("creator-1".to_string());
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "create",
+                    "workspace": workspace.as_string(),
+                    "detail": true,
+                }),
+                Some(&context),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("detail is only allowed for list")
+        );
+    }
+
+    #[test]
+    fn compact_display_name_prefers_short_name_and_truncates() {
+        let long_name = "task-description".repeat(10); // 150 chars
+        assert_eq!(
+            compact_session_display_name("abc", Some("秘书·常驻")),
+            "秘书·常驻"
+        );
+        assert_eq!(compact_session_display_name("abc", Some("  ")), "abc");
+
+        let truncated = compact_session_display_name(&long_name, None);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), 60 + 3);
+
+        assert_eq!(
+            compact_session_display_name("short name", None),
+            "short name"
+        );
+    }
+
+    #[test]
+    fn compact_list_uses_short_names_and_preserves_tree_indentation() {
+        let tool = SessionControlTool::new();
+        let sessions = vec![
+            summary("root", None, false, 1),
+            summary("child", Some("root"), false, 2),
+        ];
+        let mut short_names = HashMap::new();
+        short_names.insert("root".to_string(), Some("秘书·常驻".to_string()));
+        short_names.insert("child".to_string(), None);
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            false,
+        );
+
+        assert!(output.contains("[root] agentic | active | 秘书·常驻"));
+        assert!(output.contains("  - [child] agentic | active | Session child"));
+        assert!(output.contains("## Sessions (compact)"));
+        assert!(!output.contains("## Session Tree (JSON)"));
+    }
+
+    #[test]
+    fn compact_list_truncates_long_session_names_without_short_name() {
+        let tool = SessionControlTool::new();
+        let long_name = "派单提示词全文-".repeat(20); // 140 chars
+        let mut root = summary("root", None, false, 1);
+        root.session_name = long_name.clone();
+        let sessions = vec![root];
+        let short_names = HashMap::new();
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            false,
+        );
+
+        assert!(
+            !output.contains(&long_name),
+            "full session name must be omitted"
+        );
+        assert!(output.contains("..."));
+        assert!(output.contains("[root] agentic | active | "));
+    }
+
+    #[test]
+    fn detail_list_keeps_full_tree_json_output() {
+        let tool = SessionControlTool::new();
+        let sessions = vec![summary("root", None, false, 1)];
+        let short_names = HashMap::new();
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            true,
+        );
+
+        assert!(output.contains("## Session Tree (JSON)"));
+        assert!(output.contains("\"sessionName\": \"Session root\""));
+        assert!(output.contains("\"sessionId\": \"root\""));
     }
 }
