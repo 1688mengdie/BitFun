@@ -18,7 +18,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AcpClientBitfunMessageRequest, AcpClientPort, AgentDialogPrependedReminder,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientPort, AgentDialogPrependedReminder,
     AgentDialogSteerRequest, AgentDialogTurnPort, AgentDialogTurnRequest, AgentSessionCreateRequest,
     AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
     AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
@@ -444,6 +444,20 @@ fn format_role_display(role: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("")
+}
+
+/// Lightweight UUID shape check (8-4-4-4-12, 36 chars) for the trailing
+/// segment of an ACP flow session id (`acp_<client_id>_<uuid>`). Kept
+/// dependency-free so core does not need the uuid crate for this guard.
+fn looks_like_uuid(segment: &str) -> bool {
+    segment.len() == 36
+        && segment.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 use bitfun_runtime_ports::AgentType;
@@ -1150,6 +1164,23 @@ impl SessionMessageTool {
             .filter(|client_id| !client_id.trim().is_empty())
     }
 
+    /// The ACP client id when `session_id` is a flow session id of the shape
+    /// `acp_<client_id>_<uuid>` (created by the frontend `create_acp_flow_session`,
+    /// `acp_control` create, or the SessionControl `acp__` path; see
+    /// interfaces/acp session_persistence.rs:44). Flow sessions live in the ACP
+    /// persistence store, not the internal session store, so they are detected
+    /// by id shape instead of a registry lookup. The trailing UUID segment is
+    /// shape-checked so an internal session id that happens to start with
+    /// `acp_` is never mistaken for a flow session.
+    fn acp_flow_client_id_from_session_id(session_id: &str) -> Option<&str> {
+        let rest = session_id.strip_prefix("acp_")?;
+        let (client_id, uuid_segment) = rest.rsplit_once('_')?;
+        if client_id.is_empty() || !looks_like_uuid(uuid_segment) {
+            return None;
+        }
+        Some(client_id)
+    }
+
     /// ACP direct path: forward the message to the external agent through the
     /// port, addressed by the internal BitFun session id (the same session
     /// identity the `acp__<client>__prompt` bridge tool uses), and return the
@@ -1210,6 +1241,53 @@ impl SessionMessageTool {
                     return Err(BitFunError::tool(
                         "SessionMessage cannot send a message to the same session".to_string(),
                     ));
+                }
+
+                // ACP 流会话直通：session_id 形状 `acp_<client_id>_<uuid>`（前端
+                // create_acp_flow_session / acp_control / SessionControl acp__ 创建的
+                // 真外部 ACP 会话）。流会话不在内部 session store，无法走 workspace
+                // binding / list_sessions 解析；直接经 AcpClientPort::send_message 真
+                // 通道转发并返回外部响应原文（与 acp_message 同通道，无本地模型 turn）。
+                if let Some(flow_client_id) =
+                    Self::acp_flow_client_id_from_session_id(&target_session_id)
+                {
+                    let port = coordinator.acp_client_port().ok_or_else(|| {
+                        BitFunError::tool(
+                            "ACP client port is not available; the desktop host did not inject it"
+                                .to_string(),
+                        )
+                    })?;
+                    let workspace_path = params.workspace.clone().or_else(|| {
+                        context
+                            .workspace_root()
+                            .map(|path| path.to_string_lossy().to_string())
+                    });
+                    let sent = port
+                        .send_message(AcpClientMessageRequest {
+                            session_id: target_session_id.clone(),
+                            message: message.clone(),
+                            workspace_path: workspace_path.clone(),
+                            timeout_seconds: None,
+                        })
+                        .await
+                        .map_err(|error| {
+                            BitFunError::tool(format!(
+                                "ACP client port failed ({:?}): {}",
+                                error.kind, error.message
+                            ))
+                        })?;
+                    // Resolve before the move below: the flow client id borrows
+                    // from `target_session_id`, which is moved into the outcome.
+                    let target_agent_type = format!("acp:{}", flow_client_id);
+                    return Ok(DispatchOutcome {
+                        target_session_id,
+                        target_agent_type,
+                        created_session_id: None,
+                        workspace_path: workspace_path.unwrap_or_default(),
+                        delivery: "acp_direct",
+                        result_text: sent.response.clone(),
+                        acp_response: Some(sent.response),
+                    });
                 }
 
                 let workspace_target = runtime
@@ -1743,6 +1821,59 @@ mod tests {
             SessionMessageTool::target_agent_type_from_resolution(Some(" ".to_string())),
             None
         );
+    }
+
+    #[test]
+    fn acp_flow_client_id_parses_flow_session_id() {
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id(
+                "acp_codebuddy_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+            ),
+            Some("codebuddy")
+        );
+    }
+
+    #[test]
+    fn acp_flow_client_id_parses_client_ids_with_underscores() {
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id(
+                "acp_claude_code_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+            ),
+            Some("claude_code")
+        );
+    }
+
+    #[test]
+    fn acp_flow_client_id_rejects_non_flow_session_ids() {
+        // Internal session ids are not flow sessions even when they start with
+        // "acp_": the trailing segment must be a well-formed UUID.
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id("acp_codebuddy"),
+            None
+        );
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id(
+                "acp_codebuddy_not-a-uuid"
+            ),
+            None
+        );
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id("session-123"),
+            None
+        );
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id(""),
+            None
+        );
+    }
+
+    #[test]
+    fn looks_like_uuid_accepts_only_canonical_shape() {
+        assert!(looks_like_uuid("7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"));
+        assert!(!looks_like_uuid("7f0e1a2b3c4d4e5f8a9b0c1d2e3f4a5b"));
+        assert!(!looks_like_uuid("7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b-extra"));
+        assert!(!looks_like_uuid(""));
+        assert!(!looks_like_uuid("7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5"));
     }
 
     #[test]
