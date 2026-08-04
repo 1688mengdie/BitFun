@@ -1516,6 +1516,44 @@ fn persisted_external_owner_never_falls_back_to_a_same_name_local_mode() {
     );
 }
 
+#[test]
+fn local_subagent_type_resolves_as_primary_agent_for_turn() {
+    let registry = AgentRegistry::new();
+    registry.register_agent(
+        Arc::new(TestAgent {
+            id: "lvpa-handoff".to_string(),
+        }),
+        AgentCategory::SubAgent,
+        AgentSource::User,
+        Some(SubAgentSource::User),
+        None,
+    );
+
+    let binding = registry
+        .resolve_primary_agent_for_turn(
+            "lvpa-handoff",
+            None,
+            false,
+            Some(bitfun_core_types::SessionAgentRouteOwner::Local),
+        )
+        .expect("a session owned by a registered subagent type must resolve for continued dialog turns");
+    assert_eq!(binding.runtime_agent_key, "lvpa-handoff");
+    assert_eq!(
+        binding.route_owner,
+        bitfun_core_types::SessionAgentRouteOwner::Local
+    );
+
+    // The fail-closed guard for persisted external owners is unaffected.
+    assert!(registry
+        .resolve_primary_agent_for_turn(
+            "lvpa-handoff",
+            None,
+            false,
+            Some(bitfun_core_types::SessionAgentRouteOwner::External),
+        )
+        .is_none());
+}
+
 #[tokio::test]
 async fn external_agent_role_controls_main_and_task_projection() {
     let registry = AgentRegistry::new();

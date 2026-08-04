@@ -459,8 +459,13 @@ impl AgentRegistry {
         if expected_owner == Some(SessionAgentRouteOwner::External) {
             return None;
         }
+        // Subagent types (custom `kind: subagent` agents such as legion
+        // permanent posts, and builtin subagents) are valid owners of sessions
+        // created through SessionControl/SessionMessage and must resolve for
+        // continued dialog turns, restore, and manual compaction. The Mode
+        // filter only guarded the route branch above; the fail-closed
+        // `expected_owner == External` guard stays.
         self.find_agent_entry(logical_id, workspace_root)
-            .filter(|entry| entry.category == AgentCategory::Mode)
             .map(|entry| local_primary_binding(entry.agent.id()))
     }
 
