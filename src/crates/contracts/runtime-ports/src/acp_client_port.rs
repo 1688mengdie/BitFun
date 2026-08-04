@@ -98,6 +98,28 @@ pub struct AcpClientMessageResult {
     pub response: String,
 }
 
+/// `SessionMessage` ACP direct-path request: forward one message to the
+/// external ACP agent bound to an internal BitFun session.
+///
+/// Unlike [`AcpClientMessageRequest`] (which addresses a flow session id of
+/// the shape `acp_<client_id>_<uuid>`), this request addresses the internal
+/// session id of an `acp__<client_id>` session — the same session identity
+/// the `acp__<client_id>__prompt` bridge tool (`AcpAgentTool`) uses, so the
+/// external conversation state is shared with the delegated-turn path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientBitfunMessageRequest {
+    /// Registered ACP client id (for example `codex` or `claude-code`).
+    pub client_id: String,
+    /// Internal BitFun session id the external ACP process is bound to.
+    pub bitfun_session_id: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+}
+
 /// `acp_history` request: read the persisted transcript of an ACP session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -156,6 +178,15 @@ pub trait AcpClientPort: RuntimeServicePort + std::fmt::Debug {
     async fn send_message(
         &self,
         request: AcpClientMessageRequest,
+    ) -> PortResult<AcpClientMessageResult>;
+
+    /// Forward one message to the external ACP agent bound to an internal
+    /// BitFun session (`acp__<client_id>` session) and return the external
+    /// response synchronously. This is the `SessionMessage` direct path: no
+    /// local model turn is involved, only the port call.
+    async fn send_message_to_bitfun_session(
+        &self,
+        request: AcpClientBitfunMessageRequest,
     ) -> PortResult<AcpClientMessageResult>;
 
     /// Read the persisted transcript of an ACP session.

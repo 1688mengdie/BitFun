@@ -35,10 +35,10 @@ pub use bitfun_product_domains::tool_permissions::{
     ResolvedPermissionPolicy, ToolPermissionConfig,
 };
 pub use acp_client_port::{
-    acp_backend_error, AcpClientCancelRequest, AcpClientCreateRequest, AcpClientCreateResult,
-    AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult, AcpClientListResult,
-    AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort, AcpClientReleaseRequest,
-    AcpClientSummary,
+    acp_backend_error, AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientCreateRequest,
+    AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult,
+    AcpClientListResult, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
+    AcpClientReleaseRequest, AcpClientSummary,
 };
 pub use local_workspace_snapshot::{
     LocalWorkspaceSnapshotPort, LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,

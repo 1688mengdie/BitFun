@@ -15,10 +15,11 @@ use bitfun_acp::AcpClientService;
 use bitfun_core::agentic::coordination::ConversationCoordinator;
 use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
 use bitfun_runtime_ports::{
-    acp_backend_error, AcpClientCancelRequest, AcpClientCreateRequest, AcpClientCreateResult,
-    AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult, AcpClientListResult,
-    AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort, AcpClientReleaseRequest,
-    AcpClientSummary, PortErrorKind, PortResult, RuntimeServiceCapability, RuntimeServicePort,
+    acp_backend_error, AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientCreateRequest,
+    AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult,
+    AcpClientListResult, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
+    AcpClientReleaseRequest, AcpClientSummary, PortErrorKind, PortResult, RuntimeServiceCapability,
+    RuntimeServicePort,
 };
 
 /// Desktop implementation of [`AcpClientPort`] over the real ACP client service.
@@ -212,6 +213,35 @@ impl AcpClientPort for DesktopAcpClientPort {
             .map_err(|error| acp_backend_error(format!("ACP agent failed: {error}")))?;
         Ok(AcpClientMessageResult {
             session_id: request.session_id,
+            response,
+        })
+    }
+
+    async fn send_message_to_bitfun_session(
+        &self,
+        request: AcpClientBitfunMessageRequest,
+    ) -> PortResult<AcpClientMessageResult> {
+        let service = self.service()?.clone();
+        // Same forwarding shape as AcpAgentTool::call_impl (the
+        // `acp__<client>__prompt` bridge tool): the external process is
+        // addressed by the internal BitFun session id, so the conversation
+        // state is shared with the delegated-turn path.
+        // 参考 bitfun-acp interfaces/acp/src/client/tool.rs:157-168 —
+        // AcpAgentTool::call_impl → service.prompt_agent，Rust 翻译实现
+        let response = service
+            .prompt_agent(
+                &request.client_id,
+                request.message,
+                request.workspace_path,
+                None,
+                request.bitfun_session_id.clone(),
+                None,
+                request.timeout_seconds,
+            )
+            .await
+            .map_err(|error| acp_backend_error(format!("ACP agent failed: {error}")))?;
+        Ok(AcpClientMessageResult {
+            session_id: request.bitfun_session_id,
             response,
         })
     }

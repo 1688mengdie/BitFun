@@ -788,9 +788,9 @@ Arguments:
 mod tests {
     use super::*;
     use bitfun_runtime_ports::{
-        AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryResult, AcpClientListResult,
-        AcpClientMessageResult, AcpClientSummary, PortResult, RuntimeServiceCapability,
-        RuntimeServicePort,
+        AcpClientBitfunMessageRequest, AcpClientCreateResult, AcpClientHistoryEntry,
+        AcpClientHistoryResult, AcpClientListResult, AcpClientMessageResult, AcpClientSummary,
+        PortResult, RuntimeServiceCapability, RuntimeServicePort,
     };
     use std::sync::Mutex;
 
@@ -801,6 +801,7 @@ mod tests {
         released: Mutex<Vec<String>>,
         cancelled: Mutex<Vec<String>>,
         messages: Mutex<Vec<AcpClientMessageRequest>>,
+        bitfun_messages: Mutex<Vec<AcpClientBitfunMessageRequest>>,
         histories: Mutex<Vec<AcpClientHistoryRequest>>,
     }
 
@@ -856,6 +857,17 @@ mod tests {
             self.messages.lock().unwrap().push(request.clone());
             Ok(AcpClientMessageResult {
                 session_id: request.session_id,
+                response: "external response".to_string(),
+            })
+        }
+
+        async fn send_message_to_bitfun_session(
+            &self,
+            request: AcpClientBitfunMessageRequest,
+        ) -> PortResult<AcpClientMessageResult> {
+            self.bitfun_messages.lock().unwrap().push(request.clone());
+            Ok(AcpClientMessageResult {
+                session_id: request.bitfun_session_id,
                 response: "external response".to_string(),
             })
         }
