@@ -1,5 +1,3 @@
-use crate::types::ReasoningMode;
-
 pub(crate) fn is_dashscope_url(url: &str) -> bool {
     url.contains("dashscope.aliyuncs.com") || url.contains("dashscope-intl.aliyuncs.com")
 }
@@ -60,47 +58,20 @@ pub(crate) fn should_append_tool_stream(url: &str, model_name: &str) -> bool {
         .is_some_and(|(major, minor)| major > 4 || (major == 4 && minor >= 5))
 }
 
-pub(crate) fn apply_openai_compatible_reasoning_fields(
+pub(crate) fn apply_openai_compatible_toggle(
     request_body: &mut serde_json::Value,
-    mode: ReasoningMode,
-    reasoning_effort: Option<&str>,
+    enabled: bool,
     url: &str,
-    model_name: &str,
-) {
-    let normalized_mode = if mode == ReasoningMode::Adaptive {
-        ReasoningMode::Enabled
-    } else {
-        mode
-    };
-
+) -> bool {
     if is_dashscope_url(url) || is_siliconflow_url(url) {
-        if normalized_mode != ReasoningMode::Default {
-            request_body["enable_thinking"] =
-                serde_json::json!(normalized_mode == ReasoningMode::Enabled);
-        }
-        return;
+        request_body["enable_thinking"] = serde_json::json!(enabled);
+        return true;
     }
-
-    match normalized_mode {
-        ReasoningMode::Default => {}
-        ReasoningMode::Enabled => {
-            request_body["thinking"] = serde_json::json!({ "type": "enabled" });
-        }
-        ReasoningMode::Disabled => {
-            request_body["thinking"] = serde_json::json!({ "type": "disabled" });
-        }
-        ReasoningMode::Adaptive => unreachable!("adaptive mode is normalized above"),
+    if is_deepseek_url(url) {
+        request_body["thinking"] = serde_json::json!({
+            "type": if enabled { "enabled" } else { "disabled" }
+        });
+        return true;
     }
-
-    if normalized_mode == ReasoningMode::Disabled {
-        return;
-    }
-
-    if !(is_deepseek_url(url) || is_deepseek_reasoning_effort_model(model_name)) {
-        return;
-    }
-
-    if let Some(effort) = reasoning_effort.and_then(normalize_deepseek_reasoning_effort) {
-        request_body["reasoning_effort"] = serde_json::json!(effort);
-    }
+    false
 }

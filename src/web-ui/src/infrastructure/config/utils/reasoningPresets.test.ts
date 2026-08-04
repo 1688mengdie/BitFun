@@ -30,7 +30,7 @@ describe('canonical reasoning presets', () => {
     const canonical: ReasoningConfig = {
       catalog: { source: 'disabled' },
       default_preset: 'custom',
-      presets: [{ id: 'custom', setting: { type: 'toggle', enabled: false } }],
+      presets: [{ id: 'custom', actions: [{ type: 'toggle', enabled: false }] }],
     };
     expect(canonicalReasoningConfig(model({ reasoning: canonical }))).toEqual(canonical);
   });
@@ -43,8 +43,8 @@ describe('canonical reasoning presets', () => {
     expect(validateReasoningConfig({
       catalog: { source: 'auto' },
       presets: [
-        { id: 'high', setting: { type: 'effort', value: 'high' } },
-        { id: 'high', setting: { type: 'effort', value: 'xhigh' } },
+        { id: 'high', actions: [{ type: 'effort', value: 'high' }] },
+        { id: 'high', actions: [{ type: 'effort', value: 'xhigh' }] },
       ],
     })).toBe('duplicate_preset_id');
     expect(validateReasoningConfig({

@@ -190,31 +190,23 @@ export type ModelCategory =
   | 'multimodal'
   | 'speech_recognition';
 
-export type ReasoningMode =
-  | 'default'
-  | 'enabled'
-  | 'disabled'
-  | 'adaptive';
-
 export type ReasoningCatalogBinding =
   | { source: 'auto' }
   | { source: 'models_dev'; provider: string; model: string }
   | { source: 'disabled' };
 
-export type ReasoningPresetSetting =
-  | { type: 'mode'; value: ReasoningMode }
-  | { type: 'effort'; value: string; mode?: ReasoningMode }
+export type ReasoningPresetAction =
+  | { type: 'effort'; value: string }
   | { type: 'toggle'; enabled: boolean }
-  | { type: 'budget_tokens'; value: number; mode?: ReasoningMode }
-  | { type: 'request_patch'; body: Record<string, unknown> }
-  | { type: 'sequence'; settings: ReasoningPresetSetting[] };
+  | { type: 'budget_tokens'; value: number }
+  | { type: 'request_patch'; body: Record<string, unknown> };
 
 export interface ReasoningPreset {
   id: string;
   label?: string;
   order?: number;
   disabled?: boolean;
-  setting?: ReasoningPresetSetting;
+  actions?: ReasoningPresetAction[];
 }
 
 export interface ReasoningConfig {
@@ -229,7 +221,7 @@ export interface ReasoningPresetDescriptor {
   id: string;
   label: string;
   order: number;
-  setting: ReasoningPresetSetting;
+  actions: ReasoningPresetAction[];
   source: ReasoningPresetSource;
 }
 

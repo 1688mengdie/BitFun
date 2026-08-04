@@ -768,10 +768,9 @@ mod tests {
             reasoning: Some(bitfun_core_types::ReasoningConfig {
                 presets: vec![bitfun_core_types::ReasoningPreset {
                     id: "bad-budget".to_string(),
-                    setting: Some(bitfun_core_types::ReasoningPresetSetting::BudgetTokens {
+                    actions: vec![bitfun_core_types::ReasoningPresetAction::BudgetTokens {
                         value: 0,
-                        mode: None,
-                    }),
+                    }],
                     ..Default::default()
                 }],
                 ..Default::default()
@@ -804,16 +803,16 @@ mod tests {
                 presets: vec![
                     bitfun_core_types::ReasoningPreset {
                         id: "same".to_string(),
-                        setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle {
+                        actions: vec![bitfun_core_types::ReasoningPresetAction::Toggle {
                             enabled: true,
-                        }),
+                        }],
                         ..Default::default()
                     },
                     bitfun_core_types::ReasoningPreset {
                         id: "same".to_string(),
-                        setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle {
+                        actions: vec![bitfun_core_types::ReasoningPresetAction::Toggle {
                             enabled: false,
-                        }),
+                        }],
                         ..Default::default()
                     },
                 ],

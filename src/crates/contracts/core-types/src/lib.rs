@@ -16,9 +16,8 @@ pub mod worktree;
 pub use ai::{
     AIConfig, ConnectionTestMessageCode, ConnectionTestResult, Message, ProxyConfig,
     ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningCatalogProjection,
-    ReasoningConfig, ReasoningMode, ReasoningPreset, ReasoningPresetApplication,
-    ReasoningPresetDescriptor, ReasoningPresetSetting, ReasoningPresetSource,
-    ReasoningRuntimeParameters, RemoteModelInfo, ToolCall, ToolCallConfirmationDetails,
+    ReasoningConfig, ReasoningPreset, ReasoningPresetAction, ReasoningPresetDescriptor,
+    ReasoningPresetSource, RemoteModelInfo, ToolCall, ToolCallConfirmationDetails,
     ToolCallRequestInfo, ToolCallResponseInfo, ToolDefinition,
 };
 pub use errors::{AiErrorDetail, ErrorCategory};

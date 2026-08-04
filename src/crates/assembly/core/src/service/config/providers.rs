@@ -8,11 +8,13 @@ use super::types::*;
 use crate::infrastructure::ai::reasoning_catalog::{
     load_models_dev_reasoning_catalog_without_refresh, project_model_reasoning_catalog,
 };
+#[cfg(feature = "ai-adapter-runtime")]
+use crate::infrastructure::ai::AIClient;
 use crate::util::errors::*;
 use async_trait::async_trait;
 use bitfun_core_types::ReasoningCatalogBinding;
 #[cfg(test)]
-use bitfun_core_types::{ReasoningConfig, ReasoningPreset, ReasoningPresetSetting};
+use bitfun_core_types::{ReasoningConfig, ReasoningPreset, ReasoningPresetAction};
 use log::{error, info};
 use std::collections::HashMap;
 
@@ -48,16 +50,9 @@ impl ConfigProvider for AIConfigProvider {
         if let Ok(ai_config) = serde_json::from_value::<AIConfig>(config.clone()) {
             #[cfg(feature = "ai-adapter-runtime")]
             let models_dev = if ai_config.models.iter().any(|model| {
-                model
-                    .reasoning
-                    .as_ref()
-                    .and_then(|reasoning| {
-                        reasoning.default_preset.as_deref().filter(|preset_id| {
-                            reasoning.preset(preset_id).is_none()
-                                && !matches!(reasoning.catalog, ReasoningCatalogBinding::Disabled)
-                        })
-                    })
-                    .is_some()
+                model.reasoning.as_ref().is_some_and(|reasoning| {
+                    !matches!(reasoning.catalog, ReasoningCatalogBinding::Disabled)
+                })
             }) {
                 Some(load_models_dev_reasoning_catalog_without_refresh().await)
             } else {
@@ -154,6 +149,49 @@ impl ConfigProvider for AIConfigProvider {
                                 "Model '{}' reasoning default preset '{}' is not available at index {}",
                                 model.name, default_preset, index
                             )));
+                        }
+                    }
+
+                    #[cfg(feature = "ai-adapter-runtime")]
+                    {
+                        let runtime_config = <crate::util::types::AIConfig as TryFrom<
+                            AIModelConfig,
+                        >>::try_from(model.clone())
+                        .map_err(|message| {
+                            BitFunError::validation(format!(
+                                "Model '{}' reasoning target is invalid at index {}: {}",
+                                model.name, index, message
+                            ))
+                        })?;
+                        let client = AIClient::new(runtime_config);
+                        let projection = project_model_reasoning_catalog(
+                            model,
+                            models_dev
+                                .as_ref()
+                                .and_then(|snapshot| snapshot.catalog.as_deref()),
+                        );
+                        for preset in reasoning
+                            .presets
+                            .iter()
+                            .filter(|preset| !preset.disabled && !preset.actions.is_empty())
+                        {
+                            let preset_id = preset.id.trim();
+                            let descriptor = projection
+                                .presets
+                                .iter()
+                                .find(|descriptor| descriptor.id == preset_id)
+                                .ok_or_else(|| {
+                                    BitFunError::validation(format!(
+                                        "Model '{}' reasoning preset '{}' is not available at index {}",
+                                        model.name, preset_id, index
+                                    ))
+                                })?;
+                            client.validate_reasoning_preset(descriptor).map_err(|error| {
+                                BitFunError::validation(format!(
+                                    "Model '{}' reasoning preset '{}' is unsupported at index {}: {}",
+                                    model.name, preset_id, index, error
+                                ))
+                            })?;
                         }
                     }
                 }
@@ -703,23 +741,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_invalid_canonical_reasoning_settings() {
-        for (setting, expected) in [
+    async fn rejects_invalid_canonical_reasoning_actions() {
+        for (action, expected) in [
             (
-                ReasoningPresetSetting::BudgetTokens {
-                    value: 0,
-                    mode: None,
-                },
+                ReasoningPresetAction::BudgetTokens { value: 0 },
                 "budget_tokens value must be greater than 0",
             ),
             (
-                ReasoningPresetSetting::Sequence {
-                    settings: Vec::new(),
-                },
-                "sequence settings must not be empty",
-            ),
-            (
-                ReasoningPresetSetting::RequestPatch {
+                ReasoningPresetAction::RequestPatch {
                     body: serde_json::json!(["invalid"]),
                 },
                 "request_patch body must be a JSON object",
@@ -729,7 +758,7 @@ mod tests {
                 default_preset: Some("custom".to_string()),
                 presets: vec![ReasoningPreset {
                     id: "custom".to_string(),
-                    setting: Some(setting),
+                    actions: vec![action],
                     ..ReasoningPreset::default()
                 }],
                 ..ReasoningConfig::default()
@@ -741,18 +770,36 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ai-adapter-runtime")]
+    #[tokio::test]
+    async fn rejects_reasoning_actions_unsupported_by_the_configured_target() {
+        let error = validate_reasoning(ReasoningConfig {
+            catalog: ReasoningCatalogBinding::Disabled,
+            default_preset: Some("on".to_string()),
+            presets: vec![ReasoningPreset {
+                id: "on".to_string(),
+                actions: vec![ReasoningPresetAction::Toggle { enabled: true }],
+                ..ReasoningPreset::default()
+            }],
+        })
+        .await
+        .expect_err("Responses must reject a generic toggle action");
+
+        assert!(error.to_string().contains("unsupported"), "{error}");
+    }
+
     #[tokio::test]
     async fn rejects_duplicate_and_unavailable_default_presets() {
         let duplicate = validate_reasoning(ReasoningConfig {
             presets: vec![
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: Some(ReasoningPresetSetting::Toggle { enabled: true }),
+                    actions: vec![ReasoningPresetAction::Toggle { enabled: true }],
                     ..ReasoningPreset::default()
                 },
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: Some(ReasoningPresetSetting::Toggle { enabled: false }),
+                    actions: vec![ReasoningPresetAction::Toggle { enabled: false }],
                     ..ReasoningPreset::default()
                 },
             ],
@@ -792,10 +839,7 @@ mod tests {
         config.ai.models.push(model_with_reasoning(ReasoningConfig {
             presets: vec![ReasoningPreset {
                 id: "bad".to_string(),
-                setting: Some(ReasoningPresetSetting::BudgetTokens {
-                    value: 0,
-                    mode: None,
-                }),
+                actions: vec![ReasoningPresetAction::BudgetTokens { value: 0 }],
                 ..ReasoningPreset::default()
             }],
             ..ReasoningConfig::default()

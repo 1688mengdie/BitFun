@@ -83,7 +83,7 @@
   }
 
   &__row-head,
-  &__setting {
+  &__action {
     display: flex;
     align-items: center;
     gap: $size-gap-2;
@@ -99,23 +99,34 @@
   }
 
   &__row-head .bitfun-input-wrapper,
-  &__setting > .select,
-  &__setting > .bitfun-input-wrapper,
-  &__setting > .bitfun-number-input {
+  &__action > .select,
+  &__action > .bitfun-input-wrapper,
+  &__action > .bitfun-number-input {
     min-width: 0;
   }
 
-  &__setting > .select:first-child {
+  &__action > .select:first-child {
     flex: 0 1 190px;
   }
 
-  &__setting > .bitfun-input-wrapper,
-  &__setting > .bitfun-number-input {
+  &__action > .bitfun-input-wrapper,
+  &__action > .bitfun-number-input {
     flex: 1 1 160px;
   }
 
-  &__setting > .select:not(:first-child) {
-    flex: 0 1 150px;
+  &__actions {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+    padding-left: $size-gap-2;
+    border-left: 2px solid var(--bf-appearance-token-border-subtle);
+  }
+
+  &__action-controls {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: $size-gap-1;
   }
 
   &__default-toggle {
@@ -143,17 +154,17 @@
   .bitfun-reasoning-preset-editor {
     &__binding,
     &__row-head,
-    &__setting {
+    &__action {
       grid-template-columns: 1fr;
       flex-wrap: wrap;
     }
 
     &__row-head > .bitfun-input-wrapper:first-child,
     &__row-head > .bitfun-input-wrapper:nth-child(2),
-    &__setting > .select:first-child,
-    &__setting > .select:not(:first-child),
-    &__setting > .bitfun-input-wrapper,
-    &__setting > .bitfun-number-input {
+    &__action > .select:first-child,
+    &__action > .bitfun-input-wrapper,
+    &__action > .bitfun-number-input,
+    &__action > .bitfun-reasoning-preset-editor__json {
       flex: 1 1 100%;
       width: 100%;
     }

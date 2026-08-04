@@ -280,7 +280,15 @@ export interface RemoteReasoningPresetDescriptor {
   id: string;
   label: string;
   order: number;
+  actions: RemoteReasoningPresetAction[];
   source: string;
+}
+
+export interface RemoteReasoningPresetAction {
+  type: string;
+  value?: string | number;
+  enabled?: boolean;
+  body?: Record<string, Object>;
 }
 
 export interface RemoteReasoningCatalogProjection {

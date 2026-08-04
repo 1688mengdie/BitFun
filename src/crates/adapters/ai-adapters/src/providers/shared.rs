@@ -2,7 +2,8 @@ use crate::client::utils::{
     build_request_body_subset, is_trim_custom_request_body_mode, merge_json_value,
 };
 use crate::client::AIClient;
-use crate::types::ReasoningPresetSetting;
+use crate::types::{ReasoningPresetAction, ReasoningPresetDescriptor};
+use anyhow::{anyhow, Result};
 use reqwest::RequestBuilder;
 
 pub(crate) fn apply_header_policy<F>(
@@ -94,105 +95,108 @@ pub(crate) fn merge_extra_body_recursively(
     }
 }
 
-pub(crate) fn capture_selected_reasoning_fields(
-    client: &AIClient,
+pub(crate) fn capture_reasoning_fields(
     request_body: &serde_json::Value,
     top_level_keys: &[&str],
     nested_fields: &[(&str, &str)],
 ) -> Option<serde_json::Value> {
-    client
-        .selected_reasoning_preset
-        .as_ref()
-        .filter(|setting| setting.application().parameters.is_some())
-        .map(|_| build_request_body_subset(request_body, top_level_keys, nested_fields))
-}
-
-pub(crate) fn apply_model_reasoning_request_patches(
-    client: &AIClient,
-    request_body: &mut serde_json::Value,
-    protected_top_level_keys: &[&str],
-    protected_nested_fields: &[(&str, &str)],
-) {
-    let Some(setting) = client.model_reasoning_preset.as_ref() else {
-        return;
-    };
-    apply_reasoning_request_patches(
-        setting,
+    Some(build_request_body_subset(
         request_body,
-        protected_top_level_keys,
-        protected_nested_fields,
-    );
+        top_level_keys,
+        nested_fields,
+    ))
 }
 
-pub(crate) fn apply_selected_reasoning_overlay(
-    client: &AIClient,
+pub(crate) fn reset_reasoning_fields(
     request_body: &mut serde_json::Value,
-    captured_reasoning_fields: Option<serde_json::Value>,
+    captured_reasoning_fields: Option<&serde_json::Value>,
     reasoning_top_level_keys: &[&str],
     reasoning_nested_fields: &[(&str, &str)],
-    protected_top_level_keys: &[&str],
-    protected_nested_fields: &[(&str, &str)],
 ) {
-    if let Some(captured_reasoning_fields) = captured_reasoning_fields {
-        if let Some(request_object) = request_body.as_object_mut() {
-            for key in reasoning_top_level_keys {
-                request_object.remove(*key);
-            }
-            for (parent, child) in reasoning_nested_fields {
-                if let Some(parent_object) = request_object
-                    .get_mut(*parent)
-                    .and_then(serde_json::Value::as_object_mut)
-                {
-                    parent_object.remove(*child);
-                }
-            }
+    if let Some(request_object) = request_body.as_object_mut() {
+        for key in reasoning_top_level_keys {
+            request_object.remove(*key);
         }
-        merge_json_value(request_body, captured_reasoning_fields);
-    }
-    let Some(setting) = client.selected_reasoning_preset.as_ref() else {
-        return;
-    };
-    apply_reasoning_request_patches(
-        setting,
-        request_body,
-        protected_top_level_keys,
-        protected_nested_fields,
-    );
-}
-
-fn apply_reasoning_request_patches(
-    setting: &ReasoningPresetSetting,
-    request_body: &mut serde_json::Value,
-    protected_top_level_keys: &[&str],
-    protected_nested_fields: &[(&str, &str)],
-) {
-    for mut patch in setting.application().request_patches {
-        let Some(patch_object) = patch.as_object_mut() else {
-            log::warn!("Ignoring non-object reasoning preset request patch");
-            continue;
-        };
-        let protected_body = build_request_body_subset(
-            request_body,
-            protected_top_level_keys,
-            protected_nested_fields,
-        );
-        for key in protected_top_level_keys {
-            patch_object.remove(*key);
-        }
-        for (parent, child) in protected_nested_fields {
-            if let Some(parent_object) = patch_object
+        for (parent, child) in reasoning_nested_fields {
+            if let Some(parent_object) = request_object
                 .get_mut(*parent)
                 .and_then(serde_json::Value::as_object_mut)
             {
                 parent_object.remove(*child);
             }
         }
-        apply_json_merge_patch(request_body, &patch);
-        // A merge patch can replace or delete a protected field's parent with
-        // null, a scalar, or an array. Restore the captured paths after every
-        // patch so nested runtime fields survive those parent-level changes.
-        merge_json_value(request_body, protected_body);
     }
+    if let Some(captured_reasoning_fields) = captured_reasoning_fields {
+        merge_json_value(request_body, captured_reasoning_fields.clone());
+    }
+}
+
+pub(crate) fn apply_reasoning_request_patch(
+    action: &ReasoningPresetAction,
+    request_body: &mut serde_json::Value,
+    protected_top_level_keys: &[&str],
+    protected_nested_fields: &[(&str, &str)],
+) -> Result<()> {
+    let ReasoningPresetAction::RequestPatch { body } = action else {
+        return Ok(());
+    };
+    let mut patch = body.clone();
+    let Some(patch_object) = patch.as_object_mut() else {
+        return Err(anyhow!(
+            "Reasoning preset request_patch body must be a JSON object"
+        ));
+    };
+    let protected_body = build_request_body_subset(
+        request_body,
+        protected_top_level_keys,
+        protected_nested_fields,
+    );
+    for key in protected_top_level_keys {
+        patch_object.remove(*key);
+    }
+    for (parent, child) in protected_nested_fields {
+        if let Some(parent_object) = patch_object
+            .get_mut(*parent)
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            parent_object.remove(*child);
+        }
+    }
+    apply_json_merge_patch(request_body, &patch);
+    // A merge patch can replace or delete a protected field's parent with
+    // null, a scalar, or an array. Restore the captured paths after every
+    // patch so nested runtime fields survive those parent-level changes.
+    merge_json_value(request_body, protected_body);
+    Ok(())
+}
+
+pub(crate) fn apply_reasoning_actions<F>(
+    preset: &ReasoningPresetDescriptor,
+    request_body: &mut serde_json::Value,
+    protected_top_level_keys: &[&str],
+    protected_nested_fields: &[(&str, &str)],
+    mut compile_typed_action: F,
+) -> Result<()>
+where
+    F: FnMut(&ReasoningPresetAction, &mut serde_json::Value) -> Result<bool>,
+{
+    for action in &preset.actions {
+        if matches!(action, ReasoningPresetAction::RequestPatch { .. }) {
+            apply_reasoning_request_patch(
+                action,
+                request_body,
+                protected_top_level_keys,
+                protected_nested_fields,
+            )?;
+        } else if !compile_typed_action(action, request_body)? {
+            return Err(anyhow!(
+                "Reasoning preset '{}' contains an action unsupported by this provider: {:?}",
+                preset.id,
+                action
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_json_merge_patch(target: &mut serde_json::Value, patch: &serde_json::Value) {

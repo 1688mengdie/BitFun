@@ -5,9 +5,7 @@
 use crate::util::errors::*;
 use async_trait::async_trait;
 use bitfun_core_types::WorktreeSettings;
-pub use bitfun_core_types::{
-    ReasoningConfig, ReasoningMode, ReasoningPreset, ReasoningPresetSetting,
-};
+pub use bitfun_core_types::{ReasoningConfig, ReasoningPreset, ReasoningPresetAction};
 use bitfun_runtime_ports::{PermissionRule, ToolPermissionConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1515,15 +1513,6 @@ impl From<AIModelConfigCompat> for AIModelConfig {
             custom_request_body_mode: value.custom_request_body_mode,
             auth: parse_auth_config(value.auth),
         }
-    }
-}
-
-impl AIModelConfig {
-    pub fn default_reasoning_setting(&self) -> Option<&ReasoningPresetSetting> {
-        self.reasoning
-            .as_ref()
-            .and_then(ReasoningConfig::default_preset)
-            .and_then(|preset| preset.setting.as_ref())
     }
 }
 

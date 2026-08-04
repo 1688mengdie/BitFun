@@ -10,7 +10,7 @@ import type {
 } from '@/infrastructure/config/types';
 export type {
   ReasoningCatalogProjection,
-  ReasoningPresetSetting,
+  ReasoningPresetAction,
 } from '@/infrastructure/config/types';
 
 export const AI_MODEL_CATALOG_UPDATED_EVENT = 'ai://model-catalog-updated';

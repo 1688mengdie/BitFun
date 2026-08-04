@@ -33,7 +33,7 @@ describe('reasoning preset session creation resolution', () => {
               label: 'High',
               order: 10,
               source: 'models_dev',
-              setting: { type: 'effort', value: 'high' },
+              actions: [{ type: 'effort', value: 'high' }],
             }],
           },
         },

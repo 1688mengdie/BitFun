@@ -2,19 +2,19 @@
   "schema_version": 1,
   "artifact": {
     "path": "src/crates/services/services-integrations/assets/models-dev.json",
-    "sha256": "a3de54a8da0dc45e174a1293fadb062a818b9210fabf613aee9e520be01658f6",
-    "bytes": 2900
+    "sha256": "ac39d4424ebf1cf13ccb3dd029a3aed1600916a3171d61bd92315634118487f6",
+    "bytes": 3299
   },
   "source": {
     "project": "models.dev",
     "api_url": "https://models.dev/api.json",
-    "api_sha256": "b3a52ba98bb4b58714734f8bb98c9bc7ffeff3558f915bcc3211cfe5f276728d",
-    "api_bytes": 3452228,
-    "api_etag": "W/\"b3a52ba98bb4b58714734f8bb98c9bc7\"",
-    "retrieved_at": "2026-08-03T12:25:19.355Z",
+    "api_sha256": "8fd2113007d51f0aa2ed0ff4138f8e892877395e1e397317bb686a206d3ee67e",
+    "api_bytes": 3478783,
+    "api_etag": null,
+    "retrieved_at": "2026-08-04T06:16:13.887Z",
     "repository": "https://github.com/anomalyco/models.dev",
     "repository_branch": "dev",
-    "repository_revision": "403a7bdd43ac7daeadc8bb755eccabf66a0afb9d",
+    "repository_revision": "980878f3f31ae0e14b49273760a9bc31a94dc0a5",
     "revision_role": "Upstream dev revision observed when the API document was retrieved; api_sha256 is authoritative for the retrieved source bytes."
   },
   "license": {
@@ -27,7 +27,7 @@
   },
   "transformation": {
     "kind": "curated_reasoning_fallback",
-    "description": "Select only the listed providers and models, retain provider/model identity plus reasoning capability fields, normalize reasoning_options to arrays, and serialize deterministic pretty-printed JSON.",
+    "description": "Select only the listed providers and models, retain provider/model identity, reasoning capability fields, and limit.output, normalize reasoning_options to arrays, and serialize deterministic pretty-printed JSON.",
     "retained_provider_fields": [
       "id",
       "name"
@@ -36,7 +36,8 @@
       "id",
       "name",
       "reasoning",
-      "reasoning_options"
+      "reasoning_options",
+      "limit.output"
     ],
     "included_models": {
       "openai": [

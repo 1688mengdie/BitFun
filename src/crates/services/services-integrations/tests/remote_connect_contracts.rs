@@ -1,8 +1,8 @@
 #![cfg(feature = "remote-connect")]
 
 use bitfun_core_types::{
-    ReasoningCapabilityStatus, ReasoningCatalogProjection, ReasoningMode,
-    ReasoningPresetDescriptor, ReasoningPresetSetting, ReasoningPresetSource,
+    ReasoningCapabilityStatus, ReasoningCatalogProjection, ReasoningPresetAction,
+    ReasoningPresetDescriptor, ReasoningPresetSource,
 };
 use bitfun_events::{AgenticEvent, ToolEventData};
 use bitfun_runtime_ports::{
@@ -2206,11 +2206,12 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
                     id: "high".to_string(),
                     label: "High".to_string(),
                     order: 10,
-                    setting: ReasoningPresetSetting::Effort {
+                    actions: vec![ReasoningPresetAction::Effort {
                         value: "high".to_string(),
-                        mode: Some(ReasoningMode::Adaptive),
-                    },
+                    }],
                     source: ReasoningPresetSource::ModelsDev,
+                    execution_provider: None,
+                    execution_model: None,
                 }],
             }),
         }],

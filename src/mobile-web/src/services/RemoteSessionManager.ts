@@ -99,7 +99,13 @@ export interface RemoteModelConfig {
       id: string;
       label: string;
       order: number;
-      source: 'models_dev' | 'adapter' | 'user';
+      actions: Array<
+        | { type: 'effort'; value: string }
+        | { type: 'toggle'; enabled: boolean }
+        | { type: 'budget_tokens'; value: number }
+        | { type: 'request_patch'; body: Record<string, unknown> }
+      >;
+      source: 'models_dev' | 'adapter_fallback' | 'model_config';
     }>;
   };
 }

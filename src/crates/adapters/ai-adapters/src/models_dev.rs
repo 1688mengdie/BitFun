@@ -2,8 +2,7 @@
 
 use bitfun_core_types::{
     ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningCatalogProjection,
-    ReasoningConfig, ReasoningMode, ReasoningPresetDescriptor, ReasoningPresetSetting,
-    ReasoningPresetSource,
+    ReasoningConfig, ReasoningPresetAction, ReasoningPresetDescriptor, ReasoningPresetSource,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -29,12 +28,16 @@ struct ModelsDevProvider {
 struct ModelsDevModel {
     id: String,
     reasoning: bool,
-    reasoning_options: Vec<ModelsDevReasoningOption>,
+    /// `None` means the field was absent. `Some([])` is an authoritative
+    /// declaration that the model exposes no selectable reasoning control.
+    reasoning_options: Option<Vec<ModelsDevReasoningOption>>,
+    has_unknown_options: bool,
+    output_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum ModelsDevReasoningOption {
-    Effort { values: Vec<String> },
+    Effort { values: Vec<Option<String>> },
     Toggle,
     BudgetTokens { min: Option<u32>, max: Option<u32> },
 }
@@ -42,7 +45,7 @@ enum ModelsDevReasoningOption {
 #[derive(Debug, Deserialize, Default)]
 struct RawProvider {
     #[serde(default)]
-    models: HashMap<String, RawModel>,
+    models: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -51,8 +54,14 @@ struct RawModel {
     id: String,
     #[serde(default)]
     reasoning: bool,
-    #[serde(default, deserialize_with = "deserialize_reasoning_options")]
-    reasoning_options: Vec<RawReasoningOption>,
+    #[serde(default)]
+    limit: RawLimit,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawLimit {
+    #[serde(default)]
+    output: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,22 +80,44 @@ enum RawReasoningOption {
     },
 }
 
-fn deserialize_reasoning_options<'de, D>(
-    deserializer: D,
-) -> Result<Vec<RawReasoningOption>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<Value>::deserialize(deserializer)?.unwrap_or(Value::Null);
-    let values = match value {
-        Value::Array(values) => values,
-        Value::Object(_) => vec![value],
-        _ => Vec::new(),
+fn parse_reasoning_options(raw_model: &Value) -> (Option<Vec<ModelsDevReasoningOption>>, bool) {
+    let Some(raw_options) = raw_model.get("reasoning_options") else {
+        return (None, false);
     };
-    Ok(values
-        .into_iter()
-        .filter_map(|value| serde_json::from_value(value).ok())
-        .collect())
+    let values = match raw_options {
+        Value::Array(values) => values.clone(),
+        Value::Object(_) => vec![raw_options.clone()],
+        _ => return (Some(Vec::new()), true),
+    };
+    let mut parsed = Vec::new();
+    let mut has_unknown = false;
+    for value in values {
+        match serde_json::from_value::<RawReasoningOption>(value) {
+            Ok(RawReasoningOption::Effort { values }) => {
+                let values = values
+                    .into_iter()
+                    .filter_map(|value| match value {
+                        Some(value) => {
+                            let value = value.trim().to_ascii_lowercase();
+                            (!value.is_empty()).then_some(Some(value))
+                        }
+                        None => Some(None),
+                    })
+                    .collect::<Vec<_>>();
+                if values.is_empty() {
+                    has_unknown = true;
+                } else {
+                    parsed.push(ModelsDevReasoningOption::Effort { values });
+                }
+            }
+            Ok(RawReasoningOption::Toggle) => parsed.push(ModelsDevReasoningOption::Toggle),
+            Ok(RawReasoningOption::BudgetTokens { min, max }) => {
+                parsed.push(ModelsDevReasoningOption::BudgetTokens { min, max });
+            }
+            Err(_) => has_unknown = true,
+        }
+    }
+    (Some(parsed), has_unknown)
 }
 
 impl ModelsDevCatalog {
@@ -111,7 +142,11 @@ impl ModelsDevCatalog {
                 continue;
             };
             let mut models = BTreeMap::new();
-            for (model_key, raw_model) in raw_provider.models {
+            for (model_key, raw_model_value) in raw_provider.models {
+                let Ok(raw_model) = serde_json::from_value::<RawModel>(raw_model_value.clone())
+                else {
+                    continue;
+                };
                 let model_id = if raw_model.id.trim().is_empty() {
                     model_key.clone()
                 } else {
@@ -120,33 +155,16 @@ impl ModelsDevCatalog {
                 if model_id.trim().is_empty() {
                     continue;
                 }
+                let (reasoning_options, has_unknown_options) =
+                    parse_reasoning_options(&raw_model_value);
                 models.insert(
                     model_key,
                     ModelsDevModel {
                         id: model_id,
                         reasoning: raw_model.reasoning,
-                        reasoning_options: raw_model
-                            .reasoning_options
-                            .into_iter()
-                            .filter_map(|option| match option {
-                                RawReasoningOption::Effort { values } => {
-                                    Some(ModelsDevReasoningOption::Effort {
-                                        values: values
-                                            .into_iter()
-                                            .flatten()
-                                            .map(|value| value.trim().to_string())
-                                            .filter(|value| !value.is_empty())
-                                            .collect(),
-                                    })
-                                }
-                                RawReasoningOption::Toggle => {
-                                    Some(ModelsDevReasoningOption::Toggle)
-                                }
-                                RawReasoningOption::BudgetTokens { min, max } => {
-                                    Some(ModelsDevReasoningOption::BudgetTokens { min, max })
-                                }
-                            })
-                            .collect(),
+                        reasoning_options,
+                        has_unknown_options,
+                        output_limit: raw_model.limit.output,
                     },
                 );
             }
@@ -173,17 +191,18 @@ impl ModelsDevCatalog {
 #[derive(Debug, Clone, Copy, Default)]
 struct AdapterReasoningSupport {
     effort: bool,
-    effort_mode: Option<ReasoningMode>,
+    nullable_effort: bool,
     toggle: bool,
     budget_tokens: bool,
 }
 
 /// Project a source catalog and user-configured presets into the stable DTO
 /// consumed by remote and Web UI surfaces.
-pub fn project_reasoning_catalog(
+pub fn project_reasoning_catalog_with_limit(
     provider: &str,
     model_id: &str,
     base_url: &str,
+    effective_max_output_tokens: u32,
     configured: Option<&ReasoningConfig>,
     models_dev: Option<&ModelsDevCatalog>,
 ) -> ReasoningCatalogProjection {
@@ -191,36 +210,55 @@ pub fn project_reasoning_catalog(
         .map(|config| &config.catalog)
         .cloned()
         .unwrap_or_default();
-    let support = adapter_reasoning_support(provider, base_url);
-    let source_model = match &binding {
+    let source_match = match &binding {
         ReasoningCatalogBinding::Disabled => None,
-        ReasoningCatalogBinding::Auto => models_dev
-            .and_then(|catalog| catalog.model(auto_provider_id(provider, base_url)?, model_id)),
-        ReasoningCatalogBinding::ModelsDev { provider, model } => {
-            models_dev.and_then(|catalog| catalog.model(provider, model))
-        }
+        ReasoningCatalogBinding::Auto => models_dev.and_then(|catalog| {
+            let source_provider = auto_provider_id(provider, base_url)?;
+            Some((source_provider, catalog.model(source_provider, model_id)?))
+        }),
+        ReasoningCatalogBinding::ModelsDev {
+            provider: source_provider,
+            model,
+        } => models_dev
+            .and_then(|catalog| catalog.model(source_provider, model))
+            .map(|source_model| (source_provider.as_str(), source_model)),
     };
 
     let mut descriptors = BTreeMap::<String, ReasoningPresetDescriptor>::new();
     let mut has_unmapped_reasoning = false;
-    if let Some(source_model) = source_model {
+    if let Some((source_provider, source_model)) = source_match {
         if source_model.reasoning {
-            for option in &source_model.reasoning_options {
+            let support =
+                adapter_reasoning_support(provider, base_url, &source_model.id, source_provider);
+            for option in source_model.reasoning_options.iter().flatten() {
                 let generated = match option {
                     ModelsDevReasoningOption::Effort { values } if support.effort => {
                         effort_descriptors(
-                            values.iter().map(String::as_str),
-                            support.effort_mode,
+                            values,
+                            support.nullable_effort,
                             ReasoningPresetSource::ModelsDev,
+                            source_provider,
+                            &source_model.id,
                         )
                     }
-                    ModelsDevReasoningOption::Toggle if support.toggle => {
-                        toggle_descriptors(ReasoningPresetSource::ModelsDev)
-                    }
+                    ModelsDevReasoningOption::Toggle if support.toggle => toggle_descriptors(
+                        ReasoningPresetSource::ModelsDev,
+                        source_provider,
+                        &source_model.id,
+                    ),
                     ModelsDevReasoningOption::BudgetTokens { min, max }
                         if support.budget_tokens =>
                     {
-                        budget_descriptors(*min, *max, ReasoningPresetSource::ModelsDev)
+                        budget_descriptors(
+                            *min,
+                            *max,
+                            source_model.output_limit,
+                            effective_max_output_tokens,
+                            provider,
+                            ReasoningPresetSource::ModelsDev,
+                            source_provider,
+                            &source_model.id,
+                        )
                     }
                     ModelsDevReasoningOption::Effort { .. }
                     | ModelsDevReasoningOption::Toggle
@@ -233,9 +271,7 @@ pub fn project_reasoning_catalog(
                     descriptors.insert(descriptor.id.clone(), descriptor);
                 }
             }
-            if source_model.reasoning_options.is_empty() {
-                has_unmapped_reasoning = true;
-            }
+            has_unmapped_reasoning |= source_model.has_unknown_options;
         }
     }
 
@@ -245,17 +281,17 @@ pub fn project_reasoning_catalog(
     // auto-bound official endpoints; an explicit models.dev binding may point
     // at an arbitrary gateway and must not grant adapter-inferred capability.
     if matches!(binding, ReasoningCatalogBinding::Auto)
-        && source_model.is_none_or(|model| model.reasoning)
+        && source_match.is_none_or(|(_, model)| model.reasoning)
+        && source_match.is_none_or(|(_, model)| model.reasoning_options.is_none())
     {
-        for descriptor in adapter_fallback_descriptors(provider, model_id, base_url, support) {
-            if source_model.is_some_and(|model| {
-                model
-                    .reasoning_options
-                    .iter()
-                    .any(|option| models_dev_option_covers_setting(option, &descriptor.setting))
-            }) {
-                continue;
-            }
+        let support = adapter_reasoning_support(provider, base_url, model_id, provider);
+        for descriptor in adapter_fallback_descriptors(
+            provider,
+            model_id,
+            base_url,
+            effective_max_output_tokens,
+            support,
+        ) {
             descriptors
                 .entry(descriptor.id.clone())
                 .or_insert(descriptor);
@@ -263,6 +299,11 @@ pub fn project_reasoning_catalog(
     }
 
     if let Some(config) = configured {
+        let (execution_provider, execution_model) = source_match
+            .map(|(source_provider, source_model)| {
+                (source_provider.to_string(), source_model.id.clone())
+            })
+            .unwrap_or_else(|| (provider.to_string(), model_id.to_string()));
         for preset in &config.presets {
             let preset_id = preset.id.trim();
             if preset_id.is_empty() {
@@ -272,10 +313,10 @@ pub fn project_reasoning_catalog(
                 descriptors.remove(preset_id);
                 continue;
             }
-            let Some(setting) = preset.setting.clone() else {
+            if preset.actions.is_empty() {
                 descriptors.remove(preset_id);
                 continue;
-            };
+            }
             descriptors.insert(
                 preset_id.to_string(),
                 ReasoningPresetDescriptor {
@@ -286,8 +327,10 @@ pub fn project_reasoning_catalog(
                         .filter(|label| !label.trim().is_empty())
                         .unwrap_or_else(|| display_label(preset_id)),
                     order: preset.order.unwrap_or(100),
-                    setting,
+                    actions: preset.actions.clone(),
                     source: ReasoningPresetSource::ModelConfig,
+                    execution_provider: Some(execution_provider.clone()),
+                    execution_model: Some(execution_model.clone()),
                 },
             );
         }
@@ -305,7 +348,13 @@ pub fn project_reasoning_catalog(
         ReasoningCapabilityStatus::Unsupported
     } else if has_unmapped_reasoning {
         ReasoningCapabilityStatus::Unknown
-    } else if source_model.is_some() {
+    } else if source_match.is_some_and(|(_, model)| {
+        model.reasoning
+            && model.reasoning_options.as_ref().is_some_and(Vec::is_empty)
+            && !model.has_unknown_options
+    }) {
+        ReasoningCapabilityStatus::Known
+    } else if source_match.is_some() {
         ReasoningCapabilityStatus::Unsupported
     } else {
         ReasoningCapabilityStatus::Unknown
@@ -321,6 +370,19 @@ pub fn project_reasoning_catalog(
         default_preset: default_preset.map(ToOwned::to_owned),
         presets,
     }
+}
+
+#[cfg(test)]
+fn project_reasoning_catalog(
+    provider: &str,
+    model_id: &str,
+    base_url: &str,
+    configured: Option<&ReasoningConfig>,
+    models_dev: Option<&ModelsDevCatalog>,
+) -> ReasoningCatalogProjection {
+    project_reasoning_catalog_with_limit(
+        provider, model_id, base_url, 32_000, configured, models_dev,
+    )
 }
 
 fn auto_provider_id(provider: &str, base_url: &str) -> Option<&'static str> {
@@ -339,8 +401,15 @@ fn auto_provider_id(provider: &str, base_url: &str) -> Option<&'static str> {
     }
 }
 
-fn adapter_reasoning_support(provider: &str, base_url: &str) -> AdapterReasoningSupport {
+fn adapter_reasoning_support(
+    provider: &str,
+    base_url: &str,
+    execution_model: &str,
+    execution_provider: &str,
+) -> AdapterReasoningSupport {
     let provider = provider.trim().to_ascii_lowercase();
+    let execution_provider = execution_provider.trim().to_ascii_lowercase();
+    let execution_model = execution_model.trim().to_ascii_lowercase();
     if provider == "deepseek" || base_url.to_ascii_lowercase().contains("api.deepseek.com") {
         return AdapterReasoningSupport {
             effort: true,
@@ -353,23 +422,54 @@ fn adapter_reasoning_support(provider: &str, base_url: &str) -> AdapterReasoning
     {
         return AdapterReasoningSupport {
             effort: true,
+            nullable_effort: true,
             ..Default::default()
         };
     }
     match provider.as_str() {
-        "anthropic" => AdapterReasoningSupport {
+        "anthropic" if execution_provider == "deepseek" => AdapterReasoningSupport {
             effort: true,
-            effort_mode: Some(ReasoningMode::Adaptive),
-            toggle: true,
-            budget_tokens: true,
-            ..Default::default()
-        },
-        "gemini" | "google" => AdapterReasoningSupport {
             toggle: true,
             ..Default::default()
         },
+        "anthropic" => {
+            let capability = anthropic_thinking_capability(&execution_model);
+            AdapterReasoningSupport {
+                effort: !matches!(capability, AnthropicThinkingCapability::ManualOnly),
+                toggle: !matches!(
+                    capability,
+                    AnthropicThinkingCapability::AdaptiveOnly
+                        | AnthropicThinkingCapability::AdaptiveDefaultNoDisabled
+                ),
+                budget_tokens: !matches!(
+                    capability,
+                    AnthropicThinkingCapability::AdaptiveOnly
+                        | AnthropicThinkingCapability::AdaptiveDefaultNoDisabled
+                ),
+                ..Default::default()
+            }
+        }
+        "gemini" | "google" => gemini_reasoning_support(&execution_model),
         _ => Default::default(),
     }
+}
+
+fn gemini_reasoning_support(model: &str) -> AdapterReasoningSupport {
+    let model = model.trim().to_ascii_lowercase();
+    if model.starts_with("gemini-3-") {
+        return AdapterReasoningSupport {
+            effort: true,
+            ..Default::default()
+        };
+    }
+    if model.starts_with("gemini-2.5-") {
+        return AdapterReasoningSupport {
+            toggle: model.contains("flash"),
+            budget_tokens: true,
+            ..Default::default()
+        };
+    }
+    AdapterReasoningSupport::default()
 }
 
 fn is_responses_endpoint(base_url: &str) -> bool {
@@ -388,6 +488,7 @@ fn adapter_fallback_descriptors(
     provider: &str,
     model_id: &str,
     base_url: &str,
+    effective_max_output_tokens: u32,
     support: AdapterReasoningSupport,
 ) -> Vec<ReasoningPresetDescriptor> {
     let Some(provider_id) = adapter_fallback_provider_id(provider, base_url) else {
@@ -404,13 +505,43 @@ fn adapter_fallback_descriptors(
                 // The Codex adapter clamps unsupported `minimal` and uses
                 // medium by default. low/medium/high is the tested common set
                 // across its built-in model table.
-                effort_descriptors(["low", "medium", "high"], None, source)
+                effort_descriptors(
+                    &[
+                        Some("low".to_string()),
+                        Some("medium".to_string()),
+                        Some("high".to_string()),
+                    ],
+                    false,
+                    source,
+                    provider,
+                    model_id.as_str(),
+                )
             } else {
                 match model_id.as_str() {
-                    "gpt-5.4" => {
-                        effort_descriptors(["none", "low", "medium", "high", "xhigh"], None, source)
-                    }
-                    "gpt-5.2-pro" => effort_descriptors(["medium", "high", "xhigh"], None, source),
+                    "gpt-5.4" => effort_descriptors(
+                        &[
+                            Some("none".into()),
+                            Some("low".into()),
+                            Some("medium".into()),
+                            Some("high".into()),
+                            Some("xhigh".into()),
+                        ],
+                        true,
+                        source,
+                        provider,
+                        model_id.as_str(),
+                    ),
+                    "gpt-5.2-pro" => effort_descriptors(
+                        &[
+                            Some("medium".into()),
+                            Some("high".into()),
+                            Some("xhigh".into()),
+                        ],
+                        false,
+                        source,
+                        provider,
+                        model_id.as_str(),
+                    ),
                     _ => Vec::new(),
                 }
             }
@@ -426,9 +557,15 @@ fn adapter_fallback_descriptors(
                 // model-specific values such as max/xhigh remain models.dev
                 // facts and are not inferred here.
                 effort_descriptors(
-                    ["low", "medium", "high"],
-                    Some(ReasoningMode::Adaptive),
+                    &[
+                        Some("low".into()),
+                        Some("medium".into()),
+                        Some("high".into()),
+                    ],
+                    false,
                     source,
+                    provider,
+                    model_id.as_str(),
                 )
             }
             // These exact models are covered by the adapter's manual-thinking
@@ -440,7 +577,7 @@ fn adapter_fallback_descriptors(
                 if matches!(model_id.as_str(), "claude-sonnet-4-5" | "claude-haiku-4-5")
                     && support.toggle =>
             {
-                toggle_descriptors(source)
+                toggle_descriptors(source, provider, model_id.as_str())
             }
             _ => Vec::new(),
         },
@@ -449,13 +586,38 @@ fn adapter_fallback_descriptors(
                 && support.effort
                 && support.toggle =>
         {
-            let mut descriptors = toggle_descriptors(source);
+            let mut descriptors = toggle_descriptors(source, provider, model_id.as_str());
             descriptors.extend(effort_descriptors(
-                ["high", "max"],
-                Some(ReasoningMode::Enabled),
+                &[Some("high".into()), Some("max".into())],
+                false,
                 source,
+                provider,
+                model_id.as_str(),
             ));
             descriptors
+        }
+        "google" if support.effort && model_id.starts_with("gemini-3-") => effort_descriptors(
+            &[
+                Some("low".into()),
+                Some("medium".into()),
+                Some("high".into()),
+            ],
+            false,
+            source,
+            provider,
+            model_id.as_str(),
+        ),
+        "google" if support.budget_tokens && model_id.starts_with("gemini-2.5-") => {
+            budget_descriptors(
+                Some(1_024),
+                None,
+                None,
+                effective_max_output_tokens,
+                provider,
+                source,
+                provider,
+                model_id.as_str(),
+            )
         }
         // Gemini can serialize the current mode, but the adapter does not yet
         // own a tested model-level table for whether thinking can be disabled
@@ -496,59 +658,63 @@ fn is_codex_chatgpt_base_url(base_url: &str) -> bool {
         })
 }
 
-fn models_dev_option_covers_setting(
-    option: &ModelsDevReasoningOption,
-    setting: &ReasoningPresetSetting,
-) -> bool {
-    match (option, setting) {
-        (ModelsDevReasoningOption::Effort { values }, ReasoningPresetSetting::Effort { .. }) => {
-            !values.is_empty()
-        }
-        (ModelsDevReasoningOption::Toggle, ReasoningPresetSetting::Toggle { .. }) => true,
-        (
-            ModelsDevReasoningOption::BudgetTokens { .. },
-            ReasoningPresetSetting::BudgetTokens { .. },
-        ) => true,
-        _ => false,
-    }
-}
-
-fn effort_descriptors<'a>(
-    values: impl IntoIterator<Item = &'a str>,
-    mode: Option<ReasoningMode>,
+fn effort_descriptors(
+    values: &[Option<String>],
+    nullable_effort: bool,
     source: ReasoningPresetSource,
+    execution_provider: &str,
+    execution_model: &str,
 ) -> Vec<ReasoningPresetDescriptor> {
     values
-        .into_iter()
+        .iter()
+        .filter_map(|value| value.as_deref().or(nullable_effort.then_some("none")))
         .enumerate()
         .map(|(index, value)| ReasoningPresetDescriptor {
-            id: value.to_string(),
+            id: effort_id(value),
             label: display_label(value),
             order: 10 + index as i32,
-            setting: ReasoningPresetSetting::Effort {
+            actions: vec![ReasoningPresetAction::Effort {
                 value: value.to_string(),
-                mode,
-            },
+            }],
             source,
+            execution_provider: Some(execution_provider.to_string()),
+            execution_model: Some(execution_model.to_string()),
         })
         .collect()
 }
 
-fn toggle_descriptors(source: ReasoningPresetSource) -> Vec<ReasoningPresetDescriptor> {
+fn effort_id(value: &str) -> String {
+    let value = value.trim().to_ascii_lowercase();
+    if matches!(value.as_str(), "on" | "off" | "budget-high" | "budget-max") {
+        format!("effort-{value}")
+    } else {
+        value
+    }
+}
+
+fn toggle_descriptors(
+    source: ReasoningPresetSource,
+    execution_provider: &str,
+    execution_model: &str,
+) -> Vec<ReasoningPresetDescriptor> {
     vec![
         ReasoningPresetDescriptor {
             id: "off".to_string(),
             label: "Off".to_string(),
             order: 0,
-            setting: ReasoningPresetSetting::Toggle { enabled: false },
+            actions: vec![ReasoningPresetAction::Toggle { enabled: false }],
             source,
+            execution_provider: Some(execution_provider.to_string()),
+            execution_model: Some(execution_model.to_string()),
         },
         ReasoningPresetDescriptor {
             id: "on".to_string(),
             label: "On".to_string(),
             order: 1,
-            setting: ReasoningPresetSetting::Toggle { enabled: true },
+            actions: vec![ReasoningPresetAction::Toggle { enabled: true }],
             source,
+            execution_provider: Some(execution_provider.to_string()),
+            execution_model: Some(execution_model.to_string()),
         },
     ]
 }
@@ -556,26 +722,45 @@ fn toggle_descriptors(source: ReasoningPresetSource) -> Vec<ReasoningPresetDescr
 fn budget_descriptors(
     min: Option<u32>,
     max: Option<u32>,
+    source_output_limit: Option<u32>,
+    effective_max_output_tokens: u32,
+    target_provider: &str,
     source: ReasoningPresetSource,
+    execution_provider: &str,
+    execution_model: &str,
 ) -> Vec<ReasoningPresetDescriptor> {
-    let min = min.or(max).unwrap_or(1024);
-    let mut values = vec![("budget", min)];
-    if let Some(max) = max.filter(|max| *max != min) {
-        values.push(("budget-max", max));
+    let min = min.unwrap_or(1).max(1);
+    let mut safe_max = max.unwrap_or(u32::MAX).min(effective_max_output_tokens);
+    if let Some(output_limit) = source_output_limit {
+        safe_max = safe_max.min(output_limit);
     }
+    if target_provider.eq_ignore_ascii_case("anthropic") {
+        safe_max = safe_max.min(effective_max_output_tokens.saturating_sub(1));
+    }
+    if safe_max < min || safe_max == 0 {
+        return Vec::new();
+    }
+    let high = min.saturating_add(safe_max.saturating_sub(min) / 2);
+    let values = if high == safe_max {
+        vec![("budget-max", safe_max)]
+    } else {
+        vec![("budget-high", high), ("budget-max", safe_max)]
+    };
     values
         .into_iter()
         .enumerate()
         .map(|(index, (id, value))| ReasoningPresetDescriptor {
             id: id.to_string(),
-            label: if id == "budget" {
-                "Budget".to_string()
+            label: if id == "budget-high" {
+                "Budget high".to_string()
             } else {
                 "Budget max".to_string()
             },
             order: 30 + index as i32,
-            setting: ReasoningPresetSetting::BudgetTokens { value, mode: None },
+            actions: vec![ReasoningPresetAction::BudgetTokens { value }],
             source,
+            execution_provider: Some(execution_provider.to_string()),
+            execution_model: Some(execution_model.to_string()),
         })
         .collect()
 }
@@ -590,10 +775,12 @@ fn display_label(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{project_reasoning_catalog, ModelsDevCatalog};
+    use super::{
+        project_reasoning_catalog, project_reasoning_catalog_with_limit, ModelsDevCatalog,
+    };
     use bitfun_core_types::{
         ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset,
-        ReasoningPresetSetting, ReasoningPresetSource,
+        ReasoningPresetAction, ReasoningPresetSource,
     };
 
     fn catalog() -> ModelsDevCatalog {
@@ -604,7 +791,7 @@ mod tests {
                         "reasoning_options":{"type":"effort","values":["low","high"]}}
                 }},
                 "anthropic": {"models": {
-                    "claude-test": {"id":"claude-test","reasoning":true,
+                    "claude-sonnet-4-6": {"id":"claude-sonnet-4-6","reasoning":true,
                         "reasoning_options":[{"type":"effort","values":["low","high"]},{"type":"budget_tokens","min":1024}]}
                 }},
                 "deepseek": {"models": {
@@ -642,10 +829,113 @@ mod tests {
     }
 
     #[test]
+    fn missing_options_allow_fallback_but_explicitly_empty_options_do_not() {
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{
+                "openai": {"models": {
+                    "gpt-5.4": {"reasoning":true},
+                    "gpt-5.2-pro": {"reasoning":true,"reasoning_options":[]}
+                }}
+            }"#,
+        )
+        .expect("catalog should parse");
+
+        let missing = project_reasoning_catalog(
+            "responses",
+            "gpt-5.4",
+            "https://api.openai.com/v1/responses",
+            None,
+            Some(&catalog),
+        );
+        assert!(missing
+            .presets
+            .iter()
+            .any(|preset| preset.source == ReasoningPresetSource::AdapterFallback));
+
+        let empty = project_reasoning_catalog(
+            "responses",
+            "gpt-5.2-pro",
+            "https://api.openai.com/v1/responses",
+            None,
+            Some(&catalog),
+        );
+        assert_eq!(empty.status, ReasoningCapabilityStatus::Known);
+        assert!(empty.presets.is_empty());
+    }
+
+    #[test]
+    fn nullable_effort_maps_to_none_only_for_an_exact_target_mapping() {
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{
+                "openai": {"models": {
+                    "gpt-null": {"reasoning":true,"reasoning_options":{
+                        "type":"effort","values":[null,"high"]
+                    }}
+                }}
+            }"#,
+        )
+        .expect("catalog should parse");
+
+        let projection = project_reasoning_catalog(
+            "responses",
+            "gpt-null",
+            "https://api.openai.com/v1/responses",
+            Some(&ReasoningConfig {
+                catalog: ReasoningCatalogBinding::ModelsDev {
+                    provider: "openai".to_string(),
+                    model: "gpt-null".to_string(),
+                },
+                ..Default::default()
+            }),
+            Some(&catalog),
+        );
+        assert!(projection.presets.iter().any(|preset| {
+            preset.id == "none"
+                && matches!(
+                    preset.actions.as_slice(),
+                    [ReasoningPresetAction::Effort { value }] if value == "none"
+                )
+        }));
+    }
+
+    #[test]
+    fn budget_projection_honors_source_runtime_and_strict_provider_limits() {
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{
+                "anthropic": {"models": {
+                    "claude-sonnet-4-6": {
+                        "reasoning":true,
+                        "limit":{"output":6000},
+                        "reasoning_options":{"type":"budget_tokens","min":1000,"max":10000}
+                    }
+                }}
+            }"#,
+        )
+        .expect("catalog should parse");
+        let projection = project_reasoning_catalog_with_limit(
+            "anthropic",
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com/v1/messages",
+            4096,
+            None,
+            Some(&catalog),
+        );
+        let maximum = projection
+            .presets
+            .iter()
+            .find(|preset| preset.id == "budget-max")
+            .expect("bounded maximum");
+        assert!(matches!(
+            maximum.actions.as_slice(),
+            [ReasoningPresetAction::BudgetTokens { value: 4095 }]
+        ));
+    }
+
+    #[test]
     fn anthropic_budget_and_effort_options_are_merged() {
         let projection = project_reasoning_catalog(
             "anthropic",
-            "claude-test",
+            "claude-sonnet-4-6",
             "https://api.anthropic.com/v1/messages",
             None,
             Some(&catalog()),
@@ -655,15 +945,12 @@ mod tests {
         assert!(projection
             .presets
             .iter()
-            .any(|preset| preset.id == "budget"));
+            .any(|preset| preset.id == "budget-high" || preset.id == "budget-max"));
         assert!(projection.presets.iter().any(|preset| {
             preset.id == "high"
                 && matches!(
-                    preset.setting,
-                    ReasoningPresetSetting::Effort {
-                        mode: Some(bitfun_core_types::ReasoningMode::Adaptive),
-                        ..
-                    }
+                    preset.actions.as_slice(),
+                    [ReasoningPresetAction::Effort { value }] if value == "high"
                 )
         }));
     }
@@ -820,7 +1107,7 @@ mod tests {
     }
 
     #[test]
-    fn fallback_fills_missing_option_types_and_model_config_still_wins() {
+    fn explicit_options_suppress_fallback_and_model_config_still_wins() {
         let partial = ModelsDevCatalog::parse_str(
             r#"{
                 "anthropic": {"models": {
@@ -838,10 +1125,9 @@ mod tests {
             presets: vec![ReasoningPreset {
                 id: "high".to_string(),
                 label: Some("Configured high".to_string()),
-                setting: Some(ReasoningPresetSetting::Effort {
+                actions: vec![ReasoningPresetAction::Effort {
                     value: "max".to_string(),
-                    mode: Some(bitfun_core_types::ReasoningMode::Adaptive),
-                }),
+                }],
                 ..Default::default()
             }],
             ..Default::default()
@@ -856,24 +1142,10 @@ mod tests {
         );
 
         assert_eq!(projection.default_preset.as_deref(), Some("high"));
-        assert_eq!(
-            projection
-                .presets
-                .iter()
-                .find(|preset| preset.id == "budget")
-                .expect("models.dev budget")
-                .source,
-            ReasoningPresetSource::ModelsDev
-        );
-        assert_eq!(
-            projection
-                .presets
-                .iter()
-                .find(|preset| preset.id == "low")
-                .expect("adapter fallback effort")
-                .source,
-            ReasoningPresetSource::AdapterFallback
-        );
+        assert!(!projection.presets.iter().any(|preset| {
+            preset.id.starts_with("budget-")
+                || preset.source == ReasoningPresetSource::AdapterFallback
+        }));
         let high = projection
             .presets
             .iter()
@@ -1040,10 +1312,47 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["low", "high"]
         );
+        assert!(projection.presets.iter().all(|preset| {
+            preset.execution_provider.as_deref() == Some("openai")
+                && preset.execution_model.as_deref() == Some("gpt-test")
+        }));
     }
 
     #[test]
-    fn official_google_endpoint_projects_gemini_options() {
+    fn custom_presets_keep_the_explicit_catalog_identity_for_adapter_compilation() {
+        let configured = ReasoningConfig {
+            catalog: ReasoningCatalogBinding::ModelsDev {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4-6".to_string(),
+            },
+            presets: vec![ReasoningPreset {
+                id: "custom-high".to_string(),
+                actions: vec![ReasoningPresetAction::Effort {
+                    value: "high".to_string(),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let projection = project_reasoning_catalog(
+            "anthropic",
+            "local-model-alias",
+            "https://gateway.example.com/v1/messages",
+            Some(&configured),
+            Some(&catalog()),
+        );
+        let preset = projection
+            .presets
+            .iter()
+            .find(|preset| preset.id == "custom-high")
+            .expect("custom preset");
+
+        assert_eq!(preset.execution_provider.as_deref(), Some("anthropic"));
+        assert_eq!(preset.execution_model.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn official_google_endpoint_rejects_unverified_gemini_family_options() {
         let projection = project_reasoning_catalog(
             "gemini",
             "gemini-test",
@@ -1052,8 +1361,8 @@ mod tests {
             Some(&catalog()),
         );
 
-        assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
-        assert!(projection.presets.iter().any(|preset| preset.id == "on"));
+        assert_eq!(projection.status, ReasoningCapabilityStatus::Unknown);
+        assert!(projection.presets.is_empty());
     }
 
     #[test]
@@ -1066,9 +1375,9 @@ mod tests {
                 label: Some("Custom".to_string()),
                 order: None,
                 disabled: false,
-                setting: Some(ReasoningPresetSetting::RequestPatch {
+                actions: vec![ReasoningPresetAction::RequestPatch {
                     body: serde_json::json!({"thinking": {"type": "enabled"}}),
-                }),
+                }],
             }],
         };
         let projection = project_reasoning_catalog(
@@ -1149,12 +1458,12 @@ mod tests {
             presets: vec![
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: Some(ReasoningPresetSetting::Toggle { enabled: true }),
+                    actions: vec![ReasoningPresetAction::Toggle { enabled: true }],
                     ..Default::default()
                 },
                 ReasoningPreset {
                     id: "same".to_string(),
-                    setting: None,
+                    actions: Vec::new(),
                     ..Default::default()
                 },
             ],

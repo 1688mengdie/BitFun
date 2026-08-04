@@ -1,6 +1,6 @@
 use crate::service::config::types::AIModelConfig;
 use crate::service::config::types::{
-    automatic_max_output_tokens, is_valid_configured_max_output_tokens, ReasoningMode,
+    automatic_max_output_tokens, is_valid_configured_max_output_tokens,
     DEFAULT_MODEL_CONTEXT_WINDOW_TOKENS, MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT,
     MIN_MODEL_CONTEXT_WINDOW_TOKENS,
 };
@@ -74,18 +74,6 @@ impl TryFrom<AIModelConfig> for AIConfig {
     type Error = String;
 
     fn try_from(other: AIModelConfig) -> Result<Self, Self::Error> {
-        let mut reasoning_mode = ReasoningMode::Default;
-        let mut reasoning_effort = None;
-        let mut thinking_budget_tokens = None;
-        if let Some(parameters) = other
-            .default_reasoning_setting()
-            .and_then(|setting| setting.application().parameters)
-        {
-            reasoning_mode = parameters.mode;
-            reasoning_effort = parameters.effort;
-            thinking_budget_tokens = parameters.budget_tokens;
-        }
-
         let custom_request_body = if let Some(body_str) = &other.custom_request_body {
             match serde_json::from_str::<serde_json::Value>(body_str) {
                 Ok(value) => Some(value),
@@ -155,13 +143,10 @@ impl TryFrom<AIModelConfig> for AIConfig {
             max_tokens: Some(max_tokens),
             temperature: other.temperature,
             top_p: other.top_p,
-            reasoning_mode,
             inline_think_in_text: other.inline_think_in_text,
             custom_headers: other.custom_headers,
             custom_headers_mode: other.custom_headers_mode,
             skip_ssl_verify: other.skip_ssl_verify,
-            reasoning_effort,
-            thinking_budget_tokens,
             custom_request_body,
             custom_request_body_mode: other.custom_request_body_mode,
         })
@@ -171,7 +156,7 @@ impl TryFrom<AIModelConfig> for AIConfig {
 #[cfg(test)]
 mod tests {
     use super::{resolve_request_url, AIConfig};
-    use crate::service::config::types::{AIModelConfig, ModelCategory, ReasoningMode};
+    use crate::service::config::types::{AIModelConfig, ModelCategory};
 
     #[test]
     fn resolves_openai_request_url() {
@@ -271,27 +256,9 @@ mod tests {
     }
 
     #[test]
-    fn missing_reasoning_default_maps_to_provider_default_mode() {
+    fn missing_reasoning_default_does_not_change_runtime_config() {
         let config = AIConfig::try_from(base_model_config()).expect("conversion should succeed");
-        assert_eq!(config.reasoning_mode, ReasoningMode::Default);
-    }
-
-    #[test]
-    fn canonical_reasoning_default_maps_to_runtime_parameters() {
-        let mut model = base_model_config();
-        model.reasoning = Some(bitfun_core_types::ReasoningConfig {
-            default_preset: Some("on".to_string()),
-            presets: vec![bitfun_core_types::ReasoningPreset {
-                id: "on".to_string(),
-                label: Some("On".to_string()),
-                setting: Some(bitfun_core_types::ReasoningPresetSetting::Toggle { enabled: true }),
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-
-        let config = AIConfig::try_from(model).expect("conversion should succeed");
-        assert_eq!(config.reasoning_mode, ReasoningMode::Enabled);
+        assert_eq!(config.model, "test-model");
     }
 
     #[test]

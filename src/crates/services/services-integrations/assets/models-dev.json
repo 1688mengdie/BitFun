@@ -16,7 +16,10 @@
               "xhigh"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 128000
+        }
       },
       "gpt-5.4": {
         "id": "gpt-5.4",
@@ -33,7 +36,10 @@
               "xhigh"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 128000
+        }
       }
     }
   },
@@ -59,7 +65,10 @@
             "type": "budget_tokens",
             "min": 1024
           }
-        ]
+        ],
+        "limit": {
+          "output": 128000
+        }
       },
       "claude-sonnet-5": {
         "id": "claude-sonnet-5",
@@ -79,7 +88,10 @@
               "max"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 128000
+        }
       },
       "claude-opus-5": {
         "id": "claude-opus-5",
@@ -96,7 +108,10 @@
               "max"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 128000
+        }
       }
     }
   },
@@ -119,7 +134,10 @@
               "max"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 384000
+        }
       },
       "deepseek-v4-pro": {
         "id": "deepseek-v4-pro",
@@ -136,7 +154,10 @@
               "max"
             ]
           }
-        ]
+        ],
+        "limit": {
+          "output": 384000
+        }
       }
     }
   }

@@ -7850,7 +7850,7 @@ mod tests {
     };
     use crate::util::errors::BitFunError;
     use bitfun_core_types::{
-        ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset, ReasoningPresetSetting,
+        ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset, ReasoningPresetAction,
         SessionExecutionTarget,
     };
     use bitfun_runtime_ports::SessionStoragePathRequest;
@@ -9792,10 +9792,9 @@ mod tests {
                 catalog: ReasoningCatalogBinding::Disabled,
                 presets: vec![ReasoningPreset {
                     id: "high".to_string(),
-                    setting: Some(ReasoningPresetSetting::Effort {
+                    actions: vec![ReasoningPresetAction::Effort {
                         value: "high".to_string(),
-                        mode: None,
-                    }),
+                    }],
                     ..Default::default()
                 }],
                 ..Default::default()
