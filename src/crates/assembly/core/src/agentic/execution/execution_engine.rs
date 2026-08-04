@@ -1483,6 +1483,29 @@ impl ExecutionEngine {
         }
     }
 
+    /// Refresh only the per-round runtime facts reminder on a turn scaffold so
+    /// every model request carries live time and the current token pressure
+    /// snapshot instead of the turn-start values. Long-lived turns (background
+    /// Task agents, subagents, deep-review passes) can span many rounds and
+    /// minutes; keeping the turn-start snapshot would freeze the model's view
+    /// of time and context usage for the whole turn. Missing prompt context
+    /// keeps the existing value so a transient build failure never wipes it.
+    fn refresh_runtime_facts_for_round(
+        scaffold: &mut TurnPromptScaffold,
+        prompt_context: Option<PromptBuilderContext>,
+        usage: RuntimeFactsUsage,
+    ) {
+        let Some(prompt_context) = prompt_context else {
+            return;
+        };
+        let Some(refreshed) =
+            PromptBuilder::new(prompt_context).build_runtime_facts_reminder(usage)
+        else {
+            return;
+        };
+        scaffold.prepended_prompt_reminders.runtime_facts = Some(refreshed);
+    }
+
     pub(crate) async fn resolve_model_id_for_turn(
         &self,
         session: &Session,
@@ -3814,6 +3837,22 @@ impl ExecutionEngine {
 
             // L2: Emergency truncation — if tokens still exceed context_window
             // after all compression layers, drop oldest API rounds until we fit.
+            // Refresh runtime facts per round so every model request carries
+            // live time and the current token pressure snapshot; long-lived
+            // turns must not freeze the model's view at turn start.
+            let prompt_context = Self::build_prompt_context(
+                &context,
+                &ai_client.config.model,
+                primary_supports_image_understanding,
+                tool_listing_sections.clone(),
+                runtime_context_needs,
+            )
+            .await;
+            Self::refresh_runtime_facts_for_round(
+                &mut turn_prompt_scaffold,
+                prompt_context,
+                Self::runtime_facts_usage_from_pressure(&token_pressure),
+            );
             let send_prepended_reminders = turn_prompt_scaffold
                 .prepended_prompt_reminders
                 .ordered_reminders();
@@ -4892,6 +4931,7 @@ mod tests {
     use crate::service::config::types::AIModelConfig;
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
     use crate::util::types::ToolDefinition;
+    use bitfun_agent_runtime::prompt::RuntimeFactsUsage;
     use bitfun_runtime_ports::{WorkspaceDirEntry, WorkspaceFileSystem, WorkspacePathKind};
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -5701,6 +5741,68 @@ mod tests {
         assert_eq!(messages[0].role, MessageRole::System);
         assert_eq!(message_text(&messages[0]), Some("new system prompt"));
         assert_eq!(messages[1].role, MessageRole::User);
+    }
+
+    #[test]
+    fn per_round_runtime_facts_refresh_replaces_turn_start_value() {
+        let mut scaffold = TurnPromptScaffold {
+            system_prompt_message: Message::system("system prompt".to_string()),
+            prepended_prompt_reminders: PrependedPromptReminders::default(),
+        };
+        let context = PromptBuilderContext::new(
+            "E:/workspace".to_string(),
+            Some("session-1".to_string()),
+            Some("model-1".to_string()),
+        );
+
+        ExecutionEngine::refresh_runtime_facts_for_round(
+            &mut scaffold,
+            Some(context),
+            RuntimeFactsUsage {
+                context_usage_ratio: Some(0.35),
+                compression_preview_ratio: Some(0.9),
+            },
+        );
+        let first = scaffold
+            .prepended_prompt_reminders
+            .runtime_facts
+            .clone()
+            .expect("runtime facts should be refreshed for the round");
+        assert!(first.contains("[Runtime Facts]"));
+        assert!(first.contains("当前上下文占比: 35%"));
+
+        // A later round with a different pressure snapshot replaces the text:
+        // the runtime facts must not stay frozen at the first round's values.
+        ExecutionEngine::refresh_runtime_facts_for_round(
+            &mut scaffold,
+            Some(PromptBuilderContext::new(
+                "E:/workspace".to_string(),
+                Some("session-1".to_string()),
+                Some("model-1".to_string()),
+            )),
+            RuntimeFactsUsage {
+                context_usage_ratio: Some(0.72),
+                compression_preview_ratio: Some(0.9),
+            },
+        );
+        let second = scaffold
+            .prepended_prompt_reminders
+            .runtime_facts
+            .clone()
+            .expect("runtime facts should stay refreshed");
+        assert_ne!(first, second);
+        assert!(second.contains("当前上下文占比: 72%"));
+
+        // Missing prompt context keeps the existing value (no panic, no wipe).
+        ExecutionEngine::refresh_runtime_facts_for_round(
+            &mut scaffold,
+            None,
+            RuntimeFactsUsage::default(),
+        );
+        assert_eq!(
+            scaffold.prepended_prompt_reminders.runtime_facts.as_deref(),
+            Some(second.as_str())
+        );
     }
 
     #[test]
