@@ -3,6 +3,7 @@
 //! Provides AI clients and related services
 
 pub mod client_factory;
+pub(crate) mod provider_catalog;
 pub(crate) mod reasoning_catalog;
 pub mod tool_call_accumulator;
 

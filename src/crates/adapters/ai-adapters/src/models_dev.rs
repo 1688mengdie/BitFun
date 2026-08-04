@@ -1,6 +1,7 @@
 //! models.dev parsing, provider/model matching, and reasoning preset projection.
 
 use bitfun_core_types::{
+    ProviderCatalogModelCapabilities, ProviderCatalogModelLimits, ProviderCatalogModelPricing,
     ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningCatalogProjection,
     ReasoningConfig, ReasoningPresetAction, ReasoningPresetDescriptor, ReasoningPresetSource,
 };
@@ -21,18 +22,64 @@ pub struct ModelsDevCatalog {
 
 #[derive(Debug, Clone, PartialEq)]
 struct ModelsDevProvider {
+    id: String,
+    name: String,
+    api: Option<String>,
+    doc: Option<String>,
+    env: Vec<String>,
     models: BTreeMap<String, ModelsDevModel>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 struct ModelsDevModel {
     id: String,
+    name: Option<String>,
+    description: Option<String>,
+    family: Option<String>,
+    status: Option<String>,
+    release_date: Option<String>,
+    last_updated: Option<String>,
+    knowledge: Option<String>,
+    open_weights: Option<bool>,
+    attachment: bool,
     reasoning: bool,
+    tool_call: bool,
+    structured_output: bool,
+    input_modalities: Vec<String>,
+    output_modalities: Vec<String>,
     /// `None` means the field was absent. `Some([])` is an authoritative
     /// declaration that the model exposes no selectable reasoning control.
     reasoning_options: Option<Vec<ModelsDevReasoningOption>>,
     has_unknown_options: bool,
     output_limit: Option<u32>,
+    context_limit: Option<u32>,
+    input_limit: Option<u32>,
+    pricing: Option<ProviderCatalogModelPricing>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelsDevProviderFacts {
+    pub id: String,
+    pub name: String,
+    pub api: Option<String>,
+    pub doc: Option<String>,
+    pub env: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelsDevModelFacts {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub description: Option<String>,
+    pub family: Option<String>,
+    pub status: Option<String>,
+    pub release_date: Option<String>,
+    pub last_updated: Option<String>,
+    pub knowledge: Option<String>,
+    pub open_weights: Option<bool>,
+    pub capabilities: ProviderCatalogModelCapabilities,
+    pub limits: Option<ProviderCatalogModelLimits>,
+    pub pricing: Option<ProviderCatalogModelPricing>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,6 +92,16 @@ enum ModelsDevReasoningOption {
 #[derive(Debug, Deserialize, Default)]
 struct RawProvider {
     #[serde(default)]
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    api: Option<String>,
+    #[serde(default)]
+    doc: Option<String>,
+    #[serde(default)]
+    env: Vec<String>,
+    #[serde(default)]
     models: HashMap<String, Value>,
 }
 
@@ -53,15 +110,65 @@ struct RawModel {
     #[serde(default)]
     id: String,
     #[serde(default)]
-    reasoning: bool,
+    name: Option<String>,
     #[serde(default)]
-    limit: RawLimit,
+    description: Option<String>,
+    #[serde(default)]
+    family: Option<String>,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    release_date: Option<String>,
+    #[serde(default)]
+    last_updated: Option<String>,
+    #[serde(default)]
+    knowledge: Option<String>,
+    #[serde(default)]
+    open_weights: Option<bool>,
+    #[serde(default)]
+    attachment: Option<bool>,
+    #[serde(default)]
+    reasoning: Option<bool>,
+    #[serde(default)]
+    tool_call: Option<bool>,
+    #[serde(default)]
+    structured_output: Option<bool>,
+    #[serde(default)]
+    modalities: Option<RawModalities>,
+    #[serde(default)]
+    limit: Option<RawLimit>,
+    #[serde(default)]
+    cost: Option<RawCost>,
 }
 
 #[derive(Debug, Deserialize, Default)]
 struct RawLimit {
     #[serde(default)]
+    context: Option<u32>,
+    #[serde(default)]
+    input: Option<u32>,
+    #[serde(default)]
     output: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawModalities {
+    #[serde(default)]
+    input: Vec<String>,
+    #[serde(default)]
+    output: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct RawCost {
+    #[serde(default)]
+    input: Option<serde_json::Number>,
+    #[serde(default)]
+    output: Option<serde_json::Number>,
+    #[serde(default)]
+    cache_read: Option<serde_json::Number>,
+    #[serde(default)]
+    cache_write: Option<serde_json::Number>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -161,15 +268,49 @@ impl ModelsDevCatalog {
                     model_key,
                     ModelsDevModel {
                         id: model_id,
-                        reasoning: raw_model.reasoning,
+                        name: raw_model.name.and_then(non_empty),
+                        description: raw_model.description.and_then(non_empty),
+                        family: raw_model.family.and_then(non_empty),
+                        status: raw_model.status.and_then(non_empty),
+                        release_date: raw_model.release_date.and_then(non_empty),
+                        last_updated: raw_model.last_updated.and_then(non_empty),
+                        knowledge: raw_model.knowledge.and_then(non_empty),
+                        open_weights: raw_model.open_weights,
+                        attachment: raw_model.attachment.unwrap_or(false),
+                        reasoning: raw_model.reasoning.unwrap_or(false),
+                        tool_call: raw_model.tool_call.unwrap_or(false),
+                        structured_output: raw_model.structured_output.unwrap_or(false),
+                        input_modalities: raw_model
+                            .modalities
+                            .as_ref()
+                            .map(|modalities| normalize_string_values(modalities.input.clone()))
+                            .unwrap_or_default(),
+                        output_modalities: raw_model
+                            .modalities
+                            .as_ref()
+                            .map(|modalities| normalize_string_values(modalities.output.clone()))
+                            .unwrap_or_default(),
                         reasoning_options,
                         has_unknown_options,
-                        output_limit: raw_model.limit.output,
+                        output_limit: raw_model.limit.as_ref().and_then(|limit| limit.output),
+                        context_limit: raw_model.limit.as_ref().and_then(|limit| limit.context),
+                        input_limit: raw_model.limit.as_ref().and_then(|limit| limit.input),
+                        pricing: raw_model.cost.and_then(provider_pricing),
                     },
                 );
             }
             if !models.is_empty() {
-                parsed.insert(provider_id, ModelsDevProvider { models });
+                parsed.insert(
+                    provider_id.clone(),
+                    ModelsDevProvider {
+                        id: non_empty(raw_provider.id).unwrap_or_else(|| provider_id.clone()),
+                        name: non_empty(raw_provider.name).unwrap_or_else(|| provider_id.clone()),
+                        api: raw_provider.api.and_then(non_empty),
+                        doc: raw_provider.doc.and_then(non_empty),
+                        env: normalize_provider_env(raw_provider.env),
+                        models,
+                    },
+                );
             }
         }
         Ok(Self { providers: parsed })
@@ -186,6 +327,125 @@ impl ModelsDevCatalog {
                 })
             })
     }
+
+    pub fn provider_facts(&self, provider_id: &str) -> Option<ModelsDevProviderFacts> {
+        let provider = self
+            .providers
+            .get(&provider_id.trim().to_ascii_lowercase())?;
+        Some(ModelsDevProviderFacts {
+            id: provider.id.clone(),
+            name: provider.name.clone(),
+            api: provider.api.clone(),
+            doc: provider.doc.clone(),
+            env: provider.env.clone(),
+        })
+    }
+
+    pub fn provider_models(&self, provider_id: &str) -> Vec<ModelsDevModelFacts> {
+        let Some(provider) = self.providers.get(&provider_id.trim().to_ascii_lowercase()) else {
+            return Vec::new();
+        };
+        provider
+            .models
+            .values()
+            .filter(|model| model.supports_text_generation())
+            .map(ModelsDevModel::facts)
+            .collect()
+    }
+
+    pub fn canonical_model_id(&self, provider_id: &str, model_id: &str) -> Option<String> {
+        self.model(provider_id, model_id)
+            .map(|model| model.id.clone())
+    }
+}
+
+impl ModelsDevModel {
+    fn supports_text_generation(&self) -> bool {
+        let model_id = self.id.to_ascii_lowercase();
+        let family = self
+            .family
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let is_specialized_non_chat = ["embed", "embedding", "rerank", "moderation"]
+            .iter()
+            .any(|marker| model_id.contains(marker) || family.contains(marker));
+        !is_specialized_non_chat
+            && (self.input_modalities.is_empty()
+                || self.input_modalities.iter().any(|value| value == "text"))
+            && (self.output_modalities.is_empty()
+                || self.output_modalities.iter().any(|value| value == "text"))
+    }
+
+    fn facts(&self) -> ModelsDevModelFacts {
+        let limits = ProviderCatalogModelLimits {
+            context: self.context_limit,
+            input: self.input_limit,
+            output: self.output_limit,
+        };
+        ModelsDevModelFacts {
+            id: self.id.clone(),
+            display_name: self.name.clone(),
+            description: self.description.clone(),
+            family: self.family.clone(),
+            status: self.status.clone(),
+            release_date: self.release_date.clone(),
+            last_updated: self.last_updated.clone(),
+            knowledge: self.knowledge.clone(),
+            open_weights: self.open_weights,
+            capabilities: ProviderCatalogModelCapabilities {
+                chat: self.input_modalities.is_empty()
+                    || self.input_modalities.iter().any(|value| value == "text"),
+                tool_call: self.tool_call,
+                reasoning: self.reasoning,
+                attachment: self.attachment
+                    || self.input_modalities.iter().any(|value| value != "text"),
+                structured_output: self.structured_output,
+                input_modalities: self.input_modalities.clone(),
+                output_modalities: self.output_modalities.clone(),
+            },
+            limits: (limits.context.is_some() || limits.input.is_some() || limits.output.is_some())
+                .then_some(limits),
+            pricing: self.pricing.clone(),
+        }
+    }
+}
+
+fn non_empty(value: String) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn normalize_string_values(values: Vec<String>) -> Vec<String> {
+    let mut values = values
+        .into_iter()
+        .filter_map(non_empty)
+        .map(|value| value.to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn normalize_provider_env(values: Vec<String>) -> Vec<String> {
+    let mut values = values.into_iter().filter_map(non_empty).collect::<Vec<_>>();
+    values.sort();
+    values.dedup();
+    values
+}
+
+fn provider_pricing(cost: RawCost) -> Option<ProviderCatalogModelPricing> {
+    let pricing = ProviderCatalogModelPricing {
+        input: cost.input.map(|value| value.to_string()),
+        output: cost.output.map(|value| value.to_string()),
+        cache_read: cost.cache_read.map(|value| value.to_string()),
+        cache_write: cost.cache_write.map(|value| value.to_string()),
+    };
+    (pricing.input.is_some()
+        || pricing.output.is_some()
+        || pricing.cache_read.is_some()
+        || pricing.cache_write.is_some())
+    .then_some(pricing)
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -206,6 +466,26 @@ pub fn project_reasoning_catalog_with_limit(
     configured: Option<&ReasoningConfig>,
     models_dev: Option<&ModelsDevCatalog>,
 ) -> ReasoningCatalogProjection {
+    project_reasoning_catalog_with_limit_and_auto_binding(
+        provider,
+        model_id,
+        base_url,
+        effective_max_output_tokens,
+        configured,
+        models_dev,
+        None,
+    )
+}
+
+pub fn project_reasoning_catalog_with_limit_and_auto_binding(
+    provider: &str,
+    model_id: &str,
+    base_url: &str,
+    effective_max_output_tokens: u32,
+    configured: Option<&ReasoningConfig>,
+    models_dev: Option<&ModelsDevCatalog>,
+    trusted_auto_binding: Option<(&str, &str)>,
+) -> ReasoningCatalogProjection {
     let binding = configured
         .map(|config| &config.catalog)
         .cloned()
@@ -213,6 +493,12 @@ pub fn project_reasoning_catalog_with_limit(
     let source_match = match &binding {
         ReasoningCatalogBinding::Disabled => None,
         ReasoningCatalogBinding::Auto => models_dev.and_then(|catalog| {
+            if let Some((source_provider, source_model)) = trusted_auto_binding {
+                return Some((
+                    source_provider,
+                    catalog.model(source_provider, source_model)?,
+                ));
+            }
             let source_provider = auto_provider_id(provider, base_url)?;
             Some((source_provider, catalog.model(source_provider, model_id)?))
         }),
@@ -805,6 +1091,49 @@ mod tests {
             }"#,
         )
         .expect("catalog should parse")
+    }
+
+    #[test]
+    fn provider_projection_tolerates_null_optional_fields_and_filters_non_chat_models() {
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{
+                "nvidia": {
+                    "id":"nvidia",
+                    "name":"Nvidia",
+                    "api":"https://integrate.api.nvidia.com/v1",
+                    "env":["NVIDIA_API_KEY"],
+                    "models": {
+                        "chat": {"name":null,"family":null,"tool_call":true,
+                            "modalities":{"input":["text"],"output":["text"]},
+                            "release_date":"2026-01-02","open_weights":true,
+                            "limit":{"context":128000,"output":8192},
+                            "cost":{"input":0.5,"output":1.25}},
+                        "embed": {"id":"nv-embed-v1","family":null,
+                            "modalities":{"input":["text"],"output":["text"]}},
+                        "tts": {"modalities":{"input":["text"],"output":["audio"]}}
+                    }
+                }
+            }"#,
+        )
+        .expect("catalog");
+        let provider = catalog.provider_facts("nvidia").expect("provider facts");
+        assert_eq!(provider.env, vec!["NVIDIA_API_KEY"]);
+        let models = catalog.provider_models("nvidia");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "chat");
+        assert_eq!(models[0].release_date.as_deref(), Some("2026-01-02"));
+        assert_eq!(models[0].open_weights, Some(true));
+        assert_eq!(
+            models[0].limits.as_ref().and_then(|limit| limit.context),
+            Some(128_000)
+        );
+        assert_eq!(
+            models[0]
+                .pricing
+                .as_ref()
+                .and_then(|pricing| pricing.input.as_deref()),
+            Some("0.5")
+        );
     }
 
     #[test]

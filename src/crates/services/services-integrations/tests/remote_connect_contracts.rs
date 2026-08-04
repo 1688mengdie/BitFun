@@ -2171,6 +2171,7 @@ fn sample_remote_model_catalog(version: u64) -> RemoteModelCatalog {
             capabilities: vec!["text_chat".to_string()],
             reasoning: None,
         }],
+        provider_catalog: Default::default(),
         default_models: RemoteDefaultModelsConfig {
             primary: Some("model-1".to_string()),
             ..RemoteDefaultModelsConfig::default()
@@ -2215,6 +2216,7 @@ fn remote_connect_model_catalog_builder_preserves_config_shape() {
                 }],
             }),
         }],
+        provider_catalog: Default::default(),
         default_models: RemoteDefaultModelsConfig {
             primary: Some("model-1".to_string()),
             fast: Some("fast-model".to_string()),
@@ -2252,6 +2254,7 @@ fn remote_model_catalog_version_fits_javascript_number_precision() {
         last_modified_ms: 0,
         source_version: Some(u64::MAX),
         models: Vec::new(),
+        provider_catalog: Default::default(),
         default_models: RemoteDefaultModelsConfig::default(),
         session_model_id: None,
         session_reasoning_preset: None,
@@ -2266,6 +2269,7 @@ fn remote_model_catalog_version_tracks_session_selection() {
         last_modified_ms: 42,
         source_version: Some(7),
         models: Vec::new(),
+        provider_catalog: Default::default(),
         default_models: RemoteDefaultModelsConfig::default(),
         session_model_id: Some("model-1".to_string()),
         session_reasoning_preset: None,
@@ -2282,6 +2286,25 @@ fn remote_model_catalog_version_tracks_session_selection() {
 
     assert_ne!(model_one.version, high.version);
     assert_ne!(model_one.version, model_two.version);
+}
+
+#[test]
+fn remote_model_catalog_version_tracks_provider_catalog_revision() {
+    let mut facts = RemoteModelCatalogFacts {
+        last_modified_ms: 42,
+        source_version: Some(7),
+        models: Vec::new(),
+        provider_catalog: Default::default(),
+        default_models: RemoteDefaultModelsConfig::default(),
+        session_model_id: None,
+        session_reasoning_preset: None,
+    };
+    facts.provider_catalog.revision = "catalog-a".to_string();
+    let catalog_a = build_remote_model_catalog(facts.clone());
+    facts.provider_catalog.revision = "catalog-b".to_string();
+    let catalog_b = build_remote_model_catalog(facts);
+
+    assert_ne!(catalog_a.version, catalog_b.version);
 }
 
 #[derive(Default)]

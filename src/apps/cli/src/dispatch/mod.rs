@@ -587,6 +587,7 @@ async fn inspect_model_readiness() -> Result<ModelReadiness> {
             .unwrap_or(bitfun_core::AIModelCatalog {
                 version: 0,
                 models: Vec::new(),
+                provider_catalog: Default::default(),
                 default_models: Default::default(),
                 reasoning_preset_selection_supported: true,
                 session_model_id: None,

@@ -56,9 +56,86 @@ export interface AIModelCatalogEntry {
   reasoning?: ReasoningCatalogProjection;
 }
 
+export type ProviderCatalogSource = 'cache' | 'bundle' | 'bitfun' | 'mixed';
+export type ProviderCatalogModelSource = 'models_dev' | 'bitfun' | 'merged';
+
+export interface ProviderCatalogModelCapabilities {
+  chat: boolean;
+  tool_call: boolean;
+  reasoning: boolean;
+  attachment: boolean;
+  structured_output: boolean;
+  input_modalities?: string[];
+  output_modalities?: string[];
+}
+
+export interface ProviderCatalogModel {
+  id: string;
+  display_name?: string;
+  description?: string;
+  recommended: boolean;
+  source: ProviderCatalogModelSource;
+  family?: string;
+  status?: string;
+  release_date?: string;
+  last_updated?: string;
+  knowledge?: string;
+  open_weights?: boolean;
+  catalog_provider_ids?: string[];
+  endpoint_ids?: string[];
+  capabilities: ProviderCatalogModelCapabilities;
+  limits?: {
+    context?: number;
+    input?: number;
+    output?: number;
+  };
+  pricing?: {
+    input?: string;
+    output?: string;
+    cache_read?: string;
+    cache_write?: string;
+  };
+}
+
+export interface ProviderCatalogEndpoint {
+  id: string;
+  base_url: string;
+  api_format: string;
+  label: string;
+  is_default: boolean;
+  trusted_for_auto_detection: boolean;
+  catalog_provider_ids?: string[];
+}
+
+export interface ProviderCatalogProvider {
+  id: string;
+  display_order: number;
+  name: string;
+  description: string;
+  help_url?: string;
+  requires_api_key: boolean;
+  catalog_provider_ids?: string[];
+  catalog_providers?: Array<{
+    id: string;
+    name: string;
+    api?: string;
+    doc?: string;
+    env?: string[];
+  }>;
+  endpoints: ProviderCatalogEndpoint[];
+  models: ProviderCatalogModel[];
+}
+
+export interface ProviderCatalog {
+  revision: string;
+  source: ProviderCatalogSource;
+  providers: ProviderCatalogProvider[];
+}
+
 export interface AIModelCatalog {
   version: number;
   models: AIModelCatalogEntry[];
+  provider_catalog?: ProviderCatalog;
   default_models: {
     primary?: string | null;
     fast?: string | null;

@@ -38,76 +38,37 @@ pub(crate) enum ProviderSelection {
 
 /// Build built-in provider templates used by CLI model configuration.
 fn builtin_provider_templates() -> Vec<ProviderTemplate> {
-    vec![
-        ProviderTemplate {
-            name: "ZhiPu AI".into(),
-            base_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions".into(),
-            format: "openai".into(),
-            models: vec!["glm-5.2".into(), "glm-5.1".into(), "glm-5".into()],
-            description: "ZhiPu GLM series".into(),
-        },
-        ProviderTemplate {
-            name: "Qwen (Alibaba)".into(),
-            base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions".into(),
-            format: "openai".into(),
-            models: vec![
-                "qwen3.7-plus".into(),
-                "qwen3.7-max".into(),
-                "qwen3.6-flash".into(),
-            ],
-            description: "Alibaba Qwen series".into(),
-        },
-        ProviderTemplate {
-            name: "DeepSeek".into(),
-            base_url: "https://api.deepseek.com/chat/completions".into(),
-            format: "openai".into(),
-            models: vec!["deepseek-v4-pro".into(), "deepseek-v4-flash".into()],
-            description: "DeepSeek AI models".into(),
-        },
-        ProviderTemplate {
-            name: "Volcengine".into(),
-            base_url: "https://ark.cn-beijing.volces.com/api/v3/chat/completions".into(),
-            format: "openai".into(),
-            models: vec![
-                "doubao-seed-2-1-pro-260628".into(),
-                "doubao-seed-2-0-pro-260215".into(),
-            ],
-            description: "ByteDance Volcengine".into(),
-        },
-        ProviderTemplate {
-            name: "MiniMax".into(),
-            base_url: "https://api.minimaxi.com/anthropic/v1/messages".into(),
-            format: "anthropic".into(),
-            models: vec![
-                "MiniMax-M3".into(),
-                "MiniMax-M2.7".into(),
-                "MiniMax-M2.7-highspeed".into(),
-            ],
-            description: "MiniMax AI models".into(),
-        },
-        ProviderTemplate {
-            name: "Moonshot (Kimi)".into(),
-            base_url: "https://api.moonshot.cn/v1/chat/completions".into(),
-            format: "openai".into(),
-            models: vec![
-                "kimi-k3".into(),
-                "kimi-k2.7-code".into(),
-                "kimi-k2.6".into(),
-            ],
-            description: "Moonshot Kimi series".into(),
-        },
-        ProviderTemplate {
-            name: "Anthropic".into(),
-            base_url: "https://api.anthropic.com/v1/messages".into(),
-            format: "anthropic".into(),
-            models: vec![
-                "claude-opus-5".into(),
-                "claude-sonnet-5".into(),
-                "claude-haiku-4-5".into(),
-            ],
-            description: "Anthropic Claude series".into(),
-        },
-    ]
+    let provider_catalog = tokio::runtime::Handle::try_current()
+        .ok()
+        .filter(|runtime| runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+        .and_then(|runtime| {
+            tokio::task::block_in_place(|| {
+                runtime
+                    .block_on(bitfun_core::get_ai_model_catalog())
+                    .ok()
+                    .map(|catalog| catalog.provider_catalog)
+            })
+        })
+        .filter(|catalog| !catalog.providers.is_empty())
+        .unwrap_or_else(bitfun_core::get_builtin_ai_provider_catalog);
+
+    provider_catalog
+        .providers
+        .into_iter()
+        .filter_map(|provider| {
+            let endpoint = provider
+                .endpoints
+                .iter()
+                .find(|endpoint| endpoint.is_default)?;
+            Some(ProviderTemplate {
+                name: provider.name,
+                base_url: endpoint.base_url.clone(),
+                format: endpoint.api_format.clone(),
+                models: provider.models.into_iter().map(|model| model.id).collect(),
+                description: provider.description,
+            })
+        })
+        .collect()
 }
 
 // ── Flattened display row ──
@@ -176,8 +137,9 @@ impl ProviderSelectorState {
 
     /// Reshow the provider selector (for back navigation)
     pub(super) fn reshow(&mut self) {
-        if !self.templates.is_empty() || !builtin_provider_templates().is_empty() {
-            self.templates = builtin_provider_templates();
+        let templates = builtin_provider_templates();
+        if !self.templates.is_empty() || !templates.is_empty() {
+            self.templates = templates;
             self.build_rows();
             self.visible = true;
         }

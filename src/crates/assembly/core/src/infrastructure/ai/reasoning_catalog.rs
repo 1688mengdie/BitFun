@@ -4,7 +4,9 @@ use std::sync::{OnceLock, RwLock};
 #[cfg(feature = "product-full")]
 use std::time::{Duration, Instant};
 
-use bitfun_ai_adapters::models_dev::{project_reasoning_catalog_with_limit, ModelsDevCatalog};
+use bitfun_ai_adapters::models_dev::{
+    project_reasoning_catalog_with_limit_and_auto_binding, ModelsDevCatalog,
+};
 use bitfun_core_types::{
     ReasoningCatalogBinding, ReasoningCatalogProjection, ReasoningPresetDescriptor,
 };
@@ -12,11 +14,12 @@ use bitfun_core_types::{
 use bitfun_events::{AIModelCatalogUpdatedEvent, AI_MODEL_CATALOG_UPDATED_EVENT};
 #[cfg(feature = "product-full")]
 use bitfun_services_integrations::models_dev::{
-    ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshot,
+    ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshot, ModelsDevSnapshotSource,
 };
 #[cfg(feature = "product-full")]
 use log::debug;
 
+use crate::infrastructure::ai::provider_catalog::trusted_models_dev_binding;
 use crate::infrastructure::ai::AIClient;
 use crate::service::config::types::AIModelConfig;
 
@@ -25,6 +28,10 @@ pub(crate) struct ModelsDevReasoningCatalogSnapshot {
     pub(crate) catalog: Option<Arc<ModelsDevCatalog>>,
     #[cfg(feature = "product-full")]
     pub(crate) version: u64,
+    #[cfg(feature = "product-full")]
+    pub(crate) sha256: String,
+    #[cfg(feature = "product-full")]
+    pub(crate) source: ModelsDevSnapshotSource,
 }
 
 #[cfg(feature = "product-full")]
@@ -80,6 +87,8 @@ pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
         catalog,
         #[cfg(feature = "product-full")]
         version: snapshot.version,
+        sha256: snapshot.sha256,
+        source: snapshot.source,
     };
     if let Ok(mut cache) = parsed_catalog_cache().write() {
         *cache = Some(CachedReasoningCatalogSnapshot {
@@ -129,6 +138,8 @@ fn parse_models_dev_snapshot(
     Some(ModelsDevReasoningCatalogSnapshot {
         catalog,
         version: snapshot.version,
+        sha256: snapshot.sha256.clone(),
+        source: snapshot.source,
     })
 }
 
@@ -200,7 +211,10 @@ pub(crate) fn project_model_reasoning_catalog(
     model: &AIModelConfig,
     models_dev: Option<&ModelsDevCatalog>,
 ) -> ReasoningCatalogProjection {
-    project_reasoning_catalog_with_limit(
+    let trusted_binding = models_dev.and_then(|catalog| {
+        trusted_models_dev_binding(&model.provider, &model.base_url, &model.model_name, catalog)
+    });
+    project_reasoning_catalog_with_limit_and_auto_binding(
         &model.provider,
         &model.model_name,
         &model.base_url,
@@ -213,6 +227,9 @@ pub(crate) fn project_model_reasoning_catalog(
         }),
         model.reasoning.as_ref(),
         models_dev,
+        trusted_binding
+            .as_ref()
+            .map(|(provider, model)| (provider.as_str(), model.as_str())),
     )
 }
 
@@ -553,11 +570,15 @@ mod tests {
             snapshot: super::ModelsDevReasoningCatalogSnapshot {
                 catalog: None,
                 version: 1,
+                sha256: "one".to_string(),
+                source: bitfun_services_integrations::models_dev::ModelsDevSnapshotSource::Cache,
             },
         });
         let updated = super::ModelsDevReasoningCatalogSnapshot {
             catalog: None,
             version: 2,
+            sha256: "two".to_string(),
+            source: bitfun_services_integrations::models_dev::ModelsDevSnapshotSource::Cache,
         };
 
         assert!(super::replace_cached_catalog(&mut cache, updated));

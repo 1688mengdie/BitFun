@@ -65,6 +65,15 @@ pub use infrastructure::debug_log as debug;
 pub use bitfun_services_integrations::remote_connect::RemoteModelCatalog as AIModelCatalog;
 
 #[cfg(feature = "product-full")]
+pub fn get_builtin_ai_provider_catalog() -> bitfun_core_types::ProviderCatalog {
+    infrastructure::ai::provider_catalog::resolve_builtin_provider_catalog(
+        None,
+        "bitfun-builtin".to_string(),
+        bitfun_core_types::ProviderCatalogSource::Bitfun,
+    )
+}
+
+#[cfg(feature = "product-full")]
 pub async fn get_ai_model_catalog() -> Result<AIModelCatalog, String> {
     service_agent_runtime::CoreServiceAgentRuntime::load_remote_model_catalog(None).await
 }

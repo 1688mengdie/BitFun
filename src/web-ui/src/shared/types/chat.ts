@@ -60,6 +60,7 @@ export interface ProviderBaseUrlOption {
 
 export interface ProviderTemplate {
   id: string;
+  displayOrder?: number;
   name: string;
   baseUrl: string;
   format: ApiFormat;

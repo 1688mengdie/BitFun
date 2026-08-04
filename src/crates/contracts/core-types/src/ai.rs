@@ -200,6 +200,140 @@ pub struct ReasoningCatalogProjection {
     pub presets: Vec<ReasoningPresetDescriptor>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogSource {
+    Cache,
+    Bundle,
+    #[default]
+    Bitfun,
+    Mixed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCatalogModelSource {
+    ModelsDev,
+    Bitfun,
+    Merged,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderCatalogModelCapabilities {
+    pub chat: bool,
+    pub tool_call: bool,
+    pub reasoning: bool,
+    pub attachment: bool,
+    pub structured_output: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderCatalogModelLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderCatalogModelPricing {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_write: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogModel {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub recommended: bool,
+    pub source: ProviderCatalogModelSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub release_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_updated: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knowledge: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_weights: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_provider_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoint_ids: Vec<String>,
+    pub capabilities: ProviderCatalogModelCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<ProviderCatalogModelLimits>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ProviderCatalogModelPricing>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogUpstreamProvider {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub doc: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogEndpoint {
+    pub id: String,
+    pub base_url: String,
+    pub api_format: String,
+    pub label: String,
+    pub is_default: bool,
+    pub trusted_for_auto_detection: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProviderCatalogProvider {
+    pub id: String,
+    pub display_order: i32,
+    pub name: String,
+    pub description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub help_url: Option<String>,
+    pub requires_api_key: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_provider_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub catalog_providers: Vec<ProviderCatalogUpstreamProvider>,
+    pub endpoints: Vec<ProviderCatalogEndpoint>,
+    pub models: Vec<ProviderCatalogModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProviderCatalog {
+    pub revision: String,
+    pub source: ProviderCatalogSource,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<ProviderCatalogProvider>,
+}
+
 #[cfg(test)]
 mod reasoning_tests {
     use serde_json::json;

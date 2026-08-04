@@ -56,6 +56,7 @@ use crate::agentic::core::{Session, SessionKind};
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::workspace::WorkspaceBinding;
+use crate::infrastructure::ai::provider_catalog::resolve_builtin_provider_catalog;
 use crate::infrastructure::ai::reasoning_catalog::{
     load_models_dev_reasoning_catalog, project_model_reasoning_catalog, resolve_reasoning_preset,
 };
@@ -939,6 +940,21 @@ impl CoreServiceAgentRuntime {
             .map_err(|e| format!("Failed to load global config: {e}"))?;
         let ai_config: AIConfig = global_config.ai;
         let models_dev = load_models_dev_reasoning_catalog().await;
+        let provider_catalog = resolve_builtin_provider_catalog(
+            models_dev.catalog.as_deref(),
+            models_dev.sha256.clone(),
+            match models_dev.source {
+                bitfun_services_integrations::models_dev::ModelsDevSnapshotSource::Cache => {
+                    bitfun_core_types::ProviderCatalogSource::Cache
+                }
+                bitfun_services_integrations::models_dev::ModelsDevSnapshotSource::Bundled => {
+                    bitfun_core_types::ProviderCatalogSource::Bundle
+                }
+                bitfun_services_integrations::models_dev::ModelsDevSnapshotSource::Empty => {
+                    bitfun_core_types::ProviderCatalogSource::Bitfun
+                }
+            },
+        );
 
         let models: Vec<RemoteModelFacts> = ai_config
             .models
@@ -973,6 +989,7 @@ impl CoreServiceAgentRuntime {
             last_modified_ms: global_config.last_modified.timestamp_millis(),
             source_version: Some(models_dev.version),
             models,
+            provider_catalog,
             default_models: RemoteDefaultModelsConfig {
                 primary: ai_config.default_models.primary,
                 fast: ai_config.default_models.fast,

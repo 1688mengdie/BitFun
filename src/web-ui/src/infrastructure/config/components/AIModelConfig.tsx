@@ -12,7 +12,9 @@ import {
 } from '../types';
 import { configManager } from '../services/ConfigManager';
 import { getCapabilitiesByCategory, resolveModelCategory } from '../services/modelCategory';
-import { allocateModelConfigId, PROVIDER_TEMPLATES, getModelDisplayName, getProviderDisplayName, getProviderTemplateId } from '../services/modelConfigs';
+import { allocateModelConfigId, getModelDisplayName, getProviderDisplayName, getProviderTemplateId } from '../services/modelConfigs';
+import { resolveProviderTemplates } from '../services/builtinProviderCatalog';
+import { normalizeProviderBaseUrl } from '../services/providerCatalog';
 import { supportsResponsesReasoning } from '../utils/reasoning';
 import { canonicalReasoningConfig, validateReasoningConfig } from '../utils/reasoningPresets';
 import { aiApi, systemAPI } from '@/infrastructure/api';
@@ -550,12 +552,18 @@ const AIModelConfig: React.FC = () => {
   }, [subscriptionLoginPanel]);
   
   // Provider options with translations (must be at top level, before any conditional returns)
+  const providerTemplates = useMemo(
+    () => resolveProviderTemplates(modelCatalog?.provider_catalog),
+    [modelCatalog?.provider_catalog],
+  );
   const providerOrder = useMemo(
-    () => ['openbitfun', 'zhipu', 'qwen', 'deepseek', 'volcengine', 'minimax', 'moonshot', 'gemini', 'anthropic'],
-    []
+    () => Object.values(providerTemplates)
+      .sort((left, right) => (left.displayOrder ?? 999) - (right.displayOrder ?? 999))
+      .map(provider => provider.id),
+    [providerTemplates],
   );
   const providers = useMemo(() => {
-    const sorted = Object.values(PROVIDER_TEMPLATES).sort((a, b) => {
+    const sorted = Object.values(providerTemplates).sort((a, b) => {
       const indexA = providerOrder.indexOf(a.id);
       const indexB = providerOrder.indexOf(b.id);
       return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
@@ -567,12 +575,12 @@ const AIModelConfig: React.FC = () => {
       name: t(`providers.${provider.id}.name`),
       description: t(`providers.${provider.id}.description`)
     }));
-  }, [providerOrder, t]);
+  }, [providerOrder, providerTemplates, t]);
 
   // Current template with translations (must be at top level, before any conditional returns)
   const currentTemplate = useMemo(() => {
     if (!selectedProviderId) return null;
-    const template = PROVIDER_TEMPLATES[selectedProviderId];
+    const template = providerTemplates[selectedProviderId];
     if (!template) return null;
     // Dynamically get translated name, description, and baseUrlOptions notes
     return {
@@ -584,7 +592,7 @@ const AIModelConfig: React.FC = () => {
         note: t(`providers.${template.id}.urlOptions.${opt.note}`, { defaultValue: opt.note })
       }))
     };
-  }, [selectedProviderId, t]);
+  }, [providerTemplates, selectedProviderId, t]);
 
   const createDraftsFromConfigs = (configs: AIModelConfigType[]) => (
     configs.map(config => createModelDraft(config.model_name, config, {
@@ -638,8 +646,15 @@ const AIModelConfig: React.FC = () => {
           ? { ...baseConfig, max_tokens: undefined }
           : undefined;
 
+        const catalogModel = selectedProviderId
+          ? modelCatalog?.provider_catalog?.providers
+              .find(provider => provider.id === selectedProviderId)
+              ?.models.find(model => model.id === modelName)
+          : undefined;
         return createModelDraft(modelName, draftBaseConfig, {
           configId: pinnedRowId,
+          contextWindow: catalogModel?.limits?.context,
+          category: catalogModel?.capabilities.attachment ? 'multimodal' : undefined,
         });
       })
     );
@@ -1218,7 +1233,7 @@ const AIModelConfig: React.FC = () => {
 
   
   const handleSelectProvider = (providerId: string) => {
-    const template = PROVIDER_TEMPLATES[providerId];
+    const template = providerTemplates[providerId];
     if (!template) return;
     resetRemoteModelDiscovery();
     setManualModelInput('');
@@ -1878,6 +1893,41 @@ const AIModelConfig: React.FC = () => {
     if (!isEditing || !editingConfig) return null;
     const isFromTemplate = !editingConfig.id && !!currentTemplate;
     const isProviderScopedEditing = !editingConfig.id;
+    const catalogProvider = selectedProviderId
+      ? modelCatalog?.provider_catalog?.providers.find(provider => provider.id === selectedProviderId)
+      : undefined;
+    const normalizedEditingBaseUrl = editingConfig.base_url
+      ? normalizeProviderBaseUrl(editingConfig.base_url)
+      : '';
+    const selectedEndpointId = catalogProvider?.endpoints
+      .filter(endpoint => !editingConfig.provider || endpoint.api_format === editingConfig.provider)
+      .sort((left, right) => (
+        normalizeProviderBaseUrl(right.base_url).length
+        - normalizeProviderBaseUrl(left.base_url).length
+      ))
+      .find(endpoint => {
+        const normalizedEndpoint = normalizeProviderBaseUrl(endpoint.base_url);
+        return normalizedEndpoint === normalizedEditingBaseUrl
+          || normalizedEndpoint.startsWith(`${normalizedEditingBaseUrl}/`)
+          || normalizedEditingBaseUrl.startsWith(`${normalizedEndpoint}/`);
+      })?.id;
+    const catalogModelOptions: SelectOption[] = (catalogProvider?.models || [])
+      .filter(model => (
+        !selectedEndpointId
+        || !model.endpoint_ids?.length
+        || model.endpoint_ids.includes(selectedEndpointId)
+      ))
+      .map(model => ({
+        label: model.display_name || model.id,
+        value: model.id,
+        description: model.display_name && model.display_name !== model.id ? model.id : undefined,
+        testId: 'settings-model-option',
+        testAttributes: {
+          'data-model-id': model.id,
+          'data-model-name': model.id,
+          'data-model-source': model.source,
+        },
+      }));
     const fetchedOrPresetModelOptions: SelectOption[] = remoteModelOptions.length > 0
       ? remoteModelOptions.map(model => ({
           label: model.display_name || model.id,
@@ -1889,7 +1939,9 @@ const AIModelConfig: React.FC = () => {
             'data-model-name': model.id,
           },
         }))
-      : (currentTemplate?.models || []).map(model => ({
+      : catalogModelOptions.length > 0
+        ? catalogModelOptions
+        : (currentTemplate?.models || []).map(model => ({
           label: model,
           value: model,
           testId: 'settings-model-option',
@@ -1919,7 +1971,7 @@ const AIModelConfig: React.FC = () => {
         ? remoteModelsError
         : remoteModelOptions.length > 0
           ? null
-          : currentTemplate?.models?.length
+          : fetchedOrPresetModelOptions.length > 0
             ? t('providerSelection.usingPresetModels')
             : hasAttemptedRemoteFetch
               ? t('providerSelection.noPresetModels')
