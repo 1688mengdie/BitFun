@@ -152,7 +152,10 @@ impl ModelsDevCatalogService {
                 body
             }
             ModelsDevRuntimeSource::Http(endpoint_url) => {
-                if endpoint_url.trim().is_empty() || self.is_cache_fresh().await {
+                if endpoint_url.trim().is_empty() {
+                    return ModelsDevRefreshOutcome::NotNeeded;
+                }
+                if self.is_cache_fresh().await {
                     return ModelsDevRefreshOutcome::NotNeeded;
                 }
                 let Ok(mut refresh_state) = self.refresh_state.try_lock() else {

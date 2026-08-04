@@ -14,7 +14,10 @@ pub mod tool_image_attachment;
 pub mod worktree;
 
 pub use ai::{
-    AIConfig, ConnectionTestMessageCode, ConnectionTestResult, Message, ProxyConfig,
+    AIConfig, ConnectionTestMessageCode, ConnectionTestResult, Message, ProviderCatalog,
+    ProviderCatalogEndpoint, ProviderCatalogModel, ProviderCatalogModelCapabilities,
+    ProviderCatalogModelLimits, ProviderCatalogModelPricing, ProviderCatalogModelSource,
+    ProviderCatalogProvider, ProviderCatalogSource, ProviderCatalogUpstreamProvider, ProxyConfig,
     ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningCatalogProjection,
     ReasoningConfig, ReasoningPreset, ReasoningPresetAction, ReasoningPresetDescriptor,
     ReasoningPresetSource, RemoteModelInfo, ToolCall, ToolCallConfirmationDetails,

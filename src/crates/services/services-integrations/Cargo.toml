@@ -95,7 +95,15 @@ zbus-secret-service-keyring-store = { workspace = true, optional = true }
 [features]
 default = []
 announcement = ["reqwest", "tokio/fs", "tokio/sync"]
-models-dev = ["reqwest", "sha2", "tokio/fs", "tokio/sync", "tokio/time", "windows"]
+models-dev = [
+    "reqwest",
+    "reqwest/system-proxy",
+    "sha2",
+    "tokio/fs",
+    "tokio/sync",
+    "tokio/time",
+    "windows",
+]
 browser-control = ["anyhow", "bitfun-services-core/process-runtime", "dirs", "reqwest", "thiserror", "tokio/time"]
 canvas-runtime = [
     "dep:bitfun-product-domains",

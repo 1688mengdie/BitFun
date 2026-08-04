@@ -23,7 +23,7 @@ mod relay_http;
 pub mod session_store;
 pub mod sync_state;
 
-use bitfun_core_types::ReasoningCatalogProjection;
+use bitfun_core_types::{ProviderCatalog, ReasoningCatalogProjection};
 use bitfun_events::AgenticEvent;
 use bitfun_runtime_ports::{
     AgentInputAttachment, AgentSessionCreateRequest, AgentSubmissionRequest, AgentSubmissionSource,
@@ -1609,6 +1609,8 @@ pub struct RemoteModelConfig {
 pub struct RemoteModelCatalog {
     pub version: u64,
     pub models: Vec<RemoteModelConfig>,
+    #[serde(default)]
+    pub provider_catalog: ProviderCatalog,
     pub default_models: RemoteDefaultModelsConfig,
     #[serde(default)]
     pub reasoning_preset_selection_supported: bool,
@@ -1663,6 +1665,7 @@ pub struct RemoteModelCatalogFacts {
     pub last_modified_ms: i64,
     pub source_version: Option<u64>,
     pub models: Vec<RemoteModelFacts>,
+    pub provider_catalog: ProviderCatalog,
     pub default_models: RemoteDefaultModelsConfig,
     pub session_model_id: Option<String>,
     pub session_reasoning_preset: Option<String>,
@@ -1678,6 +1681,7 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
     let version = catalog_version(
         facts.last_modified_ms,
         facts.source_version,
+        &facts.provider_catalog.revision,
         facts.session_model_id.as_deref(),
         facts.session_reasoning_preset.as_deref(),
     );
@@ -1702,6 +1706,7 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
                 reasoning: model.reasoning,
             })
             .collect(),
+        provider_catalog: facts.provider_catalog,
         default_models: facts.default_models,
         reasoning_preset_selection_supported: true,
         session_model_id: facts.session_model_id,
@@ -1712,6 +1717,7 @@ pub fn build_remote_model_catalog(facts: RemoteModelCatalogFacts) -> RemoteModel
 fn catalog_version(
     last_modified_ms: i64,
     source_version: Option<u64>,
+    provider_catalog_revision: &str,
     session_model_id: Option<&str>,
     session_reasoning_preset: Option<&str>,
 ) -> u64 {
@@ -1721,6 +1727,9 @@ fn catalog_version(
         Some(source_version) => config_version ^ source_version.rotate_left(17),
         None => config_version,
     };
+    if !provider_catalog_revision.is_empty() {
+        version ^= stable_selection_hash(Some(provider_catalog_revision), None).rotate_left(11);
+    }
     if session_model_id.is_some() || session_reasoning_preset.is_some() {
         version ^=
             stable_selection_hash(session_model_id, session_reasoning_preset).rotate_left(29);
@@ -3649,6 +3658,7 @@ mod tests {
             Ok(RemoteModelCatalog {
                 version: 1,
                 models: Vec::new(),
+                provider_catalog: Default::default(),
                 default_models: RemoteDefaultModelsConfig::default(),
                 reasoning_preset_selection_supported: true,
                 session_model_id: None,
