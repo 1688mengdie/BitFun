@@ -46,6 +46,7 @@ export struct ChatMessageBubble {
   };
   @Param isStreaming: boolean = false;
   @Param isFinalizing: boolean = false;
+  @Param showRetryAction: boolean = false;
   @Param isBusy: boolean = false;
   @Param downloadingFilePath: string = '';
   @Param downloadedFilePath: string = '';
@@ -114,7 +115,7 @@ export struct ChatMessageBubble {
           .borderRadius(18)
           .alignItems(HorizontalAlign.Start)
         }
-        if (this.item.status === 'failed') {
+        if (this.item.status === 'failed' && this.showRetryAction) {
           Row({ space: 8 }) {
             Text(RemoteI18n.t('chat.sendFailed'))
               .fontSize(12)
@@ -151,7 +152,8 @@ export struct ChatMessageBubble {
         if (this.item.images && this.item.images.length > 0) {
           this.MessageImages(this.item.images)
         }
-        if (this.item.status === 'failed' && (this.item.detail || '').trim().length > 0) {
+        if (this.item.status === 'failed' && this.showRetryAction &&
+          (this.item.detail || '').trim().length > 0) {
           Row({ space: 8 }) {
             Text(RemoteI18n.t('generalChat.replyInterrupted'))
               .fontSize(12)
