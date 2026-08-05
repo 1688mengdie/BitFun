@@ -314,6 +314,7 @@ fn migrate_legacy_goal_mode(
         created_at,
         updated_at: created_at,
         auto_continuation_count: 0,
+        reference_files: Vec::new(),
     })
 }
 
@@ -373,6 +374,10 @@ pub struct SetThreadGoalRequest {
     pub objective: Option<String>,
     pub status: Option<ThreadGoalStatus>,
     pub token_budget: Option<Option<i64>>,
+    /// Workspace-relative reference files the goal tracks. `Some` replaces
+    /// the goal's list when the objective is also updated; `None` leaves the
+    /// existing list untouched.
+    pub reference_files: Option<Vec<String>>,
     pub replace_existing: bool,
     pub now_epoch_seconds: i64,
     pub new_goal_id: String,
@@ -439,6 +444,9 @@ pub fn build_set_thread_goal_result(
             if let Some(token_budget) = request.token_budget {
                 existing.token_budget = token_budget;
             }
+            if let Some(reference_files) = request.reference_files {
+                existing.reference_files = reference_files;
+            }
             existing.updated_at = request.now_epoch_seconds;
             existing
         } else {
@@ -453,6 +461,7 @@ pub fn build_set_thread_goal_result(
                 created_at: request.now_epoch_seconds,
                 updated_at: request.now_epoch_seconds,
                 auto_continuation_count: 0,
+                reference_files: request.reference_files.unwrap_or_default(),
             }
         }
     } else {

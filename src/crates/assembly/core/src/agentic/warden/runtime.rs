@@ -34,7 +34,7 @@ use crate::agentic::session::SessionManager;
 use crate::agentic::warden::punishment_executor::PunishmentExecutor;
 use crate::agentic::warden::{
     ChallengePokeConfig, PenaltyLevel, PenaltyRequest, PokeMessage, PokePriorityManager,
-    ShameWallRegistry, ViolationRecord, WARDEN_RUNTIME_SESSION,
+    PokeType, ShameWallRegistry, ViolationRecord, WARDEN_RUNTIME_SESSION,
 };
 use chrono::Utc;
 use log::warn;
@@ -42,6 +42,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
+
+use bitfun_runtime_ports::{ThreadGoal, WardenAuditJudgementResponse};
 
 /// Default rule set referenced by Challenge-Poke messages.
 ///
@@ -520,6 +522,49 @@ pub fn tool_failure_scene_key(tool_name: &str, arguments: &serde_json::Value) ->
     format!("{tool_name}:{summary}")
 }
 
+/// Batch-2 goal switch: whether Warden enforcement applies for a goal lookup.
+///
+/// Only an explicitly active goal (including `BudgetLimited`, see
+/// [`ThreadGoal::is_active`]) keeps the Warden hooks running; a missing goal
+/// or a `Paused`/`Blocked`/`Complete` goal opts the session out of
+/// consecutive-failure accounting and pokes.
+pub fn warden_enforcement_for_goal(goal: Option<&ThreadGoal>) -> bool {
+    goal.is_some_and(ThreadGoal::is_active)
+}
+
+/// Resolve the final Audit-Poke message from a model judgement verdict.
+///
+/// `None` means the model declined the poke (no Audit-Poke is sent). `Some`
+/// carries the poke with the model-selected rule ids and requested evidence,
+/// falling back to the mechanical candidates when the model returned none.
+/// The poke id, type and 3-turn deadline always come from the mechanical
+/// message so the audit contract stays stable across providers.
+pub fn resolve_audit_poke_from_judgement(
+    mechanical: &PokeMessage,
+    judgement: &WardenAuditJudgementResponse,
+) -> Option<PokeMessage> {
+    if !judgement.should_poke {
+        return None;
+    }
+    let rule_ids = if judgement.rule_ids.is_empty() {
+        mechanical.rule_ids.clone()
+    } else {
+        judgement.rule_ids.clone()
+    };
+    let evidence_required = if judgement.evidence_requested.is_empty() {
+        mechanical.evidence_required.clone()
+    } else {
+        Some(judgement.evidence_requested.clone())
+    };
+    Some(PokeMessage {
+        poke_id: mechanical.poke_id.clone(),
+        poke_type: PokeType::Audit,
+        rule_ids,
+        deadline_turns: 3,
+        evidence_required,
+    })
+}
+
 /// Human-readable fallback for a Challenge-Poke message (used only if JSON
 /// serialization unexpectedly fails).
 fn format_challenge_fallback(poke: &PokeMessage) -> String {
@@ -535,6 +580,7 @@ fn format_challenge_fallback(poke: &PokeMessage) -> String {
 mod tests {
     use super::*;
     use crate::agentic::core::MessageContent;
+    use bitfun_runtime_ports::ThreadGoalStatus;
     use std::collections::BTreeSet;
 
     fn runtime() -> WardenRuntime {
@@ -1101,5 +1147,108 @@ mod tests {
         rt.cleanup_session("sess-m");
         assert_eq!(rt.consecutive_failures("sess-m"), 0, "all turn scenes cleared");
         assert_eq!(rt.tool_failures("sess-m"), 0, "all tool scenes cleared");
+    }
+
+    #[test]
+    fn warden_enforcement_applies_only_for_active_goal() {
+        let goal = |status| Some(ThreadGoal {
+            goal_id: "g1".to_string(),
+            session_id: "s1".to_string(),
+            objective: "ship".to_string(),
+            status,
+            token_budget: None,
+            tokens_used: 0,
+            time_used_seconds: 0,
+            created_at: 1,
+            updated_at: 2,
+            auto_continuation_count: 0,
+            reference_files: Vec::new(),
+        });
+
+        assert!(
+            warden_enforcement_for_goal(goal(ThreadGoalStatus::Active).as_ref()),
+            "active goal keeps Warden enforcement"
+        );
+        assert!(
+            warden_enforcement_for_goal(goal(ThreadGoalStatus::BudgetLimited).as_ref()),
+            "budget-limited goal is still active"
+        );
+        assert!(
+            !warden_enforcement_for_goal(goal(ThreadGoalStatus::Paused).as_ref()),
+            "paused goal opts out"
+        );
+        assert!(
+            !warden_enforcement_for_goal(goal(ThreadGoalStatus::Blocked).as_ref()),
+            "blocked goal opts out"
+        );
+        assert!(
+            !warden_enforcement_for_goal(goal(ThreadGoalStatus::UsageLimited).as_ref()),
+            "usage-limited goal opts out"
+        );
+        assert!(
+            !warden_enforcement_for_goal(goal(ThreadGoalStatus::Complete).as_ref()),
+            "complete goal opts out"
+        );
+        assert!(
+            !warden_enforcement_for_goal(None),
+            "goal-less session opts out"
+        );
+    }
+
+    #[test]
+    fn audit_poke_resolution_follows_model_verdict() {
+        let mechanical = PokeMessage {
+            poke_id: "audit-tool-42".to_string(),
+            poke_type: PokeType::Audit,
+            rule_ids: vec![
+                "R1: no_destructive_write".to_string(),
+                "R3: path_whitelist".to_string(),
+            ],
+            deadline_turns: 3,
+            evidence_required: Some(vec![
+                "tool_call_log".to_string(),
+                "phase_summary".to_string(),
+            ]),
+        };
+
+        // The model declined the poke: no Audit-Poke is sent.
+        let declined = WardenAuditJudgementResponse {
+            should_poke: false,
+            rule_ids: Vec::new(),
+            evidence_requested: Vec::new(),
+        };
+        assert!(resolve_audit_poke_from_judgement(&mechanical, &declined).is_none());
+
+        // The model confirms the poke and selects its own rules/evidence.
+        let confirmed = WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: vec!["R2: execution_safety".to_string()],
+            evidence_requested: vec!["tool_call_log".to_string()],
+        };
+        let poke = resolve_audit_poke_from_judgement(&mechanical, &confirmed)
+            .expect("confirmed poke is sent");
+        assert_eq!(poke.poke_id, "audit-tool-42");
+        assert_eq!(poke.poke_type, PokeType::Audit);
+        assert_eq!(poke.deadline_turns, 3);
+        assert_eq!(poke.rule_ids, vec!["R2: execution_safety"]);
+        assert_eq!(
+            poke.evidence_required,
+            Some(vec!["tool_call_log".to_string()])
+        );
+
+        // The model confirms without rules: mechanical candidates carry over.
+        let bare_confirm = WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: Vec::new(),
+            evidence_requested: Vec::new(),
+        };
+        let poke = resolve_audit_poke_from_judgement(&mechanical, &bare_confirm)
+            .expect("bare confirmation still pokes");
+        assert_eq!(
+            poke.rule_ids,
+            vec!["R1: no_destructive_write", "R3: path_whitelist"],
+            "empty model rules fall back to mechanical candidates"
+        );
+        assert_eq!(poke.evidence_required, mechanical.evidence_required);
     }
 }

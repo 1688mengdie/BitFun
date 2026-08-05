@@ -149,6 +149,7 @@ fn thread_goal() -> ThreadGoal {
         created_at: 1,
         updated_at: 2,
         auto_continuation_count: 2,
+        reference_files: Vec::new(),
     }
 }
 

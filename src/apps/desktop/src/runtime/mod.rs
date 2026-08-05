@@ -37,10 +37,10 @@ pub(crate) use session_application::{
 pub struct DesktopRuntimeContext {
     session_application: DesktopSessionApplication,
     local_workspace_snapshot: Arc<dyn LocalWorkspaceSnapshotPort>,
-    /// Model-backed Warden judgement provider, assembled here per batch 1 of
-    /// the warden rework. Batch 2 wires this port into the scheduler/execution
-    /// audit loop (the consumer); until then the field is intentionally held
-    /// as the desktop assembly point.
+    /// Model-backed Warden judgement provider, assembled here and injected
+    /// into the scheduler/tool-pipeline audit loop in [`Self::build`]
+    /// (batch-2 warden rework). The field is intentionally held as the
+    /// desktop assembly point.
     #[allow(dead_code)]
     warden_model_judgement: Arc<dyn WardenModelJudgementPort>,
     permission_events_started: AtomicBool,
@@ -57,6 +57,16 @@ impl DesktopRuntimeContext {
         ai_client_factory: Arc<AIClientFactory>,
     ) -> Result<Self, String> {
         let host_effects = Arc::new(ProductionDesktopSessionHostEffects::new(acp_client_service));
+        // Desktop-side Warden model judgement provider. Batch 2 wires this
+        // port into the scheduler/tool-pipeline audit loop (the consumer);
+        // the field stays as the desktop assembly point.
+        let warden_model_judgement: Arc<dyn WardenModelJudgementPort> =
+            Arc::new(DesktopWardenModelJudgementPort::new(ai_client_factory));
+        // Batch-2 injection: the scheduler forwards the port into the tool
+        // pipeline so Audit-Poke decisions go through the model provider
+        // (mechanical rule ladder as fallback). Must happen before
+        // `scheduler` is moved into the session application below.
+        scheduler.set_warden_model_judgement(warden_model_judgement.clone());
         let session_application = DesktopSessionApplication::build(
             coordinator,
             scheduler,
@@ -66,11 +76,6 @@ impl DesktopRuntimeContext {
             host_effects,
         )?;
         let local_workspace_snapshot = CoreLocalWorkspaceSnapshot::build();
-        // Desktop-side Warden model judgement provider. Batch 2 wires this
-        // port into the scheduler/execution audit loop; until then it is held
-        // on the desktop runtime context as the assembly point.
-        let warden_model_judgement: Arc<dyn WardenModelJudgementPort> =
-            Arc::new(DesktopWardenModelJudgementPort::new(ai_client_factory));
 
         Ok(Self {
             session_application,
@@ -92,7 +97,8 @@ impl DesktopRuntimeContext {
         self.local_workspace_snapshot.as_ref()
     }
 
-    /// Warden model judgement port held for the batch-2 audit-loop consumer.
+    /// Warden model judgement port held as the desktop assembly point (the
+    /// active consumer is the tool pipeline via `scheduler.set_warden_model_judgement`).
     #[allow(dead_code)]
     pub(crate) fn warden_model_judgement(&self) -> Arc<dyn WardenModelJudgementPort> {
         self.warden_model_judgement.clone()

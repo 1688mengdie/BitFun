@@ -15,6 +15,7 @@ fn goal(status: ThreadGoalStatus) -> ThreadGoal {
         created_at: 1,
         updated_at: 2,
         auto_continuation_count: 0,
+        reference_files: Vec::new(),
     }
 }
 

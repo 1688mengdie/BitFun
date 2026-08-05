@@ -2115,6 +2115,12 @@ pub struct ThreadGoal {
     /// Auto-continuation dialog turns scheduled toward this goal (resets on new objective).
     #[serde(default)]
     pub auto_continuation_count: u32,
+    /// Files the goal references as authoritative context (workspace-relative
+    /// paths the agent should keep in sync while pursuing the goal). Attached
+    /// to model-backed Warden audit judgements so the LLM can decide pokes
+    /// against the actual goal context.
+    #[serde(default)]
+    pub reference_files: Vec<String>,
 }
 
 impl ThreadGoal {
@@ -2174,6 +2180,10 @@ pub struct AgentThreadGoalCreateRequest {
     pub objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<i64>,
+    /// Workspace-relative reference files the goal tracks as authoritative
+    /// context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3848,6 +3858,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         };
         assert!(active.is_active());
         assert_eq!(active.remaining_tokens(), Some(9_900));
@@ -4105,6 +4116,7 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 auto_continuation_count: 0,
+                reference_files: Vec::new(),
             },
         };
 
@@ -4132,6 +4144,7 @@ mod tests {
             workspace_path: "/workspace/project".to_string(),
             objective: "Ship the refactor".to_string(),
             token_budget: Some(1000),
+            reference_files: None,
         };
         let update_request = AgentThreadGoalUpdateStatusRequest {
             session_id: "session_1".to_string(),

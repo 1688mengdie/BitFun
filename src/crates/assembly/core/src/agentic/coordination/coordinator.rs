@@ -4697,11 +4697,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         _workspace_path: &Path,
         objective: String,
         token_budget: Option<i64>,
+        reference_files: Option<Vec<String>>,
     ) -> BitFunResult<ThreadGoal> {
         let storage_path = self.require_main_session_storage_path(session_id).await?;
         let goal = self
             .thread_goal_store()
-            .create_thread_goal(session_id, storage_path.as_path(), objective, token_budget)
+            .create_thread_goal(
+                session_id,
+                storage_path.as_path(),
+                objective,
+                token_budget,
+                reference_files.unwrap_or_default(),
+            )
             .await?;
         self.thread_goal_runtime.mark_turn_started("", Some(&goal));
         self.emit_thread_goal_updated(session_id, Some(goal.clone()))
@@ -4739,6 +4746,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 storage_path.as_path(),
                 Some(objective),
                 status,
+                None,
                 None,
                 false,
             )
@@ -4794,6 +4802,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 storage_path.as_path(),
                 Some(objective),
                 status,
+                None,
                 None,
                 replace_existing,
             )
@@ -4937,6 +4946,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 storage_path.as_path(),
                 None,
                 Some(status),
+                None,
                 None,
                 false,
             )
@@ -13377,6 +13387,7 @@ impl bitfun_runtime_ports::AgentThreadGoalManagementPort for ConversationCoordin
             std::path::Path::new(&request.workspace_path),
             request.objective,
             request.token_budget,
+            request.reference_files,
         )
         .await
         .map_err(runtime_port_error_from_bitfun)
@@ -18301,6 +18312,7 @@ mod tests {
                 created_at: index as i64,
                 updated_at: index as i64,
                 auto_continuation_count: 0,
+                reference_files: Vec::new(),
             };
             let mut metadata = SessionMetadata::new(
                 session_id.clone(),
@@ -18376,6 +18388,7 @@ mod tests {
             created_at: 0,
             updated_at: 0,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         };
         let mut loaded_metadata = SessionMetadata::new(
             loaded_session_id.clone(),
@@ -18481,6 +18494,7 @@ mod tests {
                 workspace_path: logical_workspace_path.clone(),
                 objective: "Keep remote ownership structured".to_string(),
                 token_budget: None,
+                reference_files: None,
             },
         )
         .await

@@ -17,7 +17,9 @@ use crate::agentic::tools::restrictions::get_session_restrictions;
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
-use crate::agentic::warden::runtime::{tool_failure_scene_key, WardenRuntime, WardenToolOutcome};
+use crate::agentic::warden::runtime::{
+    resolve_audit_poke_from_judgement, tool_failure_scene_key, WardenRuntime, WardenToolOutcome,
+};
 use crate::native_hooks::{self, NativeHookSessionFacts};
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -40,7 +42,8 @@ use bitfun_agent_tools::{
 };
 use bitfun_runtime_ports::{
     PermissionReply, PermissionRequest, PermissionRequestSource, PermissionRequestSourceKind,
-    PermissionResourceCaseSensitivity, RoundInjectionToolPreemption,
+    PermissionResourceCaseSensitivity, RoundInjectionToolPreemption, WardenAuditJudgementRequest,
+    WardenModelJudgementPort,
 };
 use futures::future::join_all;
 use log::{debug, error, info, warn};
@@ -664,6 +667,11 @@ pub struct ToolPipeline {
     /// point outside the hook dispatch channel (never gated by
     /// `app.hooks.enabled`).
     warden_runtime: std::sync::OnceLock<Arc<TokioMutex<WardenRuntime>>>,
+    /// Optional model-backed Warden judgement provider for Audit-Poke
+    /// decisions. Injected after construction via
+    /// [`ToolPipeline::set_warden_model_judgement`] (batch-2 warden rework);
+    /// when absent or failing, the mechanical rule ladder decides.
+    warden_model_judgement: std::sync::OnceLock<Arc<dyn WardenModelJudgementPort>>,
     /// Tool task ids whose admission was rejected before execution (stale
     /// tool catalog, deferred-tool gateway, runtime restrictions). Such
     /// rejections are protocol-layer outcomes, not execution violations
@@ -694,6 +702,7 @@ impl ToolPipeline {
             permission_plans: Arc::new(TokioMutex::new(HashMap::new())),
             hook_preapprovals: Arc::new(TokioMutex::new(HashSet::new())),
             warden_runtime: std::sync::OnceLock::new(),
+            warden_model_judgement: std::sync::OnceLock::new(),
             admission_rejected_tasks: Arc::new(TokioMutex::new(HashSet::new())),
             session_loaded_deferred_specs: Arc::new(TokioMutex::new(HashMap::new())),
         }
@@ -721,14 +730,27 @@ impl ToolPipeline {
         }
     }
 
+    /// Inject the model-backed Warden judgement provider for Audit-Poke
+    /// decisions (batch-2 warden rework).
+    ///
+    /// Called once after construction by the host assembly (desktop), which
+    /// owns the concrete provider. A second set is logged and ignored.
+    pub fn set_warden_model_judgement(&self, port: Arc<dyn WardenModelJudgementPort>) {
+        if self.warden_model_judgement.set(port).is_err() {
+            warn!("tool pipeline: warden model judgement already set, ignoring duplicate");
+        }
+    }
+
     /// Report one finished tool call to the Warden runtime on a custom point
     /// outside the hook dispatch channel.
     ///
-    /// Only fires when a runtime was injected; a missing task lookup is a
-    /// benign no-op (the task may already be gone). The failure scene is
-    /// fingerprinted from the effective tool name plus effective arguments so
-    /// repeated failures of the same argument shape escalate while a first
-    /// failure of a new shape stays exploratory.
+    /// Only fires when a runtime was injected and the session currently has
+    /// an active thread goal (batch-2 goal switch: Warden tool-level
+    /// enforcement applies only to goal-driven sessions). A missing task
+    /// lookup is a benign no-op (the task may already be gone). The failure
+    /// scene is fingerprinted from the effective tool name plus effective
+    /// arguments so repeated failures of the same argument shape escalate
+    /// while a first failure of a new shape stays exploratory.
     async fn notify_warden_tool_outcome(&self, task_id: &str, failure_kind: WardenToolOutcome) {
         let Some(warden_runtime) = self.warden_runtime.get() else {
             return;
@@ -736,13 +758,53 @@ impl ToolPipeline {
         let Some(task) = self.state_manager.get_task(task_id) else {
             return;
         };
-        let session_id = task.context.session_id;
+        let session_id = task.context.session_id.clone();
+        let workspace_root = task.context.workspace.as_ref().map(|workspace| workspace.root_path());
+        if !self
+            .session_has_active_goal(&session_id, workspace_root)
+            .await
+        {
+            return;
+        }
         let tool_name = task.invocation.effective_tool_name;
         let scene_key = tool_failure_scene_key(&tool_name, &task.invocation.effective_arguments);
         let mut guard = warden_runtime.lock().await;
         guard
             .on_tool_outcome(&session_id, &tool_name, &scene_key, failure_kind)
             .await;
+    }
+
+    /// Batch-2 goal switch: whether Warden tool-level enforcement applies for
+    /// the session of a tool call.
+    ///
+    /// Only sessions with an active thread goal are under Warden
+    /// enforcement; a goal-less or non-active-goal session skips the
+    /// consecutive tool-failure accounting. A goal lookup failure keeps
+    /// enforcement enabled (fail-open) so a transient store error cannot
+    /// silently disable discipline.
+    async fn session_has_active_goal(
+        &self,
+        session_id: &str,
+        workspace_root: Option<&Path>,
+    ) -> bool {
+        let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() else {
+            return true;
+        };
+        let Some(workspace_path) = workspace_root else {
+            return true;
+        };
+        match coordinator.get_thread_goal(session_id, workspace_path).await {
+            Ok(goal) => crate::agentic::warden::runtime::warden_enforcement_for_goal(
+                goal.as_ref(),
+            ),
+            Err(error) => {
+                debug!(
+                    "Warden goal gate lookup failed; keeping tool enforcement enabled: session_id={}, error={}",
+                    session_id, error
+                );
+                true
+            }
+        }
     }
 
     async fn draft_permission_plan(
@@ -1006,7 +1068,12 @@ impl ToolPipeline {
         // Poke audit check: for write/destructive tool calls, classify the
         // operation and send an Audit-Poke through the model-visible channel
         // (the appended result text is delivered to the model on the next
-        // turn, the same delivery path as prepended_reminders).
+        // turn, the same delivery path as prepended_reminders). With a model
+        // judgement port injected the mechanical classifier only supplies
+        // candidate rules; the model verdict decides whether the poke is sent
+        // and which rules/evidence apply. Port failures (unavailable,
+        // timeout, unparseable response) fall back to the mechanical rule
+        // ladder so the audit loop never depends on the model.
         if !tool_result.is_error {
             use bitfun_agent_tools::classify_tool_call;
             let op_class = classify_tool_call(tool_name, &task.invocation.effective_arguments);
@@ -1021,21 +1088,26 @@ impl ToolPipeline {
                     // Warden protocol (SKILL.md): event-triggered Audit-Poke
                     // after Write/Edit/Delete/Exec, 3-turn deadline, with
                     // requested evidence for the self-check.
-                    let poke = Self::build_audit_poke(tool_id, &op_class);
-                    let poke_json = match serde_json::to_string(&poke) {
-                        Ok(json) => json,
-                        Err(_) => poke.poke_id.clone(),
-                    };
-                    hook_sections.push(format!(
-                        "[Warden Audit-Poke] Tool `{}` performed a {} operation and is subject to audit self-check (deadline: 3 turns). PokeMessage: {}",
-                        tool_name,
-                        match op_class {
-                            bitfun_agent_tools::OperationClass::WriteFile => "write",
-                            bitfun_agent_tools::OperationClass::DeleteFile => "delete",
-                            _ => "execute",
-                        },
-                        poke_json
-                    ));
+                    let mechanical = Self::build_audit_poke(tool_id, &op_class);
+                    if let Some(poke) = self
+                        .warden_audit_poke_decision(task, tool_name, &mechanical)
+                        .await
+                    {
+                        let poke_json = match serde_json::to_string(&poke) {
+                            Ok(json) => json,
+                            Err(_) => poke.poke_id.clone(),
+                        };
+                        hook_sections.push(format!(
+                            "[Warden Audit-Poke] Tool `{}` performed a {} operation and is subject to audit self-check (deadline: 3 turns). PokeMessage: {}",
+                            tool_name,
+                            match op_class {
+                                bitfun_agent_tools::OperationClass::WriteFile => "write",
+                                bitfun_agent_tools::OperationClass::DeleteFile => "delete",
+                                _ => "execute",
+                            },
+                            poke_json
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -1084,6 +1156,81 @@ impl ToolPipeline {
                 "phase_summary".to_string(),
             ]),
         }
+    }
+
+    /// Decide the final Audit-Poke for a destructive tool call.
+    ///
+    /// Without an injected judgement port the mechanical rule ladder is the
+    /// decision. With a port, the request carries the tool name, effective
+    /// arguments, the mechanical candidate rule ids, and goal context
+    /// evidence; the model verdict then decides whether the poke is sent and
+    /// which rules/evidence apply. Any port error (unavailable, timeout,
+    /// unparseable response) falls back to the mechanical message unchanged.
+    async fn warden_audit_poke_decision(
+        &self,
+        task: &ToolTask,
+        tool_name: &str,
+        mechanical: &PokeMessage,
+    ) -> Option<PokeMessage> {
+        let Some(port) = self.warden_model_judgement.get() else {
+            return Some(mechanical.clone());
+        };
+        let workspace_root = task
+            .context
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.root_path());
+        let evidence = self
+            .warden_audit_evidence(&task.context.session_id, workspace_root)
+            .await;
+        let request = WardenAuditJudgementRequest {
+            session_id: task.context.session_id.clone(),
+            tool_name: tool_name.to_string(),
+            tool_args: Some(task.invocation.effective_arguments.clone()),
+            rule_ids: mechanical.rule_ids.clone(),
+            evidence,
+        };
+        match port.judge_audit(request).await {
+            Ok(judgement) => resolve_audit_poke_from_judgement(mechanical, &judgement),
+            Err(error) => {
+                debug!(
+                    "Warden model judgement unavailable, falling back to mechanical rules: {}",
+                    error
+                );
+                Some(mechanical.clone())
+            }
+        }
+    }
+
+    /// Evidence summary for a Warden model judgement: the session's active
+    /// thread-goal objective, status and reference files when resolvable.
+    ///
+    /// The goal context is resolved through the global coordinator so the
+    /// model can judge the tool call against the actual goal scope. A
+    /// missing or failed lookup yields `None` (the judgement still runs on
+    /// the tool facts alone).
+    async fn warden_audit_evidence(
+        &self,
+        session_id: &str,
+        workspace_root: Option<&Path>,
+    ) -> Option<serde_json::Value> {
+        let coordinator = crate::agentic::coordination::get_global_coordinator()?;
+        let workspace_path = workspace_root?;
+        let goal = match coordinator.get_thread_goal(session_id, workspace_path).await {
+            Ok(goal) => goal?,
+            Err(error) => {
+                debug!(
+                    "Warden audit goal context lookup failed: session_id={}, error={}",
+                    session_id, error
+                );
+                return None;
+            }
+        };
+        Some(serde_json::json!({
+            "goalObjective": goal.objective,
+            "goalStatus": goal.status.as_str(),
+            "referenceFiles": goal.reference_files,
+        }))
     }
 
     async fn prepare_permission_plans(&self, task_ids: &[String]) -> BitFunResult<()> {
@@ -4960,6 +5107,148 @@ mod tests {
         let json = serde_json::to_string(&write_poke).expect("serialize poke");
         assert!(json.contains("audit-tool-42"));
         assert!(json.contains("\"audit\""));
+    }
+
+    /// Test port with a scripted judgement result and captured request.
+    struct FakeWardenJudgementPort {
+        result: std::sync::Mutex<
+            bitfun_runtime_ports::PortResult<bitfun_runtime_ports::WardenAuditJudgementResponse>,
+        >,
+        captured_requests:
+            Arc<TokioMutex<Vec<bitfun_runtime_ports::WardenAuditJudgementRequest>>>,
+    }
+
+    impl FakeWardenJudgementPort {
+        fn new(
+            result: bitfun_runtime_ports::PortResult<
+                bitfun_runtime_ports::WardenAuditJudgementResponse,
+            >,
+        ) -> Self {
+            Self {
+                result: std::sync::Mutex::new(result),
+                captured_requests: Arc::new(TokioMutex::new(Vec::new())),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl bitfun_runtime_ports::WardenModelJudgementPort for FakeWardenJudgementPort {
+        async fn judge_audit(
+            &self,
+            request: bitfun_runtime_ports::WardenAuditJudgementRequest,
+        ) -> bitfun_runtime_ports::PortResult<
+            bitfun_runtime_ports::WardenAuditJudgementResponse,
+        > {
+            self.captured_requests
+                .lock()
+                .await
+                .push(request.clone());
+            self.result.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_poke_without_port_uses_mechanical_rules() {
+        use bitfun_agent_tools::OperationClass;
+
+        let pipeline = test_tool_pipeline();
+        let task = test_tool_task("tool-42", "Write");
+        let mechanical = ToolPipeline::build_audit_poke("tool-42", &OperationClass::WriteFile);
+
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await
+            .expect("no port means the mechanical poke is sent");
+        assert_eq!(decision.poke_id, mechanical.poke_id);
+        assert_eq!(decision.poke_type, PokeType::Audit);
+        assert_eq!(decision.rule_ids, mechanical.rule_ids);
+        assert_eq!(decision.deadline_turns, mechanical.deadline_turns);
+        assert_eq!(decision.evidence_required, mechanical.evidence_required);
+    }
+
+    #[tokio::test]
+    async fn audit_poke_port_unavailable_falls_back_to_mechanical_rules() {
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::{PortError, PortErrorKind};
+
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(Arc::new(FakeWardenJudgementPort::new(Err(
+            PortError::new(
+                PortErrorKind::NotAvailable,
+                "model judgement not supported by this provider",
+            ),
+        ))));
+
+        let task = test_tool_task("tool-43", "Write");
+        let mechanical = ToolPipeline::build_audit_poke("tool-43", &OperationClass::WriteFile);
+
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await
+            .expect("port failure must fall back to the mechanical poke");
+        assert_eq!(decision.poke_id, "audit-tool-43");
+        assert_eq!(decision.poke_type, PokeType::Audit);
+        assert_eq!(decision.rule_ids, mechanical.rule_ids);
+        assert_eq!(decision.deadline_turns, 3);
+        assert_eq!(decision.evidence_required, mechanical.evidence_required);
+    }
+
+    #[tokio::test]
+    async fn audit_poke_model_verdict_replaces_rules_and_can_decline() {
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::WardenAuditJudgementResponse;
+
+        let confirm_port = FakeWardenJudgementPort::new(Ok(WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: vec!["R2: execution_safety".to_string()],
+            evidence_requested: vec!["tool_call_log".to_string()],
+        }));
+        let confirm_port = Arc::new(confirm_port);
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(confirm_port.clone());
+
+        let task = test_tool_task("tool-44", "ExecCommand");
+        let mechanical = ToolPipeline::build_audit_poke("tool-44", &OperationClass::ExecuteCode);
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "ExecCommand", &mechanical)
+            .await
+            .expect("confirmed poke is sent");
+        assert_eq!(decision.rule_ids, vec!["R2: execution_safety"]);
+        assert_eq!(
+            decision.evidence_required,
+            Some(vec!["tool_call_log".to_string()])
+        );
+        assert_eq!(decision.deadline_turns, 3);
+
+        // The judgement request carries the mechanical candidates.
+        let captured = confirm_port.captured_requests.lock().await;
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].session_id, "session_1");
+        assert_eq!(captured[0].tool_name, "ExecCommand");
+        assert_eq!(
+            captured[0].rule_ids,
+            vec!["R2: execution_safety"],
+            "mechanical candidate rules are handed to the model"
+        );
+        assert!(captured[0].tool_args.is_some());
+        drop(captured);
+
+        let decline_port = Arc::new(FakeWardenJudgementPort::new(Ok(
+            WardenAuditJudgementResponse {
+                should_poke: false,
+                rule_ids: Vec::new(),
+                evidence_requested: Vec::new(),
+            },
+        )));
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(decline_port);
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "ExecCommand", &mechanical)
+            .await;
+        assert!(
+            decision.is_none(),
+            "a declining model verdict suppresses the Audit-Poke"
+        );
     }
 
     #[test]

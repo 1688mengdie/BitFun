@@ -24,6 +24,7 @@ fn goal(status: ThreadGoalStatus) -> ThreadGoal {
         created_at: 1,
         updated_at: 2,
         auto_continuation_count: 0,
+        reference_files: Vec::new(),
     }
 }
 
@@ -49,6 +50,7 @@ fn set_thread_goal_creates_new_active_goal_with_trimmed_objective() {
         objective: Some("  finish migration  ".to_string()),
         status: Some(ThreadGoalStatus::Active),
         token_budget: Some(Some(5000)),
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 10,
         new_goal_id: "goal-new".to_string(),
@@ -64,6 +66,78 @@ fn set_thread_goal_creates_new_active_goal_with_trimmed_objective() {
 }
 
 #[test]
+fn reference_files_persist_through_create_update_and_serde_round_trip() {
+    let reference_files = vec!["docs/spec.md".to_string(), "plans/todo.md".to_string()];
+
+    // Creation carries the reference files onto the goal.
+    let created = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: None,
+        objective: Some("ship".to_string()),
+        status: Some(ThreadGoalStatus::Active),
+        token_budget: None,
+        reference_files: Some(reference_files.clone()),
+        replace_existing: false,
+        now_epoch_seconds: 10,
+        new_goal_id: "goal-new".to_string(),
+    })
+    .expect("goal should be created");
+    assert_eq!(created.goal.reference_files, reference_files);
+
+    // An objective-only update without reference files keeps the list.
+    let updated = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(created.goal.clone()),
+        objective: Some("ship v2".to_string()),
+        status: None,
+        token_budget: None,
+        reference_files: None,
+        replace_existing: false,
+        now_epoch_seconds: 11,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("goal should be updated");
+    assert_eq!(updated.goal.objective, "ship v2");
+    assert_eq!(updated.goal.reference_files, reference_files, "objective update keeps reference files");
+
+    // Explicit replacement swaps the list.
+    let replaced = build_set_thread_goal_result(SetThreadGoalRequest {
+        session_id: "s1".to_string(),
+        existing: Some(updated.goal.clone()),
+        objective: Some("ship v3".to_string()),
+        status: None,
+        token_budget: None,
+        reference_files: Some(vec!["CHANGELOG.md".to_string()]),
+        replace_existing: false,
+        now_epoch_seconds: 12,
+        new_goal_id: "unused".to_string(),
+    })
+    .expect("goal should be updated");
+    assert_eq!(replaced.goal.reference_files, vec!["CHANGELOG.md"]);
+
+    // Serde round-trip preserves the field.
+    let json = serde_json::to_string(&replaced.goal).expect("serialize goal");
+    let restored: ThreadGoal = serde_json::from_str(&json).expect("deserialize goal");
+    assert_eq!(restored.reference_files, vec!["CHANGELOG.md"]);
+
+    // Legacy payloads without the field still parse (serde default).
+    let legacy = serde_json::json!({
+        "goalId": "g1",
+        "sessionId": "s1",
+        "objective": "legacy",
+        "status": "active",
+        "createdAt": 1,
+        "updatedAt": 2
+    });
+    let restored_legacy: ThreadGoal =
+        serde_json::from_value(legacy).expect("legacy goal parses");
+    assert!(
+        restored_legacy.reference_files.is_empty(),
+        "missing referenceFiles defaults to an empty list"
+    );
+}
+
+#[test]
 fn set_thread_goal_updates_existing_objective_and_resets_continuation_count() {
     let mut existing = goal(ThreadGoalStatus::BudgetLimited);
     existing.objective = "old".to_string();
@@ -75,6 +149,7 @@ fn set_thread_goal_updates_existing_objective_and_resets_continuation_count() {
         objective: Some("new".to_string()),
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 11,
         new_goal_id: "unused".to_string(),
@@ -100,6 +175,7 @@ fn set_thread_goal_replaces_existing_goal_when_requested() {
         objective: Some("new objective".to_string()),
         status: Some(ThreadGoalStatus::Active),
         token_budget: Some(Some(1000)),
+        reference_files: None,
         replace_existing: true,
         now_epoch_seconds: 12,
         new_goal_id: "goal-new".to_string(),
@@ -122,6 +198,7 @@ fn set_thread_goal_rejects_invalid_budget_and_missing_update_target() {
         objective: Some("goal".to_string()),
         status: Some(ThreadGoalStatus::Active),
         token_budget: Some(Some(0)),
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 1,
         new_goal_id: "g1".to_string(),
@@ -137,6 +214,7 @@ fn set_thread_goal_rejects_invalid_budget_and_missing_update_target() {
         objective: None,
         status: Some(ThreadGoalStatus::Complete),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 1,
         new_goal_id: "g1".to_string(),
@@ -159,6 +237,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 50,
         new_goal_id: "unused".to_string(),
@@ -176,6 +255,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 51,
         new_goal_id: "unused".to_string(),
@@ -193,6 +273,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 52,
         new_goal_id: "unused".to_string(),
@@ -208,6 +289,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 53,
         new_goal_id: "unused".to_string(),
@@ -222,6 +304,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 54,
         new_goal_id: "unused".to_string(),
@@ -237,6 +320,7 @@ fn set_thread_goal_resume_transition_activates_only_resumable_statuses() {
         objective: None,
         status: Some(ThreadGoalStatus::Active),
         token_budget: None,
+        reference_files: None,
         replace_existing: false,
         now_epoch_seconds: 55,
         new_goal_id: "unused".to_string(),

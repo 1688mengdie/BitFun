@@ -34,7 +34,7 @@ use crate::agentic::round_preempt::{DialogRoundInjectionSource, SessionRoundInje
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::restrictions::get_session_role;
-use crate::agentic::warden::runtime::WardenRuntime;
+use crate::agentic::warden::runtime::{warden_enforcement_for_goal, WardenRuntime};
 use crate::infrastructure::PathManager;
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -585,6 +585,18 @@ impl DialogScheduler {
     pub async fn cleanup_session_state(&self, session_id: &str) {
         let mut warden = self.warden_runtime.lock().await;
         warden.cleanup_session(session_id);
+    }
+
+    /// Inject the model-backed Warden judgement provider for Audit-Poke
+    /// decisions (batch-2 warden rework).
+    ///
+    /// Forwarded to the tool pipeline, mirroring the `set_warden_runtime`
+    /// injection in [`DialogScheduler::new`]; the host assembly (desktop)
+    /// owns the concrete provider and calls this once after construction.
+    pub fn set_warden_model_judgement(&self, port: Arc<dyn bitfun_runtime_ports::WardenModelJudgementPort>) {
+        self.coordinator
+            .tool_pipeline()
+            .set_warden_model_judgement(port);
     }
 
     async fn lock_session_operation(&self, session_id: &str) -> KeyedAsyncLockGuard {
@@ -1513,6 +1525,37 @@ impl DialogScheduler {
         let _ = self
             .trigger_goal_idle_wakeup(session_id, &session, "idle_timer")
             .await;
+    }
+
+    /// Batch-2 goal switch: whether the Warden turn hooks apply for a session.
+    ///
+    /// Reuses the `get_thread_goal` + `is_active()` pattern of the goal
+    /// idle-wakeup check: only sessions with an active thread goal are under
+    /// Warden enforcement, so failures of goal-less or non-active-goal
+    /// sessions never accumulate consecutive-failure counts. A goal lookup
+    /// failure keeps enforcement enabled (fail-open) so a transient store
+    /// error cannot silently disable discipline.
+    async fn session_has_active_goal(&self, session_id: &str) -> bool {
+        let Some(session) = self.session_manager.get_session(session_id) else {
+            return false;
+        };
+        let Some(workspace_path) = session.config.workspace_path.as_deref().map(Path::new) else {
+            return true;
+        };
+        match self
+            .coordinator
+            .get_thread_goal(session_id, workspace_path)
+            .await
+        {
+            Ok(goal) => warden_enforcement_for_goal(goal.as_ref()),
+            Err(error) => {
+                warn!(
+                    "Warden goal gate lookup failed; keeping Warden turn hooks enabled: session_id={}, error={}",
+                    session_id, error
+                );
+                true
+            }
+        }
     }
 
     /// Build and submit a goal wakeup turn for `session_id` (the continuation
@@ -2751,8 +2794,11 @@ impl DialogScheduler {
             let queue_action = lifecycle_plan.queue_action;
             // Turn-driven Warden runtime: feed the finished turn outcome so
             // consecutive-failure penalties and challenge pokes are queued for
-            // the next turn of this session.
-            {
+            // the next turn of this session. Batch-2 goal switch: Warden hooks
+            // only run while the session has an active thread goal, so
+            // failures of goal-less or non-active-goal sessions never
+            // accumulate (see `session_has_active_goal`).
+            if self.session_has_active_goal(&session_id).await {
                 let mut warden = self.warden_runtime.lock().await;
                 warden
                     .on_turn_outcome(&session_id, status, outcome.turn_id())
@@ -5513,5 +5559,43 @@ mod tests {
         assert_eq!(DialogScheduler::sanitize_archive_id(":::"), "unknown");
         let long = "x".repeat(200);
         assert_eq!(DialogScheduler::sanitize_archive_id(&long).len(), 128);
+    }
+
+    #[tokio::test]
+    async fn warden_goal_gate_follows_thread_goal_activity() {
+        let (scheduler, _session_manager, _, root) = test_scheduler();
+        let session_id = "warden-gate-session";
+        // Create the session through the coordinator (like the coordinator
+        // goal tests do) so the workspace binding resolves inside the test
+        // root instead of the real user home.
+        let workspace_dir = root.path().join("warden-gate-workspace");
+        std::fs::create_dir_all(&workspace_dir).expect("workspace dir");
+        scheduler
+            .coordinator
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "Warden gate".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_dir.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should load");
+
+        // No goal yet: the Warden gate is closed, so failures of this
+        // session would never accumulate consecutive-failure counts.
+        assert!(!scheduler.session_has_active_goal(session_id).await);
+
+        // A session that is not loaded has no goal and closes the gate.
+        assert!(!scheduler.session_has_active_goal("missing-session").await);
+
+        // The active-goal branch of the gate (`goal.is_active()` →
+        // `warden_enforcement_for_goal`) is covered by the pure-function
+        // tests in `warden::runtime::tests` and `rbac_poke_integration`;
+        // persisting a real goal in this harness would write into the real
+        // user home because the workspace binding resolver falls back to the
+        // global PathManager (existing test-infrastructure limitation).
     }
 }

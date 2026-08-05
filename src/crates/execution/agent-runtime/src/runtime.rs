@@ -1823,6 +1823,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         }
     }
 
@@ -2929,6 +2930,7 @@ mod tests {
                 workspace_path: "/workspace/project".to_string(),
                 objective: "Ship runtime port".to_string(),
                 token_budget: Some(1000),
+                reference_files: None,
             })
             .await
             .expect("create goal");
@@ -3641,6 +3643,7 @@ mod tests {
                     created_at: 1,
                     updated_at: 2,
                     auto_continuation_count: 0,
+                    reference_files: Vec::new(),
                 },
             })
             .await

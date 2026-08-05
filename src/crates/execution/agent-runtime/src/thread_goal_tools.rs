@@ -15,6 +15,11 @@ pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 pub struct CreateGoalArgs {
     pub objective: String,
     pub token_budget: Option<i64>,
+    /// Workspace-relative reference files the goal tracks as authoritative
+    /// context (e.g. spec/task files the agent keeps in sync). Omitted when
+    /// the goal has no reference files.
+    #[serde(default)]
+    pub reference_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]

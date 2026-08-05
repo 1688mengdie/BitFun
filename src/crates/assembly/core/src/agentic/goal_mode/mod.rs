@@ -131,6 +131,7 @@ impl<'a> ThreadGoalStore<'a> {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn set_thread_goal(
         &self,
         session_id: &str,
@@ -138,6 +139,7 @@ impl<'a> ThreadGoalStore<'a> {
         objective: Option<String>,
         status: Option<ThreadGoalStatus>,
         token_budget: Option<Option<i64>>,
+        reference_files: Option<Vec<String>>,
         replace_existing: bool,
     ) -> BitFunResult<SetThreadGoalResult> {
         let existing = self.get_thread_goal(session_id, workspace_path).await?;
@@ -152,6 +154,7 @@ impl<'a> ThreadGoalStore<'a> {
             objective,
             status,
             token_budget,
+            reference_files,
             replace_existing,
             now_epoch_seconds: now_epoch_seconds(),
             new_goal_id: Uuid::new_v4().to_string(),
@@ -177,6 +180,7 @@ impl<'a> ThreadGoalStore<'a> {
         workspace_path: &Path,
         objective: String,
         token_budget: Option<i64>,
+        reference_files: Vec<String>,
     ) -> BitFunResult<ThreadGoal> {
         if self
             .get_thread_goal(session_id, workspace_path)
@@ -194,6 +198,7 @@ impl<'a> ThreadGoalStore<'a> {
                 Some(objective),
                 Some(ThreadGoalStatus::Active),
                 Some(token_budget),
+                Some(reference_files),
                 false,
             )
             .await?;
@@ -294,6 +299,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 2,
+            reference_files: Vec::new(),
         });
         assert!(plan.display_message.contains("completion check"));
         assert!(plan.display_message.contains("2/10"));
@@ -318,6 +324,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         });
         assert!(prompt.contains("finish stack"));
         assert!(prompt.contains("update_goal"));
@@ -398,6 +405,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         })
         .user_message_metadata;
         assert!(should_skip_goal_for_turn("Adjust work", Some(&metadata)));
