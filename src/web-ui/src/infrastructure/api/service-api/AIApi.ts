@@ -5,6 +5,7 @@ import { createTauriCommandError } from '../errors/TauriCommandError';
 import type { SendMessageRequest } from './tauri-commands';
 import type { ConnectionTestMessageCode } from '@/shared/utils/aiConnectionTestMessages';
 import type {
+  OpenCodePlan,
   ReasoningCatalogProjection,
   SubscriptionProvider,
 } from '@/infrastructure/config/types';
@@ -149,6 +150,19 @@ export interface AIModelCatalog {
 
 export type SubscriptionLoginStatus = 'pending' | 'authorized' | 'failed' | 'cancelled';
 
+export interface SubscriptionOfferingModel {
+  id: string;
+  display_name?: string | null;
+}
+
+export interface SubscriptionApiOffering {
+  plan: OpenCodePlan;
+  format: 'openai' | 'responses' | 'anthropic';
+  base_url: string;
+  suggested_model: string;
+  models: SubscriptionOfferingModel[];
+}
+
 export interface SubscriptionAccount {
   provider: SubscriptionProvider;
   display_label: string;
@@ -160,6 +174,7 @@ export interface SubscriptionAccount {
   suggested_format: string;
   suggested_base_url: string;
   suggested_model: string;
+  api_offerings: SubscriptionApiOffering[];
 }
 
 export interface SubscriptionLogoutResult {

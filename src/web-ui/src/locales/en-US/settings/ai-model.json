@@ -46,7 +46,7 @@
   },
   "subscriptionAuth": {
     "sectionTitle": "Subscription accounts",
-    "sectionDescription": "Sign in to Codex, Antigravity, or OpenCode subscriptions and use them as model APIs",
+    "sectionDescription": "Sign in once to an OpenCode account and use either its Zen or Go API plan, alongside Codex and Antigravity",
     "rescan": "Refresh status",
     "import": "Use as model",
     "login": "Sign in",
@@ -71,8 +71,26 @@
       "apiKey": "API Key",
       "codex": "Codex (ChatGPT subscription)",
       "antigravity": "Antigravity (Google subscription)",
-      "opencode": "OpenCode Zen subscription"
+      "opencodeZen": "OpenCode account · Zen API",
+      "opencodeGo": "OpenCode account · Go API"
     },
+    "openCodePlans": {
+      "zen": {
+        "label": "OpenCode Zen",
+        "description": "Pay-as-you-go and free Zen models available to this OpenCode account"
+      },
+      "go": {
+        "label": "OpenCode Go",
+        "description": "Models billed against the Go subscription on this OpenCode account"
+      }
+    },
+    "openCodeFormats": {
+      "chatCompletions": "Chat Completions",
+      "responses": "Responses",
+      "messages": "Messages"
+    },
+    "useFormat": "Use {{format}}",
+    "useFormatWithCount": "Use {{format}} ({{modelCount}})",
     "detected": "Will use {{label}} ({{account}})",
     "notConnected": "{{kind}} is not signed in; sign in above first",
     "unknownAccount": "current account",
