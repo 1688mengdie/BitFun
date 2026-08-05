@@ -147,6 +147,10 @@
       "openrouter": {
         "name": "OpenRouter",
         "description": "OpenRouter Model Platform"
+      },
+      "tokendance": {
+        "name": "TokenDance",
+        "description": "Unified AI model gateway"
       }
     },
     "modelNameSelectPlaceholder": "Select model",
