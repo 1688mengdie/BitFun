@@ -4916,7 +4916,9 @@ mod tests {
     use crate::agentic::agents::{
         PrependedPromptReminders, PromptBuilderContext, UserContextPolicy,
     };
-    use crate::agentic::core::{InternalReminderKind, Message, MessageRole, ToolCall, ToolResult};
+    use crate::agentic::core::{
+        InternalReminderKind, Message, MessageRole, MessageSemanticKind, ToolCall, ToolResult,
+    };
     use crate::agentic::persistence::PersistenceManager;
     use crate::agentic::session::{
         ContextCompressor, PromptCachePolicy, SessionContextStore, SessionManager,
@@ -6166,5 +6168,167 @@ mod tests {
             duration_ms: Some(1),
             image_attachments: None,
         })
+    }
+
+    #[tokio::test]
+    async fn resident_subagent_session_compaction_keeps_context_reusable() {
+        // A resident subagent work post (Task spawn then repeated send_input
+        // reuse) accumulates context across dialog turns. Automatic compaction
+        // must replace the in-memory context — the exact source the next
+        // send_input loads — without changing the session identity, and the
+        // compacted context must stay compressible so the resident session
+        // never dies from an ever-growing context window.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let session_manager = SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(
+                PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+                    temp.path().join("user-root"),
+                )))
+                .expect("persistence manager"),
+            ),
+            SessionManagerConfig {
+                max_active_sessions: 4,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: false,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        );
+        let compressor = ContextCompressor::new(Default::default());
+        let session_id = "resident-subagent-session";
+        // A small window keeps the test fast while exercising the real trigger
+        // math (input_limit = window - output reserve - safety reserve). It
+        // must stay above the 10k safety reserve so input_limit is meaningful.
+        let context_window = 32_000usize;
+        let trigger_budget = ExecutionEngine::compression_trigger_budget(context_window, None);
+        assert!(trigger_budget.input_limit > 0);
+
+        // Repeated send_input turns: each turn appends a user message plus
+        // assistant/tool round messages (the engine loop's add_message path).
+        let mut turn = 0usize;
+        let compressed_turn = loop {
+            turn += 1;
+            assert!(turn < 50, "compression never triggered");
+            let user_message = Message::user(format!("send_input turn {}: continue the standing task", turn))
+                .with_turn_id(format!("turn-{turn}"));
+            let assistant_message =
+                Message::assistant(format!("round evidence {}", "x".repeat(2_000)))
+                    .with_turn_id(format!("turn-{turn}"));
+            let tool_message =
+                command_result("Bash", true, Some(0)).with_turn_id(format!("turn-{turn}"));
+            for message in [&user_message, &assistant_message, &tool_message] {
+                session_manager
+                    .add_message(session_id, message.clone())
+                    .await
+                    .expect("append turn messages");
+            }
+
+            let context = session_manager
+                .get_context_messages(session_id)
+                .await
+                .expect("reusable context");
+            let pressure = ExecutionEngine::estimate_auto_compression_pressure(
+                &context,
+                None,
+                context_window,
+                trigger_budget,
+                0,
+            );
+            if pressure.total_tokens >= pressure.input_limit {
+                let Some(plan) = compressor
+                    .plan_compression(
+                        session_id,
+                        &context,
+                        context_window,
+                        ContextCompressor::DEFAULT_RECENT_CONTEXT_TOKENS,
+                    )
+                    .expect("compression planning succeeds")
+                else {
+                    // Not enough compressible history yet; keep accumulating.
+                    continue;
+                };
+                let result = compressor
+                    .compress_plan_with_contract(
+                        session_id,
+                        context_window,
+                        plan,
+                        None,
+                        Some(format!("turn {} handoff summary", turn)),
+                    )
+                    .expect("compression succeeds");
+                let before_message_count = context.len();
+                session_manager
+                    .replace_context_messages(session_id, result.messages.clone())
+                    .await;
+                let after = session_manager
+                    .get_context_messages(session_id)
+                    .await
+                    .expect("compacted context");
+                let after_tokens: usize = after
+                    .iter()
+                    .map(|message| message.estimate_tokens_with_reasoning(true))
+                    .sum();
+                assert!(
+                    after_tokens < pressure.input_limit,
+                    "compaction must bring the resident context back under the input limit: after={}, input_limit={}",
+                    after_tokens,
+                    pressure.input_limit
+                );
+                assert!(
+                    after.len() < before_message_count,
+                    "compaction must fold the accumulated turn messages: before={}, after={}",
+                    before_message_count,
+                    after.len()
+                );
+                assert!(
+                    after.iter().any(|message| message.metadata.semantic_kind
+                        == Some(MessageSemanticKind::CompressionSummary)),
+                    "compacted context must carry the compression summary"
+                );
+                assert!(
+                    after.iter().any(|message| message.internal_reminder_kind()
+                        == Some(InternalReminderKind::CompressionContinuation)),
+                    "compacted context must carry the continuation reminder"
+                );
+                break turn;
+            }
+        };
+
+        // The next send_input loads the compacted context (same session_id),
+        // appends a new user message, and must remain compressible so the
+        // resident session can keep running instead of dying at the window.
+        let continued = session_manager
+            .get_context_messages(session_id)
+            .await
+            .expect("reusable context after compaction");
+        assert!(
+            !continued.is_empty(),
+            "compacted context is loadable by the next send_input"
+        );
+        session_manager
+            .add_message(
+                session_id,
+                Message::user("send_input after compaction: keep going".to_string())
+                    .with_turn_id(format!("turn-{}", compressed_turn + 1)),
+            )
+            .await
+            .expect("append after compaction");
+        let continued = session_manager
+            .get_context_messages(session_id)
+            .await
+            .expect("reloaded context");
+        let plan = compressor
+            .plan_compression(
+                session_id,
+                &continued,
+                context_window,
+                ContextCompressor::DEFAULT_RECENT_CONTEXT_TOKENS,
+            )
+            .expect("recompression planning succeeds");
+        assert!(
+            plan.is_some(),
+            "compacted resident context remains compressible"
+        );
     }
 }
