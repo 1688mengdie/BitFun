@@ -27,6 +27,34 @@ function presetLabel(
   return t(`reasoningEffort.${preset.id}`, { defaultValue: preset.label || preset.id });
 }
 
+function presetSourceLabel(
+  source: ReasoningPresetDescriptor['source'],
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  switch (source) {
+    case 'models_dev':
+      return t('reasoningSelector.source.models_dev');
+    case 'adapter_fallback':
+      return t('reasoningSelector.source.adapter_fallback');
+    case 'model_config':
+      return t('reasoningSelector.source.model_config');
+  }
+}
+
+function presetSourceTooltip(
+  source: ReasoningPresetDescriptor['source'],
+  t: ReturnType<typeof useTranslation>['t'],
+): string {
+  switch (source) {
+    case 'models_dev':
+      return t('reasoningSelector.sourceTooltip.models_dev');
+    case 'adapter_fallback':
+      return t('reasoningSelector.sourceTooltip.adapter_fallback');
+    case 'model_config':
+      return t('reasoningSelector.sourceTooltip.model_config');
+  }
+}
+
 export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = ({
   projection,
   selectedPreset,
@@ -139,6 +167,13 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
 
   if (presets.length === 0) return null;
 
+  const presetLabels = presets.map(preset => presetLabel(preset, t));
+  const labelCounts = new Map<string, number>();
+  presetLabels.forEach((label) => {
+    const normalizedLabel = label.trim().toLowerCase();
+    labelCounts.set(normalizedLabel, (labelCounts.get(normalizedLabel) ?? 0) + 1);
+  });
+
   const currentLabel = selected
     ? presetLabel(selected, t)
     : t('reasoningSelector.auto');
@@ -212,24 +247,31 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
             </span>
             {!selected && <Check size={14} aria-hidden="true" />}
           </button>
-          {presets.map(preset => {
+          {presets.map((preset, index) => {
             const isSelected = selected?.id === preset.id;
+            const label = presetLabels[index] ?? presetLabel(preset, t);
+            const hasDuplicateLabel = (labelCounts.get(label.trim().toLowerCase()) ?? 0) > 1;
             return (
-              <button
+              <Tooltip
                 key={preset.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={isSelected}
-                data-preset-id={preset.id}
-                className="bitfun-reasoning-preset-selector__option"
-                onClick={() => select(preset.id)}
+                content={presetSourceTooltip(preset.source, t)}
+                placement="right"
               >
-                <span>
-                  <strong>{presetLabel(preset, t)}</strong>
-                  <small>{t(`reasoningSelector.source.${preset.source}`)}</small>
-                </span>
-                {isSelected && <Check size={14} aria-hidden="true" />}
-              </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  data-preset-id={preset.id}
+                  className="bitfun-reasoning-preset-selector__option"
+                  onClick={() => select(preset.id)}
+                >
+                  <span>
+                    <strong>{label}</strong>
+                    {hasDuplicateLabel && <small>{presetSourceLabel(preset.source, t)}</small>}
+                  </span>
+                  {isSelected && <Check size={14} aria-hidden="true" />}
+                </button>
+              </Tooltip>
             );
           })}
         </div>,

@@ -2400,6 +2400,11 @@
       "models_dev": "models.dev",
       "adapter_fallback": "Built in",
       "model_config": "Custom"
+    },
+    "sourceTooltip": {
+      "models_dev": "Generated automatically from models.dev model metadata",
+      "adapter_fallback": "Built into BitFun for this model adapter",
+      "model_config": "Defined in this model's custom configuration"
     }
   },
   "coworkScope": {

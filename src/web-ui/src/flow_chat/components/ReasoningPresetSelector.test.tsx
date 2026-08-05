@@ -91,4 +91,32 @@ describe('ReasoningPresetSelector', () => {
     });
     expect(onSelect).toHaveBeenCalledWith(null);
   });
+
+  it('only shows preset sources when visible labels need disambiguation', async () => {
+    await act(async () => {
+      root.render(
+        <ReasoningPresetSelector
+          projection={{
+            status: 'known',
+            presets: [
+              { id: 'low', label: 'Low', order: 10, source: 'models_dev', actions: [{ type: 'effort', value: 'low' }] },
+              { id: 'custom-low', label: 'Low', order: 20, source: 'model_config', actions: [{ type: 'effort', value: 'low' }] },
+              { id: 'high', label: 'High', order: 30, source: 'adapter_fallback', actions: [{ type: 'effort', value: 'high' }] },
+            ],
+          }}
+          onSelect={vi.fn()}
+        />,
+      );
+    });
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="chat-reasoning-preset-selector-btn"]')?.click();
+    });
+
+    expect(document.body.querySelector('[data-preset-id="low"] small')?.textContent)
+      .toBe('reasoningSelector.source.models_dev');
+    expect(document.body.querySelector('[data-preset-id="custom-low"] small')?.textContent)
+      .toBe('reasoningSelector.source.model_config');
+    expect(document.body.querySelector('[data-preset-id="high"] small')).toBeNull();
+  });
 });
