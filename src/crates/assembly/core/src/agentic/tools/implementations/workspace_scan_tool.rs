@@ -34,17 +34,21 @@ enum WorkspaceScanScope {
 }
 
 /// Parses the user-facing `scope` string into a concrete scan scope.
+///
+/// Scope matching is case-insensitive (LEGION-13): "OPENED", "Recent", and
+/// "BY_STATUS:ARCHIVED" all resolve like their lowercase forms.
 fn parse_scope(scope: &str) -> Result<WorkspaceScanScope, String> {
-    let scope = scope.trim();
-    match scope {
+    let trimmed = scope.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    match lowered.as_str() {
         "" | "opened" => Ok(WorkspaceScanScope::Opened),
         "recent" => Ok(WorkspaceScanScope::Recent),
         "all" => Ok(WorkspaceScanScope::All),
-        _ => match scope.strip_prefix("by_status:") {
+        _ => match lowered.strip_prefix("by_status:") {
             Some(status) => parse_status(status).map(WorkspaceScanScope::ByStatus),
             None => Err(format!(
                 "Unsupported scope '{}'. Expected one of: opened, recent, all, by_status:<status>",
-                scope
+                trimmed
             )),
         },
     }
@@ -274,6 +278,23 @@ mod tests {
         assert_eq!(
             parse_scope("by_status:Archived"),
             Ok(WorkspaceScanScope::ByStatus(WorkspaceStatus::Archived))
+        );
+    }
+
+    #[test]
+    fn parse_scope_is_case_insensitive() {
+        // LEGION-13: scope keywords and the by_status prefix match
+        // case-insensitively, like parse_status already did.
+        assert_eq!(parse_scope("OPENED"), Ok(WorkspaceScanScope::Opened));
+        assert_eq!(parse_scope("Recent"), Ok(WorkspaceScanScope::Recent));
+        assert_eq!(parse_scope("ALL"), Ok(WorkspaceScanScope::All));
+        assert_eq!(
+            parse_scope("BY_STATUS:Active"),
+            Ok(WorkspaceScanScope::ByStatus(WorkspaceStatus::Active))
+        );
+        assert_eq!(
+            parse_scope("By_Status:error"),
+            Ok(WorkspaceScanScope::ByStatus(WorkspaceStatus::Error))
         );
     }
 

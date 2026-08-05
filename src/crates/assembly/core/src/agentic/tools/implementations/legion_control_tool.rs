@@ -13,6 +13,7 @@ use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::implementations::session_control_tool::get_available_agent_type_ids_for_creation;
+use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -22,6 +23,14 @@ use bitfun_services_core::session::types::{SessionRelationship, SessionRelations
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
+
+/// Hard upper bound on the number of legion nodes in one topology.
+///
+/// LEGION-03: an unbounded node count lets a single LegionControl call spawn an
+/// unbounded number of persisted sessions. 20 keeps the deployment bounded
+/// while leaving room for realistic team shapes (the built-in presets use at
+/// most a handful of nodes).
+const MAX_LEGION_NODES: usize = 20;
 
 /// LegionControl tool - deploy a legion team topology into persisted sessions.
 pub struct LegionControlTool;
@@ -119,6 +128,13 @@ impl LegionControlTool {
     ) -> Result<Vec<ResolvedLegionNode>, String> {
         if nodes.is_empty() {
             return Err("Legion topology must contain at least one node".to_string());
+        }
+        if nodes.len() > MAX_LEGION_NODES {
+            return Err(format!(
+                "Legion topology exceeds the maximum node count ({} > {})",
+                nodes.len(),
+                MAX_LEGION_NODES
+            ));
         }
 
         // 1. Basic node validation
@@ -292,6 +308,32 @@ impl LegionControlTool {
             }
         }
     }
+
+    /// Roll back a partially deployed legion (LEGION-01).
+    ///
+    /// When a later node fails its pre-create checks or its session creation,
+    /// every session already persisted earlier in this deployment is deleted so
+    /// a failed LegionControl load never leaks orphaned sessions. Best-effort:
+    /// a deletion failure is logged and never masks the original error.
+    async fn cleanup_deployed_sessions(
+        coordinator: &ConversationCoordinator,
+        workspace_path: &std::path::Path,
+        session_ids: &[String],
+    ) {
+        for session_id in session_ids {
+            if let Err(e) = coordinator
+                .session_manager
+                .delete_session(workspace_path, session_id)
+                .await
+            {
+                log::warn!(
+                    "LegionControl load: failed to clean up session {} after deployment failure: {:?}",
+                    session_id,
+                    e
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -311,13 +353,14 @@ Actions:
 Arguments:
 - "preset_id": Id of a saved legion preset. Mutually exclusive with "nodes".
 - "overrides": Optional per-node overrides keyed by node id. Each value may set agent, role, prompt, and/or gate.
-- "nodes": Inline topology nodes when preset_id is omitted: [{id, agent, role, prompt, gate}].
+- "nodes": Inline topology nodes when preset_id is omitted: [{id, agent, role, prompt, gate}]. At most 20 nodes.
 - "edges": Optional parent-child edges: [{from, to, condition}]. Each node may have at most one parent; cycles are rejected.
 
 Notes:
 - Agent types are validated against the available agent registry (same as SessionControl).
 - daemon/warden agents cannot be deployed through LegionControl.
 - Nodes are sorted topologically (deterministic order) and deployed root-first.
+- node.prompt, node.gate, and edge.condition are reserved fields: they are persisted into the created session metadata and echoed in the result for observability, but do not yet change runtime behavior.
 
 Related tools:
 - Use SessionControl to manage the created sessions (cancel/delete/list).
@@ -451,6 +494,24 @@ Related tools:
                 }
                 _ => {}
             }
+
+            // LEGION-03: reject inline topologies larger than MAX_LEGION_NODES at
+            // validation time so an oversized request never reaches deployment.
+            // resolve_legion_topology applies the same bound as a second guard.
+            if let Some(nodes) = &parsed.nodes {
+                if nodes.len() > MAX_LEGION_NODES {
+                    return ValidationResult {
+                        result: false,
+                        message: Some(format!(
+                            "Legion topology exceeds the maximum node count ({} > {})",
+                            nodes.len(),
+                            MAX_LEGION_NODES
+                        )),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+            }
         }
 
         ValidationResult {
@@ -570,22 +631,58 @@ Related tools:
                     BitFunError::tool("load requires a creator session in tool context".to_string())
                 })?;
 
+                // LEGION-07: role-based delegation validation before any session
+                // is created, using the same criteria as SessionControl create
+                // (R-14 B3). An executor/reviewer creator may only deploy its own
+                // role; the permissive commander baseline applies when the creator
+                // has no registered role.
+                let creator_role = context.session_id.as_deref().and_then(get_session_role);
+                let target_role = creator_role.clone().unwrap_or(AgentRole::Commander);
+                validate_delegation(creator_role, target_role)?;
+
                 // The creator session's tree depth anchors the deployed legion:
                 // every root node is a direct child of the creator, and each
                 // deeper node adds its resolved topology depth on top. This is
                 // deterministic and avoids re-reading freshly persisted lineage
                 // metadata for every node.
-                let creator_depth = coordinator
+                //
+                // LEGION-02: a read failure fails fast instead of silently
+                // degrading the depth anchor to 0, which would deploy the legion
+                // at the wrong session-tree depth. A missing relationship/missing
+                // metadata (fresh session) is not a failure: it degrades to 0 with
+                // an explicit warning.
+                let creator_depth = match coordinator
                     .session_manager
                     .load_session_metadata(
                         &std::path::PathBuf::from(&display_workspace),
                         creator_session_id,
                     )
                     .await
-                    .ok()
-                    .flatten()
-                    .and_then(|m| m.relationship.and_then(|r| r.depth))
-                    .unwrap_or(0u32);
+                {
+                    Ok(Some(metadata)) => metadata
+                        .relationship
+                        .and_then(|relationship| relationship.depth)
+                        .unwrap_or_else(|| {
+                            log::warn!(
+                                "LegionControl load: creator session '{}' has no persisted depth; anchoring legion at depth 0",
+                                creator_session_id
+                            );
+                            0
+                        }),
+                    Ok(None) => {
+                        log::warn!(
+                            "LegionControl load: creator session '{}' has no persisted metadata; anchoring legion at depth 0",
+                            creator_session_id
+                        );
+                        0
+                    }
+                    Err(e) => {
+                        return Err(BitFunError::tool(format!(
+                            "LegionControl load: failed to read creator session metadata for '{}': {}",
+                            creator_session_id, e
+                        )));
+                    }
+                };
 
                 let mut session_by_node: HashMap<String, String> = HashMap::new();
                 let mut deployed: Vec<Value> = Vec::with_capacity(topology.len());
@@ -598,6 +695,30 @@ Related tools:
                         format!("{}-{}", node.role, node.id)
                     };
 
+                    // LEGION-01: resolve the parent and the resulting child depth
+                    // BEFORE creating the session so the depth check runs before a
+                    // session is persisted. A failing node rolls back every session
+                    // created earlier in this deployment.
+                    let parent_session_id = match &resolved.parent {
+                        Some(parent_node_id) => session_by_node.get(parent_node_id).cloned(),
+                        None => Some(creator_session_id.clone()),
+                    };
+                    let child_depth = creator_depth + 1 + resolved.depth;
+                    let max_depth = coordinator.session_tree().max_depth;
+                    if child_depth > max_depth {
+                        let created: Vec<String> = session_by_node.values().cloned().collect();
+                        Self::cleanup_deployed_sessions(
+                            &coordinator,
+                            &std::path::PathBuf::from(&display_workspace),
+                            &created,
+                        )
+                        .await;
+                        return Err(BitFunError::tool(format!(
+                            "LegionControl load: session depth limit reached for node '{}': child depth {} would exceed max allowed depth {}",
+                            node.id, child_depth, max_depth
+                        )));
+                    }
+
                     let mut metadata = serde_json::Map::new();
                     metadata.insert(
                         "createdBy".to_string(),
@@ -605,11 +726,20 @@ Related tools:
                     );
                     metadata.insert("legionNodeId".to_string(), json!(node.id));
                     metadata.insert("legionRole".to_string(), json!(node.role));
+                    // LEGION-04: `prompt`/`gate` are reserved fields today — they
+                    // carry author intent but do not yet change runtime behavior.
+                    // Persist them into the session metadata so the data is
+                    // observable by downstream SessionMessage dispatch and
+                    // SessionControl inspection instead of being silently dropped.
+                    if !node.prompt.trim().is_empty() {
+                        metadata.insert("legionNodePrompt".to_string(), json!(node.prompt));
+                    }
+                    metadata.insert("legionNodeGate".to_string(), json!(node.gate));
                     if let Some(ref pid) = preset_id {
                         metadata.insert("legionPresetId".to_string(), json!(pid));
                     }
 
-                    let session = runtime
+                    let session = match runtime
                         .create_session(AgentSessionCreateRequest {
                             session_name,
                             agent_type: node.agent.clone(),
@@ -628,26 +758,27 @@ Related tools:
                             metadata,
                         })
                         .await
-                        .map_err(|error| {
-                            BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                        })?;
+                    {
+                        Ok(session) => session,
+                        Err(error) => {
+                            let created: Vec<String> =
+                                session_by_node.values().cloned().collect();
+                            Self::cleanup_deployed_sessions(
+                                &coordinator,
+                                &std::path::PathBuf::from(&display_workspace),
+                                &created,
+                            )
+                            .await;
+                            return Err(BitFunError::tool(
+                                CoreServiceAgentRuntime::runtime_error_message(error),
+                            ));
+                        }
+                    };
 
                     let created_session_id = session.session_id.clone();
 
                     // Attach to the session tree: the parent is the resolved
                     // parent's session; root nodes attach to the creator session.
-                    let parent_session_id = match &resolved.parent {
-                        Some(parent_node_id) => session_by_node.get(parent_node_id).cloned(),
-                        None => Some(creator_session_id.clone()),
-                    };
-                    let child_depth = creator_depth + 1 + resolved.depth;
-                    let max_depth = coordinator.session_tree().max_depth;
-                    if child_depth > max_depth {
-                        return Err(BitFunError::tool(format!(
-                            "LegionControl load: session depth limit reached for node '{}': child depth {} would exceed max allowed depth {}",
-                            node.id, child_depth, max_depth
-                        )));
-                    }
                     Self::attach_session_to_tree(
                         &coordinator,
                         &created_session_id,
@@ -664,6 +795,9 @@ Related tools:
                         "role": node.role,
                         "agent": node.agent,
                         "depth": child_depth,
+                        // LEGION-04: 预留字段在结果中原样回显（与上方会话元数据持久化一致），
+                        // 供调用方观察每个节点预期携带的 prompt/gate 语义；尚未改变运行时行为。
+                        "prompt": node.prompt,
                         "gate": node.gate,
                     }));
                 }
@@ -854,6 +988,29 @@ mod tests {
     }
 
     #[test]
+    fn resolve_topology_rejects_excessive_node_count() {
+        // LEGION-03: a topology larger than MAX_LEGION_NODES must be rejected so
+        // a single LegionControl call cannot spawn an unbounded session fleet.
+        let nodes: Vec<LegionNode> = (0..=MAX_LEGION_NODES)
+            .map(|index| node(&format!("node-{index}")))
+            .collect();
+        let err = LegionControlTool::resolve_legion_topology(nodes, Vec::new())
+            .expect_err("oversized topology must be rejected");
+        assert!(
+            err.contains("maximum node count"),
+            "unexpected error: {err}"
+        );
+
+        // The exact maximum still resolves.
+        let nodes: Vec<LegionNode> = (0..MAX_LEGION_NODES)
+            .map(|index| node(&format!("node-{index}")))
+            .collect();
+        let resolved = LegionControlTool::resolve_legion_topology(nodes, Vec::new())
+            .expect("topology at the maximum node count should resolve");
+        assert_eq!(resolved.len(), MAX_LEGION_NODES);
+    }
+
+    #[test]
     fn resolve_topology_rejects_empty_node_fields() {
         let mut empty_id = node("a");
         empty_id.id = "  ".to_string();
@@ -1017,6 +1174,54 @@ mod tests {
             )
             .await;
 
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_rejects_oversized_nodes() {
+        // LEGION-03: validate_input must reject an inline topology larger than
+        // MAX_LEGION_NODES before deployment is attempted.
+        let tool = LegionControlTool::new();
+
+        let nodes: Vec<Value> = (0..=MAX_LEGION_NODES)
+            .map(|index| {
+                json!({
+                    "id": format!("node-{index}"),
+                    "agent": "agentic",
+                })
+            })
+            .collect();
+
+        let validation = tool
+            .validate_input(
+                &json!({"action": "load", "nodes": nodes}),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(validation.error_code, Some(400));
+        let message = validation.message.as_deref().unwrap_or_default();
+        assert!(
+            message.contains("maximum node count"),
+            "unexpected message: {message}"
+        );
+
+        // The exact maximum still validates.
+        let nodes: Vec<Value> = (0..MAX_LEGION_NODES)
+            .map(|index| {
+                json!({
+                    "id": format!("node-{index}"),
+                    "agent": "agentic",
+                })
+            })
+            .collect();
+        let validation = tool
+            .validate_input(
+                &json!({"action": "load", "nodes": nodes}),
+                Some(&empty_context()),
+            )
+            .await;
         assert!(validation.result, "{:?}", validation.message);
     }
 

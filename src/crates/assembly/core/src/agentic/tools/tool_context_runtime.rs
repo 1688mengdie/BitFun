@@ -504,10 +504,16 @@ impl ToolUseContext {
         operation: ToolPathOperation,
         resolution: &ToolPathResolution,
     ) -> BitFunResult<()> {
-        let allowed_roots = self
-            .runtime_tool_restrictions
-            .path_policy
-            .roots_for(operation);
+        // 与 enforce_tool_runtime_restrictions 一致：先取会话级 override 的 path_policy 再检查。
+        let session_override = self
+            .session_id
+            .as_deref()
+            .and_then(get_session_restrictions);
+        let restrictions: &ToolRuntimeRestrictions = session_override
+            .as_ref()
+            .unwrap_or(&self.runtime_tool_restrictions);
+
+        let allowed_roots = restrictions.path_policy.roots_for(operation);
         if allowed_roots.is_empty() {
             return Ok(());
         }

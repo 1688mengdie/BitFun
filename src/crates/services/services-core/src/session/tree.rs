@@ -251,6 +251,17 @@ impl SessionTreeManager {
     }
 
     /// Batch-load tree relationships from sessions
+    ///
+    /// SESSION-11 rebuild fallback: the SessionControl create chain persists
+    /// the session record first and writes the structured SessionRelationship
+    /// afterwards (create_session -> persist_session_lineage -> register_child).
+    /// A crash between those steps leaves a persisted session without a
+    /// relationship, which previously made its parent-child lineage invisible
+    /// in the tree forever after restart. Pass 1 loads the authoritative
+    /// relationship edges as before; pass 2 re-hangs relationship-less sessions
+    /// from the creator marker (`session-<parent_session_id>`) or the
+    /// `parentSessionId` free-form custom-metadata key, so the lost lineage is
+    /// rebuilt instead of dropped.
     pub fn load_from_sessions(&self, sessions: &[SessionMetadata]) {
         self.edges.clear();
         self.child_to_parent.clear();
@@ -268,7 +279,75 @@ impl SessionTreeManager {
                 }
             }
         }
+        for session in sessions {
+            if session.relationship.is_some() {
+                continue;
+            }
+            let Some(parent_id) = lineage_rebuild_parent_session_id(session) else {
+                continue;
+            };
+            if parent_id == session.session_id {
+                log::warn!(
+                    "Skipping SESSION-11 lineage rebuild for {}: creator marker points at the session itself",
+                    session.session_id
+                );
+                continue;
+            }
+            // Best-effort depth: parent depth + 1 when the parent is already
+            // registered (pass 1 or an earlier pass-2 rebuild), otherwise the
+            // same default as the authoritative path.
+            let depth = self.get_depth(&parent_id).map(|d| d + 1).unwrap_or(1);
+            if let Err(e) = self.register_child(&parent_id, &session.session_id, depth) {
+                log::warn!(
+                    "SESSION-11 lineage rebuild failed for session {} under {}: {:?}",
+                    session.session_id, parent_id, e
+                );
+            }
+        }
     }
+}
+
+/// SESSION-11: recover the lost parent session id of a session record whose
+/// SessionRelationship was never persisted (crash window between
+/// create_session and persist_session_lineage). The SessionControl,
+/// SessionMessage (Task), LegionControl and Worktree create chains all persist
+/// the creator marker `session-<parent_session_id>` into the top-level
+/// created_by field; a free-form `parentSessionId` custom-metadata key and a
+/// custom-metadata `createdBy` marker (same shape) are honored defensively.
+/// Non-marker creator values (not prefixed with `session-`) are not lineage
+/// facts and are ignored.
+fn lineage_rebuild_parent_session_id(session: &SessionMetadata) -> Option<String> {
+    if let Some(serde_json::Value::Object(metadata)) = session.custom_metadata.as_ref() {
+        if let Some(parent_id) = metadata
+            .get("parentSessionId")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(parent_id.to_string());
+        }
+    }
+    session
+        .created_by
+        .as_deref()
+        .and_then(creator_marker_parent_session_id)
+        .or_else(|| {
+            session
+                .custom_metadata
+                .as_ref()
+                .and_then(|value| value.get("createdBy"))
+                .and_then(|value| value.as_str())
+                .and_then(creator_marker_parent_session_id)
+        })
+}
+
+/// Parse the `session-<parent_session_id>` creator marker produced by
+/// `session_control_creator_marker`. Returns None for any other shape so
+/// non-lineage creator values are never mistaken for a parent relationship.
+fn creator_marker_parent_session_id(marker: &str) -> Option<String> {
+    let parent_id = marker.trim().strip_prefix("session-")?;
+    let parent_id = parent_id.trim();
+    (!parent_id.is_empty()).then(|| parent_id.to_string())
 }
 
 fn session_status_to_tree_node_status(
@@ -451,5 +530,75 @@ mod tests {
         assert!(result.is_ok());
         // The registered depth is clamped to max_depth.
         assert_eq!(mgr.get_depth("B"), Some(5));
+    }
+
+    #[test]
+    fn load_from_sessions_rebuilds_lineage_from_created_by_marker() {
+        // SESSION-11: a session persisted in the crash window between
+        // create_session and persist_session_lineage has no relationship but
+        // keeps the `session-<parent_id>` creator marker in created_by.
+        let mgr = SessionTreeManager::new(5);
+        let parent = make_metadata("parent", None, Some(0));
+        let mut orphan = make_metadata("child", None, None);
+        orphan.created_by = Some("session-parent".to_string());
+        mgr.load_from_sessions(&[parent, orphan]);
+        assert_eq!(mgr.get_parent("child"), Some("parent".to_string()));
+        assert_eq!(mgr.get_depth("child"), Some(1));
+    }
+
+    #[test]
+    fn load_from_sessions_ignores_non_marker_created_by() {
+        // Creator values that are not `session-` markers are not lineage facts.
+        let mgr = SessionTreeManager::new(5);
+        let mut orphan = make_metadata("child", None, None);
+        orphan.created_by = Some("some-external-creator".to_string());
+        mgr.load_from_sessions(&[orphan]);
+        assert_eq!(mgr.get_parent("child"), None);
+    }
+
+    #[test]
+    fn load_from_sessions_uses_parent_session_id_custom_metadata() {
+        // Defensive path: free-form custom-metadata parentSessionId key.
+        let mgr = SessionTreeManager::new(5);
+        let parent = make_metadata("parent", None, Some(0));
+        let mut orphan = make_metadata("child", None, None);
+        orphan.custom_metadata = Some(serde_json::json!({ "parentSessionId": "parent" }));
+        mgr.load_from_sessions(&[parent, orphan]);
+        assert_eq!(mgr.get_parent("child"), Some("parent".to_string()));
+    }
+
+    #[test]
+    fn load_from_sessions_uses_custom_metadata_created_by_marker() {
+        // Defensive path: custom-metadata createdBy marker (same shape).
+        let mgr = SessionTreeManager::new(5);
+        let parent = make_metadata("parent", None, Some(0));
+        let mut orphan = make_metadata("child", None, None);
+        orphan.custom_metadata = Some(serde_json::json!({ "createdBy": "session-parent" }));
+        mgr.load_from_sessions(&[parent, orphan]);
+        assert_eq!(mgr.get_parent("child"), Some("parent".to_string()));
+    }
+
+    #[test]
+    fn load_from_sessions_lineage_rebuild_inherits_parent_depth() {
+        // The rebuilt child inherits parent depth + 1 when the parent is
+        // already registered through its own authoritative relationship.
+        let mgr = SessionTreeManager::new(5);
+        let parent = make_metadata("parent", Some("root"), Some(1));
+        let mut orphan = make_metadata("child", None, None);
+        orphan.created_by = Some("session-parent".to_string());
+        mgr.load_from_sessions(&[parent, orphan]);
+        assert_eq!(mgr.get_parent("child"), Some("parent".to_string()));
+        assert_eq!(mgr.get_depth("child"), Some(2));
+    }
+
+    #[test]
+    fn load_from_sessions_skips_self_reference_marker() {
+        // A marker pointing at the session itself must not create a self loop.
+        let mgr = SessionTreeManager::new(5);
+        let mut orphan = make_metadata("selfish", None, None);
+        orphan.created_by = Some("session-selfish".to_string());
+        mgr.load_from_sessions(&[orphan]);
+        assert_eq!(mgr.get_parent("selfish"), None);
+        assert_eq!(mgr.get_children("selfish"), Vec::<String>::new());
     }
 }

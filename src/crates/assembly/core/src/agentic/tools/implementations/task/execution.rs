@@ -3,17 +3,19 @@ use crate::agentic::coordination::{
     get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
 };
 use crate::agentic::core::{SessionContinuationPolicy, SessionModelBindingPolicy};
+use crate::agentic::events::AgenticEvent;
 use crate::agentic::persistence::PersistenceManager;
 use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::infrastructure::PathManager;
 use crate::service::session::SessionTranscriptExportOptions;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use bitfun_runtime_ports::{
-    AcpClientCancelRequest, AcpClientCreateRequest, AcpClientMessageRequest,
-    AgentDialogPrependedReminder, AgentDialogTurnPort, AgentDialogTurnRequest,
+    AcpClientCancelRequest, AcpClientCreateRequest, AcpClientMessageRequest, AcpClientPort,
+    AcpClientStreamChunk, AgentDialogPrependedReminder, AgentDialogTurnPort, AgentDialogTurnRequest,
 };
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use uuid::Uuid;
 
 fn resolve_focused_review_model_selection(
     requested_model: Option<String>,
@@ -119,6 +121,125 @@ fn looks_like_uuid(segment: &str) -> bool {
         })
 }
 
+/// In-process facts for ACP flow sessions spawned by the Task tool.
+///
+/// Flow sessions live in the ACP persistence store, not the coordinator
+/// session tree, so subtree ownership (R-2) and the one-shot recycle marker
+/// cannot be derived from the tree. This module-local registry records the
+/// owning parent session and the temporary flag at spawn time; continuation
+/// (`send_input` / `cancel`) verifies ownership here before forwarding, and
+/// the temporary marker drives recycling on the continuation error path.
+#[derive(Debug, Clone)]
+struct AcpFlowSessionFact {
+    /// Session id of the Task caller that spawned the flow session.
+    owner_session_id: String,
+    /// `true` when the spawn was one-shot (`persistent=false`).
+    temporary: bool,
+}
+
+static ACP_FLOW_SESSION_FACTS: OnceLock<Mutex<HashMap<String, AcpFlowSessionFact>>> =
+    OnceLock::new();
+
+fn acp_flow_session_facts() -> &'static Mutex<HashMap<String, AcpFlowSessionFact>> {
+    ACP_FLOW_SESSION_FACTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_acp_flow_session(flow_session_id: &str, owner_session_id: &str, temporary: bool) {
+    if let Ok(mut facts) = acp_flow_session_facts().lock() {
+        facts.insert(
+            flow_session_id.to_string(),
+            AcpFlowSessionFact {
+                owner_session_id: owner_session_id.to_string(),
+                temporary,
+            },
+        );
+    }
+}
+
+fn unregister_acp_flow_session(flow_session_id: &str) {
+    if let Ok(mut facts) = acp_flow_session_facts().lock() {
+        facts.remove(flow_session_id);
+    }
+}
+
+fn acp_flow_session_fact(flow_session_id: &str) -> Option<AcpFlowSessionFact> {
+    acp_flow_session_facts()
+        .lock()
+        .ok()
+        .and_then(|facts| facts.get(flow_session_id).cloned())
+}
+
+/// Verify that `caller_session_id` owns — or is a descendant of the owner of —
+/// the ACP flow session, mirroring the subtree guard local subagents get from
+/// `resolve_agent_id(..., allow_global_fallback=false)`. Returns the recorded
+/// fact so callers can also read the one-shot recycle marker.
+fn verify_acp_flow_session_ownership(
+    coordinator: &std::sync::Arc<crate::agentic::coordination::ConversationCoordinator>,
+    caller_session_id: &str,
+    flow_session_id: &str,
+) -> BitFunResult<AcpFlowSessionFact> {
+    let fact = acp_flow_session_fact(flow_session_id).ok_or_else(|| {
+        BitFunError::tool(format!(
+            "ACP flow session '{}' is not owned by this conversation: it was not created by a Task ACP spawn in this process",
+            flow_session_id
+        ))
+    })?;
+    let owned = fact.owner_session_id == caller_session_id
+        || coordinator
+            .session_tree()
+            .get_descendants(caller_session_id)
+            .iter()
+            .any(|session_id| session_id == &fact.owner_session_id);
+    if !owned {
+        return Err(BitFunError::tool(format!(
+            "ACP flow session '{}' belongs to another session subtree; refusing to continue it from session '{}'",
+            flow_session_id, caller_session_id
+        )));
+    }
+    Ok(fact)
+}
+
+/// Recycle a temporary ACP flow session: delete the persisted record (which
+/// also releases the external process) and forget the ownership fact. Failures
+/// are logged, never fatal, so a failed recycle cannot break the caller.
+async fn recycle_acp_flow_session(
+    port: &dyn AcpClientPort,
+    flow_session_id: &str,
+    workspace_path: Option<String>,
+) {
+    if let Err(error) = port
+        .delete_session_record(flow_session_id.to_string(), workspace_path)
+        .await
+    {
+        log::warn!(
+            "Failed to recycle temporary ACP flow session: session_id={}, error={}",
+            flow_session_id,
+            error
+        );
+    }
+    unregister_acp_flow_session(flow_session_id);
+}
+
+/// Build the notice injected into the caller context when an ACP send_input
+/// returns synchronously. The full external reply stays in the ACP flow
+/// session history (retrievable via SessionHistory); only the notice is
+/// injected so the calling agent's context is not inflated with the full
+/// reply text.
+fn acp_send_input_notice(_full_response: &str, session_id: &str) -> String {
+    format!(
+        "External ACP session '{}' responded; use SessionHistory to view the full reply. agent_id: \"{}\"",
+        session_id, session_id
+    )
+}
+
+/// Build the notice injected into the parent session history when a
+/// background ACP subagent task completes. The full reply stays in the ACP
+/// flow session history; the prepended reminder already carries the session
+/// reference.
+fn acp_background_result_notice(_full_response: &str) -> String {
+    "Background ACP subagent task completed; use SessionHistory to view the full reply.".to_string()
+}
+
 struct BackgroundTaskStartRequest<'a> {
     coordinator: &'a std::sync::Arc<crate::agentic::coordination::ConversationCoordinator>,
     context: &'a ToolUseContext,
@@ -221,6 +342,30 @@ impl TaskTool {
         }
 
         if invocation.action == TaskAction::Cancel {
+            // ACP flow sessions (`acp_<client>_<uuid>`) are continued through
+            // the ACP flow branch (which verifies subtree ownership), not the
+            // local background-run registry: `cancel_background_runs` resolves
+            // agent ids in the coordination store and cannot resolve a flow
+            // session id, so letting cancel short-circuit here would make ACP
+            // flow cancellation dead code.
+            let is_acp_flow_target = invocation
+                .target_agent_id
+                .as_deref()
+                .is_some_and(|agent_id| acp_flow_client_id_from_session_id(agent_id).is_some());
+            if is_acp_flow_target {
+                let coordinator = get_global_coordinator()
+                    .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
+                return Self::run_acp_subagent_invocation(
+                    &coordinator,
+                    context,
+                    invocation.clone(),
+                    None,
+                    invocation.target_agent_id.clone(),
+                    "",
+                    &session_id,
+                )
+                .await;
+            }
             return Self::cancel_background_runs(&session_id, invocation).await;
         }
 
@@ -402,6 +547,14 @@ impl TaskTool {
 
         // Continuation of an existing ACP flow session (send_input / cancel).
         if let Some(flow_session_id) = flow_target {
+            // 子树所有权守卫（与本地子代理 resolve_agent_id 守卫对齐）：只允许
+            // 创建该 flow 会话的会话子树续接它，防止跨会话控制他人的 ACP 会话。
+            let flow_fact = verify_acp_flow_session_ownership(
+                coordinator,
+                parent_session_id,
+                &flow_session_id,
+            )?;
+            let temporary = flow_fact.temporary;
             return match invocation.action {
                 TaskAction::Cancel => {
                     port.cancel_session(AcpClientCancelRequest {
@@ -427,20 +580,70 @@ impl TaskTool {
                     }])
                 }
                 TaskAction::SendInput => {
-                    let sent = port
-                        .send_message(AcpClientMessageRequest {
+                    // Stream the external reply: the port pushes text chunks
+                    // into the channel while the recv loop emits them as
+                    // frontend `TextChunk` events for the parent session's
+                    // current turn, so the user sees the external agent's
+                    // output incrementally instead of all at once. The tool
+                    // result shape below is a background result (single
+                    // `ToolResult` returned when the call completes), so the
+                    // full response text is still returned there; the chunks
+                    // are the frontend-side streaming surface.
+                    let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let send_future = port.send_message_stream(
+                        AcpClientMessageRequest {
                             session_id: flow_session_id.clone(),
                             message: prompt.to_string(),
-                            workspace_path,
+                            workspace_path: workspace_path.clone(),
                             timeout_seconds: Some(ACP_TASK_TIMEOUT_SECONDS),
-                        })
-                        .await
-                        .map_err(|error| {
-                            BitFunError::tool(format!(
+                        },
+                        chunk_tx,
+                    );
+                    let parent_session_id = context.session_id.clone();
+                    let parent_turn_id = context.dialog_turn_id.clone();
+                    let stream_events = async {
+                        if let (Some(session_id), Some(turn_id)) =
+                            (parent_session_id, parent_turn_id)
+                        {
+                            let round_id = Uuid::new_v4().to_string();
+                            while let Some(chunk) = chunk_rx.recv().await {
+                                if let AcpClientStreamChunk::Text { text } = chunk {
+                                    coordinator
+                                        .emit_event(AgenticEvent::TextChunk {
+                                            session_id: session_id.clone(),
+                                            turn_id: turn_id.clone(),
+                                            round_id: round_id.clone(),
+                                            attempt_id: None,
+                                            attempt_index: None,
+                                            text,
+                                        })
+                                        .await;
+                                }
+                            }
+                        } else {
+                            while chunk_rx.recv().await.is_some() {}
+                        }
+                    };
+                    let (sent_result, _) = tokio::join!(send_future, stream_events);
+                    let sent = match sent_result {
+                        Ok(sent) => sent,
+                        Err(error) => {
+                            // 一次性 flow 会话即使外部轮次失败也要回收，失败的临时
+                            // ACP 任务绝不能泄漏其 flow 会话/外部进程。
+                            if temporary {
+                                recycle_acp_flow_session(
+                                    port.as_ref(),
+                                    &flow_session_id,
+                                    workspace_path,
+                                )
+                                .await;
+                            }
+                            return Err(BitFunError::tool(format!(
                                 "ACP client port failed ({:?}): {}",
                                 error.kind, error.message
-                            ))
-                        })?;
+                            )));
+                        }
+                    };
                     Ok(vec![ToolResult::Result {
                         data: json!({
                             "action": "send_input",
@@ -448,9 +651,9 @@ impl TaskTool {
                             "agent_id": flow_session_id,
                             "response": sent.response,
                         }),
-                        result_for_assistant: Some(format!(
-                            "External ACP session responded:\n{}",
-                            sent.response
+                        result_for_assistant: Some(acp_send_input_notice(
+                            &sent.response,
+                            &flow_session_id,
                         )),
                         image_attachments: None,
                     }])
@@ -485,6 +688,10 @@ impl TaskTool {
         let flow_session_id = created.session_id;
         let persistent = invocation.persistent;
         let run_in_background = invocation.run_in_background;
+        let temporary = !persistent;
+        // 记录所有权与一次性标记：续接（send_input/cancel）据此校验调用方子树，
+        // 一次性标记驱动回收。
+        register_acp_flow_session(&flow_session_id, parent_session_id, temporary);
 
         if run_in_background {
             let port_for_task = port.clone();
@@ -503,7 +710,7 @@ impl TaskTool {
                     })
                     .await;
                 let output_text = match &sent {
-                    Ok(result) => Some(result.response.clone()),
+                    Ok(result) => Some(acp_background_result_notice(&result.response)),
                     Err(_) => None,
                 };
                 if let Some(scheduler) = scheduler.as_ref() {
@@ -537,23 +744,35 @@ impl TaskTool {
                         .await;
                 }
                 if !persistent {
-                    let _ = port_for_task
-                        .delete_session_record(flow_session_id_for_task, workspace_path_for_task)
-                        .await;
+                    recycle_acp_flow_session(
+                        port_for_task.as_ref(),
+                        &flow_session_id_for_task,
+                        workspace_path_for_task,
+                    )
+                    .await;
                 }
             });
-            return Ok(vec![ToolResult::Result {
-                data: json!({
-                    "action": "spawn",
-                    "status": "started",
-                    "run_in_background": true,
-                    "agent_id": flow_session_id,
-                    "agent_type": created.agent_type,
-                }),
-                result_for_assistant: Some(format!(
-                    "Background external ACP subagent started.\nagent_id: \"{}\"\nThe result will be delivered back to this session automatically.",
+            let mut data = serde_json::Map::new();
+            data.insert("action".to_string(), json!("spawn"));
+            data.insert("status".to_string(), json!("started"));
+            data.insert("run_in_background".to_string(), json!(true));
+            data.insert("agent_id".to_string(), json!(flow_session_id.clone()));
+            data.insert("agent_type".to_string(), json!(created.agent_type));
+            let mut result_for_assistant = format!(
+                "Background external ACP subagent started.\nagent_id: \"{}\"\nThe result will be delivered back to this session automatically.",
+                flow_session_id
+            );
+            if temporary {
+                // 一次性后台 spawn 返回的 agent_id 不可复用：显式标记并提示。
+                data.insert("recycled".to_string(), json!(true));
+                result_for_assistant.push_str(&format!(
+                    "\n<subagent_recycled agent_id=\"{}\">This was a one-shot (persistent=false) ACP subagent: the external session will be recycled automatically and the returned agent_id is NOT reusable for send_input.</subagent_recycled>",
                     flow_session_id
-                )),
+                ));
+            }
+            return Ok(vec![ToolResult::Result {
+                data: Value::Object(data),
+                result_for_assistant: Some(result_for_assistant),
                 image_attachments: None,
             }]);
         }
@@ -572,9 +791,8 @@ impl TaskTool {
         {
             Ok(sent) => sent,
             Err(error) => {
-                if !persistent {
-                    let _ = port
-                        .delete_session_record(flow_session_id.clone(), workspace_path)
+                if temporary {
+                    recycle_acp_flow_session(port.as_ref(), &flow_session_id, workspace_path)
                         .await;
                 }
                 return Err(BitFunError::tool(format!(
@@ -583,10 +801,8 @@ impl TaskTool {
                 )));
             }
         };
-        if !persistent {
-            let _ = port
-                .delete_session_record(flow_session_id.clone(), workspace_path)
-                .await;
+        if temporary {
+            recycle_acp_flow_session(port.as_ref(), &flow_session_id, workspace_path).await;
         }
         let mut data = json!({
             "action": "spawn",
@@ -1880,5 +2096,22 @@ mod target_context_tests {
         assert!(!child.contains_key(USER_INPUT_AVAILABLE_CONTEXT_KEY));
         assert!(!child.contains_key("parent_tool_runtime_state"));
         assert_eq!(child["deep_review_subagent_role"], "reviewer");
+    }
+
+    #[test]
+    fn acp_send_input_notice_excludes_full_response() {
+        let full_reply = format!("EXTERNAL_REPLY_MARKER_{}", "x".repeat(4096));
+        let notice = acp_send_input_notice(&full_reply, "flow-123");
+        assert!(!notice.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(notice.contains("flow-123"));
+        assert!(notice.contains("SessionHistory"));
+    }
+
+    #[test]
+    fn acp_background_result_notice_excludes_full_response() {
+        let full_reply = format!("EXTERNAL_REPLY_MARKER_{}", "x".repeat(4096));
+        let notice = acp_background_result_notice(&full_reply);
+        assert!(!notice.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(notice.contains("SessionHistory"));
     }
 }

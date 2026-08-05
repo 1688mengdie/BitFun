@@ -20,9 +20,10 @@ use async_trait::async_trait;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
     AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
-    AgentDialogPrependedReminder, AgentDialogSteerRequest, AgentDialogTurnPort, AgentDialogTurnRequest,
-    AgentSessionCreateRequest, AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, PortResult,
+    AcpClientStreamChunk, AcpClientStreamChunkSink, AgentDialogPrependedReminder,
+    AgentDialogSteerRequest, AgentDialogTurnPort, AgentDialogTurnRequest, AgentSessionCreateRequest,
+    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest, PortResult,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -77,8 +78,30 @@ struct DispatchOutcome {
 /// Bounded window for background ACP direct deliveries (seconds). The old
 /// direct path passed `timeout_seconds: None` (unbounded), which could hold
 /// the tool call open indefinitely; the async delivery runs in a background
-/// task with this window instead.
-const ACP_DIRECT_TIMEOUT_SECONDS: u64 = 300;
+/// task with this 30-minute window instead (external agent long tasks such as
+/// review/repair need the wider bound, while it stays bounded to avoid hangs).
+const ACP_DIRECT_TIMEOUT_SECONDS: u64 = 1800;
+
+/// COORD-03 流会话注册表元数据键（权威源：interfaces/acp/src/client/
+/// session_persistence.rs:11-16 —— AcpSessionPersistence 创建流会话记录时
+/// 写入 provider/acpClientId 自定义元数据）。core 不依赖 ACP crate，以
+/// 字面量消费同一持久化契约。
+const ACP_FLOW_METADATA_PROVIDER_KEY: &str = "provider";
+const ACP_FLOW_METADATA_PROVIDER_VALUE: &str = "acp";
+const ACP_FLOW_METADATA_CLIENT_ID_KEY: &str = "acpClientId";
+
+/// COORD-03 流会话注册表判定结果：会话 id 形状（`acp_<client>_<uuid>`）
+/// 只作线索，注册表记录才是「是否为活跃外部 ACP 流会话」的权威事实。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum AcpFlowSessionRegistryStatus {
+    /// 注册表记录在册且 provider=acp：活跃外部 ACP 流会话（附记录中的
+    /// client id，与形状解析出的 client id 必须一致）。
+    Active { client_id: String },
+    /// 注册表有记录但不是 ACP 流会话（例如内部会话的 id 恰巧命中形状）。
+    NotAcpFlow,
+    /// 注册表中无记录：会话已被回收（delete_session_record）或从未创建。
+    Missing,
+}
 
 /// One of the two ACP direct send shapes: a flow session
 /// (`acp_<client>_<uuid>` addressed via `send_message`) or an internal
@@ -576,11 +599,18 @@ fn resolve_urgent_delivery(processing_turn_id: Option<String>) -> UrgentDelivery
 /// Dual-channel redundancy decision for urgent messages:
 /// only attempt the steering channel when the message is urgent AND the target
 /// session already exists (a brand-new session has no running turn to steer
-/// into). Every other case uses the normal submission channel. When steering
-/// is attempted but rejected, the caller falls back to the normal channel, so
-/// one of the two channels always delivers the message.
-fn should_attempt_steering(urgent: bool, created_session_id: Option<&str>) -> bool {
-    urgent && created_session_id.is_none()
+/// into) AND the dispatch does not carry a plan-todo binding (the steering
+/// channel carries no binding metadata, so a bound message falls back to the
+/// normal submission channel that preserves the binding and the reply route —
+/// COORD-01). Every other case uses the normal submission channel. When
+/// steering is attempted but rejected, the caller falls back to the normal
+/// channel, so one of the two channels always delivers the message.
+fn should_attempt_steering(
+    urgent: bool,
+    created_session_id: Option<&str>,
+    has_plan_todo_binding: bool,
+) -> bool {
+    urgent && created_session_id.is_none() && !has_plan_todo_binding
 }
 
 #[async_trait]
@@ -1019,6 +1049,233 @@ Allowed agent types when creating a session are dynamically resolved from the av
     }
 }
 
+/// Build the follow-up message injected into the sender session when an ACP
+/// direct delivery succeeds (COORD-15). The full external reply stays in the
+/// target ACP stream session history (retrievable via SessionHistory); only
+/// the notice is injected so the sender context is not inflated with the
+/// full reply text.
+fn acp_direct_response_notice(_full_response: &str, session_id: &str) -> String {
+    format!(
+        "External ACP session '{}' responded; use SessionHistory to view the full reply.",
+        session_id
+    )
+}
+
+/// Current unix time in milliseconds (fallback 0 on clock failure; never
+/// panics).
+fn acp_direct_delivery_now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// The target workspace of an ACP direct delivery, used to resolve the
+/// session storage directory for backend persistence.
+fn acp_direct_delivery_workspace_path(op: &AcpDirectSendOp) -> Option<&str> {
+    match op {
+        AcpDirectSendOp::Flow(request) => request.workspace_path.as_deref(),
+        AcpDirectSendOp::Bitfun(request) => request.workspace_path.as_deref(),
+    }
+}
+
+/// Build the persisted `DialogTurnData` for one ACP direct delivery
+/// (a19 后端同构落盘；镜像前端 convertDialogTurnToBackendFormat 的
+/// user_message + 单 model_round text_items 结构)。
+#[allow(clippy::too_many_arguments)]
+fn build_acp_direct_delivery_turn(
+    turn_id: &str,
+    turn_index: usize,
+    session_id: &str,
+    user_input: &str,
+    round_id: &str,
+    round_started_at_ms: u64,
+    response: &str,
+    status: crate::service::session::TurnStatus,
+    error: Option<String>,
+) -> crate::service::session::DialogTurnData {
+    use crate::service::session::{
+        DialogTurnData, ModelRoundData, TextItemData, TurnStatus, UserMessageData,
+    };
+    let mut turn = DialogTurnData::new(
+        turn_id.to_string(),
+        turn_index,
+        session_id.to_string(),
+        UserMessageData {
+            id: Uuid::new_v4().to_string(),
+            content: user_input.to_string(),
+            timestamp: round_started_at_ms,
+            metadata: None,
+        },
+    );
+    turn.start_time = round_started_at_ms;
+    let mut round = ModelRoundData {
+        id: round_id.to_string(),
+        turn_id: turn_id.to_string(),
+        round_index: 0,
+        round_group_id: None,
+        timestamp: round_started_at_ms,
+        text_items: Vec::new(),
+        tool_items: Vec::new(),
+        thinking_items: Vec::new(),
+        start_time: round_started_at_ms,
+        end_time: None,
+        duration_ms: None,
+        provider_id: None,
+        model_config_id: None,
+        effective_model_name: None,
+        first_chunk_ms: None,
+        first_visible_output_ms: None,
+        stream_duration_ms: None,
+        attempt_count: None,
+        attempt_diagnostics: Vec::new(),
+        failure_category: None,
+        token_details: None,
+        status: "completed".to_string(),
+    };
+    if !response.trim().is_empty() {
+        round.text_items.push(TextItemData {
+            id: Uuid::new_v4().to_string(),
+            content: response.to_string(),
+            is_streaming: false,
+            timestamp: round_started_at_ms,
+            is_markdown: true,
+            order_index: Some(0),
+            is_subagent_item: None,
+            parent_task_tool_id: None,
+            subagent_session_id: None,
+            status: Some("completed".to_string()),
+            attempt_id: None,
+            attempt_index: None,
+        });
+    }
+    turn.model_rounds.push(round);
+    turn.error = error;
+    match status {
+        TurnStatus::Completed => turn.mark_completed(),
+        TurnStatus::Cancelled | TurnStatus::Error => {
+            turn.status = status;
+            turn.end_time = Some(acp_direct_delivery_now_unix_ms());
+        }
+        TurnStatus::InProgress => {}
+    }
+    turn
+}
+
+/// Persist one ACP direct delivery turn through the injected persistence
+/// manager. Backend persistence is independent of the frontend event stream;
+/// the turn index derives from the session metadata `turn_count` (matching
+/// the frontend `indexOf` semantics for a contiguous history). A turn already
+/// saved by the frontend at that index is a no-op; an index collision with a
+/// different turn id is skipped with a warning. Failures are logged, never
+/// propagated, so persistence can never break the notification path.
+#[allow(clippy::too_many_arguments)]
+async fn persist_acp_direct_delivery_turn(
+    persistence: &crate::agentic::persistence::PersistenceManager,
+    storage_path: &Path,
+    session_id: &str,
+    turn_id: &str,
+    user_input: &str,
+    round_id: &str,
+    round_started_at_ms: u64,
+    response: &str,
+    status: crate::service::session::TurnStatus,
+    error: Option<String>,
+) {
+    let Ok(Some(metadata)) = persistence
+        .load_session_metadata(storage_path, session_id)
+        .await
+    else {
+        warn!(
+            "ACP direct delivery persistence skipped: session metadata not found: session_id={}",
+            session_id
+        );
+        return;
+    };
+    let turn_index = metadata.turn_count;
+    match persistence
+        .load_dialog_turn(storage_path, session_id, turn_index)
+        .await
+    {
+        Ok(Some(existing)) if existing.turn_id == turn_id => {
+            // 前端在线时已落盘：跳过，避免重复写入。
+            return;
+        }
+        Ok(Some(_)) => {
+            warn!(
+                "ACP direct delivery persistence skipped: turn index collision: session_id={} turn_id={} turn_index={}",
+                session_id,
+                turn_id,
+                turn_index
+            );
+            return;
+        }
+        _ => {}
+    }
+    let turn = build_acp_direct_delivery_turn(
+        turn_id,
+        turn_index,
+        session_id,
+        user_input,
+        round_id,
+        round_started_at_ms,
+        response,
+        status,
+        error,
+    );
+    if let Err(save_error) = persistence.save_dialog_turn(storage_path, &turn).await {
+        warn!(
+            "Failed to persist ACP direct delivery turn: session_id={} turn_id={} error={}",
+            session_id, turn_id, save_error
+        );
+    }
+}
+
+/// Production wrapper for ACP direct delivery persistence: resolve the
+/// workspace session storage path and build the global persistence manager,
+/// then persist the turn.
+#[allow(clippy::too_many_arguments)]
+async fn persist_acp_direct_delivery_to_workspace(
+    workspace_path: &str,
+    session_id: &str,
+    turn_id: &str,
+    user_input: &str,
+    round_id: &str,
+    round_started_at_ms: u64,
+    response: &str,
+    status: crate::service::session::TurnStatus,
+    error: Option<String>,
+) {
+    use crate::agentic::persistence::PersistenceManager;
+    use crate::infrastructure::get_path_manager_arc;
+    use crate::service::remote_ssh::workspace_state::get_effective_session_path;
+
+    let storage_path = get_effective_session_path(workspace_path, None, None).await;
+    let persistence = match PersistenceManager::new(get_path_manager_arc()) {
+        Ok(persistence) => persistence,
+        Err(init_error) => {
+            warn!(
+                "ACP direct delivery persistence skipped: failed to initialize PersistenceManager: {}",
+                init_error
+            );
+            return;
+        }
+    };
+    persist_acp_direct_delivery_turn(
+        &persistence,
+        &storage_path,
+        session_id,
+        turn_id,
+        user_input,
+        round_id,
+        round_started_at_ms,
+        response,
+        status,
+        error,
+    )
+    .await;
+}
+
 impl SessionMessageTool {
     /// Validates a batch payload up front. Structural rules mirror the
     /// single-target shape, applied per item with `batch[N]` prefixes; any
@@ -1212,15 +1469,70 @@ impl SessionMessageTool {
         Some(client_id)
     }
 
-    /// Forward one ACP direct message through the real channel. Both send
-    /// shapes return the full external response; failures are port errors.
-    async fn acp_direct_send(
+    /// COORD-03 权威判定：查 ACP 流会话注册表（workspace 会话存储中的持久
+    /// 化记录）。流会话记录由 `AcpClientPort::create_session` 写入（provider=
+    /// acp + acpClientId 元数据），回收（`delete_session_record`）后记录被
+    /// 删除，因此记录状态是「是否活跃外部 ACP 流会话」的权威事实：
+    /// - `Active`：记录在册且 provider=acp，附记录中的 client id；
+    /// - `NotAcpFlow`：记录在册但不是 ACP 流会话（内部会话命中形状）；
+    /// - `Missing`：无记录（已回收或从未创建）——派发前存活校验失败。
+    ///
+    /// 同一存储目录（`get_effective_session_path`）同时承载内部会话与 ACP
+    /// 流会话记录，provider 标记负责区分；与 desktop `AcpClientPort` 的
+    /// `session_storage_path` 解析一致（本地 workspace，不涉及 remote）。
+    async fn acp_flow_session_registry_status(
+        workspace_path: &str,
+        session_id: &str,
+    ) -> BitFunResult<AcpFlowSessionRegistryStatus> {
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::infrastructure::get_path_manager_arc;
+        use crate::service::remote_ssh::workspace_state::get_effective_session_path;
+
+        let storage_path = get_effective_session_path(workspace_path, None, None).await;
+        let persistence = PersistenceManager::new(get_path_manager_arc())
+            .map_err(|error| BitFunError::tool(error.to_string()))?;
+        let Some(metadata) = persistence
+            .load_session_metadata(&storage_path, session_id)
+            .await
+            .map_err(|error| BitFunError::tool(error.to_string()))?
+        else {
+            return Ok(AcpFlowSessionRegistryStatus::Missing);
+        };
+        let Some(custom) = metadata.custom_metadata.as_ref() else {
+            return Ok(AcpFlowSessionRegistryStatus::NotAcpFlow);
+        };
+        if custom.get(ACP_FLOW_METADATA_PROVIDER_KEY).and_then(Value::as_str)
+            != Some(ACP_FLOW_METADATA_PROVIDER_VALUE)
+        {
+            return Ok(AcpFlowSessionRegistryStatus::NotAcpFlow);
+        }
+        let client_id = custom
+            .get(ACP_FLOW_METADATA_CLIENT_ID_KEY)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string);
+        match client_id {
+            Some(client_id) => Ok(AcpFlowSessionRegistryStatus::Active { client_id }),
+            // provider=acp 但 client id 缺失/为空：异常记录，无法确认归属，
+            // 按非 ACP 流会话拒绝（不路由）。
+            None => Ok(AcpFlowSessionRegistryStatus::NotAcpFlow),
+        }
+    }
+
+    /// Forward one ACP direct message through the real channel with streaming.
+    /// Text chunks are pushed into `chunk_sink` as they arrive and the full
+    /// external response is returned; failures are port errors.
+    async fn acp_direct_send_stream(
         port: &dyn AcpClientPort,
         op: AcpDirectSendOp,
+        chunk_sink: AcpClientStreamChunkSink,
     ) -> PortResult<AcpClientMessageResult> {
         match op {
-            AcpDirectSendOp::Flow(request) => port.send_message(request).await,
-            AcpDirectSendOp::Bitfun(request) => port.send_message_to_bitfun_session(request).await,
+            AcpDirectSendOp::Flow(request) => port.send_message_stream(request, chunk_sink).await,
+            AcpDirectSendOp::Bitfun(request) => {
+                port.send_message_to_bitfun_session_stream(request, chunk_sink).await
+            }
         }
     }
 
@@ -1254,9 +1566,15 @@ impl SessionMessageTool {
         });
     }
 
-    /// Completion path of one ACP direct delivery: emit the streaming turn
-    /// events for the target session and route the external response back to
-    /// the sender session (follow-up), or emit a failure event on port error.
+    /// Completion path of one ACP direct delivery: stream the external reply
+    /// back through per-chunk turn events for the target session and route the
+    /// external response back to the sender session (follow-up), or emit a
+    /// failure event on port error. Turn event order is preserved:
+    /// `DialogTurnStarted` → [`ModelRoundStarted`] → zero or more `TextChunk`
+    /// → [`ModelRoundCompleted`] → `DialogTurnCompleted`. Round events are
+    /// emitted only when the reply produces text (mirroring the non-streaming
+    /// path); the `ModelRoundCompleted` is emitted first when the port fails
+    /// after a partial reply, so no round is left dangling.
     async fn run_acp_direct_delivery(
         port: &dyn AcpClientPort,
         op: AcpDirectSendOp,
@@ -1269,6 +1587,10 @@ impl SessionMessageTool {
         let turn_id = Uuid::new_v4().to_string();
         let round_id = Uuid::new_v4().to_string();
         let started_at = Instant::now();
+        // a19 后端落盘时间基准：事件流内无法再次取时（事件不携带时间戳）。
+        let turn_started_at_ms = acp_direct_delivery_now_unix_ms();
+        // a19 后端落盘目标工作区：在 `op` 被 move 进发送 future 前提取。
+        let target_workspace_path = acp_direct_delivery_workspace_path(&op).map(ToOwned::to_owned);
         coordinator
             .emit_event(AgenticEvent::DialogTurnStarted {
                 session_id: target_session_id.to_string(),
@@ -1279,19 +1601,74 @@ impl SessionMessageTool {
                 user_message_metadata: None,
             })
             .await;
-        match Self::acp_direct_send(port, op).await {
+
+        // Stream the external reply: the port pushes text chunks into the
+        // channel while the recv loop emits one `TextChunk` turn event per
+        // chunk, so the frontend renders the reply incrementally instead of
+        // receiving the whole response in a single chunk. `join!` keeps the
+        // recv loop running concurrently with the port call; the channel
+        // closes when the port call finishes, ending the loop.
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel();
+        let send_future = Self::acp_direct_send_stream(port, op, chunk_tx);
+        let stream_turn_events = async {
+            let mut round_started = false;
+            while let Some(chunk) = chunk_rx.recv().await {
+                if let AcpClientStreamChunk::Text { text } = chunk {
+                    if !round_started {
+                        // 与 coordinator.rs 既有模式一致：TextChunk 前先补发
+                        // ModelRoundStarted，让前端正常建立 round 容器，再流式输出文本。
+                        coordinator
+                            .emit_event(AgenticEvent::ModelRoundStarted {
+                                session_id: target_session_id.to_string(),
+                                turn_id: turn_id.clone(),
+                                round_id: round_id.clone(),
+                                round_group_id: None,
+                                round_index: 0,
+                                model_config_id: String::new(),
+                                effective_model_name: String::new(),
+                            })
+                            .await;
+                        round_started = true;
+                    }
+                    coordinator
+                        .emit_event(AgenticEvent::TextChunk {
+                            session_id: target_session_id.to_string(),
+                            turn_id: turn_id.clone(),
+                            round_id: round_id.clone(),
+                            attempt_id: None,
+                            attempt_index: None,
+                            text,
+                        })
+                        .await;
+                }
+            }
+            round_started
+        };
+        let (sent, round_started) = tokio::join!(send_future, stream_turn_events);
+        let duration_ms = started_at.elapsed().as_millis() as u64;
+
+        match sent {
             Ok(sent) => {
-                let duration_ms = started_at.elapsed().as_millis() as u64;
-                coordinator
-                    .emit_event(AgenticEvent::TextChunk {
-                        session_id: target_session_id.to_string(),
-                        turn_id: turn_id.clone(),
-                        round_id: round_id.clone(),
-                        attempt_id: None,
-                        attempt_index: None,
-                        text: sent.response.clone(),
-                    })
-                    .await;
+                if round_started {
+                    coordinator
+                        .emit_event(AgenticEvent::ModelRoundCompleted {
+                            session_id: target_session_id.to_string(),
+                            turn_id: turn_id.clone(),
+                            round_id: round_id.clone(),
+                            has_tool_calls: false,
+                            duration_ms: Some(duration_ms),
+                            provider_id: None,
+                            model_config_id: String::new(),
+                            effective_model_name: String::new(),
+                            first_chunk_ms: None,
+                            first_visible_output_ms: None,
+                            stream_duration_ms: None,
+                            attempt_count: None,
+                            failure_category: None,
+                            token_details: None,
+                        })
+                        .await;
+                }
                 coordinator
                     .emit_event(AgenticEvent::DialogTurnCompleted {
                         session_id: target_session_id.to_string(),
@@ -1301,15 +1678,43 @@ impl SessionMessageTool {
                         duration_ms,
                         partial_recovery_reason: None,
                         success: Some(true),
-                        finish_reason: Some("stop".to_string()),
+                        // "complete" 是前端 NORMAL_FINISH_REASONS 内的正常终止码，
+                        // 避免误报「非标准方式结束」横幅。
+                        finish_reason: Some("complete".to_string()),
                         has_final_response: Some(true),
                     })
                     .await;
+                // a19 后端同构落盘：外部回复直接写入目标 ACP 会话的持久化 turn
+                // 文件，不依赖前端事件流（前端未打开/事件流中断时 SessionHistory
+                // 仍可读）。失败仅告警，不破坏通知式路径（COORD-15 follow-up
+                // 照常投递）。
+                if let Some(workspace_path) = target_workspace_path.as_deref() {
+                    persist_acp_direct_delivery_to_workspace(
+                        workspace_path,
+                        target_session_id,
+                        &turn_id,
+                        user_input,
+                        &round_id,
+                        turn_started_at_ms,
+                        &sent.response,
+                        crate::service::session::TurnStatus::Completed,
+                        None,
+                    )
+                    .await;
+                }
                 // AgentSessionReplyRoute semantics: deliver the external
                 // response back to the sender session as a follow-up.
+                //
+                // COORD-15：事件流（DialogTurnStarted → TextChunk →
+                // DialogTurnCompleted）已在目标会话完成流式渲染，是外部回复的
+                // 唯一完整呈现；follow-up 的 content/display 均只注入通知句
+                // （完成回执），全文保留在 ACP 流会话历史，发起方用
+                // SessionHistory 自查，避免 ACP 直通事件流与本地 follow-up
+                // 双重呈现、也避免全文膨胀发起方上下文。
+                let content = acp_direct_response_notice(&sent.response, target_session_id);
                 let display = format!(
-                    "External ACP session '{}' responded:\n{}",
-                    target_session_id, sent.response
+                    "External ACP session '{}' responded; the full reply is streamed in that session's chat view.",
+                    target_session_id
                 );
                 if let Err(error) = scheduler
                     .deliver_background_result(
@@ -1318,7 +1723,7 @@ impl SessionMessageTool {
                         Some(source.source_workspace.clone()),
                         source.source_remote_connection_id.clone(),
                         source.source_remote_ssh_host.clone(),
-                        sent.response.clone(),
+                        content,
                         Some(display),
                         None,
                     )
@@ -1331,6 +1736,26 @@ impl SessionMessageTool {
                 }
             }
             Err(error) => {
+                if round_started {
+                    coordinator
+                        .emit_event(AgenticEvent::ModelRoundCompleted {
+                            session_id: target_session_id.to_string(),
+                            turn_id: turn_id.clone(),
+                            round_id: round_id.clone(),
+                            has_tool_calls: false,
+                            duration_ms: Some(duration_ms),
+                            provider_id: None,
+                            model_config_id: String::new(),
+                            effective_model_name: String::new(),
+                            first_chunk_ms: None,
+                            first_visible_output_ms: None,
+                            stream_duration_ms: None,
+                            attempt_count: None,
+                            failure_category: None,
+                            token_details: None,
+                        })
+                        .await;
+                }
                 coordinator
                     .emit_event(AgenticEvent::DialogTurnFailed {
                         session_id: target_session_id.to_string(),
@@ -1347,6 +1772,22 @@ impl SessionMessageTool {
                     "ACP direct delivery failed for session '{}': {}",
                     target_session_id, error
                 );
+                // a19 后端同构落盘：失败 turn 也写入持久化存储（与前端在
+                // DialogTurnFailed 时保存 error turn 的行为同构）。
+                if let Some(workspace_path) = target_workspace_path.as_deref() {
+                    persist_acp_direct_delivery_to_workspace(
+                        workspace_path,
+                        target_session_id,
+                        &turn_id,
+                        user_input,
+                        &round_id,
+                        turn_started_at_ms,
+                        "",
+                        crate::service::session::TurnStatus::Error,
+                        Some(error_text.clone()),
+                    )
+                    .await;
+                }
                 if let Err(delivery_error) = scheduler
                     .deliver_background_result(
                         source.source_session_id.clone(),
@@ -1404,20 +1845,59 @@ impl SessionMessageTool {
                 // binding / list_sessions 解析；直接经 AcpClientPort::send_message 真
                 // 通道转发（与 acp_message 同通道，无本地模型 turn）。投递即返回，
                 // 外部响应经事件流 + follow-up 回传。
+                //
+                // COORD-03：形状只作线索，ACP 流会话注册表才是权威判定。命中形状
+                // 后先查注册表（派发前存活校验）：记录在册且 provider=acp 且
+                // acpClientId 与形状 client id 一致 → 直通；内部会话命中形状 /
+                // 记录已回收 / 记录归属 client 不一致 → 显式拒绝而非路由，杜绝
+                // 误分流与回收竞态（回收后形状仍命中会把消息发向已释放的会话）。
                 if let Some(flow_client_id) =
                     Self::acp_flow_client_id_from_session_id(&target_session_id)
                 {
+                    // 注册表查询需要 workspace 定位会话存储目录；缺失时无法
+                    // 完成权威判定，显式拒绝（不静默直通未校验的会话）。
+                    let workspace_path = params.workspace.clone().or_else(|| {
+                        context
+                            .workspace_root()
+                            .map(|path| path.to_string_lossy().to_string())
+                    });
+                    let registry_status = Self::acp_flow_session_registry_status(
+                        workspace_path.as_deref().ok_or_else(|| {
+                            BitFunError::tool(format!(
+                                "workspace is required to verify the target session '{}'",
+                                target_session_id
+                            ))
+                        })?,
+                        &target_session_id,
+                    )
+                    .await?;
+                    let registry_client_id = match registry_status {
+                        AcpFlowSessionRegistryStatus::Active { client_id } => client_id,
+                        AcpFlowSessionRegistryStatus::NotAcpFlow => {
+                            return Err(BitFunError::tool(format!(
+                                "session '{}' is not an ACP flow session (its persisted record is not an ACP session record); refusing to route it through the external ACP direct path",
+                                target_session_id
+                            )));
+                        }
+                        AcpFlowSessionRegistryStatus::Missing => {
+                            return Err(BitFunError::tool(format!(
+                                "ACP flow session '{}' was not found in the flow-session registry; it may have been recycled or never created",
+                                target_session_id
+                            )));
+                        }
+                    };
+                    if registry_client_id != flow_client_id {
+                        return Err(BitFunError::tool(format!(
+                            "ACP flow session '{}' is registered for client '{}', not '{}'; refusing to route",
+                            target_session_id, registry_client_id, flow_client_id
+                        )));
+                    }
                     let port = coordinator.acp_client_port().ok_or_else(|| {
                         BitFunError::tool(
                             "ACP client port is not available; the desktop host did not inject it"
                                 .to_string(),
                         )
                     })?;
-                    let workspace_path = params.workspace.clone().or_else(|| {
-                        context
-                            .workspace_root()
-                            .map(|path| path.to_string_lossy().to_string())
-                    });
                     // Resolve before the move below: the flow client id borrows
                     // from `target_session_id`, which is moved into the outcome.
                     let target_agent_type = format!("acp:{}", flow_client_id);
@@ -1595,6 +2075,11 @@ impl SessionMessageTool {
         // When the port is unavailable the dispatch fails loudly instead of
         // falling back to the local model (a fallback would re-introduce the
         // double-billing path).
+        //
+        // COORD-03：agent_type 前缀 `acp__` 只作线索，ACP client 注册表才是
+        // 权威判定。内部会话命中形状但 client 未注册（历史壳会话 / 用户自定义
+        // 类型）时显式拒绝而非路由到外部，防误分流；client 已注册时直通（会话
+        // 级外部进程绑定由发送端口兜底，失败经事件流 + follow-up 回传）。
         if let Some(client_id) = Self::acp_client_id_from_agent_type(&target_agent_type) {
             let port = coordinator.acp_client_port().ok_or_else(|| {
                 BitFunError::tool(
@@ -1602,6 +2087,22 @@ impl SessionMessageTool {
                         .to_string(),
                 )
             })?;
+            let listed_clients = port.list_clients().await.map_err(|error| {
+                BitFunError::tool(format!(
+                    "failed to verify the ACP client registry for agent type '{}': {}",
+                    target_agent_type, error.message
+                ))
+            })?;
+            if !listed_clients
+                .clients
+                .iter()
+                .any(|client| client.client_id == client_id)
+            {
+                return Err(BitFunError::tool(format!(
+                    "session '{}' uses agent type '{}' but ACP client '{}' is not registered; refusing to route to a non-existent external agent",
+                    target_session_id, target_agent_type, client_id
+                )));
+            }
             let result_text = format!(
                 "Message accepted for external ACP session '{}' in workspace '{}' using agent type '{}'. The external agent response will stream back once it completes.",
                 target_session_id, workspace_target.workspace_path, target_agent_type
@@ -1659,7 +2160,9 @@ impl SessionMessageTool {
         // is rejected (the turn ended between the state query and the submit), deliver
         // through the normal submission path so the message is never dropped.
         let mut steering_turn_id: Option<String> = None;
-        if should_attempt_steering(params.urgent, created_session_id.as_deref()) {
+        let has_plan_todo_binding = params.plan_file.is_some() || params.todo_id.is_some();
+        if should_attempt_steering(params.urgent, created_session_id.as_deref(), has_plan_todo_binding)
+        {
             match resolve_urgent_delivery(scheduler.current_processing_turn_id(&target_session_id)) {
                 UrgentDelivery::Steer { turn_id } => {
                     match scheduler
@@ -1753,7 +2256,7 @@ impl SessionMessageTool {
         };
         if urgent_fell_back {
             result_text.push_str(
-                " Steering into the running turn was not possible (the target session was idle, its turn had just ended, or the queue was congested), so the urgent message was delivered as a normal submission instead of a mid-turn correction.",
+                " Steering into the running turn was not possible (the target session was idle, its turn had just ended, the queue was congested, or the message carries a plan-todo binding that the steering channel cannot carry), so the urgent message was delivered as a normal submission instead of a mid-turn correction.",
             );
         }
 
@@ -2462,18 +2965,28 @@ mod tests {
 
     #[test]
     fn urgent_message_to_existing_session_attempts_steering_channel() {
-        assert!(should_attempt_steering(true, None));
+        assert!(should_attempt_steering(true, None, false));
     }
 
     #[test]
     fn urgent_message_to_new_session_uses_normal_channel_only() {
-        assert!(!should_attempt_steering(true, Some("new-session-1")));
+        assert!(!should_attempt_steering(true, Some("new-session-1"), false));
+    }
+
+    #[test]
+    fn urgent_message_with_plan_todo_binding_uses_normal_channel_only() {
+        // The steering channel carries no plan-todo binding metadata, so a
+        // bound dispatch must fall back to the normal submission channel that
+        // preserves the binding and the reply route (COORD-01).
+        assert!(!should_attempt_steering(true, None, true));
+        assert!(!should_attempt_steering(true, Some("new-session-1"), true));
     }
 
     #[test]
     fn non_urgent_message_never_attempts_steering_channel() {
-        assert!(!should_attempt_steering(false, None));
-        assert!(!should_attempt_steering(false, Some("new-session-1")));
+        assert!(!should_attempt_steering(false, None, false));
+        assert!(!should_attempt_steering(false, Some("new-session-1"), false));
+        assert!(!should_attempt_steering(false, None, true));
     }
 
     #[test]
@@ -3151,6 +3664,28 @@ mod tests {
             })
         }
 
+        async fn send_message_stream(
+            &self,
+            request: bitfun_runtime_ports::AcpClientMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+            if self.fail_send {
+                return Err(PortError::new(
+                    PortErrorKind::Backend,
+                    "simulated external agent failure",
+                ));
+            }
+            self.flow_messages.lock().unwrap().push(request.clone());
+            let _ = chunk_sink.send(AcpClientStreamChunk::Text {
+                text: "external response".to_string(),
+            });
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+            Ok(bitfun_runtime_ports::AcpClientMessageResult {
+                session_id: request.session_id,
+                response: "external response".to_string(),
+            })
+        }
+
         async fn send_message_to_bitfun_session(
             &self,
             request: AcpClientBitfunMessageRequest,
@@ -3162,6 +3697,28 @@ mod tests {
                 ));
             }
             self.bitfun_messages.lock().unwrap().push(request.clone());
+            Ok(bitfun_runtime_ports::AcpClientMessageResult {
+                session_id: request.bitfun_session_id,
+                response: "external response".to_string(),
+            })
+        }
+
+        async fn send_message_to_bitfun_session_stream(
+            &self,
+            request: AcpClientBitfunMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+            if self.fail_send {
+                return Err(PortError::new(
+                    PortErrorKind::Backend,
+                    "simulated external agent failure",
+                ));
+            }
+            self.bitfun_messages.lock().unwrap().push(request.clone());
+            let _ = chunk_sink.send(AcpClientStreamChunk::Text {
+                text: "external response".to_string(),
+            });
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
             Ok(bitfun_runtime_ports::AcpClientMessageResult {
                 session_id: request.bitfun_session_id,
                 response: "external response".to_string(),
@@ -3289,9 +3846,11 @@ mod tests {
             workspace_path: Some("/repo/project".to_string()),
             timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
         };
-        let response = SessionMessageTool::acp_direct_send(
+        let (chunk_tx, mut chunk_rx) = tokio::sync::mpsc::unbounded_channel();
+        let response = SessionMessageTool::acp_direct_send_stream(
             &port,
             AcpDirectSendOp::Bitfun(request.clone()),
+            chunk_tx,
         )
         .await
         .expect("direct path should succeed");
@@ -3308,6 +3867,12 @@ mod tests {
 
         // The external response is returned verbatim, no re-translation.
         assert_eq!(response.response, "external response");
+        // The response is also streamed as per-chunk text.
+        let streamed = chunk_rx.try_recv().expect("streamed text chunk");
+        assert!(matches!(
+            streamed,
+            AcpClientStreamChunk::Text { text } if text == "external response"
+        ));
     }
 
     #[tokio::test]
@@ -3316,7 +3881,8 @@ mod tests {
             fail_send: true,
             ..FakeAcpPort::default()
         };
-        let error = SessionMessageTool::acp_direct_send(
+        let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel();
+        let error = SessionMessageTool::acp_direct_send_stream(
             &port,
             AcpDirectSendOp::Bitfun(AcpClientBitfunMessageRequest {
                 client_id: "codex".to_string(),
@@ -3325,6 +3891,7 @@ mod tests {
                 workspace_path: None,
                 timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
             }),
+            chunk_tx,
         )
         .await
         .unwrap_err();
@@ -3381,8 +3948,13 @@ mod tests {
         // here because a model-less unit-test host cannot run the follow-up
         // turn; it is covered by `deliver_background_result`'s own tests.
         let mut saw_started = false;
+        let mut saw_round_started = false;
         let mut saw_text = false;
+        let mut saw_round_completed = false;
         let mut saw_completed = false;
+        // "complete" 是前端 NORMAL_FINISH_REASONS 内的正常终止码，非标准方式结束
+        // 横幅不会误报（参照 web-ui flow_chat/utils/turnCompletionNotice.ts）。
+        let mut saw_complete_finish = false;
         for _ in 0..200 {
             while let Ok(envelope) = event_rx.try_recv() {
                 match &envelope.event {
@@ -3391,15 +3963,28 @@ mod tests {
                     {
                         saw_started = true;
                     }
+                    AgenticEvent::ModelRoundStarted { session_id, .. }
+                        if session_id == &target_session_id =>
+                    {
+                        saw_round_started = true;
+                    }
                     AgenticEvent::TextChunk { session_id, text, .. }
                         if session_id == &target_session_id =>
                     {
                         saw_text = text == "external response";
                     }
-                    AgenticEvent::DialogTurnCompleted { session_id, .. }
+                    AgenticEvent::ModelRoundCompleted { session_id, .. }
                         if session_id == &target_session_id =>
                     {
+                        saw_round_completed = true;
+                    }
+                    AgenticEvent::DialogTurnCompleted {
+                        session_id,
+                        finish_reason,
+                        ..
+                    } if session_id == &target_session_id => {
                         saw_completed = true;
+                        saw_complete_finish = finish_reason.as_deref() == Some("complete");
                     }
                     _ => {}
                 }
@@ -3407,8 +3992,11 @@ mod tests {
             let delivered = {
                 let messages = port.flow_messages.lock().unwrap();
                 saw_started
+                    && saw_round_started
                     && saw_text
+                    && saw_round_completed
                     && saw_completed
+                    && saw_complete_finish
                     && messages.len() == 1
                     && messages[0].timeout_seconds == Some(ACP_DIRECT_TIMEOUT_SECONDS)
             };
@@ -3418,8 +4006,153 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!(
-            "ACP direct delivery did not stream turn events and forward the port call: saw_started={}, saw_text={}, saw_completed={}",
-            saw_started, saw_text, saw_completed
+            "ACP direct delivery did not stream turn events and forward the port call: saw_started={}, saw_round_started={}, saw_text={}, saw_round_completed={}, saw_completed={}, saw_complete_finish={}",
+            saw_started, saw_round_started, saw_text, saw_round_completed, saw_completed, saw_complete_finish
+        );
+    }
+
+    #[test]
+    fn acp_direct_response_notice_excludes_full_response() {
+        let full_reply = format!("EXTERNAL_REPLY_MARKER_{}", "x".repeat(4096));
+        let notice = acp_direct_response_notice(&full_reply, "session-abc");
+        assert!(!notice.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(notice.contains("session-abc"));
+        assert!(notice.contains("SessionHistory"));
+    }
+
+    #[test]
+    fn acp_direct_delivery_workspace_path_extracts_from_ops() {
+        assert_eq!(
+            acp_direct_delivery_workspace_path(&AcpDirectSendOp::Flow(AcpClientMessageRequest {
+                session_id: "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b".to_string(),
+                message: "m".to_string(),
+                workspace_path: Some("/repo/project".to_string()),
+                timeout_seconds: None,
+            })),
+            Some("/repo/project")
+        );
+        assert_eq!(
+            acp_direct_delivery_workspace_path(&AcpDirectSendOp::Bitfun(
+                AcpClientBitfunMessageRequest {
+                    client_id: "codex".to_string(),
+                    bitfun_session_id: "session-internal-1".to_string(),
+                    message: "m".to_string(),
+                    workspace_path: None,
+                    timeout_seconds: None,
+                },
+            )),
+            None
+        );
+    }
+
+    #[test]
+    fn build_acp_direct_delivery_turn_maps_response_and_status() {
+        let turn = build_acp_direct_delivery_turn(
+            "turn-1",
+            3,
+            "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "hello",
+            "round-1",
+            1000,
+            "external response",
+            crate::service::session::TurnStatus::Completed,
+            None,
+        );
+        assert_eq!(turn.turn_index, 3);
+        assert_eq!(turn.user_message.content, "hello");
+        assert_eq!(turn.model_rounds.len(), 1);
+        assert_eq!(turn.model_rounds[0].round_index, 0);
+        assert_eq!(turn.model_rounds[0].text_items.len(), 1);
+        assert_eq!(turn.model_rounds[0].text_items[0].content, "external response");
+        assert_eq!(turn.status, crate::service::session::TurnStatus::Completed);
+        assert!(turn.end_time.is_some());
+        assert!(turn.error.is_none());
+
+        // 失败 turn：status=Error + error 字段，空回复不产生文本项。
+        let failed = build_acp_direct_delivery_turn(
+            "turn-2",
+            4,
+            "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "hello",
+            "round-2",
+            2000,
+            "",
+            crate::service::session::TurnStatus::Error,
+            Some("boom".to_string()),
+        );
+        assert_eq!(failed.status, crate::service::session::TurnStatus::Error);
+        assert_eq!(failed.error.as_deref(), Some("boom"));
+        assert!(failed.model_rounds[0].text_items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn persist_acp_direct_delivery_turn_writes_turn_file() {
+        use crate::service::session::SessionMetadata;
+
+        let root = tempfile::tempdir().expect("test root");
+        let persistence = PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+            root.path().join("user-root"),
+        )))
+        .expect("persistence manager");
+        let storage_path = root.path().join("storage");
+        let session_id = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b".to_string();
+        let metadata = SessionMetadata::new(
+            session_id.clone(),
+            "Codex ACP".to_string(),
+            "acp:codex".to_string(),
+            "auto".to_string(),
+        );
+        persistence
+            .create_session_metadata_if_absent(&storage_path, &metadata)
+            .await
+            .expect("metadata should be created");
+
+        persist_acp_direct_delivery_turn(
+            &persistence,
+            &storage_path,
+            &session_id,
+            "turn-1",
+            "hello",
+            "round-1",
+            1000,
+            "external response",
+            crate::service::session::TurnStatus::Completed,
+            None,
+        )
+        .await;
+
+        let saved = persistence
+            .load_dialog_turn(&storage_path, &session_id, 0)
+            .await
+            .expect("load should succeed")
+            .expect("turn should be persisted");
+        assert_eq!(saved.turn_id, "turn-1");
+        assert_eq!(saved.user_message.content, "hello");
+        assert_eq!(saved.model_rounds[0].text_items[0].content, "external response");
+        assert_eq!(saved.status, crate::service::session::TurnStatus::Completed);
+
+        // 幂等：同 turn 再次落盘为 no-op（不覆盖已保存内容、不报错）。
+        persist_acp_direct_delivery_turn(
+            &persistence,
+            &storage_path,
+            &session_id,
+            "turn-1",
+            "hello",
+            "round-2",
+            2000,
+            "overwrite attempt",
+            crate::service::session::TurnStatus::Completed,
+            None,
+        )
+        .await;
+        let saved_again = persistence
+            .load_dialog_turn(&storage_path, &session_id, 0)
+            .await
+            .expect("load should succeed")
+            .expect("turn should still exist");
+        assert_eq!(
+            saved_again.model_rounds[0].text_items[0].content,
+            "external response"
         );
     }
 }

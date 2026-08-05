@@ -19,6 +19,19 @@ const LIONHEART_ROOT: &str = "E:/LionHeart library";
 /// Files larger than this are skipped (in bytes).
 const MAX_SCAN_FILE_SIZE: u64 = 2 * 1024 * 1024;
 
+/// Deepest directory level the recursive scan descends to (LEGION-09).
+///
+/// Symlink cycles and pathological nested layouts cannot be expressed with a
+/// finite depth cap: the walk stops descending past this level.
+const MAX_SCAN_DEPTH: usize = 16;
+
+/// Hard cap on the number of files scanned in one call (LEGION-10).
+///
+/// A single tool call must never scan an unbounded tree; once the cap is hit
+/// the walk stops and reports `file_cap_reached` so the caller can narrow the
+/// scope (keyword/scope/max_results) instead of silently truncating.
+const MAX_SCANNED_FILES: usize = 100_000;
+
 /// Default result cap.
 const DEFAULT_MAX_RESULTS: usize = 50;
 
@@ -100,17 +113,31 @@ struct ScanStats {
     scanned_files: usize,
     skipped_binary: usize,
     skipped_oversized: usize,
+    skipped_symlinks: usize,
+    /// Set when the walk stopped because it hit a hard cap (MAX_SCAN_DEPTH or
+    /// MAX_SCANNED_FILES): the scan did not fully cover the requested scope.
+    file_cap_reached: bool,
 }
 
 /// Recursively searches `dir` for `keyword_lower`, appending matches to `results`.
+///
+/// `depth` guards against unbounded descent (LEGION-09): each recursion level
+/// past `MAX_SCAN_DEPTH` stops the walk. `fs::symlink_metadata` is used so
+/// symlinks are never followed — a link pointing outside the library root can
+/// never escape the scan scope.
 fn search_dir(
     dir: &Path,
     keyword_lower: &str,
     max_results: usize,
     results: &mut Vec<Value>,
     stats: &mut ScanStats,
+    depth: usize,
 ) {
     if results.len() >= max_results {
+        return;
+    }
+    if depth > MAX_SCAN_DEPTH || stats.scanned_files >= MAX_SCANNED_FILES {
+        stats.file_cap_reached = true;
         return;
     }
     let entries = match fs::read_dir(dir) {
@@ -128,24 +155,35 @@ fn search_dir(
         if results.len() >= max_results {
             break;
         }
+        if stats.scanned_files >= MAX_SCANNED_FILES {
+            stats.file_cap_reached = true;
+            break;
+        }
         let Some(file_name) = path.file_name().map(|name| name.to_string_lossy().into_owned())
         else {
             continue;
         };
-        let meta = match fs::metadata(&path) {
+        // symlink_metadata does not follow links: a symlink to a directory is
+        // reported as a symlink, never traversed (LEGION-09).
+        let meta = match fs::symlink_metadata(&path) {
             Ok(meta) => meta,
             Err(_) => continue,
         };
-        if meta.is_dir() {
+        let file_type = meta.file_type();
+        if file_type.is_symlink() {
+            stats.skipped_symlinks += 1;
+            continue;
+        }
+        if file_type.is_dir() {
             if file_name.starts_with('.') {
                 // Skip hidden directories (e.g. .git).
                 continue;
             }
-            search_dir(&path, keyword_lower, max_results, results, stats);
-        } else if meta.is_file() {
+            search_dir(&path, keyword_lower, max_results, results, stats, depth + 1);
+        } else if file_type.is_file() {
             scan_file(&path, keyword_lower, max_results, results, stats);
         }
-        // Symlinks and special files are skipped.
+        // Special files are skipped.
     }
 }
 
@@ -160,10 +198,20 @@ fn scan_file(
     if results.len() >= max_results {
         return;
     }
-    let meta = match fs::metadata(path) {
+    if stats.scanned_files >= MAX_SCANNED_FILES {
+        stats.file_cap_reached = true;
+        return;
+    }
+    // symlink_metadata: callers already skip symlinks, but a file that became a
+    // symlink between the directory read and this call must not be followed.
+    let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(_) => return,
     };
+    if meta.file_type().is_symlink() {
+        stats.skipped_symlinks += 1;
+        return;
+    }
     if meta.len() > MAX_SCAN_FILE_SIZE {
         stats.skipped_oversized += 1;
         return;
@@ -233,7 +281,7 @@ Note: the library has L0/L1/L3/L4 and deliberately no L2 layer.
 
 `max_results` (defaults to 50, capped at 200): maximum number of matching lines to return.
 
-Non-text files, binary files, files larger than 2MB, and hidden directories (e.g. .git) are skipped. The result includes `scanned_files`, `skipped_binary`, and `skipped_oversized` counters so you can tell what was and was not searched.
+Non-text files, binary files, files larger than 2MB, hidden directories (e.g. .git), and symlinks are skipped; the walk stops at 16 directory levels or after 100k scanned files. The result includes `scanned_files`, `skipped_binary`, `skipped_oversized`, `skipped_symlinks`, and `file_cap_reached` counters so you can tell what was and was not searched.
 
 Each match has the shape {path, line, line_content}, where `line` is the 1-based line number.
 
@@ -374,9 +422,18 @@ Examples:
         }
 
         let keyword_lower = keyword.to_lowercase();
-        let mut results = Vec::new();
-        let mut stats = ScanStats::default();
-        search_dir(&root, &keyword_lower, max_results, &mut results, &mut stats);
+        // LEGION-10: the recursive scan is CPU/IO-bound and unbounded in the
+        // worst case (the whole library). Run it on the blocking pool so a
+        // large scan never stalls the async executor, and return the capped
+        // results/stats instead of mutating shared state across the await.
+        let (results, stats) = tokio::task::spawn_blocking(move || {
+            let mut results = Vec::new();
+            let mut stats = ScanStats::default();
+            search_dir(&root, &keyword_lower, max_results, &mut results, &mut stats, 0);
+            (results, stats)
+        })
+        .await
+        .map_err(|e| BitFunError::tool(format!("LionHeart search worker failed: {}", e)))?;
 
         Ok(vec![ToolResult::Result {
             data: json!({
@@ -387,13 +444,20 @@ Examples:
                 "scanned_files": stats.scanned_files,
                 "skipped_binary": stats.skipped_binary,
                 "skipped_oversized": stats.skipped_oversized,
+                "skipped_symlinks": stats.skipped_symlinks,
+                "file_cap_reached": stats.file_cap_reached,
                 "matches": results,
             }),
             result_for_assistant: Some(format!(
-                "Searched the LionHeart library with scope '{}': {} match(es) across {} scanned file(s). Use the returned matches to direct follow-up work.",
+                "Searched the LionHeart library with scope '{}': {} match(es) across {} scanned file(s){}.",
                 scope,
                 stats.scanned_files,
-                results.len()
+                results.len(),
+                if stats.file_cap_reached {
+                    " (file cap reached; narrow the scope or keyword to scan more)"
+                } else {
+                    ""
+                }
             )),
             image_attachments: None,
         }])
@@ -487,5 +551,73 @@ mod tests {
             .await;
 
         assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[cfg(unix)]
+    fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::unix::fs::symlink(target, link)
+    }
+
+    #[cfg(windows)]
+    fn make_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+        std::os::windows::fs::symlink_dir(target, link)
+    }
+
+    #[test]
+    fn search_dir_skips_symlinks_outside_root() {
+        // LEGION-09: a symlink pointing outside the library root must never be
+        // followed. Symlink creation needs privileges on Windows, so the
+        // assertion is skipped when the OS refuses to create the link.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create root");
+        std::fs::write(root.join("a.txt"), "lionheart keyword\n").expect("write file");
+
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("create outside dir");
+        std::fs::write(outside.join("secret.txt"), "lionheart secret\n").expect("write secret");
+        let link = root.join("link-to-outside");
+        if make_symlink(&outside, &link).is_ok() {
+            let mut results = Vec::new();
+            let mut stats = ScanStats::default();
+            search_dir(&root, "lionheart", 50, &mut results, &mut stats, 0);
+            assert!(
+                results
+                    .iter()
+                    .all(|result| !result["path"].to_string().contains("secret")),
+                "files reached through a symlink must not be searched"
+            );
+            assert_eq!(stats.skipped_symlinks, 1);
+        }
+    }
+
+    #[test]
+    fn search_dir_stops_at_depth_cap() {
+        // LEGION-09: the walk must not descend past MAX_SCAN_DEPTH, so a deeply
+        // nested layout cannot blow up the scan.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let mut dir = temp.path().join("root");
+        std::fs::create_dir_all(&dir).expect("create root");
+        for _ in 0..MAX_SCAN_DEPTH + 1 {
+            dir = dir.join("nested");
+        }
+        std::fs::create_dir_all(&dir).expect("create nested chain");
+        std::fs::write(dir.join("deep.txt"), "lionheart deep keyword\n").expect("write deep file");
+
+        let mut results = Vec::new();
+        let mut stats = ScanStats::default();
+        search_dir(
+            &temp.path().join("root"),
+            "lionheart",
+            50,
+            &mut results,
+            &mut stats,
+            0,
+        );
+        assert_eq!(stats.file_cap_reached, true);
+        assert!(
+            results.iter().all(|result| !result["path"].to_string().contains("deep")),
+            "files deeper than MAX_SCAN_DEPTH must not be searched"
+        );
     }
 }

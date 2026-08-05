@@ -114,7 +114,10 @@ Each item may include:
     }
 
     fn is_readonly(&self) -> bool {
-        true
+        // LEGION-11: TodoWrite replaces the session todo list, so it is a
+        // state-mutating call, not a read. Marking it readonly let RBAC treat
+        // it as side-effect free and skip Write/Communicate gating.
+        false
     }
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
@@ -126,6 +129,8 @@ Each item may include:
         input: &Value,
         _context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
+        use std::collections::HashSet;
+
         // Parse todos array
         let todos = input
             .get("todos")
@@ -133,22 +138,58 @@ Each item may include:
             .ok_or(BitFunError::validation("Missing required field: todos"))?;
 
         let mut processed_todos = Vec::new();
+        // LEGION-12: reject duplicate ids so every todo id stays a stable,
+        // addressable key in the list.
+        let mut seen_ids: HashSet<String> = HashSet::new();
         for todo in todos {
             let mut todo_obj = todo.clone();
-            if let Some(obj) = todo_obj.as_object_mut() {
-                if !obj.contains_key("status") {
-                    return Err(BitFunError::validation("Todo item missing status field"));
+            // LEGION-12: each todo must be a JSON object; a non-object item was
+            // previously passed through unvalidated.
+            let Some(obj) = todo_obj.as_object_mut() else {
+                return Err(BitFunError::validation("Todo item must be an object"));
+            };
+            if !obj.contains_key("status") {
+                return Err(BitFunError::validation("Todo item missing status field"));
+            }
+            if !obj.contains_key("content") {
+                return Err(BitFunError::validation("Todo item missing content field"));
+            }
+            // LEGION-12: reject status values outside the documented enum
+            // instead of silently ignoring them in the stats counter.
+            let status = obj
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            match status {
+                "pending" | "in_progress" | "completed" => {}
+                other => {
+                    return Err(BitFunError::validation(format!(
+                        "Todo item has invalid status '{}': expected pending, in_progress, or completed",
+                        other
+                    )));
                 }
-                if !obj.contains_key("content") {
-                    return Err(BitFunError::validation("Todo item missing content field"));
-                }
-                // If no id, generate a new one
-                if !obj.contains_key("id") {
-                    let uuid = uuid::Uuid::new_v4().to_string();
-                    let short_id = uuid.split('-').next().unwrap_or("todo");
-                    let new_id = format!("todo_{}", short_id);
-                    obj.insert("id".to_string(), json!(new_id));
-                }
+            }
+            // If no id, generate a new one
+            if !obj.contains_key("id") {
+                let uuid = uuid::Uuid::new_v4().to_string();
+                let short_id = uuid.split('-').next().unwrap_or("todo");
+                let new_id = format!("todo_{}", short_id);
+                obj.insert("id".to_string(), json!(new_id));
+            }
+            // LEGION-12: an id must be a non-empty string so the dependency
+            // topology below and downstream consumers can address it reliably.
+            let id = obj
+                .get("id")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| BitFunError::validation("Todo item id must be a string"))?;
+            if id.trim().is_empty() {
+                return Err(BitFunError::validation("Todo item id must not be empty"));
+            }
+            if !seen_ids.insert(id.to_string()) {
+                return Err(BitFunError::validation(format!(
+                    "Duplicate todo id '{}'",
+                    id
+                )));
             }
             processed_todos.push(todo_obj);
         }
@@ -304,4 +345,113 @@ fn validate_todo_dependencies(todos: &[Value]) -> BitFunResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agentic::tools::framework::ToolUseContext;
+    use std::collections::HashMap;
+
+    fn empty_context() -> ToolUseContext {
+        ToolUseContext {
+            tool_call_id: None,
+            agent_type: None,
+            session_id: None,
+            dialog_turn_id: None,
+            workspace: None,
+            loaded_deferred_tool_specs: Vec::new(),
+            primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
+            custom_data: HashMap::new(),
+            computer_use_host: None,
+            runtime_tool_restrictions: Default::default(),
+            runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
+        }
+    }
+
+    fn todo(id: &str, status: &str) -> Value {
+        json!({ "id": id, "content": "do the work", "status": status })
+    }
+
+    #[test]
+    fn todo_write_is_not_readonly() {
+        // LEGION-11: TodoWrite mutates the session todo list.
+        assert!(!TodoWriteTool::new().is_readonly());
+    }
+
+    #[tokio::test]
+    async fn rejects_duplicate_ids() {
+        // LEGION-12: two items with the same id make the list ambiguous.
+        let tool = TodoWriteTool::new();
+        let input = json!({
+            "todos": [todo("a", "pending"), todo("a", "in_progress")]
+        });
+        let result = tool.call_impl(&input, &empty_context()).await;
+        let err = result.expect_err("duplicate ids must be rejected");
+        assert!(
+            err.to_string().contains("Duplicate todo id 'a'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_non_object_todo() {
+        // LEGION-12: a non-object item (e.g. a bare string) must not pass
+        // through unvalidated.
+        let tool = TodoWriteTool::new();
+        let input = json!({ "todos": ["not-an-object"] });
+        let result = tool.call_impl(&input, &empty_context()).await;
+        let err = result.expect_err("non-object todos must be rejected");
+        assert!(
+            err.to_string().contains("must be an object"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_status() {
+        // LEGION-12: status values outside the documented enum are rejected.
+        let tool = TodoWriteTool::new();
+        let input = json!({ "todos": [todo("a", "done")] });
+        let result = tool.call_impl(&input, &empty_context()).await;
+        let err = result.expect_err("invalid status must be rejected");
+        assert!(
+            err.to_string().contains("invalid status 'done'"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_non_string_id() {
+        // LEGION-12: ids must be strings so the dependency topology can
+        // address them reliably.
+        let tool = TodoWriteTool::new();
+        let input = json!({
+            "todos": [{ "id": 123, "content": "do the work", "status": "pending" }]
+        });
+        let result = tool.call_impl(&input, &empty_context()).await;
+        let err = result.expect_err("non-string ids must be rejected");
+        assert!(
+            err.to_string().contains("id must be a string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn accepts_valid_todo_list_and_auto_generates_ids() {
+        let tool = TodoWriteTool::new();
+        let input = json!({
+            "todos": [
+                { "content": "first", "status": "pending" },
+                { "id": "b", "content": "second", "status": "completed", "dependencies": [] }
+            ]
+        });
+        let result = tool.call_impl(&input, &empty_context()).await;
+        let results = result.expect("valid todo list should succeed");
+        let data = &results[0].content();
+        let todos = data.get("todos").and_then(|value| value.as_array()).expect("todos array");
+        assert_eq!(todos.len(), 2);
+        assert!(todos[0].get("id").and_then(|value| value.as_str()).is_some());
+        assert_eq!(todos[1].get("id").and_then(|value| value.as_str()), Some("b"));
+    }
 }

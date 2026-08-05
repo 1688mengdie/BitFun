@@ -254,6 +254,7 @@ impl TaskTool {
                         "retry",
                         "auto_retry",
                         "retry_coverage",
+                        "max_turns",
                     ],
                     action,
                 )?;
@@ -533,11 +534,15 @@ impl TaskTool {
 
     fn has_effective_value(input: &Value, field: &str) -> bool {
         // Some models serialize unused fields from this action-union schema as
-        // null, an empty string, or false. Those values carry no action intent.
+        // null or an empty string; those carry no action intent. Semantic
+        // booleans (for example `persistent: false`, `fork_context: false`)
+        // carry intent even when false: a field that is disallowed for an
+        // action must be rejected regardless of its boolean value, so a bare
+        // `false` is never silently accepted.
         match input.get(field) {
             None | Some(Value::Null) => false,
             Some(Value::String(value)) => !value.trim().is_empty(),
-            Some(Value::Bool(value)) => *value,
+            Some(Value::Bool(_)) => true,
             Some(_) => true,
         }
     }

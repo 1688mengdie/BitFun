@@ -5745,7 +5745,11 @@ impl SessionManager {
                 external_sources_supported,
                 Some(session.config.agent_route_owner),
             );
-            if let Some(binding) = persisted_binding {
+            // 契约升级：resolve_primary_agent_for_turn 现返回 Result
+            // （OwnerMismatch/CandidateUnavailable）。按原有语义适配——
+            // Err 视为无绑定：External owner 继续 fail-closed（保持绑定），
+            // 非 External 走可执行 fallback。
+            if let Some(binding) = persisted_binding.ok() {
                 if session.config.agent_route_owner != binding.route_owner {
                     session.config.agent_route_owner = binding.route_owner;
                     should_persist_restored_session = true;
@@ -10616,7 +10620,7 @@ mod tests {
         );
         let manager = test_manager(persistence_manager.clone());
         let ai_config = ServiceAIConfig {
-            models: vec![test_model("deepseek-v4-flash", 200_000)],
+            models: vec![test_model("deepseek-v4-flash", 2_000_000)],
             ..Default::default()
         };
 
@@ -10638,12 +10642,12 @@ mod tests {
             .await
             .expect("session should create");
 
-        assert_eq!(session.config.max_context_tokens, 200_000);
+        assert_eq!(session.config.max_context_tokens, 2_000_000);
         let persisted = persistence_manager
             .load_session(workspace.path(), &session.session_id)
             .await
             .expect("persisted session should load");
-        assert_eq!(persisted.config.max_context_tokens, 200_000);
+        assert_eq!(persisted.config.max_context_tokens, 2_000_000);
     }
 
     #[test]

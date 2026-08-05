@@ -111,19 +111,21 @@ pub fn session_control_session_name_or_default(session_name: Option<&str>) -> St
         .to_string()
 }
 
-/// Maximum number of characters a compact display name keeps from the full
-/// session name when no explicit short name is set.
-pub const COMPACT_SESSION_NAME_MAX_CHARS: usize = 60;
+/// Maximum number of characters a user-provided short name may keep. The cap
+/// bounds `list` compact output; validation rejects longer values and the
+/// compact renderer truncates defensively.
+pub const SHORT_NAME_MAX_CHARS: usize = 60;
 
-/// Resolve the compact display name used by `list` compact output: the
-/// explicit short name wins; otherwise the full session name is truncated to
-/// [`COMPACT_SESSION_NAME_MAX_CHARS`] characters with a trailing ellipsis.
-/// Character-based truncation keeps multi-byte (CJK) names intact.
-pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>) -> String {
-    if let Some(short_name) = short_name.filter(|value| !value.trim().is_empty()) {
-        return short_name.trim().to_string();
-    }
-    let trimmed = session_name.trim();
+/// Maximum number of characters a compact display name keeps from the full
+/// session name when no explicit short name is set. Aliased to
+/// [`SHORT_NAME_MAX_CHARS`] so both paths share a single bound.
+pub const COMPACT_SESSION_NAME_MAX_CHARS: usize = SHORT_NAME_MAX_CHARS;
+
+/// Truncate a compact display name to at most [`COMPACT_SESSION_NAME_MAX_CHARS`]
+/// characters with a trailing ellipsis. Character-based truncation keeps
+/// multi-byte (CJK) names intact.
+fn truncate_compact_display_name(name: &str) -> String {
+    let trimmed = name.trim();
     if trimmed.chars().count() <= COMPACT_SESSION_NAME_MAX_CHARS {
         return trimmed.to_string();
     }
@@ -132,6 +134,18 @@ pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>
         .take(COMPACT_SESSION_NAME_MAX_CHARS)
         .collect();
     format!("{truncated}...")
+}
+
+/// Resolve the compact display name used by `list` compact output: the
+/// explicit short name wins; otherwise the full session name is truncated to
+/// [`COMPACT_SESSION_NAME_MAX_CHARS`] characters with a trailing ellipsis.
+/// Both paths share the same character-based cap, so multi-byte (CJK) names
+/// stay intact and a short name cannot exceed the bound.
+pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>) -> String {
+    if let Some(short_name) = short_name.filter(|value| !value.trim().is_empty()) {
+        return truncate_compact_display_name(short_name);
+    }
+    truncate_compact_display_name(session_name)
 }
 
 pub fn session_control_agent_type_or_default(
@@ -183,7 +197,9 @@ fn validate_mutating_action_target(
         return invalid(message);
     }
 
-    if context.current_session_id == Some(session_id) && context.has_workspace_root {
+    // 守卫只依赖会话绑定等价判定：目标 session_id 与当前会话一致即拒绝，
+    // 不再依赖 workspace_root，避免远程/未绑定上下文绕过"不能操作当前会话"限制。
+    if context.current_session_id == Some(session_id) {
         return invalid(format!(
             "cannot {} the current session from SessionControl",
             action.as_str()
@@ -224,6 +240,13 @@ pub fn validate_session_control_input(
             }
             if input.detail.is_some() {
                 return invalid("detail is only allowed for list");
+            }
+            if let Some(short_name) = input.short_name.as_deref() {
+                if short_name.trim().chars().count() > SHORT_NAME_MAX_CHARS {
+                    return invalid(format!(
+                        "short_name must be at most {SHORT_NAME_MAX_CHARS} characters"
+                    ));
+                }
             }
             if context.current_session_id.is_none() {
                 return invalid("create requires a creator session in tool context");

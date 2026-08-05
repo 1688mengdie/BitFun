@@ -208,12 +208,20 @@ fn session_roles_map() -> &'static RwLock<HashMap<String, AgentRole>> {
 }
 
 /// Assign the RBAC role for a session.
+///
+/// LEGION-05: registering a role also lands the role's default permission
+/// template into the session restrictions registry. `register_session_role`
+/// and `restore_session_role_best_effort` (coordinator) both go through this
+/// function, so this single chokepoint turns the role templates into the
+/// session's effective tool runtime restrictions — previously the templates
+/// were defined but never applied, and enforcement fell back to the
+/// context-level profile for every session.
 pub fn set_session_role(session_id: &str, role: AgentRole) -> BitFunResult<()> {
     session_roles_map()
         .write()
         .map_err(|e| BitFunError::tool(format!("Session role lock poisoned: {e}")))?
-        .insert(session_id.to_string(), role);
-    Ok(())
+        .insert(session_id.to_string(), role.clone());
+    update_restrictions(session_id, Some(role), ToolRuntimeRestrictionsPatch::default())
 }
 
 /// Retrieve the assigned RBAC role for a session, if any.
@@ -228,11 +236,14 @@ pub fn get_session_role(session_id: &str) -> Option<AgentRole> {
 ///
 /// Called when a session is deleted or discarded so a recycled session id
 /// cannot inherit a stale role through the in-memory registry. Best-effort:
-/// a poisoned lock only skips the removal, never blocks deletion.
+/// a poisoned lock only skips the removal, never blocks deletion. The
+/// per-session restrictions are cleared too (LEGION-05) so a recycled id
+/// cannot inherit a stale role template either.
 pub fn clear_session_role(session_id: &str) {
     if let Ok(mut map) = session_roles_map().write() {
         map.remove(session_id);
     }
+    clear_session_restrictions(session_id);
 }
 
 /// Validate a role-based delegation (R-14 B3).
@@ -512,6 +523,57 @@ mod tests {
         // Reassignment overwrites.
         set_session_role(session_id, AgentRole::Commander).expect("set role should succeed");
         assert_eq!(get_session_role(session_id), Some(AgentRole::Commander));
+    }
+
+    #[test]
+    fn session_role_registration_lands_role_template() {
+        // LEGION-05: registering a role must land the role's default permission
+        // template into the session restrictions, otherwise the templates are
+        // dead config and enforcement silently falls back to the context-level
+        // profile for every session.
+        let session_id = "test-session-role-template-01";
+        set_session_role(session_id, AgentRole::Commander).expect("set role should succeed");
+        let restrictions = get_session_restrictions(session_id)
+            .expect("role registration must land the template");
+        assert!(
+            restrictions
+                .allowed_operation_classes
+                .contains(&OperationClass::ReadOnly),
+            "Commander template should include ReadOnly"
+        );
+        assert!(
+            restrictions
+                .allowed_operation_classes
+                .contains(&OperationClass::Communicate),
+            "Commander template should include Communicate"
+        );
+        assert!(
+            !restrictions
+                .allowed_operation_classes
+                .contains(&OperationClass::WriteFile),
+            "Commander template should not include WriteFile"
+        );
+
+        // Re-registering with a stricter role replaces the landed template.
+        set_session_role(session_id, AgentRole::Executor).expect("reassign role should succeed");
+        let restrictions = get_session_restrictions(session_id)
+            .expect("re-registered role must re-land its template");
+        assert!(
+            restrictions
+                .allowed_operation_classes
+                .contains(&OperationClass::WriteFile),
+            "Executor template should include WriteFile"
+        );
+
+        // Session-end cleanup clears both the role and the landed template so a
+        // recycled session id cannot inherit stale restrictions.
+        clear_session_role(session_id);
+        assert_eq!(get_session_role(session_id), None, "role must be unregistered");
+        assert_eq!(
+            get_session_restrictions(session_id),
+            None,
+            "landed template must be cleared with the role"
+        );
     }
 
     #[test]

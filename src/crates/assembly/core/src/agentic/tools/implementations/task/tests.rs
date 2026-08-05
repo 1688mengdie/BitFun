@@ -709,7 +709,7 @@ async fn validate_input_accepts_send_input_with_neutral_spawn_placeholders() {
                 "action": "send_input",
                 "agent_id": "a1",
                 "description": "continue",
-                "fork_context": false,
+                "fork_context": null,
                 "prompt": "Continue the previous analysis",
                 "subagent_type": ""
             }),
@@ -953,10 +953,10 @@ async fn validate_input_accepts_cancel_with_neutral_optional_placeholders() {
             &json!({
                 "action": "cancel",
                 "agent_id": "a1",
-                "fork_context": false,
+                "fork_context": null,
                 "model_id": "",
                 "prompt": "",
-                "run_in_background": false,
+                "run_in_background": null,
                 "subagent_type": ""
             }),
             None,

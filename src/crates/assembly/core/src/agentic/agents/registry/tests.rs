@@ -1501,7 +1501,7 @@ fn persisted_external_owner_never_falls_back_to_a_same_name_local_mode() {
             true,
             Some(bitfun_core_types::SessionAgentRouteOwner::External),
         )
-        .is_none());
+        .is_err());
     let local = registry
         .resolve_primary_agent_for_turn(
             "agentic",
@@ -1551,7 +1551,7 @@ fn local_subagent_type_resolves_as_primary_agent_for_turn() {
             false,
             Some(bitfun_core_types::SessionAgentRouteOwner::External),
         )
-        .is_none());
+        .is_err());
 }
 
 #[tokio::test]
@@ -1666,7 +1666,7 @@ fn persisted_primary_route_owner_rejects_same_name_route_takeover() {
             true,
             Some(bitfun_core_types::SessionAgentRouteOwner::Local),
         )
-        .is_none());
+        .is_err());
 
     registry.install_external_subagent_routes(
         &workspace,
@@ -1682,7 +1682,7 @@ fn persisted_primary_route_owner_rejects_same_name_route_takeover() {
             true,
             Some(bitfun_core_types::SessionAgentRouteOwner::External),
         )
-        .is_none());
+        .is_err());
 }
 
 #[test]

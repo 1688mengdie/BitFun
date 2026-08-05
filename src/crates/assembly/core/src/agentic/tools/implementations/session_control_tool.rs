@@ -5,7 +5,7 @@
 //! messages that may still run later through the scheduler.
 
 use super::util::normalize_path;
-use crate::agentic::agents::AcpAgent;
+use crate::agentic::agents::{get_agent_registry, AcpAgent};
 use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler};
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -513,6 +513,8 @@ fn build_compact_tree_lines(
     // children_by_parent: parent_session_id -> list of children
     let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
     let mut roots: Vec<&AgentSessionSummary> = Vec::new();
+    // 父链在本列表中无幸存祖先的会话：提升为根节点，但标记 orphaned（与 JSON 模式一致）
+    let mut orphaned: std::collections::HashSet<&str> = std::collections::HashSet::new();
     let known_ids: std::collections::HashSet<&str> =
         sessions.iter().map(|s| s.session_id.as_str()).collect();
 
@@ -539,13 +541,20 @@ fn build_compact_tree_lines(
                     .or_default()
                     .push(session);
             }
-            None => roots.push(session),
+            None => {
+                if session.parent_session_id.is_some() {
+                    // 父链全部被过滤：提升为根节点，同时标记 orphaned（与 JSON 模式一致）
+                    orphaned.insert(session.session_id.as_str());
+                }
+                roots.push(session);
+            }
         }
     }
 
     fn compact_line(
         session: &AgentSessionSummary,
         short_names: &HashMap<String, Option<String>>,
+        orphaned: &std::collections::HashSet<&str>,
     ) -> String {
         let status = session
             .status
@@ -557,9 +566,14 @@ fn build_compact_tree_lines(
                 .get(&session.session_id)
                 .and_then(Option::as_deref),
         );
+        let orphan_marker = if orphaned.contains(session.session_id.as_str()) {
+            " (orphaned)"
+        } else {
+            ""
+        };
         format!(
-            "- [{}] {} | {} | {}",
-            session.session_id, session.agent_type, status, display_name
+            "- [{}] {} | {} | {}{}",
+            session.session_id, session.agent_type, status, display_name, orphan_marker
         )
     }
 
@@ -568,15 +582,26 @@ fn build_compact_tree_lines(
         depth: usize,
         children_by_parent: &HashMap<String, Vec<&AgentSessionSummary>>,
         short_names: &HashMap<String, Option<String>>,
+        orphaned: &std::collections::HashSet<&str>,
         lines: &mut Vec<String>,
     ) {
         let indent = "  ".repeat(depth);
-        lines.push(format!("{indent}{}", compact_line(session, short_names)));
+        lines.push(format!(
+            "{indent}{}",
+            compact_line(session, short_names, orphaned)
+        ));
         if let Some(children) = children_by_parent.get(session.session_id.as_str()) {
             let mut sorted = children.to_vec();
             sorted.sort_by_key(|s| s.created_at_ms);
             for child in sorted {
-                collect_lines(child, depth + 1, children_by_parent, short_names, lines);
+                collect_lines(
+                    child,
+                    depth + 1,
+                    children_by_parent,
+                    short_names,
+                    orphaned,
+                    lines,
+                );
             }
         }
     }
@@ -586,7 +611,14 @@ fn build_compact_tree_lines(
 
     let mut lines = Vec::new();
     for root in sorted_roots {
-        collect_lines(root, 0, &children_by_parent, short_names, &mut lines);
+        collect_lines(
+            root,
+            0,
+            &children_by_parent,
+            short_names,
+            &orphaned,
+            &mut lines,
+        );
     }
     lines
 }
@@ -826,6 +858,21 @@ Arguments:
                     }]);
                 }
 
+                // SESSION-01: create 前用 find_agent_entry（经 get_agent 公共包装）校验
+                // agent_type：未在 agent registry 注册的类型直接拒绝，避免任意字符串
+                // 进入 create_session 形成僵尸会话。
+                {
+                    let registry = get_agent_registry();
+                    let workspace_path = std::path::Path::new(&workspace.display_workspace);
+                    registry.load_custom_agents(Some(workspace_path)).await;
+                    if registry.get_agent(&agent_type, Some(workspace_path)).is_none() {
+                        return Err(BitFunError::tool(format!(
+                            "Unknown agent_type '{}' for SessionControl create; agent must be registered in the agent registry",
+                            agent_type
+                        )));
+                    }
+                }
+
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
@@ -874,7 +921,7 @@ Arguments:
                         coordinator
                             .session_manager
                             .load_session_metadata(
-                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                &std::path::PathBuf::from(&workspace.project_workspace),
                                 pid,
                             )
                             .await
@@ -900,16 +947,43 @@ Arguments:
                         depth: Some(child_depth),
                         ..Default::default()
                     };
-                    if let Err(e) = coordinator
+                    // SESSION-03: lineage 持久化失败会让重启后的子会话成为孤儿节点。
+                    // 先重试一次以吸收瞬时 IO 故障；仍失败则回滚已创建的子会话，
+                    // 确保不留下无父子关系记录的孤儿会话（绝不静默降级为 log）。
+                    let mut lineage_result = coordinator
                         .session_manager
-                        .persist_session_lineage(&created_session_id, relationship)
-                        .await
-                    {
-                        log::error!(
-                            "SessionControl create: failed to persist session lineage for {}: {:?}",
+                        .persist_session_lineage(&created_session_id, relationship.clone())
+                        .await;
+                    if lineage_result.is_err() {
+                        log::warn!(
+                            "SessionControl create: lineage persist failed for {}, retrying once: {:?}",
                             created_session_id,
-                            e
+                            lineage_result.as_ref().err()
                         );
+                        lineage_result = coordinator
+                            .session_manager
+                            .persist_session_lineage(&created_session_id, relationship)
+                            .await;
+                    }
+                    if let Err(e) = lineage_result {
+                        // 回滚创建：删除刚创建的子会话；回滚自身失败时仍要上报，
+                        // 让调用方知道存在未被清理的会话。
+                        if let Err(rollback_error) = coordinator
+                            .delete_session(
+                                std::path::Path::new(&workspace.project_workspace),
+                                &created_session_id,
+                            )
+                            .await
+                        {
+                            log::error!(
+                                "SessionControl create: lineage persist failed for {} ({:?}), rollback of session also failed: {:?}",
+                                created_session_id, e, rollback_error
+                            );
+                        }
+                        return Err(BitFunError::tool(format!(
+                            "failed to persist session lineage for {} after retry: {}",
+                            created_session_id, e
+                        )));
                     }
 
                     // R-003: Register in memory tree
@@ -939,7 +1013,7 @@ Arguments:
                         if let Err(e) = coordinator
                             .session_manager
                             .update_session_metadata(
-                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                &std::path::PathBuf::from(&workspace.project_workspace),
                                 &created_session_id,
                                 |metadata| {
                                     merge_session_custom_metadata(
@@ -1010,7 +1084,7 @@ Arguments:
                         // Fall back to persisted metadata
                         session_manager
                             .load_session_metadata(
-                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                &std::path::PathBuf::from(&workspace.project_workspace),
                                 session_id,
                             )
                             .await
@@ -1043,7 +1117,7 @@ Arguments:
                     let session_manager = coordinator.get_session_manager();
                     let target_metadata = session_manager
                         .load_session_metadata(
-                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            &std::path::PathBuf::from(&workspace.project_workspace),
                             session_id,
                         )
                         .await
@@ -1081,7 +1155,7 @@ Arguments:
                         loop {
                             let metadata = session_manager
                                 .load_session_metadata(
-                                    &std::path::PathBuf::from(&workspace.display_workspace),
+                                    &std::path::PathBuf::from(&workspace.project_workspace),
                                     &current,
                                 )
                                 .await
@@ -1209,7 +1283,7 @@ Arguments:
                         // Fall back to persisted metadata
                         session_manager
                             .load_session_metadata(
-                                &std::path::PathBuf::from(&workspace.display_workspace),
+                                &std::path::PathBuf::from(&workspace.project_workspace),
                                 session_id,
                             )
                             .await
@@ -1250,7 +1324,7 @@ Arguments:
                     let session_manager = coordinator.get_session_manager();
                     let target_metadata = session_manager
                         .load_session_metadata(
-                            &std::path::PathBuf::from(&workspace.display_workspace),
+                            &std::path::PathBuf::from(&workspace.project_workspace),
                             session_id,
                         )
                         .await
@@ -1288,7 +1362,7 @@ Arguments:
                         loop {
                             let metadata = session_manager
                                 .load_session_metadata(
-                                    &std::path::PathBuf::from(&workspace.display_workspace),
+                                    &std::path::PathBuf::from(&workspace.project_workspace),
                                     &current,
                                 )
                                 .await
@@ -1396,26 +1470,42 @@ Arguments:
                 // short_name argument was provided). Best-effort: sessions
                 // without metadata or without a shortName fall back to the
                 // truncated full name in the compact output.
+                // SESSION-06: 一次批量读取全部持久化元数据
+                // （list_session_metadata_including_internal）再逐会话提取
+                // shortName，替代原先对每个会话串行 load_session_metadata 的
+                // N+1 读。
                 let mut short_names: HashMap<String, Option<String>> = HashMap::new();
-                for session in &sessions {
-                    let short_name = coordinator
-                        .session_manager
-                        .load_session_metadata(
-                            &std::path::PathBuf::from(&workspace.display_workspace),
-                            &session.session_id,
-                        )
-                        .await
-                        .ok()
-                        .flatten()
-                        .and_then(|metadata| {
-                            metadata
-                                .custom_metadata
-                                .as_ref()
-                                .and_then(|custom| custom.get("shortName"))
-                                .and_then(|value| value.as_str())
-                                .map(str::to_string)
-                        });
-                    short_names.insert(session.session_id.clone(), short_name);
+                let surfaced_session_ids: std::collections::HashSet<&str> =
+                    sessions
+                        .iter()
+                        .map(|session| session.session_id.as_str())
+                        .collect();
+                let metadata_list = match coordinator
+                    .session_manager
+                    .persistence_manager()
+                    .list_session_metadata_including_internal(
+                        &std::path::PathBuf::from(&workspace.project_workspace),
+                    )
+                    .await
+                {
+                    Ok(metadata_list) => metadata_list,
+                    // 批量读取失败时按“无任何 shortName”处理（与原先逐条
+                    // .ok().flatten() 的最佳努力语义一致，不中断 list 输出）。
+                    Err(_) => Vec::new(),
+                };
+                for metadata in metadata_list {
+                    // 仅保留已过滤会话（daemon/warden 已在上方剔除）的
+                    // shortName，保持输出契约不变。
+                    if !surfaced_session_ids.contains(metadata.session_id.as_str()) {
+                        continue;
+                    }
+                    let short_name = metadata
+                        .custom_metadata
+                        .as_ref()
+                        .and_then(|custom| custom.get("shortName"))
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                    short_names.insert(metadata.session_id, short_name);
                 }
 
                 let detail = params.detail.unwrap_or(false);
@@ -1434,14 +1524,38 @@ Arguments:
                     .build_session_tree_json(&sessions, Some(coordinator.session_tree().as_ref()));
                 let tree_value: Value = serde_json::from_str(&tree_json).unwrap_or(Value::Null);
 
+                // SESSION-05: when detail=false, keep the machine-readable
+                // `data.sessions` payload compact too. Each session's `name`
+                // follows the same rule as the compact list lines: the short
+                // name wins, otherwise the full session name is truncated to
+                // 60 chars. The full sessions array stays available in the
+                // detail=true payload, which the legacy verbose tree view
+                // still relies on.
+                let data_sessions: Vec<AgentSessionSummary> = if detail {
+                    sessions
+                } else {
+                    sessions
+                        .iter()
+                        .map(|session| AgentSessionSummary {
+                            session_name: compact_session_display_name(
+                                &session.session_name,
+                                short_names
+                                    .get(&session.session_id)
+                                    .and_then(Option::as_deref),
+                            ),
+                            ..session.clone()
+                        })
+                        .collect()
+                };
+
                 Ok(vec![ToolResult::Result {
                     data: json!({
                         "success": true,
                         "action": "list",
                         "workspace": workspace.display_workspace.clone(),
                         "current_session_id": current_session_id,
-                        "count": sessions.len(),
-                        "sessions": sessions,
+                        "count": data_sessions.len(),
+                        "sessions": data_sessions,
                         "tree": tree_value,
                         "short_names": short_names,
                     }),
@@ -1464,8 +1578,9 @@ mod tests {
     use bitfun_runtime_ports::{
         AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientHistoryRequest,
         AcpClientHistoryResult, AcpClientListResult, AcpClientMessageRequest,
-        AcpClientMessageResult, AcpClientReleaseRequest, PortError, PortErrorKind, PortResult,
-        RuntimeServiceCapability, RuntimeServicePort,
+        AcpClientMessageResult, AcpClientReleaseRequest, AcpClientStreamChunk,
+        AcpClientStreamChunkSink, PortError, PortErrorKind, PortResult, RuntimeServiceCapability,
+        RuntimeServicePort,
     };
     use serde_json::json;
     use std::collections::HashMap;
@@ -1550,10 +1665,34 @@ mod tests {
             })
         }
 
+        async fn send_message_stream(
+            &self,
+            _request: AcpClientMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<AcpClientMessageResult> {
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+            Ok(AcpClientMessageResult {
+                session_id: String::new(),
+                response: String::new(),
+            })
+        }
+
         async fn send_message_to_bitfun_session(
             &self,
             _request: AcpClientBitfunMessageRequest,
         ) -> PortResult<AcpClientMessageResult> {
+            Ok(AcpClientMessageResult {
+                session_id: String::new(),
+                response: String::new(),
+            })
+        }
+
+        async fn send_message_to_bitfun_session_stream(
+            &self,
+            _request: AcpClientBitfunMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<AcpClientMessageResult> {
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
             Ok(AcpClientMessageResult {
                 session_id: String::new(),
                 response: String::new(),
