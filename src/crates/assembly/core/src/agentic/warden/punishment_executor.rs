@@ -261,6 +261,8 @@ impl PunishmentExecutor {
             rbac_change: None,
             session_frozen: false,
             permanent_mark: false,
+            // WARDEN-10: advisory escalation flag — the runtime surfaces L3
+            // awareness through the observability warn channel, not a UI push.
             notify_user: true,
         })
     }
@@ -304,6 +306,8 @@ impl PunishmentExecutor {
             rbac_change: None,
             session_frozen: false,
             permanent_mark: false,
+            // WARDEN-10: advisory escalation flag — the runtime surfaces L4
+            // awareness through the observability warn channel, not a UI push.
             notify_user: true,
         })
     }
@@ -343,7 +347,14 @@ pub struct PenaltyOutcome {
     pub session_frozen: bool,
     /// Always `false` since R-25: penalties never apply permanent marks.
     pub permanent_mark: bool,
-    /// Whether the user should be notified.
+    /// Whether the user should be notified of an escalation.
+    ///
+    /// WARDEN-10: this flag is advisory-only. The core has no direct UI
+    /// channel, so the runtime consumes it as an observability signal —
+    /// an L3/L4 escalation that needs user awareness is surfaced through the
+    /// warn-level log in `WardenRuntime`, not a delivered push notification.
+    /// Callers must not treat `true` as proof that a user-facing message was
+    /// shown.
     pub notify_user: bool,
 }
 

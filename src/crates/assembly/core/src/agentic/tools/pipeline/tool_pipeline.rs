@@ -18,7 +18,8 @@ use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
 use crate::agentic::warden::runtime::{
-    resolve_audit_poke_from_judgement, tool_failure_scene_key, WardenRuntime, WardenToolOutcome,
+    resolve_audit_poke_from_judgement, summarize_judgement_tool_args, tool_failure_scene_key,
+    WardenRuntime, WardenToolOutcome,
 };
 use crate::native_hooks::{self, NativeHookSessionFacts};
 use crate::util::elapsed_ms_u64;
@@ -672,6 +673,20 @@ pub struct ToolPipeline {
     /// [`ToolPipeline::set_warden_model_judgement`] (batch-2 warden rework);
     /// when absent or failing, the mechanical rule ladder decides.
     warden_model_judgement: std::sync::OnceLock<Arc<dyn WardenModelJudgementPort>>,
+    /// WARDEN-02: short-window debounce for model Audit-Poke judgements, keyed
+    /// by `(session_id, scene_key)` where the scene is the tool plus its
+    /// argument fingerprint. Repeated destructive calls of the same scene
+    /// within a turn are judged by the model once; later occurrences fall
+    /// back to the mechanical poke so the turn is not blocked on repeated
+    /// model round-trips. Distinct scenes of the same tool are judged
+    /// separately — each argument shape owns its own escalation ladder (see
+    /// `tool_failure_scene_key`).
+    warden_audit_debounce: Arc<TokioMutex<HashMap<(String, String), Instant>>>,
+    /// WARDEN-08: short-lived per-session goal-gate cache, written by the
+    /// Audit-Poke path and reused by the tool-outcome gate so a destructive
+    /// call performs at most one `get_thread_goal` lookup. Values carry a
+    /// short TTL to bound staleness across turns.
+    warden_goal_gate_cache: Arc<TokioMutex<HashMap<String, (bool, Instant)>>>,
     /// Tool task ids whose admission was rejected before execution (stale
     /// tool catalog, deferred-tool gateway, runtime restrictions). Such
     /// rejections are protocol-layer outcomes, not execution violations
@@ -685,6 +700,32 @@ pub struct ToolPipeline {
     /// conversation) can merge the refreshed generation back instead of
     /// re-triggering the reload every round.
     session_loaded_deferred_specs: Arc<TokioMutex<HashMap<String, Vec<LoadedDeferredToolSpec>>>>,
+}
+
+/// WARDEN-02: within this window the same scene (tool + argument fingerprint)
+/// of a session is judged by the model at most once; later occurrences of the
+/// same destructive scene fall back to the mechanical poke message so the
+/// turn is not blocked on repeated model round-trips. Distinct scenes of the
+/// same tool are judged independently.
+const WARDEN_AUDIT_DEBOUNCE_WINDOW: Duration = Duration::from_secs(30);
+
+/// WARDEN-08: TTL for the goal-gate cache entry written by the Audit-Poke
+/// path. Covers the sub-second gap between the audit hook and the outcome
+/// reporting of one tool call without letting stale goal state persist across
+/// turns.
+const WARDEN_GOAL_GATE_CACHE_TTL: Duration = Duration::from_secs(10);
+
+/// Outcome of the Audit-Poke goal gate (WARDEN-06/08): the gate runs on a
+/// single goal lookup that doubles as the judgement evidence.
+enum WardenGoalContext {
+    /// The session holds an active goal; `serde_json::Value` carries its
+    /// objective/status/reference-files evidence.
+    Active(serde_json::Value),
+    /// Goal lookup unavailable (no coordinator, no workspace, or store
+    /// error): fail-open, consistent with the tool-outcome gate.
+    FailOpen,
+    /// Goal absent or present-but-not-active: the Audit-Poke opts out.
+    Inactive,
 }
 
 impl ToolPipeline {
@@ -703,6 +744,8 @@ impl ToolPipeline {
             hook_preapprovals: Arc::new(TokioMutex::new(HashSet::new())),
             warden_runtime: std::sync::OnceLock::new(),
             warden_model_judgement: std::sync::OnceLock::new(),
+            warden_audit_debounce: Arc::new(TokioMutex::new(HashMap::new())),
+            warden_goal_gate_cache: Arc::new(TokioMutex::new(HashMap::new())),
             admission_rejected_tasks: Arc::new(TokioMutex::new(HashSet::new())),
             session_loaded_deferred_specs: Arc::new(TokioMutex::new(HashMap::new())),
         }
@@ -751,7 +794,19 @@ impl ToolPipeline {
     /// scene is fingerprinted from the effective tool name plus effective
     /// arguments so repeated failures of the same argument shape escalate
     /// while a first failure of a new shape stays exploratory.
-    async fn notify_warden_tool_outcome(&self, task_id: &str, failure_kind: WardenToolOutcome) {
+    ///
+    /// WARDEN-05: subagent sessions are exempt outright (thread goals are
+    /// main-only) regardless of the goal lookup result.
+    ///
+    /// WARDEN-08: the goal-gate decision computed by the Audit-Poke path is
+    /// reused from a short-lived cache so a destructive call performs at most
+    /// one `get_thread_goal` lookup.
+    async fn notify_warden_tool_outcome(
+        &self,
+        task_id: &str,
+        failure_kind: WardenToolOutcome,
+        error_summary: Option<&str>,
+    ) {
         let Some(warden_runtime) = self.warden_runtime.get() else {
             return;
         };
@@ -759,11 +814,28 @@ impl ToolPipeline {
             return;
         };
         let session_id = task.context.session_id.clone();
+        if task.context.subagent_parent_info.is_some() {
+            return;
+        }
         let workspace_root = task.context.workspace.as_ref().map(|workspace| workspace.root_path());
-        if !self
-            .session_has_active_goal(&session_id, workspace_root)
-            .await
-        {
+        let active_goal = {
+            let mut cache = self.warden_goal_gate_cache.lock().await;
+            match cache.get(&session_id) {
+                Some(&(active, fetched_at)) if fetched_at.elapsed() < WARDEN_GOAL_GATE_CACHE_TTL => {
+                    active
+                }
+                Some(_) => {
+                    cache.remove(&session_id);
+                    self.session_has_active_goal(&session_id, workspace_root).await
+                }
+                None => self.session_has_active_goal(&session_id, workspace_root).await,
+            }
+        };
+        if !active_goal {
+            // WARDEN-01: the goal left the active state (or the session is
+            // non-main) — clear stale tool-failure counts here so a later,
+            // new goal generation starts from a clean ladder.
+            warden_runtime.lock().await.clear_failure_counts(&session_id);
             return;
         }
         let tool_name = task.invocation.effective_tool_name;
@@ -772,6 +844,14 @@ impl ToolPipeline {
         guard
             .on_tool_outcome(&session_id, &tool_name, &scene_key, failure_kind)
             .await;
+        // WARDEN-03: keep the failure's error summary as judgement evidence
+        // so a later Audit-Poke of the same scene shows the real failure
+        // context instead of a bare counter.
+        if matches!(failure_kind, WardenToolOutcome::ExecutionFailed) {
+            if let Some(summary) = error_summary {
+                guard.record_tool_error(&session_id, &scene_key, summary);
+            }
+        }
     }
 
     /// Batch-2 goal switch: whether Warden tool-level enforcement applies for
@@ -782,6 +862,11 @@ impl ToolPipeline {
     /// consecutive tool-failure accounting. A goal lookup failure keeps
     /// enforcement enabled (fail-open) so a transient store error cannot
     /// silently disable discipline.
+    ///
+    /// WARDEN-05: subagent sessions are exempted by the *callers* before this
+    /// gate runs (`notify_warden_tool_outcome` returns early on
+    /// `subagent_parent_info`), so a non-main session never reaches the
+    /// fail-open branch; only main sessions query the goal store here.
     async fn session_has_active_goal(
         &self,
         session_id: &str,
@@ -1074,7 +1159,16 @@ impl ToolPipeline {
         // and which rules/evidence apply. Port failures (unavailable,
         // timeout, unparseable response) fall back to the mechanical rule
         // ladder so the audit loop never depends on the model.
-        if !tool_result.is_error {
+        // WARDEN-06: the Audit-Poke path runs under the same RBAC master
+        // switch as the Warden runtime, and subagent sessions are exempt
+        // (thread goals are main-only). The goal gate itself is evaluated
+        // inside `warden_audit_poke_decision` through the same single goal
+        // lookup that supplies the judgement evidence (WARDEN-08), so the
+        // Audit-Poke trigger here stays cheap (no extra goal query).
+        if !tool_result.is_error
+            && crate::service::config::rbac_enabled()
+            && task.context.subagent_parent_info.is_none()
+        {
             use bitfun_agent_tools::classify_tool_call;
             let op_class = classify_tool_call(tool_name, &task.invocation.effective_arguments);
             match op_class {
@@ -1161,37 +1255,85 @@ impl ToolPipeline {
     /// Decide the final Audit-Poke for a destructive tool call.
     ///
     /// Without an injected judgement port the mechanical rule ladder is the
-    /// decision. With a port, the request carries the tool name, effective
-    /// arguments, the mechanical candidate rule ids, and goal context
-    /// evidence; the model verdict then decides whether the poke is sent and
-    /// which rules/evidence apply. Any port error (unavailable, timeout,
-    /// unparseable response) falls back to the mechanical message unchanged.
+    /// decision. With a port, the request carries the tool name, a summarized
+    /// form of the effective arguments (WARDEN-08), the mechanical candidate
+    /// rule ids, and goal + scene evidence (WARDEN-03); the model verdict
+    /// then decides whether the poke is sent and which rules/evidence apply.
+    /// Any port error (unavailable, timeout, unparseable response) falls back
+    /// to the mechanical message unchanged.
+    ///
+    /// WARDEN-06: this is also the goal gate for the Audit-Poke path — the
+    /// single `get_thread_goal` lookup both gates the poke and supplies the
+    /// judgement evidence (WARDEN-08: one goal query per destructive call).
+    /// WARDEN-02: the same tool+session within a short window is judged once.
     async fn warden_audit_poke_decision(
         &self,
         task: &ToolTask,
         tool_name: &str,
         mechanical: &PokeMessage,
     ) -> Option<PokeMessage> {
-        let Some(port) = self.warden_model_judgement.get() else {
-            return Some(mechanical.clone());
-        };
+        let session_id = task.context.session_id.clone();
         let workspace_root = task
             .context
             .workspace
             .as_ref()
             .map(|workspace| workspace.root_path());
-        let evidence = self
-            .warden_audit_evidence(&task.context.session_id, workspace_root)
+
+        // Single goal lookup shared by the gate and the evidence.
+        let goal_ctx = self
+            .warden_audit_goal_context(&session_id, workspace_root)
             .await;
+        let active = !matches!(goal_ctx, WardenGoalContext::Inactive);
+        {
+            let mut cache = self.warden_goal_gate_cache.lock().await;
+            cache.insert(session_id.clone(), (active, Instant::now()));
+        }
+        if !active {
+            return None;
+        }
+
+        // Scene failure evidence (WARDEN-03): the model must see the scene's
+        // consecutive tool-failure count and last error instead of guessing
+        // whether this is an exploratory first failure or a repeated one.
+        let scene_key = tool_failure_scene_key(tool_name, &task.invocation.effective_arguments);
+        let scene_evidence = self
+            .warden_audit_scene_evidence(&session_id, &scene_key)
+            .await;
+        let consecutive_tool_failures = scene_evidence
+            .as_ref()
+            .and_then(|value| value.get("consecutiveToolFailures"))
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+
+        let Some(port) = self.warden_model_judgement.get() else {
+            return Some(mechanical.clone());
+        };
+
+        // WARDEN-02: within the debounce window the same scene (tool +
+        // argument fingerprint) is judged by the model only once; later
+        // occurrences apply the same must-poke floor as a fresh judgement
+        // instead of another round-trip. Distinct scenes of the same tool are
+        // judged separately.
+        if self.warden_audit_debounced(&session_id, &scene_key).await {
+            return (consecutive_tool_failures >= 1).then(|| mechanical.clone());
+        }
+
         let request = WardenAuditJudgementRequest {
-            session_id: task.context.session_id.clone(),
+            session_id,
             tool_name: tool_name.to_string(),
-            tool_args: Some(task.invocation.effective_arguments.clone()),
+            tool_args: summarize_judgement_tool_args(&task.invocation.effective_arguments),
             rule_ids: mechanical.rule_ids.clone(),
-            evidence,
+            evidence: Self::merge_warden_evidence(goal_ctx, scene_evidence),
         };
         match port.judge_audit(request).await {
-            Ok(judgement) => resolve_audit_poke_from_judgement(mechanical, &judgement),
+            Ok(judgement) => {
+                // WARDEN-03 must-poke floor: the model may add rules/evidence
+                // but cannot cancel a poke on a scene with repeated failures.
+                if !judgement.should_poke && consecutive_tool_failures >= 1 {
+                    return Some(mechanical.clone());
+                }
+                resolve_audit_poke_from_judgement(mechanical, &judgement)
+            }
             Err(error) => {
                 debug!(
                     "Warden model judgement unavailable, falling back to mechanical rules: {}",
@@ -1202,35 +1344,115 @@ impl ToolPipeline {
         }
     }
 
-    /// Evidence summary for a Warden model judgement: the session's active
-    /// thread-goal objective, status and reference files when resolvable.
+    /// Outcome of the Audit-Poke goal gate: the gate runs on a single goal
+    /// lookup that doubles as the judgement evidence. Defined at module scope
+    /// so the gate methods can reference it by name.
+    ///
+    /// Goal context for a Warden model judgement: the session's active
+    /// thread-goal objective, status and reference files when resolvable,
+    /// plus the gate verdict (WARDEN-06/08).
     ///
     /// The goal context is resolved through the global coordinator so the
     /// model can judge the tool call against the actual goal scope. A
-    /// missing or failed lookup yields `None` (the judgement still runs on
-    /// the tool facts alone).
-    async fn warden_audit_evidence(
+    /// missing or failed lookup fails open (`FailOpen`) — the judgement still
+    /// runs on the tool facts alone rather than silently disabling the poke.
+    async fn warden_audit_goal_context(
         &self,
         session_id: &str,
         workspace_root: Option<&Path>,
-    ) -> Option<serde_json::Value> {
-        let coordinator = crate::agentic::coordination::get_global_coordinator()?;
-        let workspace_path = workspace_root?;
-        let goal = match coordinator.get_thread_goal(session_id, workspace_path).await {
-            Ok(goal) => goal?,
+    ) -> WardenGoalContext {
+        let Some(coordinator) = crate::agentic::coordination::get_global_coordinator() else {
+            return WardenGoalContext::FailOpen;
+        };
+        let Some(workspace_path) = workspace_root else {
+            return WardenGoalContext::FailOpen;
+        };
+        match coordinator.get_thread_goal(session_id, workspace_path).await {
+            Ok(Some(goal)) => {
+                if goal.is_active() {
+                    WardenGoalContext::Active(serde_json::json!({
+                        "goalObjective": goal.objective,
+                        "goalStatus": goal.status.as_str(),
+                        "referenceFiles": goal.reference_files,
+                    }))
+                } else {
+                    WardenGoalContext::Inactive
+                }
+            }
+            Ok(None) => WardenGoalContext::Inactive,
             Err(error) => {
                 debug!(
-                    "Warden audit goal context lookup failed: session_id={}, error={}",
+                    "Warden audit goal context lookup failed; treating as fail-open: session_id={}, error={}",
                     session_id, error
                 );
-                return None;
+                WardenGoalContext::FailOpen
             }
-        };
+        }
+    }
+
+    /// Scene failure evidence for a Warden model judgement: the scene's
+    /// consecutive tool-failure count and last recorded error summary
+    /// (WARDEN-03). Returns `None` when the scene has no recorded failures.
+    async fn warden_audit_scene_evidence(
+        &self,
+        session_id: &str,
+        scene_key: &str,
+    ) -> Option<serde_json::Value> {
+        let warden_runtime = self.warden_runtime.get()?;
+        let guard = warden_runtime.lock().await;
+        let failures = guard.tool_failures_for_scene(session_id, scene_key);
+        let last_error = guard
+            .last_tool_error(session_id, scene_key)
+            .map(str::to_string);
+        if failures == 0 && last_error.is_none() {
+            return None;
+        }
         Some(serde_json::json!({
-            "goalObjective": goal.objective,
-            "goalStatus": goal.status.as_str(),
-            "referenceFiles": goal.reference_files,
+            "consecutiveToolFailures": failures,
+            "lastToolError": last_error,
         }))
+    }
+
+    /// WARDEN-02: claim (or reject) the model-judgement debounce slot for a
+    /// (session, scene). Returns `true` when the same scene was judged within
+    /// [`WARDEN_AUDIT_DEBOUNCE_WINDOW`]; otherwise records the claim and
+    /// returns `false`.
+    async fn warden_audit_debounced(&self, session_id: &str, scene_key: &str) -> bool {
+        let mut recent = self.warden_audit_debounce.lock().await;
+        let key = (session_id.to_string(), scene_key.to_string());
+        if let Some(last) = recent.get(&key) {
+            if last.elapsed() < WARDEN_AUDIT_DEBOUNCE_WINDOW {
+                return true;
+            }
+        }
+        recent.insert(key, Instant::now());
+        false
+    }
+
+    /// Combine the goal-context evidence with the scene-failure evidence into
+    /// one judgement-evidence object; `None` when both are empty.
+    fn merge_warden_evidence(
+        goal_ctx: WardenGoalContext,
+        scene: Option<serde_json::Value>,
+    ) -> Option<serde_json::Value> {
+        let mut merged = serde_json::Map::new();
+        if let WardenGoalContext::Active(goal) = &goal_ctx {
+            if let serde_json::Value::Object(map) = goal {
+                for (key, value) in map {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        if let Some(serde_json::Value::Object(map)) = scene {
+            for (key, value) in map {
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        if merged.is_empty() {
+            None
+        } else {
+            Some(serde_json::Value::Object(merged))
+        }
     }
 
     async fn prepare_permission_plans(&self, task_ids: &[String]) -> BitFunResult<()> {
@@ -1595,7 +1817,7 @@ impl ToolPipeline {
     ) {
         match result {
             Ok(execution_result) => {
-                self.notify_warden_tool_outcome(task_id, WardenToolOutcome::Success)
+                self.notify_warden_tool_outcome(task_id, WardenToolOutcome::Success, None)
                     .await;
                 all_results.push(execution_result);
             }
@@ -1614,7 +1836,17 @@ impl ToolPipeline {
                 } else {
                     WardenToolOutcome::ExecutionFailed
                 };
-                self.notify_warden_tool_outcome(task_id, failure_kind).await;
+                // WARDEN-03: carry the real error text as judgement evidence
+                // for a genuine execution failure (admission rejections carry
+                // none — they are protocol-layer, not violations).
+                let error_text = error.to_string();
+                let error_summary = if matches!(failure_kind, WardenToolOutcome::ExecutionFailed) {
+                    Some(error_text.as_str())
+                } else {
+                    None
+                };
+                self.notify_warden_tool_outcome(task_id, failure_kind, error_summary)
+                    .await;
                 let error_result = build_error_execution_result(
                     task_id,
                     self.state_manager.get_task(task_id),
@@ -5248,6 +5480,171 @@ mod tests {
         assert!(
             decision.is_none(),
             "a declining model verdict suppresses the Audit-Poke"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_poke_same_tool_is_debounced_within_window() {
+        // WARDEN-02: repeated destructive calls of the same tool+session
+        // within the debounce window are judged by the model only once.
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::WardenAuditJudgementResponse;
+
+        let confirm_port = FakeWardenJudgementPort::new(Ok(WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: Vec::new(),
+            evidence_requested: Vec::new(),
+        }));
+        let confirm_port = Arc::new(confirm_port);
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(confirm_port.clone());
+
+        let task = test_tool_task("tool-debounce", "Write");
+        let mechanical = ToolPipeline::build_audit_poke("tool-debounce", &OperationClass::WriteFile);
+
+        let first = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await
+            .expect("first call is judged and pokes");
+        assert_eq!(first.poke_id, mechanical.poke_id);
+        assert_eq!(confirm_port.captured_requests.lock().await.len(), 1);
+
+        // The second call within the window is debounced: no model round-trip,
+        // and an exploratory (count 0) occurrence sends no extra poke.
+        let second = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await;
+        assert!(second.is_none(), "debounced exploratory occurrence sends no poke");
+        assert_eq!(
+            confirm_port.captured_requests.lock().await.len(),
+            1,
+            "the model is not asked twice for the same tool within the window"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_poke_distinct_scenes_of_same_tool_are_judged_separately() {
+        // WARDEN-02: the debounce is scene-scoped — two different argument
+        // shapes of the same tool within the window each get their own model
+        // verdict instead of sharing one debounced judgement.
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::WardenAuditJudgementResponse;
+
+        let confirm_port = FakeWardenJudgementPort::new(Ok(WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: Vec::new(),
+            evidence_requested: Vec::new(),
+        }));
+        let confirm_port = Arc::new(confirm_port);
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(confirm_port.clone());
+
+        let mechanical = ToolPipeline::build_audit_poke("tool-scene-a", &OperationClass::WriteFile);
+        let mut scene_a = test_tool_task("tool-scene-a", "Write");
+        scene_a.invocation.effective_arguments = json!({ "path": "a.md", "content": "alpha" });
+        let mut scene_b = test_tool_task("tool-scene-b", "Write");
+        scene_b.invocation.effective_arguments = json!({ "path": "b.md", "content": "beta" });
+        assert_ne!(
+            tool_failure_scene_key("Write", &scene_a.invocation.effective_arguments),
+            tool_failure_scene_key("Write", &scene_b.invocation.effective_arguments),
+            "the two argument shapes must map to distinct scenes"
+        );
+
+        pipeline
+            .warden_audit_poke_decision(&scene_a, "Write", &mechanical)
+            .await
+            .expect("first scene is judged and pokes");
+        pipeline
+            .warden_audit_poke_decision(&scene_b, "Write", &mechanical)
+            .await
+            .expect("second scene is judged separately and pokes");
+        assert_eq!(
+            confirm_port.captured_requests.lock().await.len(),
+            2,
+            "distinct scenes of the same tool are judged independently"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_poke_must_poke_floor_on_repeated_scene_failures() {
+        // WARDEN-03: on a scene with repeated tool failures the model verdict
+        // cannot cancel the poke — it may only add rules/evidence. The
+        // judgement still receives the scene failure count and last error.
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::WardenAuditJudgementResponse;
+
+        let (pipeline, warden) = test_pipeline_with_warden().await;
+        let task = test_tool_task("tool-floor", "Write");
+        let scene = tool_failure_scene_key("Write", &task.invocation.effective_arguments);
+        {
+            let mut guard = warden.lock().await;
+            guard
+                .on_tool_outcome("session_1", "Write", &scene, WardenToolOutcome::ExecutionFailed)
+                .await;
+            guard
+                .on_tool_outcome("session_1", "Write", &scene, WardenToolOutcome::ExecutionFailed)
+                .await;
+            guard.record_tool_error("session_1", &scene, "permission denied");
+            guard.take_pending_reminders("session_1");
+        }
+
+        let decline_port = Arc::new(FakeWardenJudgementPort::new(Ok(
+            WardenAuditJudgementResponse {
+                should_poke: false,
+                rule_ids: Vec::new(),
+                evidence_requested: Vec::new(),
+            },
+        )));
+        pipeline.set_warden_model_judgement(decline_port.clone());
+
+        let mechanical = ToolPipeline::build_audit_poke("tool-floor", &OperationClass::WriteFile);
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await
+            .expect("repeated-failure poke cannot be cancelled by the model");
+        assert_eq!(decision.poke_id, mechanical.poke_id);
+
+        // The evidence handed to the model includes the failure context.
+        let captured = decline_port.captured_requests.lock().await;
+        assert_eq!(captured.len(), 1);
+        let evidence = captured[0].evidence.as_ref().expect("evidence present");
+        assert_eq!(evidence["consecutiveToolFailures"], json!(1));
+        assert_eq!(evidence["lastToolError"], json!("permission denied"));
+    }
+
+    #[tokio::test]
+    async fn audit_poke_request_summarizes_content_args() {
+        // WARDEN-08: content-like tool args are masked to a length marker in
+        // the request sent to the model.
+        use bitfun_agent_tools::OperationClass;
+        use bitfun_runtime_ports::WardenAuditJudgementResponse;
+
+        let confirm_port = FakeWardenJudgementPort::new(Ok(WardenAuditJudgementResponse {
+            should_poke: true,
+            rule_ids: Vec::new(),
+            evidence_requested: Vec::new(),
+        }));
+        let confirm_port = Arc::new(confirm_port);
+        let pipeline = test_tool_pipeline();
+        pipeline.set_warden_model_judgement(confirm_port.clone());
+
+        let mut task = test_tool_task("tool-content", "Write");
+        task.invocation.effective_arguments =
+            json!({ "file_path": "a.md", "content": "hello world" });
+        let mechanical = ToolPipeline::build_audit_poke("tool-content", &OperationClass::WriteFile);
+        let decision = pipeline
+            .warden_audit_poke_decision(&task, "Write", &mechanical)
+            .await
+            .expect("poke sent");
+        assert_eq!(decision.poke_id, mechanical.poke_id);
+
+        let captured = confirm_port.captured_requests.lock().await;
+        let args = captured[0].tool_args.as_ref().expect("tool_args present");
+        assert_eq!(args["file_path"], json!("a.md"));
+        assert_eq!(args["content"]["contentLength"], json!(13));
+        assert!(
+            !args.to_string().contains("hello world"),
+            "bulk content is not sent to the model"
         );
     }
 

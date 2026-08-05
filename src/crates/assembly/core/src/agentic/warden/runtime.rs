@@ -129,15 +129,26 @@ pub struct WardenRuntime {
     poke_priority: PokePriorityManager,
     challenge: ChallengePokeConfig,
     violation_policy: ViolationPolicy,
-    /// Per-session consecutive failure count per scene (key =
-    /// `(session_id, scene_key)`; reset on Completed). The first failure of a
-    /// scene is treated as an exploratory attempt and is not counted; only a
-    /// repeated failure on the same scene starts the ladder.
+    /// Per-session consecutive turn-failure count per scene (key =
+    /// `(session_id, scene_key)`; reset on Completed). **Level-1 semantics**
+    /// (turn): the first failed turn of a session is an exploratory attempt
+    /// and is not counted; only a repeated failure on the same scene starts
+    /// the ladder.
     consecutive_failures: HashMap<(String, String), u32>,
     /// Per-session consecutive tool-failure count per scene (key =
     /// `(session_id, scene_key)`; reset on tool success), independent of the
-    /// turn-level counter.
+    /// turn-level counter. **Level-2 semantics** (tool): the first failed
+    /// tool call of a *scene* (tool name + argument fingerprint) is an
+    /// exploratory attempt and is not counted; only a repeated failure on the
+    /// same scene starts the ladder. The two levels are deliberately
+    /// independent: a successful turn never resets the tool counter and a
+    /// successful tool never resets the turn counter.
     tool_failures: HashMap<(String, String), u32>,
+    /// Last recorded error summary per tool-failure scene (key =
+    /// `(session_id, scene_key)`), kept as judgement evidence so a model
+    /// Audit-Poke decision sees the actual failure context instead of a bare
+    /// counter (WARDEN-03).
+    last_tool_errors: HashMap<(String, String), String>,
     /// Internal messages queued for the next turn start of a session.
     pending_reminders: HashMap<String, Vec<Message>>,
     /// Optional shame-wall persistence path (aligned to the Warden SKILL's
@@ -161,6 +172,7 @@ impl WardenRuntime {
             violation_policy: ViolationPolicy::default(),
             consecutive_failures: HashMap::new(),
             tool_failures: HashMap::new(),
+            last_tool_errors: HashMap::new(),
             pending_reminders: HashMap::new(),
             shame_wall_path: None,
         }
@@ -226,6 +238,14 @@ impl WardenRuntime {
             TurnOutcomeStatus::Completed => {
                 self.consecutive_failures
                     .retain(|(sid, _), _| sid != session_id);
+                // WARDEN-09: a completed turn also drops exploratory (count==0)
+                // tool-failure placeholders so a later failure after a
+                // completed turn starts a fresh exploration instead of
+                // inheriting a stale zero. Real counts (>= 1) are kept: a
+                // successful turn never resets an in-progress tool escalation
+                // ladder (tool/turn counters stay independent).
+                self.tool_failures
+                    .retain(|(sid, _), count| sid != session_id || *count > 0);
                 self.poke_priority.reset_defer_count(session_id);
             }
             TurnOutcomeStatus::Cancelled => {}
@@ -304,16 +324,29 @@ impl WardenRuntime {
 
     /// Drop all per-session Warden state for `session_id` (session-end cleanup).
     ///
-    /// Clears failure counters (all scenes), queued reminders and poke defer
-    /// state so a recycled session id cannot inherit stale enforcement state.
-    /// The shame wall registry is a historical record keyed by session name
-    /// and is intentionally preserved.
+    /// Clears failure counters (all scenes), last-error evidence, queued
+    /// reminders and poke defer state so a recycled session id cannot inherit
+    /// stale enforcement state. The shame wall registry is a historical
+    /// record keyed by session name and is intentionally preserved.
     pub fn cleanup_session(&mut self, session_id: &str) {
+        self.clear_failure_counts(session_id);
+        self.pending_reminders.remove(session_id);
+        self.poke_priority.clear_session(session_id);
+    }
+
+    /// Drop only the consecutive-failure counters (turn + tool) and the
+    /// last-error evidence of a session, keeping queued reminders and poke
+    /// defer state.
+    ///
+    /// Called when a session's thread goal leaves the active state so a later
+    /// goal generation starts from a clean ladder instead of inheriting the
+    /// previous goal's consecutive-failure count (WARDEN-01). Idempotent.
+    pub fn clear_failure_counts(&mut self, session_id: &str) {
         self.consecutive_failures
             .retain(|(sid, _), _| sid != session_id);
         self.tool_failures.retain(|(sid, _), _| sid != session_id);
-        self.pending_reminders.remove(session_id);
-        self.poke_priority.clear_session(session_id);
+        self.last_tool_errors
+            .retain(|(sid, _), _| sid != session_id);
     }
 
     /// Current consecutive-failure count for a session (observation/test hook).
@@ -330,6 +363,32 @@ impl WardenRuntime {
     /// session's tool-failure scenes.
     pub fn tool_failures(&self, session_id: &str) -> u32 {
         max_failure_count_for_session(&self.tool_failures, session_id)
+    }
+
+    /// Current consecutive tool-failure count of a single scene
+    /// (observation/test hook, and model-judgement evidence source).
+    pub fn tool_failures_for_scene(&self, session_id: &str, scene_key: &str) -> u32 {
+        self.tool_failures
+            .get(&(session_id.to_string(), scene_key.to_string()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Last recorded error summary of a tool-failure scene (judgement evidence).
+    pub fn last_tool_error(&self, session_id: &str, scene_key: &str) -> Option<&str> {
+        self.last_tool_errors
+            .get(&(session_id.to_string(), scene_key.to_string()))
+            .map(String::as_str)
+    }
+
+    /// Record the error summary of a failed tool call for later judgement
+    /// evidence (WARDEN-03). Kept until the session is cleaned up or the goal
+    /// leaves the active state ([`Self::clear_failure_counts`]).
+    pub fn record_tool_error(&mut self, session_id: &str, scene_key: &str, error_summary: &str) {
+        self.last_tool_errors.insert(
+            (session_id.to_string(), scene_key.to_string()),
+            error_summary.to_string(),
+        );
     }
 
     /// Current shame wall registry (observation/test hook).
@@ -430,6 +489,17 @@ impl WardenRuntime {
                         Message::internal_reminder(InternalReminderKind::PokePenalty, reminder.text),
                     );
                 }
+                // WARDEN-10: the `notify_user` flag on the outcome must not be
+                // a dead field. The core has no direct UI channel, so an
+                // escalation that requires user awareness (L3/L4) is delivered
+                // through the observability/logging channel at warn level —
+                // the same surface hosts watch for discipline escalations.
+                if outcome.notify_user {
+                    warn!(
+                        "warden escalation delivered for user awareness: session={}, level={:?}",
+                        session_id, outcome.level
+                    );
+                }
                 if let Some(path) = &self.shame_wall_path {
                     if let Err(err) = self.shame_wall.save_to_path(path) {
                         warn!(
@@ -462,14 +532,20 @@ impl WardenRuntime {
 /// The current `on_turn_outcome` signature carries no phase/target facts, so
 /// turn failures deliberately form a single scene; scene-scoped counting
 /// still applies (the first turn failure of a session is exploratory).
+///
+/// WARDEN-11: this is the **turn level** of the first-failure rule. The
+/// distinct **tool level** (per scene) is documented on
+/// [`WardenRuntime::on_tool_outcome`]; the two levels never reset each other.
 const TURN_SCENE_KEY: &str = "turn";
 
 /// Count one failure for a scene.
 ///
-/// The first failure of a scene is treated as an exploratory (verification)
-/// attempt and is not counted; only a repeated failure on the same scene
-/// starts the consecutive ladder at 1. Returns the scene's failure count
-/// after the update.
+/// Shared by both the turn level (scene = `TURN_SCENE_KEY`) and the tool
+/// level (scene = tool name + argument fingerprint). In both levels the first
+/// failure of a scene is treated as an exploratory (verification) attempt and
+/// is not counted; only a repeated failure on the same scene starts the
+/// consecutive ladder at 1. Returns the scene's failure count after the
+/// update.
 fn bump_scene_failure(
     map: &mut HashMap<(String, String), u32>,
     session_id: &str,
@@ -500,26 +576,166 @@ fn max_failure_count_for_session(
         .unwrap_or(0)
 }
 
-/// Upper bound for the argument fingerprint used in tool-failure scene keys.
+/// Upper bound for the summarized tool arguments sent to a model judgement.
 ///
-/// The fingerprint is only a scene classifier, not a persisted artifact, so a
-/// bounded prefix keeps the map key small without affecting classification
-/// for the realistic case.
-const TOOL_SCENE_ARGUMENT_SUMMARY_MAX_CHARS: usize = 256;
+/// The judgement prompt only needs the argument *shape* plus a marker that a
+/// payload existed; a pathological argument must not blow the prompt budget
+/// or leak large content to the model (WARDEN-08).
+const WARDEN_JUDGEMENT_ARGS_MAX_CHARS: usize = 2048;
 
-/// Build the tool-failure scene key: tool name plus a normalized summary of
-/// the effective arguments.
+/// Argument keys whose value is treated as bulk content.
 ///
-/// Distinct argument shapes are distinct scenes, so the first failure of a
-/// new argument shape stays exploratory instead of inheriting an in-progress
-/// escalation ladder from another shape.
+/// The full value is never embedded in scene fingerprints or judgement
+/// prompts; only a length + deterministic hash marker is used (WARDEN-04 /
+/// WARDEN-08). Conservative by design: a misclassified key only makes the
+/// fingerprint slightly coarser, never leaks content.
+pub(crate) fn is_content_like_key(key: &str) -> bool {
+    matches!(
+        key,
+        "content"
+            | "file_content"
+            | "text"
+            | "input_text"
+            | "body"
+            | "data"
+            | "payload"
+            | "code"
+            | "html"
+            | "script"
+            | "prompt"
+    )
+}
+
+/// Deterministic FNV-1a hash over the serialized value.
+///
+/// Stable across runs (unlike `DefaultHasher`, which is randomly seeded) so a
+/// scene fingerprint computed on one run matches one computed later.
+fn content_fingerprint(value: &serde_json::Value) -> u64 {
+    let bytes = serde_json::to_string(value).unwrap_or_default();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+/// Serialized length of a value (fingerprint input; 0 on a serialization
+/// failure that cannot realistically happen for JSON values).
+fn content_len(value: &serde_json::Value) -> usize {
+    serde_json::to_string(value)
+        .map(|s| s.len())
+        .unwrap_or(0)
+}
+
+/// Scalar representation of a non-nested JSON value, used verbatim in the
+/// scene fingerprint. Nested values (objects/arrays) return `None` and are
+/// fingerprinted by length + hash instead.
+fn scalar_value(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => Some("null".to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+    }
+}
+
+/// Build the tool-failure scene key: tool name plus a structural fingerprint
+/// of the effective arguments.
+///
+/// The fingerprint is `tool_name` + sorted argument keys + non-content
+/// scalar values + length & deterministic hash for content-like and nested
+/// values (WARDEN-04). Unlike a truncated serialization it cannot collapse
+/// two large payloads that share a prefix into one scene, and it never
+/// embeds bulk content in the key. Distinct argument shapes are distinct
+/// scenes, so the first failure of a new argument shape stays exploratory
+/// instead of inheriting an in-progress escalation ladder from another shape.
 pub fn tool_failure_scene_key(tool_name: &str, arguments: &serde_json::Value) -> String {
-    let serialized = serde_json::to_string(arguments).unwrap_or_default();
-    let summary: String = serialized
-        .chars()
-        .take(TOOL_SCENE_ARGUMENT_SUMMARY_MAX_CHARS)
-        .collect();
-    format!("{tool_name}:{summary}")
+    let mut parts: Vec<String> = Vec::new();
+    match arguments {
+        serde_json::Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                let value = &map[key];
+                if is_content_like_key(key) {
+                    parts.push(format!(
+                        "{key}=<content:{}:{:x}>",
+                        content_len(value),
+                        content_fingerprint(value)
+                    ));
+                } else if let Some(scalar) = scalar_value(value) {
+                    parts.push(format!("{key}={scalar}"));
+                } else {
+                    parts.push(format!(
+                        "{key}=<obj:{}:{:x}>",
+                        content_len(value),
+                        content_fingerprint(value)
+                    ));
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            parts.push(format!(
+                "array=<len:{}:{}:{:x}>",
+                items.len(),
+                content_len(arguments),
+                content_fingerprint(arguments)
+            ));
+        }
+        serde_json::Value::Null => parts.push("null".to_string()),
+        scalar => {
+            if let Some(value) = scalar_value(scalar) {
+                parts.push(value);
+            }
+        }
+    }
+    format!("{tool_name}:{}", parts.join("&"))
+}
+
+/// Summarize tool arguments for a model judgement request (WARDEN-08).
+///
+/// Content-like values are replaced by a `{ "contentLength": N }` marker and
+/// the whole summary is capped, so the model sees the argument shape without
+/// receiving large or sensitive payloads. Returns `None` only for a `null`
+/// argument (the caller keeps `tool_args` absent in that case).
+pub fn summarize_judgement_tool_args(arguments: &serde_json::Value) -> Option<serde_json::Value> {
+    match arguments {
+        serde_json::Value::Object(map) => {
+            let mut out = serde_json::Map::new();
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                let value = &map[key];
+                if is_content_like_key(key) {
+                    out.insert(
+                        key.clone(),
+                        serde_json::json!({ "contentLength": content_len(value) }),
+                    );
+                } else {
+                    out.insert(key.clone(), value.clone());
+                }
+            }
+            Some(cap_summary(serde_json::Value::Object(out)))
+        }
+        serde_json::Value::Null => None,
+        other => Some(cap_summary(other.clone())),
+    }
+}
+
+/// Cap a summarized argument value to [`WARDEN_JUDGEMENT_ARGS_MAX_CHARS`],
+/// replacing an oversized payload with a length marker.
+fn cap_summary(value: serde_json::Value) -> serde_json::Value {
+    let serialized = serde_json::to_string(&value).unwrap_or_default();
+    if serialized.len() > WARDEN_JUDGEMENT_ARGS_MAX_CHARS {
+        serde_json::json!({
+            "summaryLength": serialized.len(),
+            "truncated": true,
+        })
+    } else {
+        value
+    }
 }
 
 /// Batch-2 goal switch: whether Warden enforcement applies for a goal lookup.
@@ -1250,5 +1466,227 @@ mod tests {
             "empty model rules fall back to mechanical candidates"
         );
         assert_eq!(poke.evidence_required, mechanical.evidence_required);
+    }
+
+    #[tokio::test]
+    async fn clear_failure_counts_resets_counters_across_goal_generations() {
+        // WARDEN-01: when a goal leaves the active state the failure counts
+        // must be dropped so a later (new) goal generation starts from a
+        // clean ladder instead of inheriting the previous goal's L2/L3 count.
+        let mut rt = runtime();
+        rt.set_challenge_config(ChallengePokeConfig::new(
+            f64::INFINITY,
+            1,
+            BTreeSet::new(),
+        ));
+
+        let scene = tool_failure_scene_key("ExecCommand", &serde_json::json!({"cmd": "pwd"}));
+        // Build an in-progress escalation ladder: repeated turn + tool failures.
+        rt.on_turn_outcome("sess-goal", TurnOutcomeStatus::Failed, "t1").await;
+        rt.on_turn_outcome("sess-goal", TurnOutcomeStatus::Failed, "t2").await;
+        rt.on_turn_outcome("sess-goal", TurnOutcomeStatus::Failed, "t3").await;
+        rt.on_tool_outcome("sess-goal", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.on_tool_outcome("sess-goal", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.record_tool_error("sess-goal", &scene, "boom");
+        rt.take_pending_reminders("sess-goal");
+        assert_eq!(rt.consecutive_failures("sess-goal"), 2);
+        assert_eq!(rt.tool_failures_for_scene("sess-goal", &scene), 1);
+        assert!(rt.last_tool_error("sess-goal", &scene).is_some());
+
+        // The goal switched away: the gate calls clear_failure_counts.
+        rt.clear_failure_counts("sess-goal");
+        assert_eq!(rt.consecutive_failures("sess-goal"), 0, "turn count cleared");
+        assert_eq!(
+            rt.tool_failures_for_scene("sess-goal", &scene),
+            0,
+            "tool count cleared"
+        );
+        assert!(
+            rt.last_tool_error("sess-goal", &scene).is_none(),
+            "error evidence cleared"
+        );
+
+        // A sibling session is untouched.
+        assert_eq!(rt.consecutive_failures("sess-other"), 0);
+    }
+
+    #[tokio::test]
+    async fn completed_turn_drops_exploratory_zero_tool_failure_placeholders() {
+        // WARDEN-09: an exploratory first tool failure leaves a count==0
+        // placeholder; a completed turn must drop it so the next failure after
+        // a completed turn starts a fresh exploration (count 0) instead of
+        // inheriting the stale zero and immediately counting as a repeat.
+        let mut rt = runtime();
+        rt.set_challenge_config(ChallengePokeConfig::new(
+            f64::INFINITY,
+            1,
+            BTreeSet::new(),
+        ));
+
+        let scene = tool_failure_scene_key("ExecCommand", &serde_json::json!({"cmd": "pwd"}));
+        rt.on_tool_outcome("sess-z", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        assert_eq!(rt.tool_failures_for_scene("sess-z", &scene), 0, "exploratory");
+
+        // A completed turn cleans the zero placeholder...
+        rt.on_turn_outcome("sess-z", TurnOutcomeStatus::Completed, "t1").await;
+
+        // ...so the next same-scene failure is again exploratory (0), and only
+        // the failure after that counts toward L1.
+        rt.on_tool_outcome("sess-z", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        assert_eq!(
+            rt.tool_failures_for_scene("sess-z", &scene),
+            0,
+            "stale zero was cleaned; a fresh exploration starts"
+        );
+        rt.on_tool_outcome("sess-z", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        assert_eq!(rt.tool_failures_for_scene("sess-z", &scene), 1);
+        rt.take_pending_reminders("sess-z");
+    }
+
+    #[tokio::test]
+    async fn completed_turn_keeps_in_progress_tool_escalation_ladder() {
+        // The WARDEN-09 cleanup must not reset a real (>=1) tool ladder: tool
+        // and turn counters stay independent.
+        let mut rt = runtime();
+        rt.set_challenge_config(ChallengePokeConfig::new(
+            f64::INFINITY,
+            1,
+            BTreeSet::new(),
+        ));
+
+        let scene = tool_failure_scene_key("ExecCommand", &serde_json::json!({"cmd": "pwd"}));
+        rt.on_tool_outcome("sess-z", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.on_tool_outcome("sess-z", "ExecCommand", &scene, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.take_pending_reminders("sess-z");
+        assert_eq!(rt.tool_failures_for_scene("sess-z", &scene), 1);
+
+        rt.on_turn_outcome("sess-z", TurnOutcomeStatus::Completed, "t1").await;
+        assert_eq!(
+            rt.tool_failures_for_scene("sess-z", &scene),
+            1,
+            "a completed turn never resets a real tool escalation ladder"
+        );
+    }
+
+    #[test]
+    fn tool_failure_scene_key_hashes_large_content_instead_of_truncating() {
+        // WARDEN-04: two large payloads sharing a 256-char prefix must remain
+        // distinct scenes (the old truncation collapsed them), and the content
+        // itself must never be embedded in the key.
+        let big_a = "a".repeat(1024);
+        let big_b = format!("{}b", "a".repeat(1023));
+        assert_eq!(big_a.len(), 1024);
+        assert_eq!(big_b.len(), 1024);
+        assert_eq!(
+            &big_a[..256],
+            &big_b[..256],
+            "fixture: identical 256-char prefixes"
+        );
+
+        let scene_a = tool_failure_scene_key("Write", &serde_json::json!({ "content": big_a }));
+        let scene_b = tool_failure_scene_key("Write", &serde_json::json!({ "content": big_b }));
+        assert_ne!(
+            scene_a, scene_b,
+            "large contents with a shared prefix must not merge into one scene"
+        );
+        assert!(
+            !scene_a.contains(&big_a) && !scene_b.contains(&big_b),
+            "bulk content must not be embedded in the scene key"
+        );
+        assert!(
+            scene_a.len() < 200,
+            "scene key stays compact: {}",
+            scene_a.len()
+        );
+    }
+
+    #[test]
+    fn summarize_judgement_tool_args_masks_content_and_caps_size() {
+        // WARDEN-08: content-like args are masked to a length marker and the
+        // summary is capped; scalar/nested shapes are preserved.
+        let small = summarize_judgement_tool_args(&serde_json::json!({
+            "file_path": "a.md",
+            "content": "hello",
+        }))
+        .expect("object args summarize to some value");
+        assert_eq!(small["file_path"], "a.md");
+        assert_eq!(
+            small["content"]["contentLength"],
+            serde_json::json!(7)
+        );
+        assert!(!small.to_string().contains("hello"), "content masked");
+
+        let huge = summarize_judgement_tool_args(&serde_json::json!({
+            "file_path": "b.md",
+            "content": "x".repeat(5000),
+        }))
+        .expect("object args summarize");
+        assert_eq!(
+            huge["content"]["contentLength"],
+            serde_json::json!(5002),
+            "bulk content is masked to a length marker, never embedded"
+        );
+        assert!(!huge.to_string().contains('x'), "content not leaked");
+
+        // The size cap only applies to the non-masked remainder.
+        let mut big_map = serde_json::Map::new();
+        for i in 0..40 {
+            big_map.insert(
+                format!("key_{i}"),
+                serde_json::json!("y".repeat(200)),
+            );
+        }
+        let capped = summarize_judgement_tool_args(&serde_json::Value::Object(big_map))
+            .expect("object args summarize");
+        assert_eq!(capped["truncated"], serde_json::json!(true));
+
+        assert!(
+            summarize_judgement_tool_args(&serde_json::Value::Null).is_none(),
+            "null arguments stay absent"
+        );
+        assert_eq!(
+            summarize_judgement_tool_args(&serde_json::json!("scalar")).expect("scalar"),
+            serde_json::json!("scalar")
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_failures_for_scene_and_last_error_are_recorded() {
+        // WARDEN-03 evidence accessors: the scene count and the last error
+        // summary are observable per scene for model judgement.
+        let mut rt = runtime();
+        let scene_a = tool_failure_scene_key("ExecCommand", &serde_json::json!({"cmd": "pwd"}));
+        let scene_b = tool_failure_scene_key("ExecCommand", &serde_json::json!({"cmd": "ls"}));
+
+        rt.on_tool_outcome("sess-ev", "ExecCommand", &scene_a, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.on_tool_outcome("sess-ev", "ExecCommand", &scene_a, WardenToolOutcome::ExecutionFailed)
+            .await;
+        rt.record_tool_error("sess-ev", &scene_a, "permission denied");
+        assert_eq!(rt.tool_failures_for_scene("sess-ev", &scene_a), 1);
+        assert_eq!(
+            rt.last_tool_error("sess-ev", &scene_a),
+            Some("permission denied")
+        );
+
+        assert_eq!(
+            rt.tool_failures_for_scene("sess-ev", &scene_b),
+            0,
+            "sibling scene untouched"
+        );
+        assert!(
+            rt.last_tool_error("sess-ev", &scene_b).is_none(),
+            "no error recorded for the untouched scene"
+        );
+
+        // `tool_failures` (max across scenes) still reports the ladder driver.
+        assert_eq!(rt.tool_failures("sess-ev"), 1);
     }
 }
