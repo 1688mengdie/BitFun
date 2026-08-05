@@ -1187,7 +1187,7 @@ impl AcpClientService {
             tokio::time::timeout(Duration::from_secs(seconds), run)
                 .await
                 .map_err(|_| {
-                    BitFunError::tool(format!("ACP client timed out after {}s", seconds))
+                    BitFunError::tool(format!("ACP client turn timed out after {}s", seconds))
                 })?
         } else {
             run.await
@@ -1290,7 +1290,7 @@ impl AcpClientService {
             tokio::time::timeout(Duration::from_secs(seconds), run)
                 .await
                 .map_err(|_| {
-                    BitFunError::tool(format!("ACP client timed out after {}s", seconds))
+                    BitFunError::tool(format!("ACP client turn timed out after {}s", seconds))
                 })?
         } else {
             run.await
@@ -3068,5 +3068,19 @@ mod tests {
         );
         assert_eq!(resolved.env.get("BASE").map(String::as_str), Some("1"));
         assert!(resolved.enabled);
+    }
+
+    #[test]
+    fn new_session_request_serializes_with_explicit_empty_mcp_servers() {
+        // Regression guard: some ACP agents (e.g. codebuddy) strictly validate
+        // session/new and reject a request whose JSON omits the mcpServers key
+        // (-32602). NewSessionRequest::new must keep serializing the explicit
+        // empty array, so mcp_servers must not gain skip_serializing_if.
+        let request = NewSessionRequest::new(PathBuf::from("/tmp/work"));
+        let json = serde_json::to_value(&request).expect("serialize new session request");
+        assert_eq!(
+            json.get("mcpServers"),
+            Some(&serde_json::Value::Array(vec![]))
+        );
     }
 }

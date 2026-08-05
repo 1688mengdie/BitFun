@@ -38,7 +38,7 @@ pub use acp_client_port::{
     acp_backend_error, AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientCreateRequest,
     AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult,
     AcpClientListResult, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
-    AcpClientReleaseRequest, AcpClientSummary,
+    AcpClientReleaseRequest, AcpClientStreamChunk, AcpClientStreamChunkSink, AcpClientSummary,
 };
 pub use local_workspace_snapshot::{
     LocalWorkspaceSnapshotPort, LocalWorkspaceSnapshotSessionRequest, LocalWorkspaceSnapshotStats,
@@ -2393,10 +2393,14 @@ pub struct WardenAuditJudgementRequest {
 ///
 /// A provider must not fail the audit loop: `should_poke = false` with empty
 /// rule ids is a valid "no poke" verdict.
+///
+/// WARDEN-07: `shouldPoke` is intentionally *not* `#[serde(default)]`. A
+/// verdict missing the field (or an empty object) fails to deserialize, so a
+/// malformed model response falls back to the mechanical rule ladder instead
+/// of silently defaulting to `false` and suppressing a poke.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WardenAuditJudgementResponse {
-    #[serde(default)]
     pub should_poke: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rule_ids: Vec<String>,

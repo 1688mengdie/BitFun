@@ -12,6 +12,7 @@
 use super::{PortError, PortErrorKind, PortResult, RuntimeServicePort};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 /// `acp_control` action `create` request.
 ///
@@ -98,6 +99,31 @@ pub struct AcpClientMessageResult {
     pub response: String,
 }
 
+/// One incrementally streamed output chunk of an ACP direct message.
+///
+/// Mirrors the incremental events of `AcpClientService::prompt_agent_stream`
+/// (the desktop implementation translates the ACP crate's stream events into
+/// this boundary type), so core tools consume streaming without depending on
+/// the ACP crate. `Text` chunks are part of the final response; `Thought`
+/// chunks are informational only and do not contribute to it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum AcpClientStreamChunk {
+    /// One incremental text chunk of the external agent's response.
+    Text { text: String },
+    /// One incremental thought chunk from the external agent.
+    Thought { text: String },
+    /// The external agent completed its turn.
+    Completed,
+    /// The external turn was cancelled.
+    Cancelled,
+}
+
+/// Sink receiving [`AcpClientStreamChunk`] items while a streamed ACP message
+/// runs. Unbounded so the producer never drops a chunk when the consumer is
+/// temporarily slower (for example while it emits per-chunk UI events).
+pub type AcpClientStreamChunkSink = mpsc::UnboundedSender<AcpClientStreamChunk>;
+
 /// `SessionMessage` ACP direct-path request: forward one message to the
 /// external ACP agent bound to an internal BitFun session.
 ///
@@ -180,6 +206,16 @@ pub trait AcpClientPort: RuntimeServicePort + std::fmt::Debug {
         request: AcpClientMessageRequest,
     ) -> PortResult<AcpClientMessageResult>;
 
+    /// Forward one message through the real channel and stream the external
+    /// response incrementally. Text chunks are pushed into `chunk_sink` as
+    /// they arrive; the returned result still carries the full response text
+    /// (including text that may have been emitted before an early error).
+    async fn send_message_stream(
+        &self,
+        request: AcpClientMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult>;
+
     /// Forward one message to the external ACP agent bound to an internal
     /// BitFun session (`acp__<client_id>` session) and return the external
     /// response synchronously. This is the `SessionMessage` direct path: no
@@ -189,11 +225,26 @@ pub trait AcpClientPort: RuntimeServicePort + std::fmt::Debug {
         request: AcpClientBitfunMessageRequest,
     ) -> PortResult<AcpClientMessageResult>;
 
+    /// Streaming variant of [`AcpClientPort::send_message_to_bitfun_session`]:
+    /// text chunks are pushed into `chunk_sink` as they arrive while the
+    /// returned result still carries the full response text.
+    async fn send_message_to_bitfun_session_stream(
+        &self,
+        request: AcpClientBitfunMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult>;
+
     /// Delete a temporary ACP session: release the external process (if one is
     /// live) and remove the persisted flow-session record for `session_id`.
     /// Used to recycle one-shot (`persistent=false`) ACP sessions created by
-    /// the Task tool; idempotent so a session with no live process or record is
-    /// a no-op success.
+    /// the Task tool.
+    ///
+    /// `workspace_path` is required to resolve the persisted record.
+    /// Implementations must reject a `None`/empty value with `InvalidRequest`
+    /// rather than silently releasing the process without deleting the record
+    /// (a release-only cleanup would leave an orphan record that keeps the
+    /// recycled session appearing in listings). Idempotent so a session with
+    /// no live process or record is a no-op success.
     async fn delete_session_record(
         &self,
         session_id: String,

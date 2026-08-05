@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bitfun_acp::client::AcpClientStreamEvent;
 use bitfun_acp::AcpClientService;
 use bitfun_core::agentic::coordination::ConversationCoordinator;
 use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
@@ -19,8 +20,8 @@ use bitfun_runtime_ports::{
     acp_backend_error, AcpClientBitfunMessageRequest, AcpClientCancelRequest, AcpClientCreateRequest,
     AcpClientCreateResult, AcpClientHistoryEntry, AcpClientHistoryRequest, AcpClientHistoryResult,
     AcpClientListResult, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
-    AcpClientReleaseRequest, AcpClientSummary, PortErrorKind, PortResult, RuntimeServiceCapability,
-    RuntimeServicePort,
+    AcpClientReleaseRequest, AcpClientStreamChunk, AcpClientStreamChunkSink, AcpClientSummary,
+    PortErrorKind, PortResult, RuntimeServiceCapability, RuntimeServicePort,
 };
 
 /// Desktop implementation of [`AcpClientPort`] over the real ACP client service.
@@ -84,6 +85,58 @@ impl DesktopAcpClientPort {
                 )
             })?;
         Ok(get_effective_session_path(workspace_path, None, None).await)
+    }
+
+    /// Stream one prompt through the real ACP channel.
+    ///
+    /// Translates the ACP crate's `AcpClientStreamEvent` stream into the
+    /// boundary `AcpClientStreamChunk` sequence pushed into `chunk_sink`.
+    /// `Text` chunks are accumulated so the returned full response text stays
+    /// equivalent to the non-streaming `prompt_agent` path; `Thought` chunks
+    /// are forwarded as informational chunks but excluded from the response.
+    async fn prompt_agent_streamed(
+        &self,
+        client_id: &str,
+        message: String,
+        workspace_path: Option<String>,
+        bitfun_session_id: String,
+        timeout_seconds: Option<u64>,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<String> {
+        let service = self.service()?.clone();
+        let mut response = String::new();
+        service
+            .prompt_agent_stream(
+                client_id,
+                message,
+                workspace_path,
+                None,
+                bitfun_session_id.clone(),
+                None,
+                timeout_seconds,
+                |event| {
+                    match event {
+                        AcpClientStreamEvent::AgentText(text) => {
+                            response.push_str(&text);
+                            let _ = chunk_sink.send(AcpClientStreamChunk::Text { text });
+                        }
+                        AcpClientStreamEvent::AgentThought(text) => {
+                            let _ = chunk_sink.send(AcpClientStreamChunk::Thought { text });
+                        }
+                        AcpClientStreamEvent::Completed => {
+                            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+                        }
+                        AcpClientStreamEvent::Cancelled => {
+                            let _ = chunk_sink.send(AcpClientStreamChunk::Cancelled);
+                        }
+                        _ => {}
+                    }
+                    Ok(())
+                },
+            )
+            .await
+            .map_err(|error| acp_backend_error(format!("ACP agent failed: {error}")))?;
+        Ok(response)
     }
 }
 
@@ -194,8 +247,15 @@ impl AcpClientPort for DesktopAcpClientPort {
     async fn release_session(&self, request: AcpClientReleaseRequest) -> PortResult<()> {
         let service = self.service()?.clone();
         // Idempotent: releasing a session that has no live external process is
-        // a no-op success, matching the session lifecycle bridge semantics.
-        service.release_bitfun_session(&request.session_id).await;
+        // a no-op success, matching the session lifecycle bridge semantics. A
+        // `false` return still means "nothing live to release", which is worth
+        // surfacing so callers can tell an expected no-op from a lost binding.
+        if !service.release_bitfun_session(&request.session_id).await {
+            log::warn!(
+                "ACP release_bitfun_session reported no live session: session_id={}",
+                request.session_id
+            );
+        }
         Ok(())
     }
 
@@ -240,6 +300,36 @@ impl AcpClientPort for DesktopAcpClientPort {
         })
     }
 
+    async fn send_message_stream(
+        &self,
+        request: AcpClientMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult> {
+        let client_id = client_id_from_session_id(&request.session_id).ok_or_else(|| {
+            bitfun_runtime_ports::PortError::new(
+                PortErrorKind::InvalidRequest,
+                format!(
+                    "session_id '{}' is not an ACP flow session id (expected acp_<client_id>_<uuid>)",
+                    request.session_id
+                ),
+            )
+        })?;
+        let response = self
+            .prompt_agent_streamed(
+                &client_id,
+                request.message,
+                request.workspace_path,
+                request.session_id.clone(),
+                request.timeout_seconds,
+                chunk_sink,
+            )
+            .await?;
+        Ok(AcpClientMessageResult {
+            session_id: request.session_id,
+            response,
+        })
+    }
+
     async fn send_message_to_bitfun_session(
         &self,
         request: AcpClientBitfunMessageRequest,
@@ -269,20 +359,53 @@ impl AcpClientPort for DesktopAcpClientPort {
         })
     }
 
+    async fn send_message_to_bitfun_session_stream(
+        &self,
+        request: AcpClientBitfunMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult> {
+        let response = self
+            .prompt_agent_streamed(
+                &request.client_id,
+                request.message,
+                request.workspace_path,
+                request.bitfun_session_id.clone(),
+                request.timeout_seconds,
+                chunk_sink,
+            )
+            .await?;
+        Ok(AcpClientMessageResult {
+            session_id: request.bitfun_session_id,
+            response,
+        })
+    }
+
     async fn delete_session_record(
         &self,
         session_id: String,
         workspace_path: Option<String>,
     ) -> PortResult<()> {
         let service = self.service()?.clone();
+        // Resolve the storage path up front: a missing workspace would
+        // otherwise release the process without removing the persisted record,
+        // silently leaving an orphan record that keeps the recycled session in
+        // listings. Reject with InvalidRequest instead of half-cleaning.
+        let Some(workspace_path) = workspace_path.as_deref() else {
+            return Err(bitfun_runtime_ports::PortError::new(
+                PortErrorKind::InvalidRequest,
+                "workspace_path is required to delete the ACP session record; refusing to release-only (would leave an orphan record)",
+            ));
+        };
+        let session_storage_path = self.session_storage_path(Some(workspace_path)).await?;
         // Release the external process if one is bound to the session
         // (idempotent), then remove the persisted flow-session record so the
         // recycled session stops appearing in listings.
-        service.release_bitfun_session(&session_id).await;
-        let Some(workspace_path) = workspace_path.as_deref() else {
-            return Ok(());
-        };
-        let session_storage_path = self.session_storage_path(Some(workspace_path)).await?;
+        if !service.release_bitfun_session(&session_id).await {
+            log::warn!(
+                "ACP release_bitfun_session reported no live session during delete_session_record: session_id={}",
+                session_id
+            );
+        }
         service
             .delete_flow_session_record(&session_storage_path, &session_id)
             .await
@@ -337,11 +460,30 @@ impl AcpClientPort for DesktopAcpClientPort {
 /// Parse the ACP client id out of a flow session id.
 ///
 /// Flow session ids have the shape `acp_<client_id>_<uuid>`; the client id is
-/// everything between the `acp_` prefix and the final uuid segment.
+/// everything between the `acp_` prefix and the final uuid segment. The trailing
+/// segment must be a canonical uuid (length 36, dashed, hex) — matching the
+/// strict `SessionMessage` detection — so an internal session id that merely
+/// starts with `acp_` is never mistaken for a flow session, and an empty client
+/// id (`acp__<uuid>`) is rejected.
 fn client_id_from_session_id(session_id: &str) -> Option<String> {
     let rest = session_id.strip_prefix("acp_")?;
-    let (client_id, _uuid) = rest.rsplit_once('_')?;
+    let (client_id, uuid_segment) = rest.rsplit_once('_')?;
+    if client_id.is_empty() || !looks_like_uuid(uuid_segment) {
+        return None;
+    }
     Some(client_id.to_string())
+}
+
+/// Dependency-free canonical uuid shape guard for flow-session ids.
+fn looks_like_uuid(segment: &str) -> bool {
+    segment.len() == 36
+        && segment.bytes().enumerate().all(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        })
 }
 
 #[cfg(test)]
@@ -370,5 +512,16 @@ mod tests {
         assert!(client_id_from_session_id("session-123").is_none());
         assert!(client_id_from_session_id("acp_codex").is_none());
         assert!(client_id_from_session_id("").is_none());
+    }
+
+    #[test]
+    fn client_id_rejects_non_uuid_trailing_segment() {
+        // 与 SessionMessage 严格版一致：尾段必须是规范 uuid，非 uuid 一律拒绝
+        assert!(client_id_from_session_id("acp_codex_s1").is_none());
+        assert!(client_id_from_session_id("acp_codex_7f0e1a2b-3c4d-4e5f-8a9b").is_none());
+        // acp__<uuid> 解析出空 client_id，拒绝
+        assert!(
+            client_id_from_session_id("acp__7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b").is_none()
+        );
     }
 }

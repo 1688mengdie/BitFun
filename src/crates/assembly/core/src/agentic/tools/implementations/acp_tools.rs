@@ -19,7 +19,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_runtime_ports::{
     AcpClientCancelRequest, AcpClientCreateRequest, AcpClientHistoryRequest, AcpClientMessageRequest,
-    AcpClientPort, AcpClientReleaseRequest,
+    AcpClientPort,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -184,11 +184,12 @@ pub(crate) async fn run_acp_control(
         }
         "delete" => {
             let session_id = required_session_id(params.session_id.as_deref(), "delete")?;
-            port.release_session(AcpClientReleaseRequest {
-                session_id: session_id.clone(),
-            })
-            .await
-            .map_err(port_error)?;
+            let workspace_path = workspace_or_context(params.workspace_path.as_deref(), context)?;
+            // 删除持久化流会话记录并释放外部进程：两个效果都需要，否则只剩
+            // release 会留下孤儿记录（已回收会话仍出现在列表里）。
+            port.delete_session_record(session_id.clone(), Some(workspace_path))
+                .await
+                .map_err(port_error)?;
             Ok(vec![ToolResult::Result {
                 data: json!({
                     "success": true,
@@ -196,7 +197,7 @@ pub(crate) async fn run_acp_control(
                     "session_id": session_id,
                 }),
                 result_for_assistant: Some(format!(
-                    "Released external ACP session '{}'.",
+                    "Deleted external ACP session '{}'.",
                     session_id
                 )),
                 image_attachments: None,
@@ -364,7 +365,7 @@ impl Tool for AcpControlTool {
 Actions:
 - "create": Start an external ACP client process for a client_id (for example "codex" or "claude-code") bound to a persisted session in the given workspace. Requires client_id and workspace_path.
 - "list": List registered ACP clients with their runtime status and session counts.
-- "delete": Release the external ACP process bound to a session_id created by this tool or acp_control create.
+- "delete": Delete an external ACP session: release the external process bound to a session_id created by this tool or acp_control create, and remove its persisted record so it stops appearing in listings.
 - "cancel": Cancel the currently running dialog turn of the external ACP session.
 
 Related tools:
@@ -374,7 +375,7 @@ Related tools:
 Arguments:
 - "action": Required. One of "create", "list", "delete", "cancel".
 - "client_id": Required for create. Registered ACP client id.
-- "workspace_path": Optional absolute workspace path; defaults to the current workspace when omitted. Used by create.
+- "workspace_path": Optional absolute workspace path; defaults to the current workspace when omitted. Used by create and delete.
 - "session_name": Optional display name; only used by create.
 - "session_id": Required for delete and cancel."#
                 .to_string(),
@@ -404,7 +405,7 @@ Arguments:
                 },
                 "workspace_path": {
                     "type": "string",
-                    "description": "Optional absolute workspace path for create; defaults to the current workspace when omitted."
+                    "description": "Optional absolute workspace path for create and delete; defaults to the current workspace when omitted."
                 },
                 "session_name": {
                     "type": "string",
@@ -509,7 +510,7 @@ Arguments:
                     .get("session_id")
                     .and_then(|value| value.as_str())
                     .unwrap_or("unknown");
-                format!("Release external ACP session '{}'", session_id)
+                format!("Delete external ACP session '{}'", session_id)
             }
             "cancel" => {
                 let session_id = input
@@ -789,7 +790,8 @@ mod tests {
     use super::*;
     use bitfun_runtime_ports::{
         AcpClientBitfunMessageRequest, AcpClientCreateResult, AcpClientHistoryEntry,
-        AcpClientHistoryResult, AcpClientListResult, AcpClientMessageResult, AcpClientSummary,
+        AcpClientHistoryResult, AcpClientListResult, AcpClientMessageResult,
+        AcpClientReleaseRequest, AcpClientStreamChunk, AcpClientStreamChunkSink, AcpClientSummary,
         PortResult, RuntimeServiceCapability, RuntimeServicePort,
     };
     use std::sync::Mutex;
@@ -799,6 +801,7 @@ mod tests {
         created: Mutex<Vec<AcpClientCreateRequest>>,
         listed: Mutex<usize>,
         released: Mutex<Vec<String>>,
+        deleted: Mutex<Vec<String>>,
         cancelled: Mutex<Vec<String>>,
         messages: Mutex<Vec<AcpClientMessageRequest>>,
         bitfun_messages: Mutex<Vec<AcpClientBitfunMessageRequest>>,
@@ -861,6 +864,22 @@ mod tests {
             })
         }
 
+        async fn send_message_stream(
+            &self,
+            request: AcpClientMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<AcpClientMessageResult> {
+            self.messages.lock().unwrap().push(request.clone());
+            let _ = chunk_sink.send(AcpClientStreamChunk::Text {
+                text: "external response".to_string(),
+            });
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+            Ok(AcpClientMessageResult {
+                session_id: request.session_id,
+                response: "external response".to_string(),
+            })
+        }
+
         async fn send_message_to_bitfun_session(
             &self,
             request: AcpClientBitfunMessageRequest,
@@ -872,11 +891,29 @@ mod tests {
             })
         }
 
+        async fn send_message_to_bitfun_session_stream(
+            &self,
+            request: AcpClientBitfunMessageRequest,
+            chunk_sink: AcpClientStreamChunkSink,
+        ) -> PortResult<AcpClientMessageResult> {
+            self.bitfun_messages.lock().unwrap().push(request.clone());
+            let _ = chunk_sink.send(AcpClientStreamChunk::Text {
+                text: "external response".to_string(),
+            });
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+            Ok(AcpClientMessageResult {
+                session_id: request.bitfun_session_id,
+                response: "external response".to_string(),
+            })
+        }
+
         async fn delete_session_record(
             &self,
-            _session_id: String,
+            session_id: String,
             _workspace_path: Option<String>,
         ) -> PortResult<()> {
+            // 与真实桌面实现一致：delete_session_record 内部会 release + 删除记录
+            self.deleted.lock().unwrap().push(session_id);
             Ok(())
         }
 
@@ -987,20 +1024,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn acp_control_delete_releases_session() {
+    async fn acp_control_delete_deletes_session_record() {
         let port = FakeAcpClientPort::default();
         let results = run_acp_control(
             &port,
-            &json!({ "action": "delete", "session_id": "acp_codex_s1" }),
+            &json!({
+                "action": "delete",
+                "session_id": "acp_codex_s1",
+                "workspace_path": "/repo/project",
+            }),
             &context(),
         )
         .await
         .expect("delete should succeed");
 
+        // delete 走 delete_session_record（release + 删除持久记录），而非仅 release
         assert_eq!(
-            port.released.lock().unwrap().as_slice(),
+            port.deleted.lock().unwrap().as_slice(),
             &["acp_codex_s1".to_string()]
         );
+        assert!(port.released.lock().unwrap().is_empty());
         assert_eq!(results[0].content()["session_id"], "acp_codex_s1");
     }
 
