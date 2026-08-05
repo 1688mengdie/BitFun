@@ -53,7 +53,7 @@ struct EndpointOverlay {
 enum ModelPolicyMode {
     Curated,
     Catalog,
-    CatalogPlusCurated,
+    CatalogWithFallback,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -61,6 +61,8 @@ struct ModelPolicyOverlay {
     mode: ModelPolicyMode,
     #[serde(default)]
     curated_models: Vec<String>,
+    #[serde(default)]
+    additional_models: Vec<String>,
 }
 
 pub(crate) fn resolve_builtin_provider_catalog(
@@ -185,28 +187,38 @@ fn validate_overlay(overlay: &ProviderOverlayDocument) -> Result<(), String> {
                 ));
             }
         }
-        let mut curated_models = BTreeSet::new();
+        let mut declared_models = BTreeSet::new();
         for model_id in &provider.model_policy.curated_models {
-            if model_id.trim().is_empty() || !curated_models.insert(model_id.as_str()) {
+            if model_id.trim().is_empty() || !declared_models.insert(model_id.as_str()) {
                 return Err(format!(
                     "provider '{}' has a duplicate or empty curated model ID",
                     provider.id
                 ));
             }
         }
-        if provider.model_policy.mode == ModelPolicyMode::Curated
-            && provider.model_policy.curated_models.is_empty()
+        for model_id in &provider.model_policy.additional_models {
+            if model_id.trim().is_empty() || !declared_models.insert(model_id.as_str()) {
+                return Err(format!(
+                    "provider '{}' has a duplicate, conflicting, or empty additional model ID",
+                    provider.id
+                ));
+            }
+        }
+        if matches!(
+            provider.model_policy.mode,
+            ModelPolicyMode::Catalog | ModelPolicyMode::CatalogWithFallback
+        ) && provider.catalog_provider_ids.is_empty()
         {
             return Err(format!(
-                "provider '{}' uses curated mode without curated models",
+                "provider '{}' uses a catalog mode without a catalog binding",
                 provider.id
             ));
         }
-        if provider.model_policy.mode == ModelPolicyMode::Catalog
-            && provider.catalog_provider_ids.is_empty()
+        if provider.model_policy.mode == ModelPolicyMode::CatalogWithFallback
+            && provider.model_policy.curated_models.is_empty()
         {
             return Err(format!(
-                "provider '{}' uses catalog mode without a catalog binding",
+                "provider '{}' uses catalog-with-fallback mode without fallback models",
                 provider.id
             ));
         }
@@ -290,11 +302,9 @@ fn resolve_provider(
 
     let mut dynamic_models = BTreeMap::<String, (ModelsDevModelFacts, BTreeSet<String>)>::new();
     let mut deprecated_models = BTreeSet::<String>::new();
-    let mut matched_catalog_provider = false;
     if provider.model_policy.mode != ModelPolicyMode::Curated {
         if let Some(catalog) = models_dev {
             for catalog_provider_id in &provider.catalog_provider_ids {
-                matched_catalog_provider |= catalog.provider_facts(catalog_provider_id).is_some();
                 for model in catalog.provider_models(catalog_provider_id) {
                     if model
                         .status
@@ -325,20 +335,16 @@ fn resolve_provider(
         .map(|model| model.as_str())
         .collect::<BTreeSet<_>>();
     let mut models = Vec::new();
-    for curated_model in &provider.model_policy.curated_models {
-        // An authoritative catalog deprecation wins over the offline curated
-        // fallback. Otherwise the same model would disappear from the dynamic
-        // set only to be reintroduced as an apparently valid BitFun model.
-        if deprecated_models.contains(curated_model) {
-            continue;
+    let catalog_is_usable = !dynamic_models.is_empty();
+    if catalog_is_usable {
+        // Curated IDs only influence recommendation and ordering while a usable
+        // catalog is available. Missing IDs are not reintroduced as fallback
+        // records; models.dev is authoritative for catalog membership.
+        for curated_model in &provider.model_policy.curated_models {
+            if let Some((facts, source_providers)) = dynamic_models.remove(curated_model) {
+                models.push(catalog_model(provider, facts, source_providers, true));
+            }
         }
-        if let Some((facts, source_providers)) = dynamic_models.remove(curated_model) {
-            models.push(catalog_model(provider, facts, source_providers, true));
-        } else {
-            models.push(curated_model_fallback(provider, curated_model));
-        }
-    }
-    if provider.model_policy.mode != ModelPolicyMode::Curated && matched_catalog_provider {
         models.extend(
             dynamic_models
                 .into_values()
@@ -347,6 +353,32 @@ fn resolve_provider(
                     catalog_model(provider, facts, source_providers, is_recommended)
                 }),
         );
+    } else if matches!(
+        provider.model_policy.mode,
+        ModelPolicyMode::Curated | ModelPolicyMode::CatalogWithFallback
+    ) {
+        models.extend(
+            provider
+                .model_policy
+                .curated_models
+                .iter()
+                .filter(|model_id| !deprecated_models.contains(model_id.as_str()))
+                .map(|model_id| curated_model_fallback(provider, model_id, true)),
+        );
+    }
+
+    // Explicit additions are independent from disaster fallback. They are
+    // appended only when models.dev did not already provide the same model and
+    // never revive a model that the catalog explicitly deprecated.
+    let included_model_ids = models
+        .iter()
+        .map(|model| model.id.clone())
+        .collect::<BTreeSet<_>>();
+    for model_id in &provider.model_policy.additional_models {
+        if !included_model_ids.contains(model_id.as_str()) && !deprecated_models.contains(model_id)
+        {
+            models.push(curated_model_fallback(provider, model_id, false));
+        }
     }
 
     ProviderCatalogProvider {
@@ -419,12 +451,16 @@ fn catalog_model(
     }
 }
 
-fn curated_model_fallback(provider: &ProviderOverlay, model_id: &str) -> ProviderCatalogModel {
+fn curated_model_fallback(
+    provider: &ProviderOverlay,
+    model_id: &str,
+    recommended: bool,
+) -> ProviderCatalogModel {
     ProviderCatalogModel {
         id: model_id.to_string(),
         display_name: None,
         description: None,
-        recommended: true,
+        recommended,
         source: ProviderCatalogModelSource::Bitfun,
         catalog_provider_ids: provider.catalog_provider_ids.clone(),
         endpoint_ids: provider
@@ -485,7 +521,7 @@ mod tests {
     }
 
     #[test]
-    fn models_dev_models_merge_with_curated_fallback_and_filter_non_text_output() {
+    fn usable_models_dev_catalog_is_authoritative_and_curated_models_only_recommend() {
         let catalog = ModelsDevCatalog::parse_str(
             r#"{
                 "alibaba": {
@@ -540,12 +576,88 @@ mod tests {
         assert!(qwen.models.iter().any(|model| model.id == "qwen-new"));
         assert!(!qwen.models.iter().any(|model| model.id == "qwen-asr"));
         assert!(!qwen.models.iter().any(|model| model.id == "qwen3.7-max"));
-        assert!(qwen.models.iter().any(|model| {
-            model.id == "qwen3.6-flash" && model.source == ProviderCatalogModelSource::Bitfun
-        }));
+        assert!(!qwen.models.iter().any(|model| model.id == "qwen3.6-flash"));
         assert_eq!(resolved.source, ProviderCatalogSource::Cache);
         assert_ne!(resolved.revision, "42");
         assert_eq!(resolved.revision.len(), 64);
+    }
+
+    #[test]
+    fn unavailable_or_empty_catalog_uses_provider_level_curated_fallback() {
+        let unavailable = resolve_builtin_provider_catalog(
+            None,
+            "none".to_string(),
+            ProviderCatalogSource::Bitfun,
+        );
+        let qwen = unavailable
+            .providers
+            .iter()
+            .find(|provider| provider.id == "qwen")
+            .expect("qwen fallback");
+        assert_eq!(
+            qwen.models
+                .iter()
+                .map(|model| (model.id.as_str(), model.source))
+                .collect::<Vec<_>>(),
+            [
+                ("qwen3.7-plus", ProviderCatalogModelSource::Bitfun),
+                ("qwen3.7-max", ProviderCatalogModelSource::Bitfun),
+                ("qwen3.6-flash", ProviderCatalogModelSource::Bitfun),
+            ]
+        );
+
+        let filtered = ModelsDevCatalog::parse_str(
+            r#"{"alibaba":{"models":{"qwen-asr":{"modalities":{"input":["audio"],"output":["audio"]}}}}}"#,
+        )
+        .expect("filtered catalog");
+        let resolved = resolve_builtin_provider_catalog(
+            Some(&filtered),
+            "filtered".to_string(),
+            ProviderCatalogSource::Cache,
+        );
+        let qwen = resolved
+            .providers
+            .iter()
+            .find(|provider| provider.id == "qwen")
+            .expect("qwen filtered fallback");
+        assert_eq!(qwen.models.len(), 3);
+        assert!(qwen
+            .models
+            .iter()
+            .all(|model| model.source == ProviderCatalogModelSource::Bitfun));
+    }
+
+    #[test]
+    fn explicit_additional_models_are_independent_from_catalog_fallback() {
+        let overlay = parse_overlay().expect("valid overlay");
+        let mut qwen = overlay
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == "qwen")
+            .expect("qwen");
+        qwen.model_policy.additional_models = vec!["qwen-early-access".to_string()];
+        let catalog = ModelsDevCatalog::parse_str(
+            r#"{"alibaba":{"models":{"qwen-catalog":{"modalities":{"input":["text"],"output":["text"]}}}}}"#,
+        )
+        .expect("catalog");
+
+        let resolved = super::resolve_provider(&qwen, Some(&catalog));
+
+        assert!(resolved
+            .models
+            .iter()
+            .any(|model| model.id == "qwen-catalog"
+                && model.source == ProviderCatalogModelSource::ModelsDev));
+        assert!(resolved
+            .models
+            .iter()
+            .any(|model| model.id == "qwen-early-access"
+                && model.source == ProviderCatalogModelSource::Bitfun
+                && !model.recommended));
+        assert!(!resolved
+            .models
+            .iter()
+            .any(|model| model.id == "qwen3.7-plus"));
     }
 
     #[test]

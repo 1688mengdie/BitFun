@@ -19,7 +19,7 @@ interface RawProvider {
   help_url?: string;
   requires_api_key: boolean;
   endpoints: RawEndpoint[];
-  model_policy: { curated_models: string[] };
+  model_policy: { curated_models: string[]; additional_models?: string[] };
 }
 
 const overlayProviders = (overlayDocument as { providers: RawProvider[] }).providers;
@@ -40,7 +40,10 @@ function toTemplate(provider: RawProvider): ProviderTemplate {
     name: provider.name,
     baseUrl: defaultEndpoint.base_url,
     format: defaultEndpoint.api_format,
-    models: provider.model_policy.curated_models,
+    models: [
+      ...provider.model_policy.curated_models,
+      ...(provider.model_policy.additional_models ?? []),
+    ],
     requiresApiKey: provider.requires_api_key,
     description: provider.description,
     helpUrl: provider.help_url,

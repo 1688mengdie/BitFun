@@ -34,7 +34,7 @@ interface OverlayProvider {
   display_order: number;
   help_url?: string;
   endpoints: OverlayEndpoint[];
-  model_policy: { curated_models: string[] };
+  model_policy: { curated_models: string[]; additional_models?: string[] };
 }
 
 const overlayProviders = (providerOverlay as { providers: OverlayProvider[] }).providers;
@@ -67,7 +67,10 @@ function templateFromOverlay(provider: OverlayProvider): ProviderTemplate {
     descriptionKey: `model.providers.${provider.id}.description`,
     baseUrl: defaultEndpoint.base_url,
     format: defaultEndpoint.api_format,
-    models: provider.model_policy.curated_models,
+    models: [
+      ...provider.model_policy.curated_models,
+      ...(provider.model_policy.additional_models ?? []),
+    ],
     helpUrl: provider.help_url,
     baseUrlOptions,
   };
