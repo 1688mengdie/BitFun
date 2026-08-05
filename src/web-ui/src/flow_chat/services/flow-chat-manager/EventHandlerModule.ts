@@ -35,6 +35,7 @@ import type {
   OpenBuiltInBrowserEvent,
   AcpContextUsageUpdatedEvent,
   SessionModelAutoMigratedEvent,
+  SessionReasoningPresetAutoClearedEvent,
   SubagentSessionLinkedEvent,
 } from '@/infrastructure/api/service-api/AgentAPI';
 import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
@@ -818,6 +819,9 @@ export async function initializeEventListeners(
     onSessionModelAutoMigrated: (event) => {
       handleSessionModelAutoMigrated(event);
     },
+    onSessionReasoningPresetAutoCleared: (event) => {
+      handleSessionReasoningPresetAutoCleared(event);
+    },
     onUserSteeringInjected: (event) => {
       handleUserSteeringInjected(context, event);
     }
@@ -1196,6 +1200,24 @@ function handleSessionModelAutoMigrated(event: SessionModelAutoMigratedEvent): v
       newModelId,
       reason,
       currentModelId: store.getState().sessions.get(sessionId)?.config.modelName,
+    });
+  }
+}
+
+function handleSessionReasoningPresetAutoCleared(
+  event: SessionReasoningPresetAutoClearedEvent,
+): void {
+  const { sessionId, previousPresetId, reason } = event;
+  if (!sessionId || !previousPresetId) return;
+
+  const store = FlowChatStore.getInstance();
+  const applied = store.applySessionReasoningPresetAutoClear(sessionId, previousPresetId);
+  if (!applied) {
+    log.debug('Ignoring stale session reasoning preset auto-clear', {
+      sessionId,
+      previousPresetId,
+      reason,
+      currentPresetId: store.getState().sessions.get(sessionId)?.config.reasoningPreset,
     });
   }
 }

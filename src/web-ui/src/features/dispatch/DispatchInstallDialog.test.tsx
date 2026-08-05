@@ -1,5 +1,9 @@
-import { BASE_DISPATCH_CAPABILITIES } from './dispatchPreflight';
 // @vitest-environment jsdom
+
+import {
+  BASE_DISPATCH_CAPABILITIES,
+  DISPATCH_PROTOCOL_VERSION,
+} from './dispatchPreflight';
 
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -193,7 +197,7 @@ describe('DispatchInstallDialog target preparation', () => {
           arch: 'x86_64',
           installSupported: false,
           protocol: {
-            protocolVersion: 4,
+            protocolVersion: DISPATCH_PROTOCOL_VERSION,
             cliVersion: '1.2.3',
             os: 'linux',
             arch: 'x86_64',
@@ -307,7 +311,7 @@ describe('DispatchInstallDialog target preparation', () => {
           arch: 'x86_64',
           installSupported: false,
           protocol: {
-            protocolVersion: 4,
+            protocolVersion: DISPATCH_PROTOCOL_VERSION,
             cliVersion: '1.2.3',
             os: 'linux',
             arch: 'x86_64',
@@ -418,7 +422,7 @@ describe('DispatchInstallDialog target preparation', () => {
       arch: 'x86_64',
       installSupported: false,
       protocol: {
-        protocolVersion: 4,
+        protocolVersion: DISPATCH_PROTOCOL_VERSION,
         cliVersion: '1.2.3',
         os: 'linux',
         arch: 'x86_64',
@@ -526,7 +530,7 @@ describe('DispatchInstallDialog target preparation', () => {
       arch: 'x86_64',
       installSupported: false,
       protocol: {
-        protocolVersion: 4,
+        protocolVersion: DISPATCH_PROTOCOL_VERSION,
         cliVersion: '1.2.3',
         os: 'linux',
         arch: 'x86_64',
@@ -598,7 +602,7 @@ describe('DispatchInstallDialog target preparation', () => {
     expect(container.textContent).not.toContain('dispatch.snapshotResultLocationHint');
   });
 
-  it('preserves protocol v4 target model facts without a delivery-mode choice', async () => {
+  it('preserves target model facts without a delivery-mode choice', async () => {
     const onReady = vi.fn();
     mocks.probeTarget.mockResolvedValue({
       cliInstalled: true,
@@ -606,7 +610,7 @@ describe('DispatchInstallDialog target preparation', () => {
       arch: 'x86_64',
       installSupported: false,
       protocol: {
-        protocolVersion: 4,
+        protocolVersion: DISPATCH_PROTOCOL_VERSION,
         cliVersion: '1.2.3',
         os: 'linux',
         arch: 'x86_64',
@@ -673,7 +677,7 @@ describe('DispatchInstallDialog model configuration sync', () => {
       arch: 'x86_64',
       installSupported: true,
       protocol: {
-        protocolVersion: 4,
+        protocolVersion: DISPATCH_PROTOCOL_VERSION,
         cliVersion: '1.2.3',
         os: 'linux',
         arch: 'x86_64',
@@ -831,7 +835,7 @@ describe('DispatchInstallDialog target model readout', () => {
       arch: 'x86_64',
       installSupported: true,
       protocol: {
-        protocolVersion: 4,
+        protocolVersion: DISPATCH_PROTOCOL_VERSION,
         cliVersion: '1.2.3',
         os: 'linux',
         arch: 'x86_64',

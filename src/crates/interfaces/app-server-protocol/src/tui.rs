@@ -5,7 +5,7 @@
 //! the server adapter.
 
 use agent_client_protocol::{JsonRpcRequest, JsonRpcResponse};
-use bitfun_core_types::SessionUsageReport;
+use bitfun_core_types::{ProviderCatalog, SessionUsageReport};
 use bitfun_product_domains::tool_permissions::{PermissionReply, PermissionRequest};
 use bitfun_runtime_ports::{
     AgentContextReloadRequest, AgentDialogSteerRequest, AgentDialogTurnRequest,
@@ -31,6 +31,19 @@ macro_rules! unit_response {
         #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
         pub struct $name {}
     };
+}
+
+/// Provider and reasoning facts needed by TUI model configuration surfaces.
+/// API keys and provider-specific execution metadata remain host-owned.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
+#[request(method = "config/getTuiModelCatalog", response = TuiModelCatalogResponse)]
+pub struct TuiModelCatalogRequest {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+pub struct TuiModelCatalogResponse {
+    pub provider_catalog: ProviderCatalog,
+    pub reasoning_presets_by_model: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]

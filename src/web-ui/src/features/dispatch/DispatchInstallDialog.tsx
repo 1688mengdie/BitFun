@@ -477,6 +477,7 @@ export const DispatchInstallDialog: React.FC<DispatchInstallDialogProps> = ({
       includeUncommitted,
       baseRef: normalizedBaseRef,
       approvalPolicy,
+      modelCatalog: protocol?.modelCatalog,
       availableModels: protocol?.availableModels,
       defaultModel: protocol?.defaultModel,
     });

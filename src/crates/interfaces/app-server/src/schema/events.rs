@@ -47,6 +47,7 @@ pub(crate) fn config_update_from_owner(
         ConfigUpdateEvent::WorkspaceUpdated => ConfigUpdate::WorkspaceUpdated,
         ConfigUpdateEvent::AppUpdated => ConfigUpdate::AppUpdated,
         ConfigUpdateEvent::ConfigReloaded => ConfigUpdate::ConfigReloaded,
+        ConfigUpdateEvent::ReasoningCatalogUpdated => ConfigUpdate::ReasoningCatalogUpdated,
         ConfigUpdateEvent::DebugModeConfigUpdated {
             new_port,
             new_log_path,
@@ -99,6 +100,16 @@ mod tests {
                 "funcAgentModelsChanged": false,
                 "agentModelDefaultsChanged": true
             })
+        );
+    }
+
+    #[test]
+    fn reasoning_catalog_update_is_projected() {
+        let update = super::config_update_from_owner(ConfigUpdateEvent::ReasoningCatalogUpdated);
+
+        assert_eq!(
+            serde_json::to_value(update).expect("config update should serialize"),
+            json!({ "kind": "reasoningCatalogUpdated" })
         );
     }
 }

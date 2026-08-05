@@ -15,7 +15,7 @@ pub mod tui;
 pub use role::{AppClient, AppServer};
 
 /// Current App Server protocol version.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Oldest protocol version this implementation accepts.
 pub const MIN_PROTOCOL_VERSION: u32 = 2;

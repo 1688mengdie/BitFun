@@ -5096,6 +5096,11 @@ pub async fn get_model_configs(
     }
 }
 
+#[tauri::command]
+pub async fn get_ai_model_catalog() -> Result<bitfun_core::AIModelCatalog, String> {
+    bitfun_core::get_ai_model_catalog().await
+}
+
 #[derive(Debug, Deserialize)]
 pub struct IdeControlResultRequest {
     pub request_id: String,

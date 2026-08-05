@@ -1272,6 +1272,7 @@ reqwest = ["dep:reqwest"]
 announcement = ["reqwest", "reqwest/rustls"]
 file-watch = ["reqwest?/__native-tls"]
 mcp = ["reqwest"]
+models-dev = ["reqwest", "reqwest/rustls", "reqwest/system-proxy"]
 speech = ["reqwest", "reqwest/rustls", "reqwest/http3"]
 `);
 
@@ -1280,6 +1281,7 @@ speech = ["reqwest", "reqwest/rustls", "reqwest/http3"]
     .join('\n');
   assert.match(messages, /file-watch.*outside its reviewed owner features/);
   assert.match(messages, /mcp.*missing reqwest\/rustls/);
+  assert.doesNotMatch(messages, /models-dev.*system-proxy/);
   assert.match(messages, /speech.*unreviewed Reqwest feature reference reqwest\/http3/);
 });
 

@@ -68,6 +68,13 @@ impl AppServerClient {
         self.rpc(|cx| Ok(cx.send_request(HealthRequest {}))).await
     }
 
+    pub async fn tui_model_catalog(
+        &self,
+    ) -> agent_client_protocol::Result<TuiModelCatalogResponse> {
+        self.rpc(|cx| Ok(cx.send_request(TuiModelCatalogRequest {})))
+            .await
+    }
+
     pub fn subscribe_events(&self) -> broadcast::Receiver<AppServerEvent> {
         self.event_tx.subscribe()
     }

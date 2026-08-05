@@ -3786,6 +3786,28 @@ export class FlowChatStore {
     });
   }
 
+  public updateSessionReasoningPreset(sessionId: string, presetId?: string | null): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session) return prev;
+
+      const normalizedPreset = presetId?.trim() || undefined;
+      if (session.config.reasoningPreset === normalizedPreset) return prev;
+
+      const updatedSession = {
+        ...session,
+        config: {
+          ...session.config,
+          reasoningPreset: normalizedPreset,
+        },
+        lastActiveAt: Date.now(),
+      };
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, updatedSession);
+      return { ...prev, sessions: newSessions };
+    });
+  }
+
   /**
    * Apply a backend `SessionModelAutoMigrated` notice as a compare-and-swap.
    *
@@ -3818,6 +3840,23 @@ export class FlowChatStore {
     return true;
   }
 
+  /** Clear a backend-invalidated reasoning preset without overwriting a newer choice. */
+  public applySessionReasoningPresetAutoClear(
+    sessionId: string,
+    previousPresetId: string,
+  ): boolean {
+    const session = this.state.sessions.get(sessionId);
+    if (
+      !session
+      || session.config.reasoningPreset?.trim() !== previousPresetId.trim()
+    ) {
+      return false;
+    }
+
+    this.updateSessionReasoningPreset(sessionId, undefined);
+    return true;
+  }
+
   /** Update the target-owned model choice before an observer job is submitted. */
   public updateSessionDispatchModel(sessionId: string, modelName: string): void {
     this.setState(prev => {
@@ -3837,7 +3876,26 @@ export class FlowChatStore {
         config: {
           ...session.config,
           dispatchModel: normalizedModelName,
+          dispatchReasoningPreset: 'auto',
         },
+        lastActiveAt: Date.now(),
+      });
+      return { ...prev, sessions: newSessions };
+    });
+  }
+
+  /** Update the target-owned reasoning choice for the next dispatch turn. */
+  public updateSessionDispatchReasoningPreset(sessionId: string, presetId: string): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      const normalizedPreset = presetId.trim();
+      if (!session || !normalizedPreset || session.config.dispatchReasoningPreset === normalizedPreset) {
+        return prev;
+      }
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        config: { ...session.config, dispatchReasoningPreset: normalizedPreset },
         lastActiveAt: Date.now(),
       });
       return { ...prev, sessions: newSessions };
@@ -3918,6 +3976,8 @@ export class FlowChatStore {
       jobId: string;
       approvalPolicy: NonNullable<SessionConfig['dispatchApprovalPolicy']>;
       model?: string;
+      reasoningPreset?: string;
+      modelCatalog?: SessionConfig['dispatchModelCatalog'];
       availableModels?: string[];
       defaultModel?: string;
       state?: NonNullable<SessionConfig['dispatchJobState']>;
@@ -3981,6 +4041,10 @@ export class FlowChatStore {
           dispatchJobId: binding.jobId,
           dispatchApprovalPolicy: binding.approvalPolicy,
           dispatchModel: binding.model ?? session.config.dispatchModel,
+          dispatchReasoningPreset:
+            binding.reasoningPreset ?? session.config.dispatchReasoningPreset,
+          dispatchModelCatalog:
+            binding.modelCatalog ?? session.config.dispatchModelCatalog,
           dispatchAvailableModels:
             binding.availableModels ?? session.config.dispatchAvailableModels,
           dispatchDefaultModel:
@@ -6669,6 +6733,9 @@ export class FlowChatStore {
           ...(restored.session.modelName
             ? { modelName: restored.session.modelName }
             : {}),
+          ...(restored.session.reasoningPreset !== undefined
+            ? { reasoningPreset: restored.session.reasoningPreset?.trim() || undefined }
+            : {}),
         },
         mode: restored.session.agentType || session.mode,
         lastUserDialogMode:
@@ -7118,6 +7185,9 @@ export class FlowChatStore {
             ...session.config,
             ...(restoredSessionInfo?.modelName
               ? { modelName: restoredSessionInfo.modelName }
+              : {}),
+            ...(restoredSessionInfo?.reasoningPreset !== undefined
+              ? { reasoningPreset: restoredSessionInfo.reasoningPreset?.trim() || undefined }
               : {}),
           },
           mode: restoredSessionInfo?.agentType || session.mode,

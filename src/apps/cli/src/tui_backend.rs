@@ -43,6 +43,8 @@ pub(crate) trait TuiBackend: Send + Sync {
 
     fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<AppServerEvent>;
 
+    async fn model_catalog(&self) -> Result<TuiModelCatalogResponse, TuiBackendError>;
+
     async fn list_sessions(
         &self,
         request: ListSessionsRequest,
@@ -182,6 +184,10 @@ impl TuiBackend for AppServerTuiBackend {
 
     async fn health(&self) -> Result<HealthResponse, TuiBackendError> {
         map(self.client.health().await)
+    }
+
+    async fn model_catalog(&self) -> Result<TuiModelCatalogResponse, TuiBackendError> {
+        map(self.client.tui_model_catalog().await)
     }
 
     fn subscribe_events(&self) -> tokio::sync::broadcast::Receiver<AppServerEvent> {

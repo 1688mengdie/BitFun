@@ -27,6 +27,7 @@ use bitfun_core::service::remote_connect::{
 use bitfun_core::service::session::{DialogTurnData, SessionMetadata};
 use bitfun_core::service::workspace::{get_global_workspace_service, WorkspaceKind};
 use bitfun_core::service::workspace_runtime::WorkspaceRuntimeService;
+use bitfun_events::AI_MODEL_CATALOG_UPDATED_EVENT;
 use bitfun_services_integrations::remote_connect::account::{
     ensure_relay_session_history_exportable, error_indicates_expired_token,
     mark_relay_session_history_import_complete, mark_relay_session_history_import_pending,
@@ -542,6 +543,7 @@ fn should_fanout_peer_ui_event(event: &str) -> bool {
             | "backend-event-toolawaitinguserinput"
             | "backend-event-toolcallconfirmation"
             | "permission://event"
+            | AI_MODEL_CATALOG_UPDATED_EVENT
     )
 }
 
@@ -4904,5 +4906,10 @@ mod peer_event_tests {
     fn permission_events_are_fanned_out_to_peer_controllers() {
         assert!(should_fanout_peer_ui_event("permission://event"));
         assert!(!should_fanout_peer_ui_event("permission://internal"));
+    }
+
+    #[test]
+    fn model_catalog_updates_are_fanned_out_to_peer_controllers() {
+        assert!(should_fanout_peer_ui_event("ai://model-catalog-updated"));
     }
 }

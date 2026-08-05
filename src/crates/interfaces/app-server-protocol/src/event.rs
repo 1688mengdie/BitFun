@@ -115,6 +115,7 @@ pub enum ConfigUpdate {
     WorkspaceUpdated,
     AppUpdated,
     ConfigReloaded,
+    ReasoningCatalogUpdated,
     DebugModeConfigUpdated {
         new_port: u16,
         new_log_path: String,
