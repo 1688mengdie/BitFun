@@ -5,8 +5,9 @@
 use crate::agentic::agents::get_agent_registry;
 use crate::agentic::core::{
     new_turn_id, CompressionContract, CompressionState, InternalReminderKind, Message,
-    MessageContent, MessageRole, MessageSemanticKind, ProcessingPhase, Session, SessionConfig,
-    SessionKind, SessionModelBindingPolicy, SessionState, SessionSummary, TurnStats,
+    MessageContent, MessageRole, MessageSemanticKind, ProcessingPhase, Session,
+    SessionAgentRouteOwner, SessionConfig, SessionKind, SessionModelBindingPolicy, SessionState,
+    SessionSummary, TurnStats,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::keyed_lock::{KeyedAsyncLock, KeyedAsyncLockGuard};
@@ -68,6 +69,11 @@ use std::time::Instant;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time;
+
+#[cfg(test)]
+tokio::task_local! {
+    static TEST_MODEL_RESOLUTION_AI_CONFIG: crate::service::config::types::AIConfig;
+}
 
 /// Session manager configuration
 #[derive(Debug, Clone)]
@@ -552,8 +558,30 @@ impl SessionManager {
         Ok(true)
     }
 
+    pub(crate) async fn active_turn_id_in_storage_path(
+        &self,
+        storage_path: &Path,
+        session_id: &str,
+    ) -> BitFunResult<Option<String>> {
+        let _mutation_guard = self.acquire_session_mutation(session_id).await?;
+        self.validate_session_storage_path_binding(session_id, storage_path)?;
+        Ok(self
+            .get_session(session_id)
+            .and_then(|session| match session.state {
+                SessionState::Processing {
+                    current_turn_id, ..
+                } => Some(current_turn_id),
+                _ => None,
+            }))
+    }
+
     async fn load_ai_config_for_model_resolution() -> Option<crate::service::config::types::AIConfig>
     {
+        #[cfg(test)]
+        if let Ok(ai_config) = TEST_MODEL_RESOLUTION_AI_CONFIG.try_with(Clone::clone) {
+            return Some(ai_config);
+        }
+
         let config_service = get_global_config_service().await.ok()?;
         config_service.get_config(Some("ai")).await.ok()
     }
@@ -2418,6 +2446,17 @@ impl SessionManager {
                     previous_reasoning_preset.as_deref().unwrap_or_default()
                 );
             }
+            let previous_context_window = session.config.max_context_tokens;
+            if let Some(resolved_context_window) =
+                Self::sync_session_context_window_from_ai_config(&mut session, ai_config)
+            {
+                if resolved_context_window != previous_context_window {
+                    debug!(
+                        "Resolved session context window before creation: session_id={}, previous={}, resolved={}",
+                        session.session_id, previous_context_window, resolved_context_window
+                    );
+                }
+            }
         } else if let Some(preset_id) = session.config.reasoning_preset.as_deref() {
             session.config.reasoning_preset =
                 Some(preset_id.trim().to_string()).filter(|preset_id| {
@@ -3559,8 +3598,11 @@ impl SessionManager {
         Ok(true)
     }
 
-    /// Update session agent type (in-memory + persistence)
-    pub async fn update_session_agent_type(
+    /// Legacy mutation helper retained only for persistence-focused unit tests.
+    /// Production callers must update the logical id and route owner atomically
+    /// through `update_session_agent_binding`.
+    #[cfg(test)]
+    async fn update_session_agent_type(
         &self,
         session_id: &str,
         agent_type: &str,
@@ -3608,6 +3650,75 @@ impl SessionManager {
         debug!(
             "Session agent type updated: session_id={}, agent_type={}",
             session_id, agent_type
+        );
+
+        Ok(())
+    }
+
+    /// Update the logical main-agent id and its durable route owner together.
+    ///
+    /// The owner is part of the execution binding: an externally owned Session
+    /// must remain fail-closed after restart instead of resolving a same-name
+    /// local mode. Persist the complete Session so metadata and state sidecar
+    /// cannot disagree about this pair.
+    pub async fn update_session_agent_binding(
+        &self,
+        session_id: &str,
+        agent_type: &str,
+        route_owner: SessionAgentRouteOwner,
+    ) -> BitFunResult<()> {
+        let _mutation_guard = self.acquire_session_mutation(session_id).await?;
+        let original_session = self
+            .sessions
+            .get(session_id)
+            .map(|session| session.clone())
+            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
+        if original_session.agent_type == agent_type
+            && original_session.config.agent_route_owner == route_owner
+        {
+            return Ok(());
+        }
+
+        let mut updated_session = original_session.clone();
+        let now = SystemTime::now();
+        updated_session.agent_type = agent_type.to_string();
+        updated_session.config.agent_route_owner = route_owner;
+        updated_session.updated_at = now;
+        updated_session.last_activity_at = now;
+
+        if self.should_persist_session_id(session_id) {
+            if let Some(workspace_path) = self.effective_session_storage_path(session_id).await {
+                if let Err(error) = self
+                    .persistence_manager
+                    .save_session(&workspace_path, &updated_session)
+                    .await
+                {
+                    if let Err(rollback_error) = self
+                        .persistence_manager
+                        .save_session(&workspace_path, &original_session)
+                        .await
+                    {
+                        return Err(BitFunError::session(format!(
+                            "Session agent binding persistence failed and rollback did not complete: session_id={session_id}, error={error}, rollback_error={rollback_error}"
+                        )));
+                    }
+                    return Err(error);
+                }
+            }
+        }
+
+        let Some(mut active_session) = self.sessions.get_mut(session_id) else {
+            return Err(BitFunError::NotFound(format!(
+                "Session not found: {session_id}"
+            )));
+        };
+        active_session.agent_type = updated_session.agent_type;
+        active_session.config.agent_route_owner = route_owner;
+        active_session.updated_at = now;
+        active_session.last_activity_at = now;
+        debug!(
+            "Session agent binding updated: session_id={}, agent_type={}, route_owner={:?}",
+            session_id, agent_type, route_owner
         );
 
         Ok(())
@@ -5220,11 +5331,60 @@ impl SessionManager {
         let mut auto_cleared_reasoning_preset = None;
 
         if !include_internal {
-            let available_modes = get_agent_registry().get_modes_info().await;
-            if !available_modes
-                .iter()
-                .any(|mode| mode.id == session.agent_type)
-            {
+            let external_workspace_root =
+                crate::agentic::workspace::session_execution_workspace_root(&session.config);
+            let workspace_path_is_remote = match external_workspace_root {
+                Some(path) => {
+                    crate::service::remote_ssh::workspace_state::is_remote_path(
+                        &path.to_string_lossy(),
+                    )
+                    .await
+                }
+                None => false,
+            };
+            let external_sources_supported = cfg!(feature = "external-sources")
+                && session.config.remote_connection_id.is_none()
+                && session.config.remote_ssh_host.is_none()
+                && !workspace_path_is_remote;
+            #[cfg(feature = "external-sources")]
+            if external_sources_supported {
+                if let Err(error) =
+                    crate::external_sources::ensure_external_source_workspace_snapshot(
+                        external_workspace_root,
+                    )
+                    .await
+                {
+                    warn!(
+                        "External agent source discovery failed during session restore: session_id={}, error_category={}",
+                        session.session_id,
+                        crate::external_sources::external_integration_error_code(&error),
+                    );
+                }
+            }
+            let agent_registry = get_agent_registry();
+            agent_registry
+                .load_custom_agents(external_workspace_root)
+                .await;
+            let available_modes = agent_registry
+                .get_modes_info_for_workspace(external_workspace_root, external_sources_supported)
+                .await;
+            let persisted_binding = agent_registry.resolve_primary_agent_for_turn(
+                &session.agent_type,
+                external_workspace_root,
+                external_sources_supported,
+                Some(session.config.agent_route_owner),
+            );
+            if let Some(binding) = persisted_binding {
+                if session.config.agent_route_owner != binding.route_owner {
+                    session.config.agent_route_owner = binding.route_owner;
+                    should_persist_restored_session = true;
+                }
+            } else if session.config.agent_route_owner == SessionAgentRouteOwner::External {
+                warn!(
+                    "Persisted external main agent is currently unavailable; preserving fail-closed session binding: session_id={}, persisted_mode={}",
+                    session.session_id, session.agent_type
+                );
+            } else {
                 let fallback_mode = available_modes
                     .iter()
                     .find(|mode| mode.id == "agentic")
@@ -5241,6 +5401,7 @@ impl SessionManager {
                     session.session_id, session.agent_type, fallback_mode
                 );
                 session.agent_type = fallback_mode;
+                session.config.agent_route_owner = SessionAgentRouteOwner::Local;
                 should_persist_restored_session = true;
             }
         }
@@ -7827,10 +7988,12 @@ mod tests {
     use super::{
         should_auto_migrate_session_model, CoreSessionStorePort, SessionExecutionBindingError,
         SessionExecutionBindingUpdate, SessionManager, SessionManagerConfig,
+        TEST_MODEL_RESOLUTION_AI_CONFIG,
     };
     use crate::agentic::core::{
         CompressionState, Message, MessageContent, MessageRole, ProcessingPhase, Session,
-        SessionConfig, SessionModelBindingPolicy, SessionState, ToolCall, ToolResult,
+        SessionAgentRouteOwner, SessionConfig, SessionModelBindingPolicy, SessionState, ToolCall,
+        ToolResult,
     };
     use crate::agentic::persistence::PersistenceManager;
     use crate::agentic::session::{
@@ -9727,6 +9890,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_agent_binding_persists_atomically_and_never_restores_as_local_by_name() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager.clone());
+        let session = manager
+            .create_session(
+                "Durable external route".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should create");
+
+        manager
+            .update_session_agent_binding(
+                &session.session_id,
+                "agentic",
+                SessionAgentRouteOwner::External,
+            )
+            .await
+            .expect("same-id local-to-external rebind should persist");
+        assert_eq!(
+            manager
+                .get_session(&session.session_id)
+                .expect("rebound session")
+                .config
+                .agent_route_owner,
+            SessionAgentRouteOwner::External
+        );
+        manager
+            .update_session_agent_binding(
+                &session.session_id,
+                "agentic",
+                SessionAgentRouteOwner::Local,
+            )
+            .await
+            .expect("same-id external-to-local rebind should persist");
+        assert_eq!(
+            manager
+                .get_session(&session.session_id)
+                .expect("rebound session")
+                .config
+                .agent_route_owner,
+            SessionAgentRouteOwner::Local
+        );
+
+        manager
+            .update_session_agent_binding(
+                &session.session_id,
+                "Plan",
+                SessionAgentRouteOwner::External,
+            )
+            .await
+            .expect("external route update should persist without a turn");
+
+        let (persisted, _) = persistence_manager
+            .load_session_with_turns(workspace.path(), &session.session_id)
+            .await
+            .expect("persisted session should load");
+        assert_eq!(persisted.agent_type, "Plan");
+        assert_eq!(
+            persisted.config.agent_route_owner,
+            SessionAgentRouteOwner::External
+        );
+
+        manager.evict_loaded_session_for_test(&session.session_id);
+        let restored = manager
+            .restore_session(workspace.path(), &session.session_id)
+            .await
+            .expect("external route should restore fail-closed");
+        assert_eq!(restored.agent_type, "Plan");
+        assert_eq!(
+            restored.config.agent_route_owner,
+            SessionAgentRouteOwner::External,
+            "a same-name local mode must not capture a persisted external route"
+        );
+    }
+
+    #[tokio::test]
     async fn session_mode_update_does_not_rewrite_the_runtime_state_file() {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
@@ -9892,6 +10139,44 @@ mod tests {
             .config
             .reasoning_preset
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn session_creation_persists_resolved_model_context_window() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager.clone());
+        let ai_config = ServiceAIConfig {
+            models: vec![test_model("deepseek-v4-flash", 200_000)],
+            ..Default::default()
+        };
+
+        let session = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(ai_config, async {
+                manager
+                    .create_session(
+                        "Remote session".to_string(),
+                        "agentic".to_string(),
+                        SessionConfig {
+                            workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                            model_id: Some("deepseek-v4-flash".to_string()),
+                            max_context_tokens: 128_128,
+                            ..Default::default()
+                        },
+                    )
+                    .await
+            })
+            .await
+            .expect("session should create");
+
+        assert_eq!(session.config.max_context_tokens, 200_000);
+        let persisted = persistence_manager
+            .load_session(workspace.path(), &session.session_id)
+            .await
+            .expect("persisted session should load");
+        assert_eq!(persisted.config.max_context_tokens, 200_000);
     }
 
     #[test]

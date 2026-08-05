@@ -6,6 +6,7 @@ edition.workspace = true
 description = "BitFun CLI - Terminal User Interface"
 default-run = "bitfun"
 autobins = false
+autotests = false
 
 [[bin]]
 name = "bitfun"
@@ -15,9 +16,27 @@ path = "src/main.rs"
 name = "bitfun-cli"
 path = "src/bin/bitfun_cli_compat.rs"
 
+[[test]]
+name = "acp_stdio_cli"
+path = "tests/acp_stdio_cli.rs"
+
+[[test]]
+name = "cli_command_contracts"
+path = "tests/cli_command_contracts.rs"
+
+[[test]]
+name = "terminal_process_contracts"
+path = "tests/terminal_process_contracts.rs"
+
 [dependencies]
 # Internal crates
-bitfun-core = { path = "../../crates/assembly/core", default-features = false, features = ["product-full"] }
+bitfun-core = { path = "../../crates/assembly/core", default-features = false, features = [
+    "agent-runtime",
+    "canvas-runtime",
+    "external-sources",
+    "plugin-runtime",
+    "ssh-remote",
+] }
 bitfun-events = { path = "../../crates/contracts/events" }
 bitfun-acp = { path = "../../crates/interfaces/acp" }
 bitfun-agent-runtime = { path = "../../crates/execution/agent-runtime" }
@@ -85,7 +104,7 @@ fs2 = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }
 minisign-verify = "0.2"
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["rustls"] }
 sha2 = { workspace = true }
 tar = { workspace = true }
 tempfile = "3"

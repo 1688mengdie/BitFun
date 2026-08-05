@@ -16,8 +16,8 @@ use crate::agentic::agents::{get_agent_registry, ExternalSubagentModelBinding};
 use crate::agentic::context_profile::ContextProfilePolicy;
 use crate::agentic::core::{
     InternalReminderKind, Message, MessageContent, MessageSemanticKind, ProcessingPhase, Session,
-    SessionConfig, SessionContinuationPolicy, SessionKind, SessionModelBindingPolicy, SessionState,
-    SessionSummary, ToolCall, ToolResult, TurnStats,
+    SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy, SessionKind,
+    SessionModelBindingPolicy, SessionState, SessionSummary, ToolCall, ToolResult, TurnStats,
 };
 use crate::agentic::events::{
     AgenticEvent, DeepReviewQueueState, EventPriority, EventQueue, EventRouter, EventSubscriber,
@@ -72,7 +72,7 @@ use crate::service::config::{
 use crate::service::remote_ssh::normalize_remote_workspace_path;
 use crate::service::session::{
     DialogTurnData, SessionMemoryMode, SessionRelationship, SessionRelationshipKind, SessionStatus,
-    ToolItemIdentityExt,
+    ToolItemIdentityExt, TurnStatus,
 };
 use crate::service::workspace::{
     get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions, WorkspaceInfo,
@@ -196,6 +196,31 @@ fn snapshot_normal_session_model(config: &mut SessionConfig, defaults: &AgentMod
     config.model_id = trimmed_model_id(config.model_id.as_deref())
         .or_else(|| trimmed_model_id(Some(defaults.mode.as_str())))
         .or_else(|| Some(AgentModelDefaultsConfig::default().mode));
+}
+
+/// Apply an external primary profile's fixed model as a creation-time default.
+/// An explicit user selection always wins; inherited bindings continue through
+/// the existing product default path.
+fn apply_primary_agent_model_default(
+    config: &mut SessionConfig,
+    binding: Option<&ExternalSubagentModelBinding>,
+) {
+    let has_explicit_model = config
+        .model_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|model_id| {
+            !model_id.is_empty()
+                && !model_id.eq_ignore_ascii_case("auto")
+                && !model_id.eq_ignore_ascii_case("default")
+        });
+    if has_explicit_model {
+        return;
+    }
+
+    if let Some(model_id) = binding.and_then(ExternalSubagentModelBinding::fixed_model_id) {
+        config.model_id = Some(model_id.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -788,7 +813,6 @@ struct ActiveSubagentExecution {
     subagent_session_id: String,
     subagent_dialog_turn_id: String,
     cancel_token: CancellationToken,
-    abort_handle: tokio::task::AbortHandle,
 }
 
 #[derive(Clone)]
@@ -990,6 +1014,54 @@ impl SubagentTimeoutHandle {
             SubagentTimeoutAction::Extend { seconds } => self.extend_timeout(seconds),
         }
     }
+}
+
+fn lineage_active_turn_after_transcript(
+    candidate_active_turn_id: Option<String>,
+    current_active_turn_id: Option<String>,
+    persisted_turn_status: Option<&TurnStatus>,
+) -> Option<String> {
+    (candidate_active_turn_id == current_active_turn_id)
+        .then_some(current_active_turn_id)
+        .flatten()
+        .filter(|_| persisted_turn_status.is_none_or(|status| *status == TurnStatus::InProgress))
+}
+
+fn lineage_session_is_settling_without_active_state(
+    active_turn_id: Option<&str>,
+    in_flight_execution_count: usize,
+) -> bool {
+    active_turn_id.is_none() && in_flight_execution_count > 0
+}
+
+pub(crate) fn validate_required_lineage_turns_settled(
+    turns: &[DialogTurnData],
+    required_settled_turn_ids: &[String],
+) -> bitfun_runtime_ports::PortResult<()> {
+    for required_turn_id in required_settled_turn_ids {
+        let settled = turns
+            .iter()
+            .any(|turn| turn.turn_id == *required_turn_id && turn.status != TurnStatus::InProgress);
+        if !settled {
+            return Err(bitfun_runtime_ports::PortError::new(
+                bitfun_runtime_ports::PortErrorKind::OutcomeUnknown,
+                format!(
+                    "Required terminal Turn is not yet durable in the authoritative transcript: turn_id={required_turn_id}"
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn lineage_post_admission_cancellation_error(
+    error: BitFunError,
+    session_id: &str,
+    turn_id: &str,
+) -> BitFunError {
+    BitFunError::OutcomeUnknown(format!(
+        "Subagent cancellation was admitted, but its final outcome was not confirmed: session_id={session_id}, turn_id={turn_id}; {error}"
+    ))
 }
 
 /// Conversation coordinator
@@ -1321,6 +1393,109 @@ impl ConversationCoordinator {
         } else {
             agent_type.trim().to_string()
         }
+    }
+
+    async fn resolve_primary_agent_for_workspace(
+        agent_type: &str,
+        workspace_root: Option<&Path>,
+        external_sources_supported: bool,
+        expected_owner: Option<SessionAgentRouteOwner>,
+    ) -> BitFunResult<crate::agentic::agents::ExternalPrimaryAgentTurnBinding> {
+        let external_sources_supported =
+            cfg!(feature = "external-sources") && external_sources_supported;
+        let registry = get_agent_registry();
+        registry.load_custom_agents(workspace_root).await;
+        let local_binding = registry.resolve_primary_agent_for_turn(
+            agent_type,
+            workspace_root,
+            false,
+            expected_owner,
+        );
+
+        if !external_sources_supported {
+            return local_binding.ok_or_else(|| {
+                BitFunError::Validation(format!("Unknown session mode: {agent_type}"))
+            });
+        }
+
+        #[cfg(feature = "external-sources")]
+        if let Err(error) =
+            crate::external_sources::ensure_external_source_workspace_snapshot(workspace_root).await
+        {
+            if let Some(external_binding) = registry.resolve_primary_agent_for_turn(
+                agent_type,
+                workspace_root,
+                true,
+                expected_owner,
+            ) {
+                warn!(
+                    "External agent source discovery failed; continuing with the existing resolved route: agent_type={}, route_owner={:?}, error_category={}",
+                    agent_type,
+                    external_binding.route_owner,
+                    crate::external_sources::external_integration_error_code(&error),
+                );
+                return Ok(external_binding);
+            }
+            if expected_owner == Some(SessionAgentRouteOwner::External)
+                || registry.is_external_subagent_route(agent_type, workspace_root)
+            {
+                return Err(BitFunError::Validation(format!(
+                    "candidate_unavailable: external main agent {agent_type} could not be refreshed"
+                )));
+            }
+            if let Some(local_binding) = local_binding {
+                warn!(
+                    "External agent source discovery failed; continuing with local mode: agent_type={}, error_category={}",
+                    agent_type,
+                    crate::external_sources::external_integration_error_code(&error),
+                );
+                return Ok(local_binding);
+            }
+            return Err(BitFunError::Service(format!(
+                "External agent source discovery failed: {error}"
+            )));
+        }
+
+        registry
+            .resolve_primary_agent_for_turn(
+                agent_type,
+                workspace_root,
+                true,
+                expected_owner,
+            )
+            .ok_or_else(|| {
+                if expected_owner == Some(SessionAgentRouteOwner::External)
+                    || registry.is_external_subagent_route(agent_type, workspace_root)
+                {
+                    BitFunError::Validation(format!(
+                        "candidate_unavailable: external main agent {agent_type} changed before the turn could start"
+                    ))
+                } else {
+                    BitFunError::Validation(format!("Unknown session mode: {agent_type}"))
+                }
+            })
+    }
+
+    async fn resolve_session_primary_agent(
+        session: &Session,
+        agent_type: &str,
+        workspace: &Option<WorkspaceBinding>,
+    ) -> BitFunResult<crate::agentic::agents::ExternalPrimaryAgentTurnBinding> {
+        let workspace_root =
+            crate::agentic::workspace::session_execution_workspace_root(&session.config);
+        let external_sources_supported = workspace
+            .as_ref()
+            .is_some_and(|workspace| !workspace.is_remote());
+        let expected_owner = agent_type
+            .eq_ignore_ascii_case(&session.agent_type)
+            .then_some(session.config.agent_route_owner);
+        Self::resolve_primary_agent_for_workspace(
+            agent_type,
+            workspace_root,
+            external_sources_supported,
+            expected_owner,
+        )
+        .await
     }
 
     fn ensure_user_message_metadata_object(
@@ -2258,9 +2433,27 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             config.remote_ssh_host.as_deref(),
         )?;
         config.workspace_id = Self::resolve_workspace_id_for_config(&config).await;
+        let agent_type = Self::normalize_agent_type(&agent_type);
+        let workspace_binding = Self::build_workspace_binding(&config).await;
+        let external_workspace_root =
+            crate::agentic::workspace::session_execution_workspace_root(&config);
+        let external_sources_supported = workspace_binding
+            .as_ref()
+            .is_some_and(|workspace| !workspace.is_remote());
+        let primary_agent_binding = Self::resolve_primary_agent_for_workspace(
+            &agent_type,
+            external_workspace_root,
+            external_sources_supported,
+            None,
+        )
+        .await?;
+        config.agent_route_owner = primary_agent_binding.route_owner;
+        apply_primary_agent_model_default(
+            &mut config,
+            primary_agent_binding.model_binding.as_ref(),
+        );
         let defaults = Self::agent_model_defaults().await;
         snapshot_normal_session_model(&mut config, &defaults);
-        let agent_type = Self::normalize_agent_type(&agent_type);
         let session = if transient {
             self.session_manager
                 .create_transient_session_with_id_and_details(
@@ -3287,11 +3480,23 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     })?;
             }
 
+            let effective_agent_type = Self::normalize_agent_type(agent_type.trim());
+            let session_workspace = Self::build_workspace_binding(&session.config).await;
+            let primary_agent_binding = Self::resolve_session_primary_agent(
+                &session,
+                &effective_agent_type,
+                &session_workspace,
+            )
+            .await?;
+            let primary_runtime_agent_key = primary_agent_binding.runtime_agent_key.clone();
+            let primary_route_owner = primary_agent_binding.route_owner;
+            let primary_agent_generation_lease = primary_agent_binding.lease;
+
             let binding = get_agent_registry()
             .resolve_external_subagent_for_fresh_invocation(
                 &logical_id,
                 &ecosystem_id,
-                Some(Path::new(&project_workspace_path)),
+                Some(Path::new(&execution_workspace_path)),
             )
             .ok_or_else(|| {
                 BitFunError::Validation(format!(
@@ -3305,15 +3510,21 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 )
             })?;
 
-            let effective_agent_type = Self::normalize_agent_type(agent_type.trim());
             let permission_runtime_ceiling =
-                crate::agentic::permission_policy::load_parent_permission_runtime_ceiling(Some(
-                    &effective_agent_type,
-                ))
+                crate::agentic::permission_policy::load_parent_permission_runtime_ceiling(
+                    Some(&primary_runtime_agent_key),
+                    Some(Path::new(&execution_workspace_path)),
+                )
                 .await?;
-            if session.agent_type != effective_agent_type {
+            if session.agent_type != effective_agent_type
+                || session.config.agent_route_owner != primary_route_owner
+            {
                 self.session_manager
-                    .update_session_agent_type(&session_id, &effective_agent_type)
+                    .update_session_agent_binding(
+                        &session_id,
+                        &effective_agent_type,
+                        primary_route_owner,
+                    )
                     .await?;
             }
             let display_input = original_user_input
@@ -3449,6 +3660,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             tokio::spawn(async move {
                 let _execution_lease = execution_lease;
                 let _turn_settlement_registration = turn_settlement_registration;
+                let _primary_agent_generation_lease = primary_agent_generation_lease;
                 let _cancel_guard = CancelTokenGuard {
                     execution_engine: Arc::clone(&coordinator.execution_engine),
                     dialog_turn_id: turn_id.clone(),
@@ -4491,6 +4703,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             )));
         }
 
+        let manual_workspace = Self::build_workspace_binding(&initial_session.config).await;
+        let primary_agent_binding = Self::resolve_session_primary_agent(
+            &initial_session,
+            &initial_session.agent_type,
+            &manual_workspace,
+        )
+        .await?;
+        let runtime_agent_type = primary_agent_binding.runtime_agent_key;
+        let external_agent_generation_lease = primary_agent_binding.lease;
+
         self.commit_session_revert_before_persisted_turn_locked(&session_id, "Manual compaction")
             .await?;
         let user_message_metadata = Some(Self::manual_compaction_metadata());
@@ -4554,6 +4776,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
         tokio::spawn(async move {
             let _execution_lease = execution_lease;
+            let _external_agent_generation_lease = external_agent_generation_lease;
             let _settlement = settlement;
             let _control_guard = control_guard;
             let result = Self::execute_manual_compaction_task(
@@ -4565,6 +4788,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id_for_task,
                 turn_id_for_task,
                 turn_index,
+                runtime_agent_type,
+                manual_workspace,
                 terminal_port,
                 remote_exec_port,
                 cancellation_token,
@@ -4671,18 +4896,19 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: String,
         turn_id: String,
         turn_index: usize,
+        runtime_agent_type: String,
+        manual_workspace: Option<WorkspaceBinding>,
         terminal_port: Option<Arc<dyn TerminalPort>>,
         remote_exec_port: Option<Arc<dyn RemoteExecPort>>,
         cancellation_token: CancellationToken,
         commit_gate: Arc<ManualCompactionCommitGate>,
     ) -> BitFunResult<()> {
-        let manual_workspace = Self::build_workspace_binding(&session.config).await;
         let manual_workspace_services = Self::build_workspace_services(&manual_workspace).await;
         let manual_execution_context = ExecutionContext {
             session_id: session_id.clone(),
             dialog_turn_id: turn_id.clone(),
             turn_index,
-            agent_type: session.agent_type.clone(),
+            agent_type: runtime_agent_type,
             workspace: manual_workspace,
             context: HashMap::new(),
             subagent_parent_info: None,
@@ -4899,6 +5125,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         };
         self.ensure_session_runtime_ownership(&session_id, None)?;
+        let session_workspace = Self::build_workspace_binding(&session.config).await;
 
         let previous_agent_type = session.last_user_dialog_agent_type.clone();
         let requested_agent_type = agent_type.trim().to_string();
@@ -4910,6 +5137,14 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             "agentic".to_string()
         };
         let effective_agent_type = Self::normalize_agent_type(&provisional_agent_type);
+        let primary_agent_binding = Self::resolve_session_primary_agent(
+            &session,
+            &effective_agent_type,
+            &session_workspace,
+        )
+        .await?;
+        let runtime_agent_type = primary_agent_binding.runtime_agent_key.clone();
+        let external_agent_generation_lease = primary_agent_binding.lease;
 
         Self::track_session_workspace_activity_best_effort(
             &session.config,
@@ -4937,9 +5172,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             submission_policy.queue_priority
         );
 
-        if session.agent_type != effective_agent_type {
+        if session.agent_type != effective_agent_type
+            || session.config.agent_route_owner != primary_agent_binding.route_owner
+        {
             self.session_manager
-                .update_session_agent_type(&session_id, &effective_agent_type)
+                .update_session_agent_binding(
+                    &session_id,
+                    &effective_agent_type,
+                    primary_agent_binding.route_owner,
+                )
                 .await?;
         }
 
@@ -5166,8 +5407,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             user_message_metadata = Some(metadata);
         }
 
-        let session_workspace = Self::build_workspace_binding(&session.config).await;
-
         // Build WorkspaceServices based on the workspace type
         let workspace_services = Self::build_workspace_services(&session_workspace).await;
 
@@ -5231,7 +5470,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .wrap_user_input(
                 &session_id,
                 turn_index,
-                &effective_agent_type,
+                &runtime_agent_type,
                 previous_agent_type
                     .as_deref()
                     .map(str::trim)
@@ -5568,10 +5807,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let user_input_for_workspace = effective_user_input.clone();
         let session_storage_path_for_finalize = session_storage_path.clone();
         let effective_agent_type_clone = effective_agent_type.clone();
+        let runtime_agent_type_clone = runtime_agent_type;
         let user_message_metadata_clone = user_message_metadata;
         let scheduler_notify_tx = self.scheduler_notify_tx.get().cloned();
 
         tokio::spawn(async move {
+            // Keep the exact approved external prompt/tool/permission/model
+            // generation alive for the whole turn. Source updates affect only
+            // the next turn.
+            let _external_agent_generation_lease = external_agent_generation_lease;
             // Keep exact turn settlement pending until every tail write in
             // this spawned task has completed.
             let _turn_settlement_registration = turn_settlement_registration;
@@ -5652,11 +5896,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
 
             let workspace_turn_status = match execution_engine
-                .execute_dialog_turn(
-                    effective_agent_type_clone.clone(),
-                    messages,
-                    execution_context,
-                )
+                .execute_dialog_turn(runtime_agent_type_clone, messages, execution_context)
                 .await
             {
                 Ok(execution_result) => Some(
@@ -5836,7 +6076,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         )))
     }
 
-    async fn cancel_active_subagents_for_parent_turn(
+    fn cancel_active_subagents_for_parent_turn(
         &self,
         parent_session_id: &str,
         parent_dialog_turn_id: &str,
@@ -5863,14 +6103,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         );
 
         for active in active_subagents {
-            self.stop_active_subagent_execution(&active, "Parent dialog turn cancelled")
-                .await;
+            self.signal_active_subagent_cancellation(&active, "Parent dialog turn cancelled");
         }
     }
 
-    async fn stop_active_subagent_execution(&self, active: &ActiveSubagentExecution, reason: &str) {
+    fn signal_active_subagent_cancellation(&self, active: &ActiveSubagentExecution, reason: &str) {
         debug!(
-            "Stopping active subagent execution: subagent_session_id={}, subagent_dialog_turn_id={}, parent_session_id={}, parent_dialog_turn_id={}, reason={}",
+            "Signalling active subagent cancellation: subagent_session_id={}, subagent_dialog_turn_id={}, parent_session_id={}, parent_dialog_turn_id={}, reason={}",
             active.subagent_session_id,
             active.subagent_dialog_turn_id,
             active.parent_session_id,
@@ -5878,48 +6117,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             reason
         );
 
+        // The outer subagent execution task is the sole terminal persistence
+        // owner. It observes this token, cancels the engine/tools, waits for
+        // the inner task, and writes exactly one Cancelled outcome. Aborting
+        // and persisting here races that owner and can turn cancellation into
+        // a JoinError/Failed outcome or emit duplicate terminal events.
         active.cancel_token.cancel();
-        active.abort_handle.abort();
-
-        if let Err(error) = self
-            .execution_engine
-            .cancel_dialog_turn(&active.subagent_dialog_turn_id)
-            .await
-        {
-            warn!(
-                "Failed to cancel active subagent dialog turn: subagent_session_id={}, subagent_dialog_turn_id={}, error={}",
-                active.subagent_session_id, active.subagent_dialog_turn_id, error
-            );
-        }
-
-        if let Err(error) = self
-            .tool_pipeline
-            .cancel_dialog_turn_tools(&active.subagent_dialog_turn_id)
-            .await
-        {
-            warn!(
-                "Failed to cancel active subagent tools: subagent_session_id={}, subagent_dialog_turn_id={}, error={}",
-                active.subagent_session_id, active.subagent_dialog_turn_id, error
-            );
-        }
-
-        Self::persist_cancelled_dialog_turn(
-            self.event_queue.as_ref(),
-            self.session_manager.as_ref(),
-            None,
-            &active.subagent_session_id,
-            &active.subagent_dialog_turn_id,
-            true,
-        )
-        .await;
-
-        self.session_manager.reset_session_state_if_processing(
-            &active.subagent_session_id,
-            &active.subagent_dialog_turn_id,
-        );
-
-        self.active_subagent_executions
-            .remove(&active.subagent_session_id);
     }
 
     /// Cancel dialog turn execution
@@ -5929,8 +6132,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         dialog_turn_id: &str,
     ) -> BitFunResult<()> {
-        self.cancel_dialog_turn_with_descendant_policy(session_id, dialog_turn_id, true)
-            .await
+        self.cancel_dialog_turn_with_descendant_policy(
+            session_id,
+            dialog_turn_id,
+            true,
+            Duration::from_millis(1500),
+        )
+        .await
     }
 
     async fn cancel_dialog_turn_with_descendant_policy(
@@ -5938,6 +6146,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         dialog_turn_id: &str,
         cancel_descendants: bool,
+        drain_timeout: Duration,
     ) -> BitFunResult<()> {
         info!(
             "Received cancel request: dialog_turn_id={}, session_id={}, cancel_descendants={}",
@@ -5967,14 +6176,35 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // cancellation still targets the currently processing turn. A delayed
         // cancel request for an older turn must not clear a newer turn.
         debug!("Conditionally updating session state to Idle for cancelled turn");
-        let state_updated = self
+        let state_update_result = self
             .session_manager
             .update_session_state_for_turn_if_processing(
                 session_id,
                 dialog_turn_id,
                 SessionState::Idle,
             )
-            .await?;
+            .await;
+
+        // A persistence failure can occur after SessionManager has already
+        // changed the in-memory state. Cancellation has been admitted at that
+        // point, so it must still reach the engine, tools, and descendants.
+        // Preserve the error for the caller, but never return before sending
+        // those signals.
+        let (state_updated, state_update_error) = match state_update_result {
+            Ok(state_updated) => (state_updated, None),
+            Err(error) => {
+                let updated_in_memory = self
+                    .session_manager
+                    .get_session(session_id)
+                    .map(|session| matches!(session.state, SessionState::Idle))
+                    .unwrap_or(false);
+                warn!(
+                    "Failed to persist cancelled Session state; cancellation signals will still be delivered: session_id={}, dialog_turn_id={}, error={}",
+                    session_id, dialog_turn_id, error
+                );
+                (updated_in_memory, Some(error))
+            }
+        };
 
         let new_state = self
             .session_manager
@@ -6021,20 +6251,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
 
         if cancel_descendants {
-            self.cancel_active_subagents_for_parent_turn(session_id, dialog_turn_id)
-                .await;
+            self.cancel_active_subagents_for_parent_turn(session_id, dialog_turn_id);
         }
 
         // Step 4: Wait briefly for the spawn task that owns this turn to drain
         // its in-memory message writes before returning. Capped so the RPC
         // never blocks longer than ~1.5s — beyond that we let the new turn
         // proceed and rely on the cancellation token already being signalled.
-        let pending = self
-            .wait_session_drained(session_id, Duration::from_millis(1500))
-            .await;
+        let pending = self.wait_session_drained(session_id, drain_timeout).await;
         if pending > 0 {
             warn!(
-                "Cancelled turn did not fully drain within 1500ms: session_id={}, dialog_turn_id={}, pending={}",
+                "Cancelled turn did not fully drain within {}ms: session_id={}, dialog_turn_id={}, pending={}",
+                drain_timeout.as_millis(),
                 session_id, dialog_turn_id, pending
             );
         } else {
@@ -6042,6 +6270,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 "Cancelled turn fully drained: session_id={}, dialog_turn_id={}",
                 session_id, dialog_turn_id
             );
+        }
+
+        if let Some(error) = state_update_error {
+            return Err(error);
         }
 
         Ok(())
@@ -6076,16 +6308,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             return Ok(None);
         };
 
+        let deadline = Instant::now() + wait_timeout;
+        let drain_timeout = std::cmp::min(
+            Duration::from_millis(1500),
+            deadline.saturating_duration_since(Instant::now()),
+        );
         self.cancel_dialog_turn_with_descendant_policy(
             session_id,
             &current_turn_id,
             cancel_descendants,
+            drain_timeout,
         )
         .await?;
 
-        let deadline = Instant::now() + wait_timeout;
         while self.execution_engine.has_active_turn(&current_turn_id) {
-            if Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
                 warn!(
                     "Timed out waiting for active turn cancellation: session_id={}, dialog_turn_id={}, timeout_ms={}",
                     session_id,
@@ -6097,10 +6335,74 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     wait_timeout.as_millis()
                 )));
             }
-            sleep(Duration::from_millis(50)).await;
+            sleep(std::cmp::min(Duration::from_millis(50), remaining)).await;
         }
 
         Ok(Some(current_turn_id))
+    }
+
+    pub(crate) async fn cancel_loaded_lineage_session_in_storage(
+        &self,
+        storage_path: &Path,
+        session_id: &str,
+        expected_active_turn_id: Option<&str>,
+        wait_timeout: Duration,
+    ) -> BitFunResult<Option<String>> {
+        let deadline = Instant::now() + wait_timeout;
+        let _mutation_guard = tokio::time::timeout(
+            wait_timeout,
+            self.session_manager.acquire_session_mutation(session_id),
+        )
+        .await
+        .map_err(|_| {
+            BitFunError::Timeout(format!(
+                "Timed out acquiring the Session lifecycle lease before lineage cancellation: session_id={session_id}"
+            ))
+        })??;
+        if !self
+            .session_manager
+            .is_session_loaded_from_storage_path(storage_path, session_id)?
+        {
+            return Ok(None);
+        }
+        let active_turn_id = self
+            .session_manager
+            .get_session(session_id)
+            .and_then(|session| match session.state {
+                SessionState::Processing {
+                    current_turn_id, ..
+                } => Some(current_turn_id),
+                _ => None,
+            });
+        if active_turn_id.as_deref() != expected_active_turn_id {
+            return Err(BitFunError::OutcomeUnknown(format!(
+                "Subagent Session active Turn changed before cancellation: session_id={session_id}, expected_turn_id={}, active_turn_id={}",
+                expected_active_turn_id.unwrap_or("none"),
+                active_turn_id.as_deref().unwrap_or("none")
+            )));
+        }
+        if active_turn_id.is_none() {
+            return Ok(None);
+        }
+        // Match the Session abort semantics used by OpenCode: interrupting an
+        // inspected subagent stops the execution subtree rooted at that Session.
+        // A running Task is part of the selected Turn, so preserving its child
+        // while cancelling the owning Tool would leave the parent Turn unsettled.
+        self.cancel_active_turn_for_session_with_descendant_policy(
+            session_id,
+            deadline.saturating_duration_since(Instant::now()),
+            true,
+        )
+        .await
+        .map_err(|error| {
+            lineage_post_admission_cancellation_error(
+                error,
+                session_id,
+                active_turn_id
+                    .as_deref()
+                    .expect("active turn was checked before cancellation"),
+            )
+        })
     }
 
     /// Delete session
@@ -7951,7 +8253,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     subagent_session_id: session_id.clone(),
                     subagent_dialog_turn_id: dialog_turn_id.clone(),
                     cancel_token: subagent_cancel_token.clone(),
-                    abort_handle: abort_handle.clone(),
                 },
             );
         }
@@ -10193,18 +10494,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Ok(normalized)
     }
 
-    pub async fn update_session_agent_type(
-        &self,
-        session_id: &str,
-        agent_type: &str,
-    ) -> BitFunResult<()> {
-        self.ensure_session_runtime_ownership(session_id, None)?;
-        let normalized = Self::normalize_agent_type(agent_type);
-        self.session_manager
-            .update_session_agent_type(session_id, &normalized)
-            .await
-    }
-
     pub async fn update_session_mode(&self, session_id: &str, mode_id: &str) -> BitFunResult<()> {
         self.ensure_session_runtime_ownership(session_id, None)?;
         let mode_id = mode_id.trim();
@@ -10214,19 +10503,26 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             ));
         }
 
-        let mode_exists = get_agent_registry()
-            .get_modes_info()
-            .await
-            .into_iter()
-            .any(|mode| mode.id == mode_id);
-        if !mode_exists {
-            return Err(BitFunError::Validation(format!(
-                "Unknown session mode: {mode_id}"
-            )));
-        }
+        let session = self
+            .session_manager
+            .get_session(session_id)
+            .ok_or_else(|| BitFunError::NotFound(format!("Session not found: {session_id}")))?;
+        let workspace = Self::build_workspace_binding(&session.config).await;
+        let workspace_root =
+            crate::agentic::workspace::session_execution_workspace_root(&session.config);
+        let external_sources_supported = workspace
+            .as_ref()
+            .is_some_and(|workspace| !workspace.is_remote());
+        let binding = Self::resolve_primary_agent_for_workspace(
+            mode_id,
+            workspace_root,
+            external_sources_supported,
+            None,
+        )
+        .await?;
 
         self.session_manager
-            .update_session_agent_type(session_id, mode_id)
+            .update_session_agent_binding(session_id, mode_id, binding.route_owner)
             .await
     }
 
@@ -10619,7 +10915,7 @@ fn runtime_transcript_message_from_message(
     }
 }
 
-fn runtime_transcript_messages_from_turns(
+pub(crate) fn runtime_transcript_messages_from_turns(
     turns: &[DialogTurnData],
     requested_turn_id: Option<&str>,
 ) -> Vec<bitfun_runtime_ports::TranscriptMessage> {
@@ -11302,7 +11598,8 @@ impl bitfun_runtime_ports::AgentLocalCommandTurnPort for ConversationCoordinator
     async fn record_completed_local_command_turn(
         &self,
         request: bitfun_runtime_ports::AgentLocalCommandTurnRecordRequest,
-    ) -> bitfun_runtime_ports::PortResult<()> {
+    ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AgentLocalCommandTurnRecordResult>
+    {
         self.ensure_session_runtime_ownership(&request.session_id, None)
             .map_err(runtime_port_error_preserving_message)?;
         let mutation_guard = self
@@ -11341,7 +11638,12 @@ impl bitfun_runtime_ports::AgentLocalCommandTurnPort for ConversationCoordinator
             .await;
         drop(mutation_guard);
         result
-            .map(|_| ())
+            .map(
+                |turn| bitfun_runtime_ports::AgentLocalCommandTurnRecordResult {
+                    turn_id: turn.turn_id,
+                    storage_turn_index: turn.turn_index,
+                },
+            )
             .map_err(runtime_port_error_preserving_message)
     }
 }
@@ -11925,7 +12227,11 @@ impl bitfun_runtime_ports::AgentTurnCancellationPort for ConversationCoordinator
 
         let wait_timeout = Duration::from_millis(request.wait_timeout_ms.unwrap_or(1500));
         let cancelled_turn_id = self
-            .cancel_active_turn_for_session(&session_id, wait_timeout)
+            .cancel_active_turn_for_session_with_descendant_policy(
+                &session_id,
+                wait_timeout,
+                request.cancel_descendants,
+            )
             .await
             .map_err(|error| {
                 bitfun_runtime_ports::PortError::new(
@@ -11991,37 +12297,189 @@ impl bitfun_runtime_ports::RemoteControlStatePort for ConversationCoordinator {
 }
 
 impl ConversationCoordinator {
-    pub(crate) async fn read_session_transcript_locked(
+    async fn read_session_transcript_with_turn_status_locked(
         &self,
         request: bitfun_runtime_ports::SessionTranscriptRequest,
-    ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::SessionTranscript> {
-        let messages = match self
+        status_turn_id: Option<&str>,
+        required_settled_turn_ids: &[String],
+    ) -> bitfun_runtime_ports::PortResult<(
+        bitfun_runtime_ports::SessionTranscript,
+        Option<TurnStatus>,
+    )> {
+        let (messages, turn_status) = match self
             .session_manager
             .load_persisted_transcript_turns_locked(&request.session_id)
             .await
             .map_err(runtime_port_error_preserving_message)?
         {
             Some(turns) => {
-                runtime_transcript_messages_from_turns(&turns, request.turn_id.as_deref())
+                validate_required_lineage_turns_settled(&turns, required_settled_turn_ids)?;
+                (
+                    runtime_transcript_messages_from_turns(&turns, request.turn_id.as_deref()),
+                    status_turn_id.and_then(|turn_id| {
+                        turns
+                            .iter()
+                            .find(|turn| turn.turn_id == turn_id)
+                            .map(|turn| turn.status.clone())
+                    }),
+                )
             }
-            None => self
-                .session_manager
-                .get_context_messages(&request.session_id)
-                .await
-                .map_err(runtime_port_error_preserving_message)?
-                .into_iter()
-                .filter(|message| match request.turn_id.as_ref() {
-                    Some(turn_id) => message.metadata.turn_id.as_ref() == Some(turn_id),
-                    None => true,
-                })
-                .map(runtime_transcript_message_from_message)
-                .collect(),
+            None => {
+                if !required_settled_turn_ids.is_empty() {
+                    return Err(bitfun_runtime_ports::PortError::new(
+                        bitfun_runtime_ports::PortErrorKind::OutcomeUnknown,
+                        "Required terminal Turns are not yet durable in the authoritative transcript",
+                    ));
+                }
+                (
+                    self.session_manager
+                        .get_context_messages(&request.session_id)
+                        .await
+                        .map_err(runtime_port_error_preserving_message)?
+                        .into_iter()
+                        .filter(|message| match request.turn_id.as_ref() {
+                            Some(turn_id) => message.metadata.turn_id.as_ref() == Some(turn_id),
+                            None => true,
+                        })
+                        .map(runtime_transcript_message_from_message)
+                        .collect(),
+                    None,
+                )
+            }
         };
 
-        Ok(bitfun_runtime_ports::SessionTranscript {
-            session_id: request.session_id,
-            messages,
-        })
+        Ok((
+            bitfun_runtime_ports::SessionTranscript {
+                session_id: request.session_id,
+                messages,
+            },
+            turn_status,
+        ))
+    }
+
+    pub(crate) async fn read_session_transcript_locked(
+        &self,
+        request: bitfun_runtime_ports::SessionTranscriptRequest,
+    ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::SessionTranscript> {
+        self.read_session_transcript_with_turn_status_locked(request, None, &[])
+            .await
+            .map(|(transcript, _)| transcript)
+    }
+
+    pub(crate) async fn inspect_loaded_lineage_session_in_storage(
+        &self,
+        storage_path: &Path,
+        request: bitfun_runtime_ports::SessionTranscriptRequest,
+        required_settled_turn_ids: &[String],
+    ) -> bitfun_runtime_ports::PortResult<Option<bitfun_runtime_ports::AgentSessionLineageInspection>>
+    {
+        let _mutation_guard = self
+            .session_manager
+            .acquire_session_mutation(&request.session_id)
+            .await
+            .map_err(runtime_port_error_preserving_message)?;
+        if !self
+            .session_manager
+            .is_session_loaded_from_storage_path(storage_path, &request.session_id)
+            .map_err(runtime_port_error_preserving_message)?
+        {
+            return Ok(None);
+        }
+        if let Some(state) = self
+            .session_manager
+            .persistence_manager()
+            .load_session_revert_state(storage_path, &request.session_id)
+            .await
+            .map_err(runtime_port_error_preserving_message)?
+        {
+            if state.phase != SessionRevertPhase::Staged {
+                self.reconcile_session_revert_locked(storage_path, &request.session_id)
+                    .await
+                    .map_err(runtime_port_error_preserving_message)?;
+            }
+        }
+
+        let candidate_active_turn_id = self
+            .session_manager
+            .get_session(&request.session_id)
+            .and_then(|session| match session.state {
+                SessionState::Processing {
+                    current_turn_id, ..
+                } => Some(current_turn_id),
+                _ => None,
+            });
+        let in_flight_execution_count = self
+            .active_turns_per_session
+            .get(&request.session_id)
+            .map(|counter| counter.load(Ordering::SeqCst))
+            .unwrap_or(0);
+        if candidate_active_turn_id.as_deref().is_some_and(|turn_id| {
+            required_settled_turn_ids
+                .iter()
+                .any(|observed| observed == turn_id)
+        }) {
+            return Err(bitfun_runtime_ports::PortError::new(
+                bitfun_runtime_ports::PortErrorKind::OutcomeUnknown,
+                "Session still reports an observed terminal turn as active; retry the inspection",
+            ));
+        }
+        if lineage_session_is_settling_without_active_state(
+            candidate_active_turn_id.as_deref(),
+            in_flight_execution_count,
+        ) {
+            return Err(bitfun_runtime_ports::PortError::new(
+                bitfun_runtime_ports::PortErrorKind::OutcomeUnknown,
+                "Session turn is still settling after its active state changed; retry the inspection",
+            ));
+        }
+        let (transcript, persisted_turn_status) = self
+            .read_session_transcript_with_turn_status_locked(
+                request.clone(),
+                candidate_active_turn_id.as_deref(),
+                required_settled_turn_ids,
+            )
+            .await?;
+        let current_active_turn_id = self
+            .session_manager
+            .get_session(&request.session_id)
+            .and_then(|session| match session.state {
+                SessionState::Processing {
+                    current_turn_id, ..
+                } => Some(current_turn_id),
+                _ => None,
+            });
+        if candidate_active_turn_id != current_active_turn_id {
+            let (settled_transcript, settled_turn_status) = self
+                .read_session_transcript_with_turn_status_locked(
+                    request,
+                    candidate_active_turn_id.as_deref(),
+                    required_settled_turn_ids,
+                )
+                .await?;
+            if settled_turn_status
+                .as_ref()
+                .is_none_or(|status| *status == TurnStatus::InProgress)
+            {
+                return Err(bitfun_runtime_ports::PortError::new(
+                    bitfun_runtime_ports::PortErrorKind::OutcomeUnknown,
+                    "Session turn settlement changed while its transcript was being inspected; retry the inspection",
+                ));
+            }
+            return Ok(Some(bitfun_runtime_ports::AgentSessionLineageInspection {
+                transcript: settled_transcript,
+                active_turn_id: None,
+            }));
+        }
+        let active_turn_id = lineage_active_turn_after_transcript(
+            candidate_active_turn_id,
+            current_active_turn_id,
+            persisted_turn_status.as_ref(),
+        );
+
+        Ok(Some(bitfun_runtime_ports::AgentSessionLineageInspection {
+            transcript,
+            active_turn_id,
+        }))
     }
 }
 
@@ -12173,16 +12631,20 @@ fn merge_prepended_messages_for_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        btw_session_memory_mode, build_subagent_session_relationship,
-        logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
-        normalize_subagent_max_concurrency, resolve_agent_session_create_created_by,
-        resolve_agent_submission_turn_id, resolve_subagent_model_selection,
-        runtime_port_error_preserving_message, runtime_session_summary,
-        runtime_tool_restrictions_for_session_lifetime, runtime_transcript_messages_from_turns,
-        session_storage_workspace_locator, turn_review_manifest_for_agent,
-        BackgroundSubagentWaitMode, ContextCompactionOutcome, ConversationCoordinator,
-        ManualCompactionCommitGate, SessionMemoryMode, SessionReferenceLocator,
-        SessionRelationshipKind, SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
+        apply_primary_agent_model_default, btw_session_memory_mode,
+        build_subagent_session_relationship, lineage_active_turn_after_transcript,
+        lineage_post_admission_cancellation_error,
+        lineage_session_is_settling_without_active_state, logical_subagent_type_or_runtime,
+        merge_prepended_messages_for_turn, normalize_subagent_max_concurrency,
+        resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
+        resolve_subagent_model_selection, runtime_port_error_preserving_message,
+        runtime_session_summary, runtime_tool_restrictions_for_session_lifetime,
+        runtime_transcript_messages_from_turns, session_storage_workspace_locator,
+        turn_review_manifest_for_agent, validate_required_lineage_turns_settled,
+        ActiveSubagentExecution, BackgroundSubagentWaitMode, ContextCompactionOutcome,
+        ConversationCoordinator, ManualCompactionCommitGate, SessionMemoryMode,
+        SessionReferenceLocator, SessionRelationshipKind, SubagentExecutionRequest,
+        TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::agents::ExternalSubagentModelBinding;
     use crate::agentic::coordination::coordination_store::{
@@ -12190,8 +12652,8 @@ mod tests {
     };
     use crate::agentic::core::{
         InternalReminderKind, Message, MessageContent, MessageRole, MessageSemanticKind,
-        SessionConfig, SessionContinuationPolicy, SessionKind, SessionModelBindingPolicy,
-        SessionState, TurnStats,
+        ProcessingPhase, SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy,
+        SessionKind, SessionModelBindingPolicy, SessionState, ToolCall, TurnStats,
     };
     use crate::agentic::events::{AgenticEvent, EventQueue, EventQueueConfig, EventRouter};
     use crate::agentic::execution::{
@@ -12208,7 +12670,9 @@ mod tests {
     use crate::agentic::tools::framework::{
         PermissionIntent, Tool, ToolResult, ToolUseContext, ValidationResult,
     };
-    use crate::agentic::tools::pipeline::SubagentParentInfo;
+    use crate::agentic::tools::pipeline::{
+        SubagentParentInfo, ToolExecutionContext, ToolExecutionOptions, ToolTask,
+    };
     use crate::agentic::tools::registry::ToolRegistry;
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
     use crate::agentic::TurnSkillAgentSnapshot;
@@ -12216,6 +12680,258 @@ mod tests {
     use bitfun_agent_runtime::permission::PermissionRequestManager;
     use bitfun_runtime_services::test_support::FakeRuntimePort;
     use bitfun_services_core::permission_store::ProjectPermissionSqliteStore;
+
+    #[test]
+    fn external_command_delegation_uses_the_resolved_primary_binding() {
+        let source = include_str!("coordinator.rs").replace("\r\n", "\n");
+        let delegation = source
+            .split_once("pub(crate) fn start_external_subagent_delegation_turn(")
+            .expect("external command delegation entry")
+            .1
+            .split_once("pub async fn start_dialog_turn_with_prepended_messages(")
+            .expect("external command delegation boundary")
+            .0;
+
+        assert!(delegation.contains("Self::resolve_session_primary_agent("));
+        assert!(delegation.contains("Some(&primary_runtime_agent_key)"));
+        assert!(delegation.contains(".update_session_agent_binding("));
+        assert!(!delegation.contains(".update_session_agent_type("));
+        assert!(delegation
+            .contains("let _primary_agent_generation_lease = primary_agent_generation_lease;"));
+    }
+
+    #[test]
+    fn external_primary_fixed_model_is_only_a_creation_default() {
+        let fixed = ExternalSubagentModelBinding::Fixed {
+            model_id: "provider/profile-model".to_string(),
+            configuration_fingerprint: "fingerprint".to_string(),
+        };
+
+        let mut omitted = SessionConfig::default();
+        apply_primary_agent_model_default(&mut omitted, Some(&fixed));
+        assert_eq!(omitted.model_id.as_deref(), Some("provider/profile-model"));
+
+        let mut automatic = SessionConfig {
+            model_id: Some("auto".to_string()),
+            ..SessionConfig::default()
+        };
+        apply_primary_agent_model_default(&mut automatic, Some(&fixed));
+        assert_eq!(
+            automatic.model_id.as_deref(),
+            Some("provider/profile-model")
+        );
+
+        let mut explicit = SessionConfig {
+            model_id: Some("provider/user-model".to_string()),
+            ..SessionConfig::default()
+        };
+        apply_primary_agent_model_default(&mut explicit, Some(&fixed));
+        assert_eq!(explicit.model_id.as_deref(), Some("provider/user-model"));
+
+        let mut inherited = SessionConfig::default();
+        apply_primary_agent_model_default(
+            &mut inherited,
+            Some(&ExternalSubagentModelBinding::InheritParent),
+        );
+        assert_eq!(inherited.model_id, None);
+    }
+
+    #[test]
+    fn terminal_persisted_turn_is_not_replayed_as_active() {
+        assert_eq!(
+            lineage_active_turn_after_transcript(
+                Some("turn-1".to_string()),
+                Some("turn-1".to_string()),
+                Some(&TurnStatus::Completed),
+            ),
+            None
+        );
+        assert_eq!(
+            lineage_active_turn_after_transcript(
+                Some("turn-1".to_string()),
+                Some("turn-1".to_string()),
+                Some(&TurnStatus::InProgress),
+            )
+            .as_deref(),
+            Some("turn-1")
+        );
+    }
+
+    #[test]
+    fn idle_session_with_in_flight_execution_is_not_published_as_settled() {
+        assert!(lineage_session_is_settling_without_active_state(None, 1));
+        assert!(!lineage_session_is_settling_without_active_state(
+            Some("turn-1"),
+            1
+        ));
+        assert!(!lineage_session_is_settling_without_active_state(None, 0));
+    }
+
+    #[test]
+    fn lineage_read_barrier_requires_each_turn_to_be_durably_terminal() {
+        let turn = |turn_id: &str, status| {
+            let mut turn = DialogTurnData::new(
+                turn_id.to_string(),
+                0,
+                "session-1".to_string(),
+                UserMessageData {
+                    id: format!("{turn_id}-user"),
+                    content: "question".to_string(),
+                    timestamp: 1,
+                    metadata: None,
+                },
+            );
+            turn.status = status;
+            turn
+        };
+        let turns = vec![
+            turn("turn-settled", TurnStatus::Cancelled),
+            turn("turn-active", TurnStatus::InProgress),
+        ];
+
+        validate_required_lineage_turns_settled(&turns, &["turn-settled".to_string()])
+            .expect("terminal turn should satisfy the barrier");
+        for required in ["turn-active", "turn-missing"] {
+            let error = validate_required_lineage_turns_settled(&turns, &[required.to_string()])
+                .expect_err("non-terminal or absent turns must keep the read uncertain");
+            assert_eq!(
+                error.kind,
+                bitfun_runtime_ports::PortErrorKind::OutcomeUnknown
+            );
+        }
+    }
+
+    #[test]
+    fn post_admission_cancellation_errors_are_outcome_unknown() {
+        for source_error in [
+            crate::util::errors::BitFunError::Timeout("drain deadline".to_string()),
+            crate::util::errors::BitFunError::Session("state persistence failed".to_string()),
+        ] {
+            let error =
+                lineage_post_admission_cancellation_error(source_error, "session-1", "turn-1");
+
+            assert!(matches!(
+                error,
+                crate::util::errors::BitFunError::OutcomeUnknown(message)
+                    if message.contains("session_id=session-1")
+                        && message.contains("turn_id=turn-1")
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn post_admission_state_write_failure_still_delivers_all_cancellation_signals() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("lineage-cancel-{}", uuid::Uuid::new_v4());
+        let turn_id = format!("turn-{}", uuid::Uuid::new_v4());
+        session_manager
+            .create_session_with_id(
+                Some(session_id.clone()),
+                "Cancellation fault".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create persistent session");
+        session_manager
+            .update_session_state(
+                &session_id,
+                SessionState::Processing {
+                    current_turn_id: turn_id.clone(),
+                    phase: ProcessingPhase::ToolCalling,
+                },
+            )
+            .await
+            .expect("mark turn active");
+        let storage_path = session_manager
+            .effective_session_storage_path(&session_id)
+            .await
+            .expect("session storage path");
+
+        let engine_token = CancellationToken::new();
+        coordinator
+            .execution_engine
+            .register_cancel_token(&turn_id, engine_token.clone());
+
+        let tool_id = format!("tool-{}", uuid::Uuid::new_v4());
+        coordinator
+            .tool_pipeline
+            .insert_tool_task_for_test(ToolTask::new(
+                ToolCall {
+                    tool_id: tool_id.clone(),
+                    tool_name: "Read".to_string(),
+                    arguments: serde_json::json!({}),
+                    ..Default::default()
+                },
+                ToolExecutionContext {
+                    session_id: session_id.clone(),
+                    dialog_turn_id: turn_id.clone(),
+                    round_id: "round-1".to_string(),
+                    attempt_id: None,
+                    attempt_index: None,
+                    agent_type: "agentic".to_string(),
+                    workspace: None,
+                    primary_model_facts: Default::default(),
+                    context_vars: HashMap::new(),
+                    subagent_parent_info: None,
+                    permission_delegation: None,
+                    delegation_policy: DelegationPolicy::top_level(),
+                    deferred_tools: Vec::new(),
+                    loaded_deferred_tool_specs: Vec::new(),
+                    allowed_tools: Vec::new(),
+                    runtime_tool_restrictions: Default::default(),
+                    steering_interrupt: None,
+                    workspace_services: None,
+                    terminal_port: None,
+                    remote_exec_port: None,
+                },
+                ToolExecutionOptions::default(),
+            ))
+            .await;
+
+        let descendant_token = CancellationToken::new();
+        coordinator.active_subagent_executions.insert(
+            "child-session".to_string(),
+            ActiveSubagentExecution {
+                parent_session_id: session_id.clone(),
+                parent_dialog_turn_id: turn_id.clone(),
+                subagent_session_id: "child-session".to_string(),
+                subagent_dialog_turn_id: "child-turn".to_string(),
+                cancel_token: descendant_token.clone(),
+            },
+        );
+        session_manager
+            .persistence_manager()
+            .fail_next_session_state_write_for_test(&session_id);
+
+        let error = coordinator
+            .cancel_loaded_lineage_session_in_storage(
+                &storage_path,
+                &session_id,
+                Some(&turn_id),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect_err("admitted persistence failure must remain outcome-unknown");
+
+        assert!(matches!(
+            error,
+            crate::util::errors::BitFunError::OutcomeUnknown(message)
+                if message.contains("Injected session state write failure")
+        ));
+        assert!(engine_token.is_cancelled());
+        assert!(
+            coordinator
+                .tool_pipeline
+                .tool_task_is_cancelled_for_test(&tool_id),
+            "tool cancellation must run before the state write error is returned"
+        );
+        assert!(descendant_token.is_cancelled());
+    }
 
     #[test]
     fn runtime_session_list_preserves_the_runtime_owned_model_selector() {
@@ -12271,6 +12987,10 @@ mod tests {
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
+    // These tests settle only after the real filesystem and SQLite persistence path completes.
+    // Keep the wait state-based, but allow for loaded hosted Windows runners.
+    const USER_SHELL_TURN_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(30);
+
     #[test]
     fn manual_compaction_cancellation_wins_before_commit() {
         let gate = ManualCompactionCommitGate::planning();
@@ -12285,6 +13005,110 @@ mod tests {
 
         assert!(gate.try_begin_commit());
         assert!(!gate.try_cancel());
+    }
+
+    #[tokio::test]
+    async fn manual_compaction_fails_closed_before_admission_when_external_agent_is_unavailable() {
+        let (coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("external-compact-{}", uuid::Uuid::new_v4());
+        let external_agent_id = format!("missing-external-{}", uuid::Uuid::new_v4());
+        session_manager
+            .create_session_with_id(
+                Some(session_id.clone()),
+                "External compaction".to_string(),
+                external_agent_id.clone(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        session_manager
+            .update_session_agent_binding(
+                &session_id,
+                &external_agent_id,
+                SessionAgentRouteOwner::External,
+            )
+            .await
+            .expect("persist external route owner");
+
+        let error = match coordinator
+            .start_manual_compaction_task(session_id.clone(), None)
+            .await
+        {
+            Ok(_) => panic!("manual compaction must not bypass an unavailable external route"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("candidate_unavailable"));
+        let session = session_manager
+            .get_session(&session_id)
+            .expect("session remains loaded");
+        assert!(matches!(session.state, SessionState::Idle));
+        assert!(session.dialog_turn_ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_agent_change_switches_owner_but_case_variant_does_not() {
+        let (_coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("external-to-local-{}", uuid::Uuid::new_v4());
+        let external_agent_id = format!("external-profile-{}", uuid::Uuid::new_v4());
+        session_manager
+            .create_session_with_id(
+                Some(session_id.clone()),
+                "External to local".to_string(),
+                external_agent_id.clone(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        session_manager
+            .update_session_agent_binding(
+                &session_id,
+                &external_agent_id,
+                SessionAgentRouteOwner::External,
+            )
+            .await
+            .expect("persist external route owner");
+        let session = session_manager
+            .get_session(&session_id)
+            .expect("session remains loaded");
+        let workspace = ConversationCoordinator::build_workspace_binding(&session.config).await;
+
+        let binding =
+            ConversationCoordinator::resolve_session_primary_agent(&session, "agentic", &workspace)
+                .await
+                .expect(
+                    "explicitly selected local mode should resolve independently of the old owner",
+                );
+
+        assert_eq!(binding.runtime_agent_key, "agentic");
+        assert_eq!(binding.route_owner, SessionAgentRouteOwner::Local);
+
+        session_manager
+            .update_session_agent_binding(&session_id, "AGENTIC", SessionAgentRouteOwner::External)
+            .await
+            .expect("persist case-variant external route owner");
+        let case_variant_session = session_manager
+            .get_session(&session_id)
+            .expect("case-variant session remains loaded");
+        let error = match ConversationCoordinator::resolve_session_primary_agent(
+            &case_variant_session,
+            "agentic",
+            &workspace,
+        )
+        .await
+        {
+            Ok(_) => panic!("case variants of the same external identity must remain fail-closed"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("candidate_unavailable"));
     }
 
     #[test]
@@ -14022,7 +14846,7 @@ mod tests {
             .wait_for_turn_settlement(
                 &accepted.session_id,
                 &accepted.turn_id,
-                Duration::from_secs(5),
+                USER_SHELL_TURN_SETTLEMENT_TIMEOUT,
             )
             .await
             .expect("shell turn settles");
@@ -14117,7 +14941,7 @@ mod tests {
             .wait_for_turn_settlement(
                 &accepted.session_id,
                 &accepted.turn_id,
-                Duration::from_secs(5),
+                USER_SHELL_TURN_SETTLEMENT_TIMEOUT,
             )
             .await
             .expect("denied shell turn settles");
@@ -14175,7 +14999,7 @@ mod tests {
             .wait_for_turn_settlement(
                 &accepted.session_id,
                 &accepted.turn_id,
-                Duration::from_secs(5),
+                USER_SHELL_TURN_SETTLEMENT_TIMEOUT,
             )
             .await
             .expect("failed shell turn settles");
@@ -14244,6 +15068,7 @@ mod tests {
                     requester_session_id: None,
                     reason: Some("test cancellation".to_string()),
                     wait_timeout_ms: Some(1500),
+                    cancel_descendants: true,
                 },
             )
             .await
@@ -14270,7 +15095,7 @@ mod tests {
             .wait_for_turn_settlement(
                 &accepted.session_id,
                 &accepted.turn_id,
-                Duration::from_secs(5),
+                USER_SHELL_TURN_SETTLEMENT_TIMEOUT,
             )
             .await
             .expect("cancelled shell turn settles");

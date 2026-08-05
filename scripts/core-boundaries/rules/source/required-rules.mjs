@@ -2,6 +2,34 @@
 
 export const requiredContentRules = [
   {
+    path: 'Cargo.toml',
+    reason:
+      'workspace Reqwest defaults must stay transport-only so client owners select one TLS backend explicitly',
+    patterns: [
+      {
+        regex: /^reqwest[ \t]*=[ \t]*\{[ \t]*version[ \t]*=[ \t]*"[^"]+",[ \t]*default-features[ \t]*=[ \t]*false,[ \t]*features[ \t]*=[ \t]*\[[ \t]*"http2",[ \t]*"json",[ \t]*"stream",[ \t]*"multipart",[ \t]*"query",[ \t]*"form"[ \t]*\][ \t]*\}[ \t]*$/m,
+        message:
+          'workspace Reqwest dependency must use the reviewed transport/data feature allowlist',
+      },
+    ],
+  },
+  ...[
+    'src/apps/cli/Cargo.toml',
+    'src/apps/desktop/Cargo.toml',
+    'src/crates/adapters/ai-adapters/Cargo.toml',
+    'src/crates/services/miniapp-market-service/Cargo.toml',
+    'src/crates/services/skin-market-service/Cargo.toml',
+  ].map((path) => ({
+    path,
+    reason: 'first-party Reqwest client owners must select the repository TLS backend explicitly',
+    patterns: [
+      {
+        regex: /^reqwest\s*=\s*\{\s*workspace\s*=\s*true,\s*features\s*=\s*\[\s*"rustls"\s*\]\s*\}/m,
+        message: 'Reqwest client dependency must explicitly enable rustls',
+      },
+    ],
+  })),
+  {
     path: 'src/crates/services/services-core/src/lib.rs',
     reason:
       'services-core must compile concrete service owners only through their declared capability features',
@@ -501,6 +529,29 @@ export const requiredContentRules = [
         regex: /\brequire_capability\b/,
         message: 'missing typed capability requirement check',
       },
+      {
+        regex:
+          /#\[cfg\(any\(test, feature = "test-support"\)\)\]\s*pub mod test_support;/,
+        message: 'runtime-services test support must stay out of ordinary library builds',
+      },
+      {
+        regex: /#\[cfg\(test\)\]\s*mod runtime_services_contracts;/,
+        message: 'runtime-services owner contracts must run in the default crate test target',
+      },
+    ],
+  },
+  {
+    path: 'src/crates/execution/runtime-services/Cargo.toml',
+    reason: 'runtime-services test support must require an explicit dev-only feature',
+    patterns: [
+      {
+        regex: /^test-support\s*=\s*\[\]\s*$/m,
+        message: 'missing empty runtime-services test-support feature',
+      },
+      {
+        regex: /^default\s*=\s*\[\]\s*$/m,
+        message: 'runtime-services default feature set must stay empty',
+      },
     ],
   },
   {
@@ -535,7 +586,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/runtime-services/tests/runtime_services_contracts.rs',
+    path: 'src/crates/execution/runtime-services/src/runtime_services_contracts.rs',
     reason:
       'runtime-services must keep behavior-equivalence contracts for required services, optional capabilities, registry assembly, and remote port exposure',
     patterns: [
@@ -716,7 +767,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/sdk_smoke.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/sdk_smoke.rs',
     reason:
       'agent-runtime SDK smoke tests must prove the facade works with injected fake provider, services, tools, harnesses, and hooks without core',
     patterns: [
@@ -1340,7 +1391,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/deep_review_policy_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/deep_review_policy_contracts.rs',
     reason:
       'agent-runtime DeepReview owner must keep behavior-equivalence contracts for policy, queue state, tool context, report enrichment, and cache updates',
     patterns: [
@@ -1375,7 +1426,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/prompt_cache_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/prompt_cache_contracts.rs',
     reason:
       'agent-runtime prompt-cache owner must keep behavior-equivalence contracts for cache identity, expiry, invalidation, and scope-key shape',
     patterns: [
@@ -1669,7 +1720,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/agent_registry_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/agent_registry_contracts.rs',
     reason:
       'agent-runtime agent registry owner must keep behavior-equivalence contracts for visibility, availability, shared mode config, and source ordering',
     patterns: [
@@ -1807,7 +1858,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/custom_subagent_discovery_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/custom_subagent_discovery_contracts.rs',
     reason:
       'agent-runtime custom subagent discovery owner must keep behavior-equivalence contracts for BitFun directory priority, foreign directory exclusion, and load errors',
     patterns: [
@@ -1824,7 +1875,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/custom_subagent_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/custom_subagent_contracts.rs',
     reason:
       'agent-runtime custom subagent owner must keep behavior-equivalence contracts for defaults and front-matter serialization decisions',
     patterns: [
@@ -1910,7 +1961,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/post_call_hook_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_interaction_contracts/post_call_hook_contracts.rs',
     reason:
       'agent-runtime post-call hook owner must keep behavior-equivalence contracts for successful tool-call hook routing',
     patterns: [
@@ -1933,7 +1984,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/post_call_hook_execution_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_interaction_contracts/post_call_hook_execution_contracts.rs',
     reason:
       'agent-runtime post-call hook owner must keep concrete-executor routing behavior-equivalence contracts',
     patterns: [
@@ -2062,7 +2113,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/scheduler_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/scheduler_contracts.rs',
     reason:
       'agent-runtime scheduler owner must keep behavior-equivalence contracts for background delivery, queueing, reply suppression, steering, round injection, and turn outcomes',
     patterns: [
@@ -2198,7 +2249,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/thread_goal_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/thread_goal_contracts.rs',
     reason:
       'agent-runtime thread-goal owner must keep behavior-equivalence contracts for goal creation, continuation limits, budget reporting, and wire response shape',
     patterns: [
@@ -2226,7 +2277,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/prompt_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/prompt_contracts.rs',
     reason:
       'agent-runtime prompt owner must keep behavior-equivalence contracts for user context and reminder ordering',
     patterns: [
@@ -2264,7 +2315,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/events_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/events_contracts.rs',
     reason:
       'agent-runtime event owner must keep behavior-equivalence contracts for event wire labels',
     patterns: [
@@ -2414,7 +2465,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/scheduled_job_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/scheduled_job_contracts.rs',
     reason:
       'agent-runtime scheduled-job owner must keep behavior-equivalence contracts for wire shape, retry, coalescing, one-shot, missing-session, and restart recovery semantics',
     patterns: [
@@ -2705,7 +2756,7 @@ export const requiredContentRules = [
     ],
   },
   {
-    path: 'src/crates/execution/agent-runtime/tests/deep_research_contracts.rs',
+    path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/deep_research_contracts.rs',
     reason:
       'agent-runtime must keep behavior-equivalence contracts for DeepResearch citation renumbering',
     patterns: [
@@ -3875,8 +3926,8 @@ export const requiredContentRules = [
         message: 'core ai-adapter-runtime feature must explicitly enable the optional dependency',
       },
       {
-        regex: /product-full = \[[^\]]*"ai-adapter-runtime"[^\]]*\]/,
-        message: 'core product-full assembly must explicitly opt into AI adapter runtime',
+        regex: /agent-runtime = \[[^\]]*"ai-adapter-runtime"[^\]]*\]/,
+        message: 'core agent-runtime assembly must explicitly opt into AI adapter runtime',
       },
       {
         regex: /product-domains = \[[^\]]*"ai-adapter-runtime"[^\]]*\]/,
@@ -3922,8 +3973,10 @@ export const requiredContentRules = [
         message: 'core product-full must explicitly enable tool pack product features',
       },
       {
-        regex: /"bitfun-services-integrations\/product-full"/,
-        message: 'core product-full must explicitly enable integration product features',
+        regex:
+          /agent-runtime = \[[\s\S]*"bitfun-services-integrations\/mcp"[\s\S]*"bitfun-services-integrations\/remote-connect"[\s\S]*"bitfun-services-integrations\/workspace-search"[\s\S]*\]/,
+        message:
+          'core agent-runtime must directly assemble the MCP, Remote Connect, and workspace-search services it exposes',
       },
       {
         regex: /"dep:bitfun-product-domains"/,
@@ -3946,12 +3999,12 @@ export const requiredContentRules = [
       'no-default bitfun-core must keep product runtime surfaces behind explicit features',
     patterns: [
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod agentic\b/s,
-        message: 'agentic runtime must stay behind product-full for no-default builds',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod agentic\b/s,
+        message: 'agentic runtime must stay behind agent-runtime for no-default builds',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*mod external_subagents\b/s,
-        message: 'external subagent product assembly must stay behind product-full',
+        regex: /#\[cfg\(feature = "external-sources"\)\]\s*mod external_subagents\b/s,
+        message: 'external subagent product assembly must stay behind external-sources',
       },
       {
         regex: /#\[cfg\(feature = "product-domains"\)\]\s*pub mod function_agents\b/s,
@@ -3962,8 +4015,16 @@ export const requiredContentRules = [
         message: 'MiniApp product domain facade must stay behind product-domains',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub\(crate\) mod service_agent_runtime\b/s,
-        message: 'service agent runtime owner assembly must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub\(crate\) mod service_agent_runtime\b/s,
+        message: 'service agent runtime owner assembly must stay behind agent-runtime',
+      },
+      {
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod native_hooks\b/s,
+        message: 'native Agent hook dispatch must stay owned by agent-runtime',
+      },
+      {
+        regex: /#\[cfg\(feature = "external-sources"\)\]\s*mod instruction_sources\b/s,
+        message: 'third-party instruction discovery must stay behind external-sources',
       },
     ],
   },
@@ -3974,17 +4035,17 @@ export const requiredContentRules = [
     patterns: [
       {
         regex:
-          /#\[cfg\(feature = "product-full"\)\]\s*mod baseline;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod controller;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod device_controller;[\s\S]*?#\[cfg\(feature = "product-full"\)\]\s*mod preparation;/s,
-        message: 'Dispatch product controllers must stay behind product-full',
+          /#\[cfg\(feature = "agent-runtime"\)\]\s*mod baseline;[\s\S]*?#\[cfg\(all\(feature = "agent-runtime", feature = "ssh-remote"\)\)\]\s*mod controller;[\s\S]*?#\[cfg\(all\(feature = "agent-runtime", feature = "ssh-remote"\)\)\]\s*mod device_controller;[\s\S]*?#\[cfg\(feature = "agent-runtime"\)\]\s*mod preparation;/s,
+        message: 'Dispatch SSH/device controllers must require both agent-runtime and ssh-remote',
       },
       {
         regex:
-          /#\[cfg\(feature = "product-full"\)\]\s*async fn release_baseline_claim\b/s,
-        message: 'worktree-backed dispatch claim release must stay behind product-full',
+          /#\[cfg\(feature = "agent-runtime"\)\]\s*async fn release_baseline_claim\b/s,
+        message: 'worktree-backed dispatch claim release must stay behind agent-runtime',
       },
       {
         regex:
-          /#\[cfg\(not\(feature = "product-full"\)\)\]\s*async fn release_baseline_claim\([^)]*\)\s*->\s*Result<\(\), DispatchStoreError>\s*\{\s*Err\(\s*DispatchStoreError::ClaimRelease\([\s\S]*?\)\s*\)\s*\}/s,
+          /#\[cfg\(not\(feature = "agent-runtime"\)\)\]\s*async fn release_baseline_claim\([^)]*\)\s*->\s*Result<\(\), DispatchStoreError>\s*\{\s*Err\(\s*DispatchStoreError::ClaimRelease\([\s\S]*?\)\s*\)\s*\}/s,
         message: 'no-default dispatch claim release must fail closed',
       },
     ],
@@ -4002,8 +4063,8 @@ export const requiredContentRules = [
         message: 'AI subscription auth runtime must stay behind ai-adapter-runtime',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod debug_log\b/s,
-        message: 'debug ingest HTTP server must stay behind product-full',
+        regex: /#\[cfg\(feature = "debug-log"\)\]\s*pub mod debug_log\b/s,
+        message: 'debug ingest HTTP server must stay behind debug-log',
       },
     ],
   },
@@ -4039,28 +4100,28 @@ export const requiredContentRules = [
         message: 'git service facade must stay behind its exact feature',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod mcp\b/s,
-        message: 'Core MCP product bridge must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod mcp\b/s,
+        message: 'Core MCP product bridge must stay behind agent-runtime',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod remote_connect\b/s,
-        message: 'Core Remote Connect product bridge must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod remote_connect\b/s,
+        message: 'Core Remote Connect product bridge must stay behind agent-runtime',
       },
       {
         regex: /#\[cfg\(feature = "review-platform"\)\]\s*pub mod review_platform\b/s,
         message: 'review platform facade must stay behind its exact feature',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod search\b/s,
-        message: 'workspace search facade must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod search\b/s,
+        message: 'workspace search facade must stay behind agent-runtime',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub use search::/s,
-        message: 'workspace search exports must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub use search::/s,
+        message: 'workspace search exports must stay behind agent-runtime',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod snapshot\b/s,
-        message: 'snapshot service must stay behind product-full until tool-runtime ownership is split',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod snapshot\b/s,
+        message: 'snapshot service must stay behind agent-runtime until tool-runtime ownership is split',
       },
     ],
   },
@@ -4070,8 +4131,8 @@ export const requiredContentRules = [
       'mode config canonicalization depends on product agent/tool registries and must stay out of no-default builds',
     patterns: [
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub mod mode_config_canonicalizer\b/s,
-        message: 'mode config canonicalizer must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub mod mode_config_canonicalizer\b/s,
+        message: 'mode config canonicalizer must stay behind agent-runtime',
       },
     ],
   },
@@ -4097,12 +4158,12 @@ export const requiredContentRules = [
       'workspace runtime binding helpers may depend on agentic runtime only in full product builds and must delegate legacy session-store migration to services-core',
     patterns: [
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*use crate::agentic::WorkspaceBinding\b/s,
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*use crate::agentic::WorkspaceBinding\b/s,
         message: 'WorkspaceBinding import must stay gated for no-default builds',
       },
       {
-        regex: /#\[cfg\(feature = "product-full"\)\]\s*pub async fn ensure_runtime_for_workspace_binding\b/s,
-        message: 'WorkspaceBinding runtime helper must stay behind product-full',
+        regex: /#\[cfg\(feature = "agent-runtime"\)\]\s*pub async fn ensure_runtime_for_workspace_binding\b/s,
+        message: 'WorkspaceBinding runtime helper must stay behind agent-runtime',
       },
       {
         regex: /\bmerge_legacy_session_store\b/,

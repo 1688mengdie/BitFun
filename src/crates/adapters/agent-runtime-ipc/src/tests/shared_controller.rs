@@ -9,10 +9,12 @@ use async_trait::async_trait;
 use bitfun_events::{AgenticEvent, AgenticEventEnvelope, AgenticEventPriority};
 use bitfun_runtime_ports::{
     AgentDialogTurnRequest, AgentSessionCompactionRequest, AgentSessionComposerUpdate,
-    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionModeUpdateRequest,
+    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionLineageCancellationRequest,
+    AgentSessionLineageTranscriptRequest, AgentSessionModeUpdateRequest,
     AgentSessionModelUpdateRequest, AgentSessionRevertRequest, AgentSessionRevertResult,
-    AgentSessionSummary, AgentSubmissionSource, AgentUserShellCommandRequest,
-    DialogSubmissionPolicy, SessionTranscript,
+    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSubmissionSource,
+    AgentUserShellCommandRequest, DialogSubmissionPolicy, SessionExecutionTarget,
+    SessionTranscript,
 };
 use serde_json::Map;
 use std::path::Path;
@@ -90,6 +92,7 @@ struct FakeHandler {
     rename_delay: Option<Duration>,
     delete_delay: Option<Duration>,
     submit_delay: Option<Duration>,
+    lineage_read_delay: Option<Duration>,
     invalid_steer_result: bool,
     settle_cancel: bool,
     events: broadcast::Sender<RuntimeIpcEvent>,
@@ -115,6 +118,7 @@ impl Default for FakeHandler {
             rename_delay: None,
             delete_delay: None,
             submit_delay: None,
+            lineage_read_delay: None,
             invalid_steer_result: false,
             settle_cancel: true,
             events,
@@ -205,6 +209,15 @@ impl RuntimeIpcRequestHandler for FakeHandler {
                 tokio::time::sleep(delay).await;
             }
         }
+        if matches!(
+            operation,
+            RuntimeIpcOperation::GetSessionLineage { .. }
+                | RuntimeIpcOperation::InspectLineageSession { .. }
+        ) {
+            if let Some(delay) = self.lineage_read_delay {
+                tokio::time::sleep(delay).await;
+            }
+        }
         match operation {
             RuntimeIpcOperation::RestoreSession { request } => Ok(restored(&request.session_id)),
             RuntimeIpcOperation::ForkSession { .. } => {
@@ -214,6 +227,7 @@ impl RuntimeIpcRequestHandler for FakeHandler {
                         session_id: "session-fork".to_string(),
                         messages: Vec::new(),
                     },
+                    workspace_binding: workspace_binding(),
                 })
             }
             RuntimeIpcOperation::SubmitTurn { request } => {
@@ -248,6 +262,26 @@ impl RuntimeIpcRequestHandler for FakeHandler {
                 Ok(RuntimeIpcOperationResult::TurnAccepted {
                     session_id: request.session_id,
                     turn_id: request.turn_id,
+                })
+            }
+            RuntimeIpcOperation::InspectLineageSession { request } => {
+                Ok(RuntimeIpcOperationResult::LineageSessionInspection {
+                    inspection: bitfun_runtime_ports::AgentSessionLineageInspection {
+                        transcript: SessionTranscript {
+                            session_id: request.session_id,
+                            messages: Vec::new(),
+                        },
+                        active_turn_id: None,
+                    },
+                })
+            }
+            RuntimeIpcOperation::CancelLineageSession { request } => {
+                Ok(RuntimeIpcOperationResult::TurnCancelled {
+                    cancellation: bitfun_runtime_ports::AgentTurnCancellationResult {
+                        session_id: request.session_id,
+                        turn_id: None,
+                        requested: true,
+                    },
                 })
             }
             RuntimeIpcOperation::UndoSession { request }
@@ -394,7 +428,7 @@ async fn first_party_timeout_reports_unknown_outcome_and_releases_the_lease() {
             client_id,
             "0.1.0",
             Duration::from_secs(2),
-            Duration::from_millis(150),
+            Duration::from_secs(2),
         )
         .await
         .expect("connect first-party client");
@@ -412,6 +446,88 @@ async fn first_party_timeout_reports_unknown_outcome_and_releases_the_lease() {
             "unexpected restore result: {restore:?}"
         );
     }
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn cancellation_supersedes_a_slow_lineage_read_on_the_same_client() {
+    let handler = Arc::new(FakeHandler {
+        lineage_read_delay: Some(Duration::from_secs(2)),
+        ..FakeHandler::default()
+    });
+    let server = TestServer::start(server_config(), handler.clone()).await;
+    let client = RuntimeIpcClient::connect(
+        server.runtime_root.path(),
+        &server.discovery,
+        "lineage-controller",
+        "0.1.0",
+        Duration::from_secs(2),
+        Duration::from_secs(3),
+    )
+    .await
+    .expect("connect first-party client");
+    client
+        .request(restore_operation(server.workspace.path(), "session-a"))
+        .await
+        .expect("restore root session");
+
+    let inspect_client = client.clone();
+    let workspace_path = server.workspace.path().to_string_lossy().to_string();
+    let inspect_workspace_path = workspace_path.clone();
+    let inspect = tokio::spawn(async move {
+        inspect_client
+            .request(RuntimeIpcOperation::InspectLineageSession {
+                request: AgentSessionLineageTranscriptRequest {
+                    workspace_path: inspect_workspace_path,
+                    root_session_id: "session-a".to_string(),
+                    session_id: "session-child".to_string(),
+                    required_settled_turn_ids: Vec::new(),
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                },
+            })
+            .await
+    });
+    wait_for_calls(&handler, |calls| {
+        calls
+            .iter()
+            .any(|call| matches!(call, RuntimeIpcOperation::InspectLineageSession { .. }))
+    })
+    .await;
+
+    let cancellation = tokio::time::timeout(
+        Duration::from_millis(300),
+        client.request(RuntimeIpcOperation::CancelLineageSession {
+            request: AgentSessionLineageCancellationRequest {
+                workspace_path,
+                root_session_id: "session-a".to_string(),
+                session_id: "session-child".to_string(),
+                expected_active_turn_id: Some("turn-child".to_string()),
+                source: None,
+                reason: None,
+                wait_timeout_ms: None,
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        }),
+    )
+    .await
+    .expect("lineage cancellation must not wait for transcript I/O")
+    .expect("cancel response");
+    assert!(matches!(
+        cancellation,
+        RuntimeIpcOperationResult::TurnCancelled { cancellation }
+            if cancellation.requested && cancellation.session_id == "session-child"
+    ));
+    assert!(matches!(
+        inspect.await.expect("inspect task"),
+        Err(RuntimeIpcClientError::Remote(RuntimeIpcError {
+            code: RuntimeIpcErrorCode::Unavailable,
+            ..
+        }))
+    ));
+
+    drop(client);
     server.finish().await;
 }
 
@@ -508,6 +624,18 @@ fn restored(session_id: &str) -> RuntimeIpcOperationResult {
             messages: Vec::new(),
         },
         pending_permissions: Vec::new(),
+        workspace_binding: workspace_binding(),
+    }
+}
+
+fn workspace_binding() -> AgentSessionWorkspaceBinding {
+    AgentSessionWorkspaceBinding {
+        workspace_id: Some("workspace-fixture".to_string()),
+        workspace_path: "/workspace".to_string(),
+        project_workspace_path: Some("/workspace".to_string()),
+        execution_target: Some(SessionExecutionTarget::local("/workspace")),
+        remote_connection_id: None,
+        remote_ssh_host: None,
     }
 }
 
@@ -797,6 +925,45 @@ async fn session_switching_is_exclusive_and_disconnect_releases_control() {
     )
     .await;
     drop(second);
+    server.finish().await;
+}
+
+#[tokio::test]
+async fn session_scoped_agent_catalog_requires_the_current_controller() {
+    let server = TestServer::start(server_config(), Arc::new(FakeHandler::default())).await;
+    let mut client = server.connect("catalog-controller").await;
+
+    expect_response(
+        &mut client,
+        2,
+        RuntimeIpcOperation::ListAgentModes { session_id: None },
+    )
+    .await;
+    expect_error(
+        &mut client,
+        3,
+        RuntimeIpcOperation::ListAgentModes {
+            session_id: Some("session-a".to_string()),
+        },
+        RuntimeIpcErrorCode::ControllerRequired,
+    )
+    .await;
+    expect_response(
+        &mut client,
+        4,
+        restore_operation(server.workspace.path(), "session-a"),
+    )
+    .await;
+    expect_response(
+        &mut client,
+        5,
+        RuntimeIpcOperation::ListAgentModes {
+            session_id: Some("session-a".to_string()),
+        },
+    )
+    .await;
+
+    drop(client);
     server.finish().await;
 }
 

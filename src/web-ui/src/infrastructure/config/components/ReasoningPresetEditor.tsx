@@ -216,7 +216,6 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
             </span>
             <Select
               value={catalog.source}
-              dropdownPortal
               disabled={disabled}
               size="small"
               triggerAriaLabel={t('reasoningPresets.catalogSource')}
@@ -260,7 +259,6 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
             </span>
             <Select
               value={value.default_preset ?? ''}
-              dropdownPortal
               disabled={disabled}
               size="small"
               triggerAriaLabel={t('reasoningPresets.defaultPreset')}
@@ -457,7 +455,6 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                       <div key={jsonKey} className="bitfun-reasoning-preset-editor__action">
                         <Select
                           size="small"
-                          dropdownPortal
                           value={action.type}
                           disabled={disabled}
                           options={actionOptions.filter(option => (
@@ -482,7 +479,6 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                           <div className="bitfun-reasoning-preset-editor__effort-control">
                             <Select
                               size="small"
-                              dropdownPortal
                               value={action.value}
                               disabled={disabled}
                               options={effortOptions}

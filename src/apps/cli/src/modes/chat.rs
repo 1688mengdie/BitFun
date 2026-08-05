@@ -12,7 +12,7 @@ use arboard::Clipboard;
 use crossterm::event::{
     Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
 };
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::{
     mpsc::{self, Receiver, TryRecvError as MpscTryRecvError},
     Arc,
@@ -21,8 +21,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::broadcast::error::TryRecvError;
 
 use bitfun_agent_runtime::sdk::{
-    AgentLocalCommandTurnRecordRequest, AgentSessionComposerUpdate, AgentSessionUsageRequest,
-    SessionUsageReport,
+    AgentLocalCommandTurnRecordRequest, AgentSessionComposerUpdate, AgentSessionLineageEntry,
+    AgentSessionLineageInspection, AgentSessionLineageSnapshot, AgentSessionUsageRequest,
+    AgentTurnCancellationResult, SessionTranscript, SessionUsageReport,
 };
 use bitfun_events::{AgenticEvent, ToolEventData, ToolEventIdentity};
 use resize::ResizeRedrawState;
@@ -34,7 +35,7 @@ use crate::actions::{
     SHARED_TUI_HELP_NOTE,
 };
 use crate::agent::context_reload_client::CliContextReloadClient;
-use crate::agent::runtime_client::{CliAgentRuntimeClient, SessionOperationError};
+use crate::agent::runtime_client::{CliAgentMode, CliAgentRuntimeClient, SessionOperationError};
 use crate::chat_state::{ChatState, ModelTokenUsageSnapshot};
 use crate::config::CliConfig;
 use crate::ui::agent_selector::{AgentItem, AgentSelectorAction};
@@ -53,6 +54,7 @@ use crate::ui::prompt_command_shell_review::PromptCommandShellReviewAction;
 use crate::ui::prompt_stash_selector::PromptStashAction;
 use crate::ui::provider_selector::ProviderSelection;
 use crate::ui::question::QuestionAction;
+use crate::ui::session_lineage_selector::SessionLineageAction;
 use crate::ui::session_selector::{SessionAction, SessionItem};
 use crate::ui::skill_selector::{SkillItem, SkillSelectorAction};
 use crate::ui::subagent_selector::{SubagentItem, SubagentSelectorAction};
@@ -140,6 +142,129 @@ fn mark_active_turn_failed(chat_state: &mut ChatState, error: &str) -> bool {
 
     chat_state.handle_turn_failed(error);
     true
+}
+
+#[derive(Debug, Default)]
+struct TranscriptProjectionOutcome {
+    changed: bool,
+    requested_input: bool,
+    terminal: Option<TranscriptTerminalOutcome>,
+}
+
+#[derive(Debug)]
+enum TranscriptTerminalOutcome {
+    Completed,
+    Failed(String),
+    Cancelled,
+    SystemError(String),
+}
+
+/// Shared event-to-transcript projection used by the root conversation and a
+/// read-only inspected descendant. Host notifications and git refresh remain
+/// root-only side effects in the caller.
+fn project_transcript_event(
+    chat_state: &mut ChatState,
+    event: &AgenticEvent,
+    interactive: bool,
+) -> TranscriptProjectionOutcome {
+    if event
+        .turn_id()
+        .is_some_and(|turn_id| chat_state.should_ignore_turn_event(turn_id))
+    {
+        return TranscriptProjectionOutcome::default();
+    }
+
+    let mut outcome = TranscriptProjectionOutcome::default();
+    match event {
+        AgenticEvent::DialogTurnStarted {
+            turn_id,
+            user_input,
+            ..
+        } if chat_state.current_turn_id() != Some(turn_id.as_str()) => {
+            chat_state.handle_turn_started(turn_id, user_input);
+            outcome.changed = true;
+        }
+        AgenticEvent::TextChunk { turn_id, text, .. }
+            if chat_state.current_turn_id() == Some(turn_id.as_str()) =>
+        {
+            chat_state.handle_text_chunk(text);
+            outcome.changed = true;
+        }
+        AgenticEvent::ThinkingChunk {
+            turn_id, content, ..
+        } if chat_state.current_turn_id() == Some(turn_id.as_str()) => {
+            chat_state.handle_thinking_chunk(content);
+            outcome.changed = true;
+        }
+        AgenticEvent::ToolEvent {
+            turn_id,
+            tool_event,
+            ..
+        } if chat_state.current_turn_id() == Some(turn_id.as_str()) => {
+            let question_pending = chat_state.question_prompt.is_some();
+            chat_state.handle_tool_event(tool_event);
+            outcome.requested_input = !question_pending && chat_state.question_prompt.is_some();
+            if !interactive {
+                chat_state.question_prompt = None;
+                chat_state.permission_prompt = None;
+            }
+            outcome.changed = true;
+        }
+        AgenticEvent::UserSteeringInjected {
+            turn_id,
+            steering_id,
+            display_content,
+            ..
+        } if chat_state.current_turn_id() == Some(turn_id.as_str()) => {
+            chat_state.handle_user_steering(steering_id, display_content, false);
+            outcome.changed = true;
+        }
+        AgenticEvent::ContextCompressionStarted { .. }
+        | AgenticEvent::ContextCompressionCompleted { .. }
+        | AgenticEvent::ContextCompressionFailed { .. } => {
+            if let Some(tool_event) = context_compression_tool_event(event, chat_state) {
+                chat_state.handle_tool_event(&tool_event);
+                outcome.changed = true;
+            }
+        }
+        AgenticEvent::DialogTurnCompleted {
+            turn_id,
+            total_rounds,
+            total_tools,
+            ..
+        } if chat_state.current_turn_id() == Some(turn_id.as_str()) => {
+            chat_state.handle_turn_completed(*total_rounds, *total_tools);
+            outcome.changed = true;
+            outcome.terminal = Some(TranscriptTerminalOutcome::Completed);
+        }
+        AgenticEvent::DialogTurnFailed { turn_id, error, .. }
+            if chat_state.current_turn_id() == Some(turn_id.as_str()) =>
+        {
+            chat_state.handle_turn_failed(error);
+            outcome.changed = true;
+            outcome.terminal = Some(TranscriptTerminalOutcome::Failed(error.clone()));
+        }
+        AgenticEvent::DialogTurnCancelled { turn_id, .. }
+            if chat_state.should_apply_turn_cancelled(turn_id) =>
+        {
+            chat_state.handle_turn_cancelled();
+            outcome.changed = true;
+            outcome.terminal = Some(TranscriptTerminalOutcome::Cancelled);
+        }
+        AgenticEvent::TokenUsageUpdated { .. } => {
+            if let Some(usage) = primary_model_usage_for_active_turn(event, chat_state) {
+                chat_state.handle_primary_model_usage(usage);
+                outcome.changed = true;
+            }
+        }
+        AgenticEvent::SystemError { error, .. } => {
+            chat_state.add_system_message(format!("[System error: {error}]"));
+            outcome.changed = true;
+            outcome.terminal = Some(TranscriptTerminalOutcome::SystemError(error.clone()));
+        }
+        _ => {}
+    }
+    outcome
 }
 
 /// Chat mode exit reason
@@ -242,6 +367,64 @@ struct PendingWorkspaceDiff {
     >,
 }
 
+enum LineageInspectionTaskError {
+    Runtime(SessionOperationError),
+    Deadline,
+}
+
+impl LineageInspectionTaskError {
+    fn outcome_unknown(&self) -> bool {
+        matches!(self, Self::Runtime(error) if error.outcome_unknown())
+    }
+}
+
+impl std::fmt::Display for LineageInspectionTaskError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Runtime(error) => error.fmt(formatter),
+            Self::Deadline => formatter.write_str("the transcript settlement deadline elapsed"),
+        }
+    }
+}
+
+enum PendingLineageOperation {
+    Query {
+        root_session_id: String,
+        handle: tokio::task::JoinHandle<anyhow::Result<Option<AgentSessionLineageSnapshot>>>,
+    },
+    Inspect {
+        entry: AgentSessionLineageEntry,
+        refresh: bool,
+        event_generation: u64,
+        handle: tokio::task::JoinHandle<
+            std::result::Result<AgentSessionLineageInspection, LineageInspectionTaskError>,
+        >,
+    },
+}
+
+impl PendingLineageOperation {
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Query { handle, .. } => handle.is_finished(),
+            Self::Inspect { handle, .. } => handle.is_finished(),
+        }
+    }
+
+    fn abort(&self) {
+        match self {
+            Self::Query { handle, .. } => handle.abort(),
+            Self::Inspect { handle, .. } => handle.abort(),
+        }
+    }
+}
+
+struct PendingLineageCancellation {
+    root_session_id: String,
+    session_id: String,
+    navigation_generation: u64,
+    handle: tokio::task::JoinHandle<anyhow::Result<AgentTurnCancellationResult>>,
+}
+
 #[derive(Debug, Clone)]
 struct ExternalPromptCommandInvocation {
     command_name: String,
@@ -295,6 +478,29 @@ struct ChatEventContext<'a> {
     exit_reason: &'a mut ChatExitReason,
 }
 
+struct AgentSessionInspection {
+    selected_session_id: String,
+    chat_state: ChatState,
+    /// Runtime events invalidate this read model. Live chunks are projected
+    /// directly; Runtime transcript reads replace it authoritatively.
+    refresh_pending: bool,
+    refresh_due_at: Instant,
+    refresh_deadline: Option<Instant>,
+    refresh_retry_delay: Duration,
+}
+
+struct BufferedLineageEvent {
+    event: AgenticEvent,
+    encoded_bytes: usize,
+}
+
+const LINEAGE_EVENT_BUFFER_MAX_BYTES: usize = 1024 * 1024;
+const LINEAGE_EVENT_BUFFER_MAX_EVENTS: usize = 4096;
+const LINEAGE_READ_BARRIER_MAX_TURNS_PER_SESSION: usize = 256;
+const LINEAGE_SETTLEMENT_RETRY_WINDOW: Duration = Duration::from_secs(5);
+const LINEAGE_SETTLEMENT_RETRY_MIN: Duration = Duration::from_millis(250);
+const LINEAGE_SETTLEMENT_RETRY_MAX: Duration = Duration::from_secs(1);
+
 pub(crate) struct ChatMode {
     config: CliConfig,
     keymap: ResolvedKeymap,
@@ -323,6 +529,31 @@ pub(crate) struct ChatMode {
     pending_workspace_diff: Option<PendingWorkspaceDiff>,
     pending_local_effect: Option<PendingLocalEffect>,
     pending_workspace_reference_search: Option<PendingWorkspaceReferenceSearch>,
+    /// One lineage read in flight. Runtime I/O never blocks the TUI
+    /// event loop, and refresh requests cannot overlap.
+    pending_lineage_operation: Option<PendingLineageOperation>,
+    /// Side-effecting cancellation outlives navigation resets, but its result
+    /// is only surfaced to the lineage generation that initiated it.
+    pending_lineage_cancellation: Option<PendingLineageCancellation>,
+    /// Last authoritative flat lineage read. This is a presentation cache only;
+    /// Services remains the membership/order owner.
+    lineage_snapshot: Option<AgentSessionLineageSnapshot>,
+    /// Presentation-only index for the immutable ordering owned by Services.
+    lineage_session_index: HashMap<String, usize>,
+    lineage_inspection: Option<AgentSessionInspection>,
+    /// Bounded presentation tail for active descendants. It bridges live
+    /// broadcast output until the Runtime-owned transcript settles.
+    lineage_event_buffer: VecDeque<BufferedLineageEvent>,
+    lineage_event_buffer_bytes: usize,
+    /// Advances whenever a lineage event can make an in-flight transcript read
+    /// stale. Async inspection results are applied only to the generation they
+    /// observed, so a late read cannot erase newer live projection state.
+    lineage_event_generations: HashMap<String, u64>,
+    lineage_navigation_generation: u64,
+    /// Exact terminal Turns observed from Runtime events but not yet reflected
+    /// by an authoritative inspection. These are read-consistency tokens, not
+    /// a second settlement state machine.
+    lineage_required_settled_turns: BTreeMap<String, Vec<String>>,
     workspace_reference_search_generation: u64,
     last_workspace_reference_query: Option<String>,
     /// One explicit native slash-menu choice waiting for its parameterized submission.
@@ -388,6 +619,16 @@ impl ChatMode {
             pending_workspace_diff: None,
             pending_local_effect: None,
             pending_workspace_reference_search: None,
+            pending_lineage_operation: None,
+            pending_lineage_cancellation: None,
+            lineage_snapshot: None,
+            lineage_session_index: HashMap::new(),
+            lineage_inspection: None,
+            lineage_event_buffer: VecDeque::new(),
+            lineage_event_buffer_bytes: 0,
+            lineage_event_generations: HashMap::new(),
+            lineage_navigation_generation: 0,
+            lineage_required_settled_turns: BTreeMap::new(),
             workspace_reference_search_generation: 0,
             last_workspace_reference_query: None,
             selected_native_command_once: None,
@@ -425,7 +666,9 @@ impl ChatMode {
     }
 
     fn action_state(&self, is_processing: bool, popup_open: bool) -> ActionState {
-        ActionState::chat(is_processing, popup_open).with_shared_tui(self.agent.is_shared())
+        ActionState::chat(is_processing, popup_open)
+            .with_shared_tui(self.agent.is_shared())
+            .with_lineage_inspection(self.lineage_inspection.is_some())
     }
 }
 
@@ -439,5 +682,6 @@ include!("chat/mcp.rs");
 include!("chat/sessions.rs");
 include!("chat/workspace_references.rs");
 include!("chat/capabilities.rs");
+include!("chat/session_lineage.rs");
 include!("chat/provider_models.rs");
 include!("chat/tests.rs");

@@ -2,9 +2,11 @@ use bitfun_product_domains::tool_permissions::{PermissionReply, PermissionReques
 use bitfun_runtime_ports::{
     AgentContextReloadRequest, AgentDialogSteerRequest, AgentDialogTurnRequest,
     AgentMessageWorkspaceReferencesRequest, AgentSessionCompactionRequest,
-    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionListRequest,
-    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRevertRequest,
-    AgentSessionRevertResult, AgentSessionSummary, AgentTurnCancellationRequest,
+    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionLineageCancellationRequest,
+    AgentSessionLineageInspection, AgentSessionLineageRequest, AgentSessionLineageSnapshot,
+    AgentSessionLineageTranscriptRequest, AgentSessionListRequest, AgentSessionModeUpdateRequest,
+    AgentSessionModelUpdateRequest, AgentSessionRevertRequest, AgentSessionRevertResult,
+    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentTurnCancellationRequest,
     AgentTurnCancellationResult, AgentUserShellCommandRequest, AgentWorkspaceReference,
     AgentWorkspaceReferenceSearchRequest, AgentWorkspaceReferenceSearchResult, SessionTranscript,
     WorkspaceDiffSnapshot,
@@ -43,6 +45,19 @@ pub struct RuntimeUserAnswersRequest {
     pub answers: serde_json::Value,
 }
 
+/// Minimal host-owned main-agent catalog consumed by Shared TUI selectors.
+/// Runtime generation keys and provider-specific source state never cross IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimeAgentModeSummary {
+    pub id: String,
+    pub description: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub is_external: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "operation",
@@ -52,6 +67,10 @@ pub struct RuntimeUserAnswersRequest {
 )]
 pub enum RuntimeIpcOperation {
     Health,
+    ListAgentModes {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<String>,
+    },
     ListSessions {
         request: AgentSessionListRequest,
     },
@@ -94,6 +113,15 @@ pub enum RuntimeIpcOperation {
     WorkspaceReferencesForMessage {
         request: AgentMessageWorkspaceReferencesRequest,
     },
+    GetSessionLineage {
+        request: AgentSessionLineageRequest,
+    },
+    InspectLineageSession {
+        request: AgentSessionLineageTranscriptRequest,
+    },
+    CancelLineageSession {
+        request: AgentSessionLineageCancellationRequest,
+    },
     WorkspaceDiff,
     SubmitTurn {
         request: AgentDialogTurnRequest,
@@ -121,8 +149,22 @@ pub enum RuntimeIpcOperation {
 }
 
 impl RuntimeIpcOperation {
+    /// These speculative reads may be superseded by a newer request from the
+    /// same TUI connection. The server keeps their execution outside the
+    /// connection's serial control path so cancellation and Session changes
+    /// are never queued behind transcript I/O.
+    pub(crate) fn is_interruptible_lineage_read(&self) -> bool {
+        matches!(
+            self,
+            Self::GetSessionLineage { .. } | Self::InspectLineageSession { .. }
+        )
+    }
+
     pub fn session_id(&self) -> Option<&str> {
         match self {
+            Self::ListAgentModes {
+                session_id: Some(session_id),
+            } => Some(session_id),
             Self::RestoreSession { request } => Some(&request.session_id),
             Self::DeleteSession { session_id } => Some(session_id),
             Self::UpdateSessionMode { request } => Some(&request.session_id),
@@ -135,6 +177,9 @@ impl RuntimeIpcOperation {
             Self::RedoSession { request } => Some(&request.session_id),
             Self::SearchWorkspaceReferences { request } => Some(&request.session_id),
             Self::WorkspaceReferencesForMessage { request } => Some(&request.session_id),
+            Self::GetSessionLineage { request } => Some(&request.anchor_session_id),
+            Self::InspectLineageSession { request } => Some(&request.root_session_id),
+            Self::CancelLineageSession { request } => Some(&request.root_session_id),
             Self::SubmitTurn { request } => Some(&request.session_id),
             Self::SteerTurn { request } => Some(&request.session_id),
             Self::RunUserShellCommand { request } => Some(&request.session_id),
@@ -143,6 +188,7 @@ impl RuntimeIpcOperation {
             | Self::RespondPermission { session_id, .. } => Some(session_id),
             Self::SubmitUserAnswers { request } => Some(&request.session_id),
             Self::Health
+            | Self::ListAgentModes { session_id: None }
             | Self::ListSessions { .. }
             | Self::CreateSession { .. }
             | Self::WorkspaceDiff => None,
@@ -155,9 +201,14 @@ impl RuntimeIpcOperation {
         };
 
         match self {
-            Self::Health | Self::ListSessions { .. } => {
-                RuntimeIpcOperationRules::new(None, false, false, false)
+            Self::Health
+            | Self::ListAgentModes {
+                session_id: std::option::Option::None,
             }
+            | Self::ListSessions { .. } => RuntimeIpcOperationRules::new(None, false, false, false),
+            Self::ListAgentModes {
+                session_id: Some(_),
+            } => RuntimeIpcOperationRules::new(CurrentController, false, false, false),
             Self::WorkspaceDiff => RuntimeIpcOperationRules::new(None, true, false, false),
             Self::CreateSession { .. } => RuntimeIpcOperationRules::new(None, true, true, true),
             Self::RestoreSession { .. } => {
@@ -191,6 +242,12 @@ impl RuntimeIpcOperation {
             }
             Self::SearchWorkspaceReferences { .. } | Self::WorkspaceReferencesForMessage { .. } => {
                 RuntimeIpcOperationRules::new(CurrentController, false, false, false)
+            }
+            Self::GetSessionLineage { .. } | Self::InspectLineageSession { .. } => {
+                RuntimeIpcOperationRules::new(CurrentController, false, false, false)
+            }
+            Self::CancelLineageSession { .. } => {
+                RuntimeIpcOperationRules::new(CurrentController, false, false, true)
             }
         }
     }
@@ -241,6 +298,9 @@ pub enum RuntimeIpcOperationResult {
         process_id: u32,
     },
     Unit,
+    AgentModes {
+        modes: Vec<RuntimeAgentModeSummary>,
+    },
     Sessions {
         sessions: Vec<AgentSessionSummary>,
     },
@@ -249,15 +309,23 @@ pub enum RuntimeIpcOperationResult {
     },
     SessionRestored {
         session: AgentSessionSummary,
+        workspace_binding: AgentSessionWorkspaceBinding,
         transcript: SessionTranscript,
         pending_permissions: Vec<PermissionRequest>,
     },
     SessionForked {
         session: AgentSessionSummary,
+        workspace_binding: AgentSessionWorkspaceBinding,
         transcript: SessionTranscript,
     },
     SessionReverted {
         revert: AgentSessionRevertResult,
+    },
+    SessionLineage {
+        snapshot: Option<AgentSessionLineageSnapshot>,
+    },
+    LineageSessionInspection {
+        inspection: AgentSessionLineageInspection,
     },
     TurnAccepted {
         session_id: String,
@@ -290,6 +358,8 @@ mod tests {
     use super::{RuntimeIpcOperation, RuntimeIpcSessionRequirement, RuntimeSessionRestoreRequest};
     use bitfun_runtime_ports::{
         AgentContextReloadRequest, AgentContextReloadTarget, AgentDialogSteerRequest,
+        AgentSessionLineageCancellationRequest, AgentSessionLineageRequest,
+        AgentSessionLineageTranscriptRequest,
     };
 
     #[test]
@@ -377,5 +447,61 @@ mod tests {
         assert!(!pending.requires_idle);
         assert!(!pending.serializes_session_selection);
         assert!(!pending.side_effecting);
+    }
+
+    #[test]
+    fn lineage_rules_keep_root_controller_and_allow_active_read_only_inspection() {
+        let query = RuntimeIpcOperation::GetSessionLineage {
+            request: AgentSessionLineageRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                anchor_session_id: "root-1".to_string(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        };
+        let inspect = RuntimeIpcOperation::InspectLineageSession {
+            request: AgentSessionLineageTranscriptRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                root_session_id: "root-1".to_string(),
+                session_id: "child-1".to_string(),
+                required_settled_turn_ids: Vec::new(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        };
+        let cancel = RuntimeIpcOperation::CancelLineageSession {
+            request: AgentSessionLineageCancellationRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                root_session_id: "root-1".to_string(),
+                session_id: "child-1".to_string(),
+                expected_active_turn_id: Some("turn-child".to_string()),
+                source: None,
+                reason: None,
+                wait_timeout_ms: None,
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        };
+
+        for operation in [&query, &inspect] {
+            let rules = operation.rules();
+            assert_eq!(operation.session_id(), Some("root-1"));
+            assert_eq!(
+                rules.session_requirement,
+                RuntimeIpcSessionRequirement::CurrentController
+            );
+            assert!(!rules.requires_idle);
+            assert!(!rules.serializes_session_selection);
+            assert!(!rules.side_effecting);
+        }
+        let cancel_rules = cancel.rules();
+        assert_eq!(cancel.session_id(), Some("root-1"));
+        assert_eq!(
+            cancel_rules.session_requirement,
+            RuntimeIpcSessionRequirement::CurrentController
+        );
+        assert!(!cancel_rules.requires_idle);
+        assert!(!cancel_rules.serializes_session_selection);
+        assert!(cancel_rules.side_effecting);
     }
 }

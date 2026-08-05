@@ -48,6 +48,7 @@ impl ChatMode {
         new_state.current_reasoning_preset = summary.reasoning_preset;
         new_state.apply_workspace_binding(workspace_binding);
 
+        self.reset_lineage_navigation(chat_view);
         clear_selected_native_command_prefill(&mut self.selected_native_command_once, chat_view);
         chat_view.activate_session_composer(&source_session_id, &new_session_id);
         *session_id = new_session_id.clone();
@@ -117,6 +118,7 @@ impl ChatMode {
             })?;
 
         // Update session state
+        self.reset_lineage_navigation(chat_view);
         clear_selected_native_command_prefill(&mut self.selected_native_command_once, chat_view);
         chat_view.activate_session_composer(&previous_session_id, new_session_id);
         *session_id = new_session_id.to_string();
@@ -172,6 +174,7 @@ impl ChatMode {
         );
         new_state.apply_workspace_binding(workspace_binding);
 
+        self.reset_lineage_navigation(chat_view);
         clear_selected_native_command_prefill(&mut self.selected_native_command_once, chat_view);
         chat_view.activate_session_composer(&previous_session_id, &new_session_id);
         *session_id = new_session_id;

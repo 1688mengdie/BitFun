@@ -29,6 +29,8 @@ export function runManifestParserSelfTest({
   hasPluginWildcardReexport,
   createFacadeLineChecker,
   escapeRegex,
+  validateExplicitIntegrationTestTopology,
+  agentRuntimeIntegrationTestTargets,
 }) {
   const positiveCases = [
     'bitfun-core = { path = "../core" }',
@@ -53,6 +55,88 @@ export function runManifestParserSelfTest({
     if (isManifestDependencyDeclaration(line, 'bitfun-core')) {
       throw new Error(`manifest parser matched non-dependency declaration: ${line}`);
     }
+  }
+
+  const explicitTestManifest = [
+    '[package]',
+    'autotests = false',
+    ...agentRuntimeIntegrationTestTargets.flatMap(({ name, path }) => [
+      '[[test]]',
+      `name = "${name}"`,
+      `path = "${path}"`,
+    ]),
+    '[lints]',
+  ].join('\n');
+  const explicitTestRoots = new Map(
+    agentRuntimeIntegrationTestTargets.map(({ path }) => [path, '']),
+  );
+  explicitTestRoots.set(
+    'tests/agent_definition_contracts.rs',
+    '#[path = "agent_definition_contracts/prompt_contracts.rs"]\nmod prompt_contracts;',
+  );
+  const explicitTestFixture = {
+    manifestText: explicitTestManifest,
+    expectedTargets: agentRuntimeIntegrationTestTargets,
+    topLevelRustFiles: agentRuntimeIntegrationTestTargets.map(({ path }) => path),
+    rootSources: explicitTestRoots,
+    leafRustFiles: ['tests/agent_definition_contracts/prompt_contracts.rs'],
+  };
+  const topologyErrors = validateExplicitIntegrationTestTopology(explicitTestFixture);
+  if (topologyErrors.length > 0) {
+    throw new Error(`valid explicit integration-test topology failed: ${topologyErrors.join('; ')}`);
+  }
+  const orphanErrors = validateExplicitIntegrationTestTopology({
+    ...explicitTestFixture,
+    leafRustFiles: [
+      ...explicitTestFixture.leafRustFiles,
+      'tests/agent_definition_contracts/orphan_contracts.rs',
+    ],
+  });
+  if (!orphanErrors.some((error) => error.includes('orphan_contracts.rs'))) {
+    throw new Error('explicit integration-test topology must reject an orphan leaf test');
+  }
+  const wrongSectionErrors = validateExplicitIntegrationTestTopology({
+    ...explicitTestFixture,
+    manifestText: explicitTestManifest.replace(
+      '[package]\nautotests = false',
+      '[package]\n[package.metadata.test-topology]\nautotests = false',
+    ),
+  });
+  if (!wrongSectionErrors.some((error) => error.includes('[package]'))) {
+    throw new Error('explicit integration-test topology must read autotests from [package] only');
+  }
+  const commentedReferenceErrors = validateExplicitIntegrationTestTopology({
+    ...explicitTestFixture,
+    rootSources: new Map([
+      ...explicitTestRoots,
+      [
+        'tests/agent_definition_contracts.rs',
+        '/*\n#[path = "agent_definition_contracts/prompt_contracts.rs"]\nmod prompt_contracts;\n*/',
+      ],
+    ]),
+  });
+  if (!commentedReferenceErrors.some((error) => error.includes('prompt_contracts.rs'))) {
+    throw new Error('explicit integration-test topology must reject a commented-out leaf reference');
+  }
+  const duplicateReferenceErrors = validateExplicitIntegrationTestTopology({
+    ...explicitTestFixture,
+    rootSources: new Map([
+      ...explicitTestRoots,
+      [
+        'tests/agent_definition_contracts.rs',
+        `${explicitTestRoots.get('tests/agent_definition_contracts.rs')}\n${explicitTestRoots.get('tests/agent_definition_contracts.rs')}`,
+      ],
+    ]),
+  });
+  if (!duplicateReferenceErrors.some((error) => error.includes('found 2'))) {
+    throw new Error('explicit integration-test topology must reject a duplicate leaf reference');
+  }
+  const unexpectedRootErrors = validateExplicitIntegrationTestTopology({
+    ...explicitTestFixture,
+    topLevelRustFiles: [...explicitTestFixture.topLevelRustFiles, 'tests/unregistered.rs'],
+  });
+  if (!unexpectedRootErrors.some((error) => error.includes('top-level test roots'))) {
+    throw new Error('explicit integration-test topology must reject an unregistered test root');
   }
 
   const parsedDeps = parseManifestDependencies([
@@ -145,7 +229,10 @@ export function runManifestParserSelfTest({
   }
 
   for (const featureName of [
+    'agent-runtime',
     'announcement',
+    'canvas-runtime',
+    'debug-log',
     'dispatch-store',
     'file-watch',
     'filesystem',
@@ -153,6 +240,8 @@ export function runManifestParserSelfTest({
     'lsp',
     'local-storage',
     'process-runtime',
+    'external-sources',
+    'plugin-runtime',
     'remote-workspace',
     'review-platform',
     'ssh-remote',
@@ -218,7 +307,7 @@ export function runManifestParserSelfTest({
     [
       servicesCoreManifest,
       'workspace-instructions',
-      ['dep:globset', 'tokio/fs', 'tokio/io-util'],
+      ['dep:globset', 'dep:serde_yaml', 'tokio/fs', 'tokio/io-util'],
     ],
     [
       servicesCoreManifest,
@@ -279,6 +368,11 @@ export function runManifestParserSelfTest({
         'dep:bitfun-services-integrations',
         'bitfun-services-integrations/remote-ssh',
       ],
+    ],
+    [
+      coreManifest,
+      'canvas-runtime',
+      ['product-domains', 'bitfun-services-integrations/canvas-runtime'],
     ],
     [coreManifest, 'announcement', ['bitfun-services-integrations/announcement']],
     [coreManifest, 'file-watch', ['bitfun-services-integrations/file-watch']],
@@ -763,6 +857,7 @@ export function runManifestParserSelfTest({
     'qrcode',
     'rand',
     'readability-js',
+    'rmcp',
     'russh',
     'rustls',
     'rustls-native-certs',
@@ -779,7 +874,7 @@ export function runManifestParserSelfTest({
       throw new Error(`core optional dependency owner rule must cover forbidden dependency ${dep}`);
     }
   }
-  for (const dep of ['rmcp', 'image', 'tool-runtime']) {
+  for (const dep of ['image', 'tool-runtime']) {
     if (!coreOptionalOwnerDeps.has(dep)) {
       throw new Error(`core optional dependency owner rule must cover ${dep}`);
     }
@@ -787,6 +882,45 @@ export function runManifestParserSelfTest({
   const servicesOptionalOwnerRule = optionalDependencyFeatureOwnerRules.find(
     (rule) => rule.crateName === 'services-integrations',
   );
+  const workspaceReqwestRule = requiredContentRules.find((rule) => rule.path === 'Cargo.toml');
+  const workspaceReqwestRuleText = workspaceReqwestRule?.patterns
+    .map((pattern) => pattern.regex.source)
+    .join('\n') ?? '';
+  for (const featureName of ['http2', 'json', 'stream', 'multipart', 'query', 'form']) {
+    if (!workspaceReqwestRuleText.includes(featureName)) {
+      throw new Error(`workspace Reqwest boundary must allow only reviewed feature ${featureName}`);
+    }
+  }
+  const workspaceReqwestPattern = workspaceReqwestRule?.patterns[0]?.regex;
+  const reviewedReqwestDeclaration =
+    'reqwest = { version = "0.13.4", default-features = false, features = ["http2", "json", "stream", "multipart", "query", "form"] }';
+  if (!workspaceReqwestPattern?.test(reviewedReqwestDeclaration)) {
+    throw new Error('workspace Reqwest boundary must accept the reviewed transport/data profile');
+  }
+  for (const featureName of ['default-tls', 'http3', '__native-tls']) {
+    const expandedDeclaration = reviewedReqwestDeclaration.replace(
+      '"form"]',
+      `"form", "${featureName}"]`,
+    );
+    if (workspaceReqwestPattern.test(expandedDeclaration)) {
+      throw new Error(`workspace Reqwest boundary must reject TLS-enabling feature ${featureName}`);
+    }
+  }
+  for (const path of [
+    'src/apps/cli/Cargo.toml',
+    'src/apps/desktop/Cargo.toml',
+    'src/crates/adapters/ai-adapters/Cargo.toml',
+    'src/crates/services/miniapp-market-service/Cargo.toml',
+    'src/crates/services/skin-market-service/Cargo.toml',
+  ]) {
+    const reqwestRule = requiredContentRules.find((rule) => rule.path === path);
+    const reqwestRuleText = reqwestRule?.patterns
+      .map((pattern) => pattern.regex.source)
+      .join('\n') ?? '';
+    if (!reqwestRuleText.includes('rustls')) {
+      throw new Error(`${path} must guard the explicit Reqwest Rustls client dependency`);
+    }
+  }
   const servicesCoreOptionalOwnerRule = optionalDependencyFeatureOwnerRules.find(
     (rule) => rule.crateName === 'services-core',
   );
@@ -810,7 +944,7 @@ export function runManifestParserSelfTest({
     ['libc', ['local-storage', 'process-runtime']],
     ['notify', ['lsp']],
     ['rusqlite', ['permission']],
-    ['serde_yaml', ['markdown']],
+    ['serde_yaml', ['markdown', 'workspace-instructions']],
     [
       'sha2',
       [
@@ -892,6 +1026,14 @@ export function runManifestParserSelfTest({
     );
     if (!owner?.ownerFeatures.includes('plugin-source')) {
       throw new Error(`services-integrations plugin-source must own optional dependency ${dep}`);
+    }
+  }
+  for (const dep of ['bitfun-product-domains', 'image']) {
+    const owner = servicesOptionalOwnerRule?.dependencies.find(
+      (dependency) => dependency.depName === dep,
+    );
+    if (!owner?.ownerFeatures.includes('miniapp-market')) {
+      throw new Error(`services-integrations miniapp-market must own optional dependency ${dep}`);
     }
   }
   for (const dep of ['sha2', 'windows']) {
@@ -1453,6 +1595,8 @@ export function runManifestParserSelfTest({
     }
   }
   for (const requiredSymbol of [
+    'ExternalMcpTimeouts',
+    'MAX_EXTERNAL_MCP_TIMEOUT_MS',
     'ExternalMcpServerDefinition',
     'ExternalMcpSourceProvider',
     'PreparedExternalMcpServer',
@@ -1529,6 +1673,14 @@ export function runManifestParserSelfTest({
     'src/crates/services/services-integrations/Cargo.toml',
   )) {
     throw new Error('speech engine manifest guard must allow only its integration service owner');
+  }
+  const rmcpManifestRule = forbiddenManifestDependencyRules.find((rule) =>
+    rule.dependencyNames?.includes('rmcp'),
+  );
+  if (!rmcpManifestRule?.allowManifestPaths?.includes(
+    'src/crates/services/services-integrations/Cargo.toml',
+  )) {
+    throw new Error('RMCP manifest guard must allow only its integration service owner');
   }
   const coreSpeechOwnerRule = forbiddenContentUnderRules.find(
     (rule) => rule.path === 'src/crates/assembly/core/src/service',
@@ -1618,6 +1770,12 @@ export function runManifestParserSelfTest({
   }
   if (!noCoreDependencyCrates.includes('plugin-runtime-client')) {
     throw new Error('plugin-runtime-client must be covered by the no-core dependency guard');
+  }
+  if (
+    crateLayoutRules.find((rule) => rule.crateName === 'agent-content')?.layer !== 'assembly'
+    || !noCoreDependencyCrates.includes('agent-content')
+  ) {
+    throw new Error('agent-content must stay an assembly-owned leaf independent from bitfun-core');
   }
   for (const adapterCrate of ['claude-code-adapter', 'codex-adapter', 'static-hook-support']) {
     if (crateLayoutRules.find((rule) => rule.crateName === adapterCrate)?.layer !== 'adapters') {
@@ -2205,7 +2363,7 @@ export function runManifestParserSelfTest({
       contracts: ['project_agentic_frontend_event', 'projected.event_name.as_str()'],
     },
     {
-      path: 'src/crates/execution/runtime-services/tests/runtime_services_contracts.rs',
+      path: 'src/crates/execution/runtime-services/src/runtime_services_contracts.rs',
       contracts: [
         'builder_requires_mandatory_runtime_services',
         'fake_provider_registers_required_and_remote_services_through_registry',
@@ -2318,7 +2476,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/sdk_smoke.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/sdk_smoke.rs',
       contracts: [
         'sdk_facade_exposes_versioned_preview_compatibility_contract',
         'sdk_facade_runs_with_fake_provider_and_local_event_stream',
@@ -2356,7 +2514,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/agent_registry_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/agent_registry_contracts.rs',
       contracts: [
         'visibility_policy_supports_public_restricted_hidden_and_denied_parents',
         'availability_preserves_builtin_project_and_user_override_layering',
@@ -2399,14 +2557,14 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/custom_subagent_discovery_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/custom_subagent_discovery_contracts.rs',
       contracts: [
         'custom_subagent_discovery_preserves_bitfun_priority_and_ignores_foreign_agent_dirs',
         'custom_subagent_discovery_reports_parse_errors_without_dropping_valid_files',
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/custom_subagent_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/custom_subagent_contracts.rs',
       contracts: [
         'custom_subagent_defaults_match_existing_front_matter_contract',
         'custom_subagent_tool_front_matter_keeps_existing_comma_format',
@@ -2432,7 +2590,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/post_call_hook_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_interaction_contracts/post_call_hook_contracts.rs',
       contracts: [
         'successful_tool_call_routes_to_shared_context_measurement_hook',
         'runtime_hook_registry_preserves_order_timeout_and_error_policy',
@@ -2441,7 +2599,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/post_call_hook_execution_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_interaction_contracts/post_call_hook_execution_contracts.rs',
       contracts: ['successful_tool_post_call_executor_runs_deep_review_measurement_route'],
     },
     {
@@ -2617,7 +2775,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/scheduler_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/scheduler_contracts.rs',
       contracts: [
         'background_delivery_injects_when_session_is_processing',
         'background_delivery_starts_agent_session_follow_up_when_session_is_not_processing',
@@ -2655,7 +2813,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/thread_goal_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/thread_goal_contracts.rs',
       contracts: [
         'set_thread_goal_creates_new_active_goal_with_trimmed_objective',
         'continuation_outcome_increments_active_goal_and_builds_plan',
@@ -2737,7 +2895,7 @@ export function runManifestParserSelfTest({
       contracts: ['DialogTurnCancellationTokenStore', 'get_or_insert_new', 'is_cancelled'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/prompt_cache_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/prompt_cache_contracts.rs',
       contracts: [
         'prompt_cache_policy_keeps_existing_default_persistence_ttl',
         'prompt_cache_lookup_preserves_identity_and_expiry_semantics',
@@ -2745,7 +2903,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/prompt_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_definition_contracts/prompt_contracts.rs',
       contracts: [
         'user_context_policy_preserves_order_and_deduplicates_sections',
         'tool_listing_sections_render_only_present_sections',
@@ -2757,7 +2915,7 @@ export function runManifestParserSelfTest({
       contracts: ['FinishReason', 'session_state_label', 'turn_outcome_kind'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/events_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/events_contracts.rs',
       contracts: [
         'finish_reason_display_preserves_wire_labels',
         'session_state_labels_match_existing_event_wire_values',
@@ -2823,7 +2981,7 @@ export function runManifestParserSelfTest({
       ],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/scheduled_job_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_session_contracts/scheduled_job_contracts.rs',
       contracts: [
         'manual_trigger_coalesces_existing_pending_run',
         'due_scheduled_trigger_coalesces_when_active_or_pending',
@@ -3943,7 +4101,7 @@ export function runManifestParserSelfTest({
       contracts: ['renumber_research_report', 'ResearchCitationRenumberOutput', 'ResearchCitationDisplayMapEntry', 'rejected_index_rows_dropped', 'should_post_process_research_report'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/deep_research_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/deep_research_contracts.rs',
       contracts: ['deep_research_citation_renumber_owner_preserves_report_and_display_map_contracts', 'deep_research_citation_renumber_owner_is_idempotent_without_citations'],
     },
     {
@@ -4014,7 +4172,10 @@ export function runManifestParserSelfTest({
         'dep:bitfun-product-capabilities',
         'dep:bitfun-tool-packs',
         'bitfun-tool-packs\\/product-full',
-        'bitfun-services-integrations\\/product-full',
+        'agent-runtime',
+        'bitfun-services-integrations\\/mcp',
+        'bitfun-services-integrations\\/remote-connect',
+        'bitfun-services-integrations\\/workspace-search',
         'dep:bitfun-product-domains',
         'bitfun-product-domains\\/product-full',
       ],
@@ -4022,13 +4183,14 @@ export function runManifestParserSelfTest({
     {
       path: 'src/crates/assembly/core/src/lib.rs',
       contracts: [
-        'feature = "product-full"',
+        'feature = "agent-runtime"',
         'pub mod agentic',
+        'feature = "external-sources"',
         'mod external_subagents',
         'feature = "product-domains"',
         'pub mod function_agents',
         'pub mod miniapp',
-        'feature = "product-full"',
+        'feature = "agent-runtime"',
         'service_agent_runtime',
       ],
     },
@@ -4038,7 +4200,7 @@ export function runManifestParserSelfTest({
         'feature = "ai-adapter-runtime"',
         'pub mod ai',
         'pub mod subscription_auth',
-        'feature = "product-full"',
+        'feature = "debug-log"',
         'pub mod debug_log',
       ],
     },
@@ -4060,18 +4222,21 @@ export function runManifestParserSelfTest({
         'file_watch',
         'feature = "git"',
         'pub mod git',
-        'feature = "product-full"',
+        'feature = "agent-runtime"',
         'pub mod mcp',
+        'feature = "agent-runtime"',
         'pub mod remote_connect',
         'feature = "review-platform"',
         'pub mod review_platform',
+        'feature = "agent-runtime"',
         'pub mod search',
+        'feature = "agent-runtime"',
         'pub mod snapshot',
       ],
     },
     {
       path: 'src/crates/assembly/core/src/service/config/mod.rs',
-      contracts: ['feature = "product-full"', 'mode_config_canonicalizer'],
+      contracts: ['feature = "agent-runtime"', 'mode_config_canonicalizer'],
     },
     {
       path: 'src/crates/assembly/core/src/service/workspace/manager.rs',
@@ -4084,7 +4249,7 @@ export function runManifestParserSelfTest({
     {
       path: 'src/crates/assembly/core/src/service/workspace_runtime/service.rs',
       contracts: [
-        'feature = "product-full"',
+        'feature = "agent-runtime"',
         'WorkspaceBinding',
         'ensure_runtime_for_workspace_binding',
         'merge_legacy_session_store',
@@ -4095,8 +4260,8 @@ export function runManifestParserSelfTest({
     {
       path: 'src/crates/assembly/core/src/service/dispatch/mod.rs',
       contracts: [
-        'feature = "product-full"',
-        'not\\(feature = "product-full"\\)',
+        'feature = "agent-runtime"',
+        'not\\(feature = "agent-runtime"\\)',
         'release_baseline_claim',
         'DispatchStoreError::ClaimRelease',
       ],
@@ -4680,12 +4845,12 @@ export function runManifestParserSelfTest({
     throw new Error('missing no-default dispatch claim release boundary rule');
   }
   const failClosedDispatchRelease = `
-#[cfg(not(feature = "product-full"))]
+#[cfg(not(feature = "agent-runtime"))]
 async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), DispatchStoreError> {
     Err(DispatchStoreError::ClaimRelease(format!("job_id={}", release.job_id)))
 }`;
   const unsafeDispatchRelease = `
-#[cfg(not(feature = "product-full"))]
+#[cfg(not(feature = "agent-runtime"))]
 async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), DispatchStoreError> {
     let _ignored = DispatchStoreError::ClaimRelease(format!("job_id={}", release.job_id));
     Ok(())
@@ -4705,7 +4870,7 @@ async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), Dis
   }
 
   const sdkSmokeRuleText = forbiddenRuleTextForPath(
-    'src/crates/execution/agent-runtime/tests/sdk_smoke.rs',
+    'src/crates/execution/agent-runtime/tests/agent_session_contracts/sdk_smoke.rs',
   );
   for (const forbiddenSdkSmokeImport of [
     'bitfun_runtime_services::test_support',
@@ -5184,6 +5349,7 @@ async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), Dis
       'DetachSession',
       'ManageModels',
       'ManageAgents',
+      'LineageSessionTranscript',
     ].every((name) => runtimeIpcOperationPattern.test(`    ${name},`)) ||
     runtimeIpcOperationPattern.test('    Health,') ||
     runtimeIpcOperationPattern.test('    DeleteSession {') ||
@@ -5195,6 +5361,15 @@ async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), Dis
     runtimeIpcOperationPattern.test('    RedoSession {') ||
     runtimeIpcOperationPattern.test('    SearchWorkspaceReferences {') ||
     runtimeIpcOperationPattern.test('    WorkspaceReferencesForMessage {') ||
+    runtimeIpcOperationPattern.test('    GetSessionLineage {') ||
+    runtimeIpcOperationPattern.test('    InspectLineageSession {') ||
+    runtimeIpcOperationPattern.test('    CancelLineageSession {') ||
+    runtimeIpcOperationPattern.test('    SessionLineage {') ||
+    runtimeIpcOperationPattern.test('    LineageSessionInspection {') ||
+    runtimeIpcOperationPattern.test('    AgentSessionLineageCancellationRequest,') ||
+    runtimeIpcOperationPattern.test('    AgentSessionLineageRequest,') ||
+    runtimeIpcOperationPattern.test('    AgentSessionLineageSnapshot,') ||
+    runtimeIpcOperationPattern.test('    AgentSessionLineageTranscriptRequest,') ||
     runtimeIpcOperationPattern.test('    WorkspaceReferenceSearch {') ||
     runtimeIpcOperationPattern.test('    WorkspaceReferences {') ||
     runtimeIpcOperationPattern.test('    WorkspaceDiff {') ||

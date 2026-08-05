@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 4;
+pub const AGENT_RUNTIME_SDK_API_VERSION: u32 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -53,6 +53,11 @@ pub use crate::runtime::{
 pub use crate::session_state::{session_state_label_for_state, ProcessingPhase, SessionState};
 pub use bitfun_agent_tools::{ToolRegistry, ToolRegistryItem};
 pub use bitfun_core_types::SessionUsageReport;
+// Event envelope types re-exported so protocol surfaces (e.g. `bitfun-app-server`)
+// can carry the runtime event stream over a JSON-RPC transport without depending
+// on `bitfun-events` directly. These are the exact types the runtime's event
+// subscribers receive; the app-server forwards them as `agent/event` notifications.
+pub use bitfun_events::{AgenticEvent, AgenticEventEnvelope};
 pub use bitfun_harness::{
     build_descriptor_harness_registry, HarnessCapability, HarnessProviderDescriptor,
     HarnessRegistry, HarnessWorkflow,
@@ -61,12 +66,15 @@ pub use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentDialogSteerRequest, AgentDialogTurnExecution,
     AgentDialogTurnPort, AgentDialogTurnRequest, AgentInputAttachment, AgentLifecycleDeliveryPort,
     AgentLocalCommandTurnPort, AgentLocalCommandTurnRecordRequest,
-    AgentMessageWorkspaceReferencesRequest, AgentSessionArchiveRequest,
-    AgentSessionArchiveStateRequest, AgentSessionClosePort, AgentSessionCompactionPort,
-    AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionComposerUpdate,
-    AgentSessionCreateRequest, AgentSessionCreateResult, AgentSessionDeleteRequest,
-    AgentSessionForkAtTurnRequest, AgentSessionForkBeforeTurnRequest, AgentSessionForkPort,
-    AgentSessionForkRequest, AgentSessionForkResult, AgentSessionListRequest,
+    AgentLocalCommandTurnRecordResult, AgentMessageWorkspaceReferencesRequest,
+    AgentSessionArchiveRequest, AgentSessionArchiveStateRequest, AgentSessionClosePort,
+    AgentSessionCompactionPort, AgentSessionCompactionRequest, AgentSessionCompactionResult,
+    AgentSessionComposerUpdate, AgentSessionCreateRequest, AgentSessionCreateResult,
+    AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest, AgentSessionForkBeforeTurnRequest,
+    AgentSessionForkPort, AgentSessionForkRequest, AgentSessionForkResult,
+    AgentSessionLifecycleStatus, AgentSessionLineageCancellationRequest, AgentSessionLineageEntry,
+    AgentSessionLineageInspection, AgentSessionLineagePort, AgentSessionLineageRequest,
+    AgentSessionLineageSnapshot, AgentSessionLineageTranscriptRequest, AgentSessionListRequest,
     AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
     AgentSessionModelPort, AgentSessionModelSelection, AgentSessionModelSelectionUpdateRequest,
     AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentSessionRevertPort,
@@ -134,6 +142,11 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentSessionManagementPort>,
     ) -> Self {
         self.inner = self.inner.with_session_management_port(port);
+        self
+    }
+
+    pub fn with_session_lineage_port(mut self, port: Arc<dyn AgentSessionLineagePort>) -> Self {
+        self.inner = self.inner.with_session_lineage_port(port);
         self
     }
 
@@ -484,7 +497,7 @@ impl AgentRuntime {
     pub async fn record_completed_local_command_turn(
         &self,
         request: AgentLocalCommandTurnRecordRequest,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<AgentLocalCommandTurnRecordResult, RuntimeError> {
         self.inner
             .record_completed_local_command_turn(request)
             .await
@@ -588,6 +601,20 @@ impl AgentRuntime {
         self.inner.read_session_transcript(request).await
     }
 
+    pub async fn get_session_lineage(
+        &self,
+        request: AgentSessionLineageRequest,
+    ) -> Result<Option<AgentSessionLineageSnapshot>, RuntimeError> {
+        self.inner.get_session_lineage(request).await
+    }
+
+    pub async fn read_lineage_session_transcript(
+        &self,
+        request: AgentSessionLineageTranscriptRequest,
+    ) -> Result<AgentSessionLineageInspection, RuntimeError> {
+        self.inner.read_lineage_session_transcript(request).await
+    }
+
     pub async fn resolve_session_workspace_binding(
         &self,
         request: AgentSessionWorkspaceRequest,
@@ -677,6 +704,13 @@ impl AgentRuntime {
         request: AgentTurnCancellationRequest,
     ) -> Result<AgentTurnCancellationResult, RuntimeError> {
         self.inner.cancel_turn(request).await
+    }
+
+    pub async fn cancel_lineage_session(
+        &self,
+        request: AgentSessionLineageCancellationRequest,
+    ) -> Result<AgentTurnCancellationResult, RuntimeError> {
+        self.inner.cancel_lineage_session(request).await
     }
 
     pub async fn submit_user_answers(

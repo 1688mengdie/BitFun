@@ -2,6 +2,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+import { servicesReqwestOwnerFeatures } from './rules/feature-rules.mjs';
+
 const SKIPPED_DIRECTORIES = new Set([
   '.git',
   '.targets',
@@ -55,6 +57,68 @@ function dependencyDescription(dependency) {
   const optional = dependency.optional ? ' optional' : '';
   const target = dependency.target ? ` for ${dependency.target}` : '';
   return `${kind}${optional} dependency${target}`;
+}
+
+function expandedLocalFeatures(featureGraph, selectedFeatures, useDefaultFeatures) {
+  const pending = [...selectedFeatures];
+  if (useDefaultFeatures && Object.hasOwn(featureGraph, 'default')) {
+    pending.push('default');
+  }
+  const active = new Set();
+  const references = new Set();
+
+  while (pending.length > 0) {
+    const feature = pending.pop();
+    if (active.has(feature)) {
+      continue;
+    }
+    active.add(feature);
+    for (const reference of featureGraph[feature] ?? []) {
+      references.add(reference);
+      if (Object.hasOwn(featureGraph, reference)) {
+        pending.push(reference);
+      }
+    }
+  }
+
+  return { active, references };
+}
+
+function dependencyAlias(dependency) {
+  return dependency.rename ?? dependency.name;
+}
+
+function dependencyActivation(dependency, sourceFeatureState) {
+  const alias = dependencyAlias(dependency);
+  const forwarded = [];
+  let explicitlyActivated = false;
+  for (const reference of sourceFeatureState.references) {
+    if (reference === `dep:${alias}`) {
+      explicitlyActivated = true;
+      continue;
+    }
+    const match = reference.match(/^([^/?]+)(\?)?\/(.+)$/);
+    if (match?.[1] !== alias) {
+      continue;
+    }
+    if (!match[2]) {
+      explicitlyActivated = true;
+    }
+    forwarded.push(match[3]);
+  }
+
+  if (dependency.optional && !explicitlyActivated) {
+    return null;
+  }
+  return {
+    features: [...new Set([...(dependency.features ?? []), ...forwarded])],
+    useDefaultFeatures: dependency.uses_default_features !== false,
+  };
+}
+
+function isProcMacroPackage(pkg) {
+  return (pkg.targets ?? []).some((target) =>
+    (target.kind ?? []).includes('proc-macro'));
 }
 
 const SERVICES_INTEGRATIONS_TOKIO_FEATURES = new Map([
@@ -169,6 +233,351 @@ function findOwnedTokioFeatureViolations(pkg, ownerProfiles) {
 export function findServicesIntegrationsTokioFeatureViolations(pkg) {
   return findOwnedTokioFeatureViolations(pkg, SERVICES_INTEGRATIONS_TOKIO_FEATURES);
 }
+
+function reqwestDependencyFeatureReferences(references) {
+  return references.filter(
+    (reference) =>
+      reference === 'reqwest'
+      || reference === 'dep:reqwest'
+      || reference.startsWith('reqwest/')
+      || reference.startsWith('reqwest?/'),
+  );
+}
+
+const REQWEST_TRANSPORT_FEATURES = [
+  'form',
+  'http2',
+  'json',
+  'multipart',
+  'query',
+  'stream',
+];
+const REQWEST_PACKAGE_PROFILES = new Map([
+  ['bitfun-installer', {
+    dependencyFeatures: ['json', 'rustls-tls', 'stream'],
+    optional: false,
+    allowedPackageFeatureRefs: new Set(['reqwest/rustls-tls']),
+  }],
+  ['bitfun-core', { dependencyFeatures: REQWEST_TRANSPORT_FEATURES, optional: true }],
+  ['bitfun-services-integrations', {
+    dependencyFeatures: REQWEST_TRANSPORT_FEATURES,
+    optional: true,
+    servicesOwners: true,
+  }],
+  ...[
+    'bitfun-ai-adapters',
+    'bitfun-cli',
+    'bitfun-desktop',
+    'bitfun-miniapp-market-service',
+    'bitfun-skin-market-service',
+  ].map((packageName) => [packageName, {
+    dependencyFeatures: [...REQWEST_TRANSPORT_FEATURES, 'rustls'],
+    optional: false,
+    allowedPackageFeatureRefs: new Set(['reqwest/rustls']),
+  }]),
+]);
+
+function findReqwestPackageProfileViolations(pkg, profile) {
+  const violations = [];
+  const dependencies = (pkg.dependencies ?? []).filter(
+    (dependency) => dependency.name === 'reqwest',
+  );
+  if (dependencies.length !== 1) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message: `${pkg.name} must declare exactly one normal Reqwest dependency`,
+    });
+    return violations;
+  }
+
+  const dependency = dependencies[0];
+  if (
+    (dependency.kind ?? null) !== null
+    || (dependency.rename ?? null) !== null
+    || (dependency.target ?? null) !== null
+  ) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message:
+        `${pkg.name} Reqwest dependency must be an unrenamed, non-target-specific normal dependency`,
+    });
+  }
+  if (dependency.uses_default_features !== false) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message: `${pkg.name} Reqwest dependency must disable default features`,
+    });
+  }
+  if (dependency.optional !== profile.optional) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message:
+        `${pkg.name} Reqwest dependency optional=${dependency.optional} does not match its owner profile`,
+    });
+  }
+  const actualFeatures = new Set(dependency.features ?? []);
+  const expectedFeatures = new Set(profile.dependencyFeatures);
+  const missing = [...expectedFeatures]
+    .filter((feature) => !actualFeatures.has(feature));
+  const unexpected = [...actualFeatures]
+    .filter((feature) => !expectedFeatures.has(feature));
+  if (missing.length > 0) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message: `${pkg.name} Reqwest dependency missing features: ${missing.join(', ')}`,
+    });
+  }
+  if (unexpected.length > 0) {
+    violations.push({
+      path: pkg.manifest_path,
+      line: 1,
+      message: `${pkg.name} Reqwest dependency has unexpected dependency features: ${unexpected.join(', ')}`,
+    });
+  }
+
+  if (profile.servicesOwners) {
+    violations.push(...findServicesIntegrationsReqwestFeatureViolations(pkg));
+  } else {
+    for (const [featureName, references] of Object.entries(pkg.features ?? {})) {
+      for (const reference of reqwestDependencyFeatureReferences(references)) {
+        if (
+          (reference.startsWith('reqwest/') || reference.startsWith('reqwest?/'))
+          && !profile.allowedPackageFeatureRefs?.has(reference)
+        ) {
+          violations.push({
+            path: pkg.manifest_path,
+            line: 1,
+            message:
+              `${pkg.name}:${featureName} has unreviewed Reqwest feature reference ${reference}`,
+          });
+        }
+      }
+    }
+  }
+
+  return violations;
+}
+
+function ungovernedReqwestDependencyViolations(pkg) {
+  const hasReqwestDependency = (pkg.dependencies ?? []).some(
+    (dependency) => dependency.name === 'reqwest',
+  );
+  if (!hasReqwestDependency) {
+    return [];
+  }
+  return [
+    {
+      path: pkg.manifest_path,
+      line: 1,
+      message: `${pkg.name} Reqwest dependency is missing a reviewed owner profile`,
+    },
+  ];
+}
+
+export function findReqwestDependencyFeatureViolations(packages) {
+  return packages.flatMap((pkg) => {
+    const profile = REQWEST_PACKAGE_PROFILES.get(pkg.name);
+    if (!profile) {
+      return ungovernedReqwestDependencyViolations(pkg);
+    }
+    return findReqwestPackageProfileViolations(pkg, profile);
+  });
+}
+
+export function findRuntimeServicesTestSupportFeatureViolations(packages) {
+  const violations = [];
+
+  const pathToFeature = (featureGraph, start, target, visiting = new Set()) => {
+    if (start === target) {
+      return [target];
+    }
+    if (visiting.has(start)) {
+      return null;
+    }
+    visiting.add(start);
+    for (const reference of featureGraph[start] ?? []) {
+      if (!Object.hasOwn(featureGraph, reference)) {
+        continue;
+      }
+      const suffix = pathToFeature(featureGraph, reference, target, visiting);
+      if (suffix) {
+        visiting.delete(start);
+        return [start, ...suffix];
+      }
+    }
+    visiting.delete(start);
+    return null;
+  };
+
+  for (const pkg of packages) {
+    const runtimeServiceAliases = new Set(['bitfun-runtime-services']);
+    for (const dependency of pkg.dependencies ?? []) {
+      if (dependency.name !== 'bitfun-runtime-services') {
+        continue;
+      }
+      runtimeServiceAliases.add(dependency.rename ?? dependency.name);
+      if (
+        (dependency.features ?? []).includes('test-support')
+        && dependency.kind !== 'dev'
+      ) {
+        violations.push({
+          path: pkg.manifest_path,
+          line: 1,
+          message:
+            `${pkg.name} must not enable bitfun-runtime-services/test-support for its `
+            + dependencyDescription(dependency),
+        });
+      }
+    }
+
+    for (const [featureName, references] of Object.entries(pkg.features ?? {})) {
+      const testSupportReference = references.find((reference) =>
+        [...runtimeServiceAliases].some(
+          (alias) =>
+            reference === `${alias}/test-support`
+            || reference === `${alias}?/test-support`,
+        ));
+      if (!testSupportReference) {
+        continue;
+      }
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message:
+          `${pkg.name}:${featureName} must not expose bitfun-runtime-services/test-support `
+          + 'through a package feature',
+      });
+    }
+
+    if (pkg.name === 'bitfun-runtime-services') {
+      for (const featureName of Object.keys(pkg.features ?? {})) {
+        if (featureName === 'test-support') {
+          continue;
+        }
+        const path = pathToFeature(pkg.features, featureName, 'test-support');
+        if (!path) {
+          continue;
+        }
+        violations.push({
+          path: pkg.manifest_path,
+          line: 1,
+          message:
+            `bitfun-runtime-services:${featureName} must not expose test-support; `
+            + `reachable via ${path.join(' -> ')}`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
+export function findResolvedReqwestNativeTlsViolations(records, { root }) {
+  const reqwestRecords = records.filter((record) => record.name === 'reqwest');
+  if (reqwestRecords.length === 0) {
+    return [{
+      path: join(root, 'Cargo.toml'),
+      line: 1,
+      message: 'resolved Cargo graph is missing Reqwest feature-union evidence',
+    }];
+  }
+
+  return reqwestRecords.flatMap((record) => {
+    const nativeTlsFeatures = (record.features ?? []).filter(
+      (feature) =>
+        feature === 'default-tls'
+        || feature === '__native-tls'
+        || feature.startsWith('__native-tls-')
+        || feature === 'native-tls'
+        || feature.startsWith('native-tls-'),
+    );
+    if (nativeTlsFeatures.length === 0) {
+      return [];
+    }
+    return [{
+      path: join(root, 'Cargo.toml'),
+      line: 1,
+      message:
+        `resolved reqwest ${record.version} feature union enables an unreviewed TLS backend: `
+        + nativeTlsFeatures.join(', '),
+    }];
+  });
+}
+
+export function findServicesIntegrationsReqwestFeatureViolations(pkg) {
+  const violations = [];
+  const featureGraph = pkg.features ?? {};
+  const ownerFeatures = new Set(servicesReqwestOwnerFeatures);
+
+  for (const featureName of servicesReqwestOwnerFeatures) {
+    const references = featureGraph[featureName];
+    if (!references) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${featureName} governed Reqwest owner feature is missing`,
+      });
+      continue;
+    }
+    if (!references.some((reference) => reference === 'reqwest' || reference === 'dep:reqwest')) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${featureName} must explicitly enable reqwest`,
+      });
+    }
+    if (!references.includes('reqwest/rustls')) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message: `${pkg.name}:${featureName} is missing reqwest/rustls`,
+      });
+    }
+  }
+
+  for (const [featureName, references] of Object.entries(featureGraph)) {
+    const reqwestReferences = reqwestDependencyFeatureReferences(references);
+    const implicitDependencyFeature =
+      featureName === 'reqwest'
+      && reqwestReferences.length === 1
+      && reqwestReferences[0] === 'dep:reqwest';
+    if (implicitDependencyFeature || reqwestReferences.length === 0) {
+      continue;
+    }
+    if (!ownerFeatures.has(featureName)) {
+      violations.push({
+        path: pkg.manifest_path,
+        line: 1,
+        message:
+          `${pkg.name}:${featureName} enables Reqwest outside its reviewed owner features`,
+      });
+      continue;
+    }
+    for (const reference of reqwestReferences) {
+      if (
+        reference !== 'reqwest'
+        && reference !== 'dep:reqwest'
+        && reference !== 'reqwest/rustls'
+        && !(featureName === 'models-dev' && reference === 'reqwest/system-proxy')
+      ) {
+        violations.push({
+          path: pkg.manifest_path,
+          line: 1,
+          message:
+            `${pkg.name}:${featureName} has unreviewed Reqwest feature reference ${reference}`,
+        });
+      }
+    }
+  }
+
+  return violations;
+}
+
 
 export function findServicesCoreTokioFeatureViolations(pkg) {
   return findOwnedTokioFeatureViolations(pkg, SERVICES_CORE_TOKIO_FEATURES);
@@ -363,6 +772,48 @@ export function findProductEntrypointCoreFeatureViolations(
   packages,
   { root, crateLayoutRules },
 ) {
+  const reviewedCoreFeatureClosures = new Map([
+    ['bitfun-cli', [
+      'agent-runtime',
+      'canvas-runtime',
+      'external-sources',
+      'plugin-runtime',
+      'ssh-remote',
+    ]],
+    ['bitfun-acp', [
+      'agent-runtime',
+      'canvas-runtime',
+      'external-sources',
+      'ssh-remote',
+    ]],
+  ]);
+  const acpActiveCoreFeatures = [
+    'agent-runtime',
+    'ai-adapter-runtime',
+    'canvas-runtime',
+    'external-sources',
+    'file-watch',
+    'filesystem',
+    'git',
+    'lsp',
+    'local-storage',
+    'plugin-source',
+    'process-runtime',
+    'product-capabilities',
+    'product-domains',
+    'remote-workspace',
+    'review-platform',
+    'runtime-services',
+    'ssh-remote',
+    'terminal',
+    'tool-packs',
+    'workspace-runtime',
+    'workspace-watch',
+  ];
+  const reviewedActiveCoreFeatureClosures = new Map([
+    ['bitfun-cli', [...acpActiveCoreFeatures, 'plugin-runtime']],
+    ['bitfun-acp', acpActiveCoreFeatures],
+  ]);
   const packageByManifest = new Map(
     packages.map((pkg) => [normalizedPath(pkg.manifest_path), pkg]),
   );
@@ -400,6 +851,192 @@ export function findProductEntrypointCoreFeatureViolations(
           line: 1,
           message: `product entrypoint ${sourcePackage.name} must select at least one explicit feature for its bitfun-core ${dependencyDescription(dependency)}`,
         });
+      }
+      const reviewedClosure = reviewedCoreFeatureClosures.get(sourcePackage.name);
+      if (reviewedClosure) {
+        const selectedFeatures = new Set(dependency.features ?? []);
+        for (const requiredFeature of reviewedClosure) {
+          if (!selectedFeatures.has(requiredFeature)) {
+            violations.push({
+              path: sourcePackage.manifest_path,
+              line: 1,
+              message: `${sourcePackage.name} Core capability closure must include ${requiredFeature}`,
+            });
+          }
+        }
+        for (const selectedFeature of selectedFeatures) {
+          if (!reviewedClosure.includes(selectedFeature)) {
+            violations.push({
+              path: sourcePackage.manifest_path,
+              line: 1,
+              message: `${sourcePackage.name} Core capability closure must not include unreviewed feature ${selectedFeature}`,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const corePackage = packages.find((pkg) => pkg.name === 'bitfun-core');
+  if (corePackage) {
+    const forbiddenCoreFeatures = [
+      'product-full',
+      'announcement',
+      'debug-log',
+      'dispatch-store',
+    ];
+    const reportedUnexpectedFeatures = new Set();
+
+    for (const [rootName, reviewedClosure] of reviewedCoreFeatureClosures) {
+      const rootPackage = packages.find((pkg) => pkg.name === rootName);
+      if (!rootPackage) {
+        continue;
+      }
+      const allowedCoreFeatures = new Set(
+        reviewedActiveCoreFeatureClosures.get(rootName) ?? [],
+      );
+      const rootSelectedFeatures = Object.keys(rootPackage.features ?? {})
+        .filter((feature) => feature !== 'default');
+      const rootLabel = rootName === 'bitfun-cli' ? 'CLI' : 'ACP';
+
+      const packageStates = new Map();
+      const pending = [];
+      const queued = new Set();
+
+      const mergePackageState = (
+        pkg,
+        dependencyKindContext,
+        selectedFeatures,
+        useDefaultFeatures,
+        packagePath,
+      ) => {
+        const key = [
+          normalizedPath(pkg.manifest_path),
+          dependencyKindContext,
+        ].join('|');
+        let state = packageStates.get(key);
+        if (!state) {
+          state = {
+            pkg,
+            dependencyKindContext,
+            selectedFeatures: new Set(),
+            useDefaultFeatures: false,
+            featureState: { active: new Set(), references: new Set() },
+            packagePath,
+            initialized: false,
+          };
+          packageStates.set(key, state);
+        }
+
+        let changed = false;
+        for (const feature of selectedFeatures) {
+          if (!state.selectedFeatures.has(feature)) {
+            state.selectedFeatures.add(feature);
+            changed = true;
+          }
+        }
+        if (useDefaultFeatures && !state.useDefaultFeatures) {
+          state.useDefaultFeatures = true;
+          changed = true;
+        }
+        if (!changed && state.initialized) {
+          return state;
+        }
+
+        state.featureState = expandedLocalFeatures(
+          pkg.features ?? {},
+          state.selectedFeatures,
+          state.useDefaultFeatures,
+        );
+        state.initialized = true;
+        if (!queued.has(key)) {
+          pending.push(key);
+          queued.add(key);
+        }
+        return state;
+      };
+
+      // This is an architecture declaration check, not a target simulator.
+      // Cargo target cfg facts are multi-valued and evolve with rustc. Treating
+      // every declared target edge as reachable prevents a platform-only path
+      // from hiding an unreviewed Core owner. Products that genuinely need
+      // different owners must express that difference through package/module
+      // boundaries. Cargo features are additive, so all root features form the
+      // strongest buildable profile.
+      mergePackageState(
+        rootPackage,
+        'normal',
+        rootSelectedFeatures,
+        true,
+        [rootPackage.name],
+      );
+
+      while (pending.length > 0) {
+        const stateKey = pending.shift();
+        queued.delete(stateKey);
+        const {
+          pkg: sourcePackage,
+          dependencyKindContext,
+          featureState,
+          packagePath,
+        } = packageStates.get(stateKey);
+
+        for (const dependency of sourcePackage.dependencies ?? []) {
+          const kind = dependency.kind ?? 'normal';
+          if (
+            !dependency.path
+            || (kind !== 'normal' && kind !== 'build')
+            || repositoryPath(root, dependency.path) === null
+          ) {
+            continue;
+          }
+          const activation = dependencyActivation(dependency, featureState);
+          if (!activation) {
+            continue;
+          }
+          const targetPackage = packageByManifest.get(
+            normalizedPath(join(dependency.path, 'Cargo.toml')),
+          );
+          if (!targetPackage) {
+            continue;
+          }
+          const targetDependencyKindContext =
+            dependencyKindContext === 'build'
+              || kind === 'build'
+              || isProcMacroPackage(targetPackage)
+              ? 'build'
+              : 'normal';
+          const targetPath = [...packagePath, targetPackage.name];
+          const targetState = mergePackageState(
+            targetPackage,
+            targetDependencyKindContext,
+            activation.features,
+            activation.useDefaultFeatures,
+            targetPath,
+          );
+
+          if (targetPackage.name === 'bitfun-core') {
+            const activeCoreFeatures = targetState.featureState.active;
+            const unexpected = forbiddenCoreFeatures.find((feature) =>
+              activeCoreFeatures.has(feature))
+              ?? [...activeCoreFeatures]
+                .filter((feature) => !allowedCoreFeatures.has(feature))
+                .sort()[0];
+            const reportKey = [rootName, targetDependencyKindContext, unexpected].join('|');
+            if (unexpected && !reportedUnexpectedFeatures.has(reportKey)) {
+              reportedUnexpectedFeatures.add(reportKey);
+              violations.push({
+                path: sourcePackage.manifest_path,
+                line: 1,
+                message: `${rootLabel} dependency closure must not enable ${unexpected}: ${[
+                  ...packagePath,
+                  `${targetPackage.name}/${unexpected}`,
+                ].join(' -> ')}`,
+              });
+            }
+            continue;
+          }
+        }
       }
     }
   }
@@ -698,6 +1335,22 @@ function resolvedDependencyRecords(metadata, root) {
   return records;
 }
 
+function resolvedPackageFeatureRecords(metadata) {
+  const packageById = new Map((metadata.packages ?? []).map((pkg) => [pkg.id, pkg]));
+  return (metadata.resolve?.nodes ?? []).flatMap((node) => {
+    const pkg = packageById.get(node.id);
+    if (!pkg) {
+      return [];
+    }
+    return [{
+      name: pkg.name,
+      version: pkg.version,
+      source: pkg.source ?? null,
+      features: node.features ?? [],
+    }];
+  });
+}
+
 export function collectCargoMetadataGraph({
   root,
   manifestPaths = discoverCargoManifestPaths(root),
@@ -705,6 +1358,7 @@ export function collectCargoMetadataGraph({
 }) {
   const packagesByManifest = new Map();
   const dependenciesByKey = new Map();
+  const resolvedPackageFeaturesByKey = new Map();
   const coveredManifests = new Set();
   const workspaceManifest = normalizedPath(join(root, 'Cargo.toml'));
   const orderedManifests = [...manifestPaths].sort((left, right) => {
@@ -748,11 +1402,16 @@ export function collectCargoMetadataGraph({
       ].join('|');
       dependenciesByKey.set(key, dependency);
     }
+    for (const record of resolvedPackageFeatureRecords(metadata)) {
+      const key = `${record.name}@${record.version}|${record.source ?? ''}`;
+      resolvedPackageFeaturesByKey.set(key, record);
+    }
   }
 
   return {
     packages: [...packagesByManifest.values()],
     resolvedDependencies: [...dependenciesByKey.values()],
+    resolvedPackageFeatures: [...resolvedPackageFeaturesByKey.values()],
   };
 }
 
@@ -782,7 +1441,11 @@ export function checkCargoDependencyLayersSafely({ root, crateLayoutRules }) {
 }
 
 export function checkCargoDependencyBoundaries({ root, crateLayoutRules }) {
-  const { packages, resolvedDependencies } = collectCargoMetadataGraph({ root });
+  const {
+    packages,
+    resolvedDependencies,
+    resolvedPackageFeatures,
+  } = collectCargoMetadataGraph({ root });
   return [
     ...findCargoLayerViolations(
       packages,
@@ -794,7 +1457,10 @@ export function checkCargoDependencyBoundaries({ root, crateLayoutRules }) {
       { root, crateLayoutRules },
     ),
     ...findFeatureGatedTestTargetViolations(packages),
+    ...findRuntimeServicesTestSupportFeatureViolations(packages),
     ...findTokioDependencyFeatureViolations(packages),
+    ...findReqwestDependencyFeatureViolations(packages),
+    ...findResolvedReqwestNativeTlsViolations(resolvedPackageFeatures, { root }),
     ...findServicesCorePlatformDependencyFeatureViolations(packages),
   ];
 }

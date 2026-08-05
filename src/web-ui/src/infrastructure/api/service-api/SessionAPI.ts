@@ -1,7 +1,11 @@
 
 import { api } from './ApiClient';
 import { createTauriCommandError } from '../errors/TauriCommandError';
-import type { SessionMetadata, DialogTurnData } from '@/shared/types/session-history';
+import type {
+  DialogTurnData,
+  SessionMetadata,
+  SessionTurnCatalog,
+} from '@/shared/types/session-history';
 import { normalizeRemoteSessionScope } from '@/shared/utils/remoteSessionScope';
 
 export type UiSessionMetadataField =
@@ -38,7 +42,24 @@ export interface SessionLineageRequest {
 
 export interface SessionLineageSnapshot {
   rootSessionId: string;
-  sessions: SessionMetadata[];
+  sessions: SessionLineageEntry[];
+}
+
+export interface SessionLineageEntry {
+  sessionId: string;
+  sessionName: string;
+  agentType: string;
+  createdAtMs: number;
+  status: 'active' | 'archived' | 'completed';
+  activeTurnId?: string;
+  parentSessionId?: string;
+  parentToolCallId?: string;
+  subagentType?: string;
+  workspacePath?: string;
+  remoteConnectionId?: string;
+  remoteSshHost?: string;
+  unreadCompletion?: 'completed' | 'error' | 'interrupted';
+  needsUserAttention?: 'ask_user' | 'tool_confirm';
 }
 
 export interface SessionReferenceCandidate {
@@ -201,6 +222,13 @@ export interface SessionUsageReport {
   };
 }
 
+export interface RecordLocalCommandTurnResponse {
+  turnId: string;
+  storageTurnIndex: number;
+  totalTurnCount: number;
+  turnCatalog: SessionTurnCatalog;
+}
+
 function remoteSessionFields(
   remoteConnectionId?: string,
   remoteSshHost?: string
@@ -355,6 +383,28 @@ export class SessionAPI {
       });
     } catch (error) {
       throw createTauriCommandError('save_session_turn', error, { turnData, workspacePath });
+    }
+  }
+
+  async recordLocalCommandTurn(
+    turnData: DialogTurnData,
+    workspacePath: string,
+    remoteConnectionId?: string,
+    remoteSshHost?: string,
+  ): Promise<RecordLocalCommandTurnResponse> {
+    try {
+      return await api.invoke('record_local_command_turn', {
+        request: {
+          turn_data: turnData,
+          workspace_path: workspacePath,
+          ...remoteSessionFields(remoteConnectionId, remoteSshHost),
+        },
+      });
+    } catch (error) {
+      throw createTauriCommandError('record_local_command_turn', error, {
+        turnData,
+        workspacePath,
+      });
     }
   }
 

@@ -57,7 +57,11 @@ impl ChatView {
         let input_inner_width = size.width.saturating_sub(2); // subtract left+right borders
         let total_visual_lines = self.text_input.visual_line_count(input_inner_width) as u16;
         let content_lines = total_visual_lines.max(1).min(max_input_content_lines);
-        let input_height = content_lines + 2; // +2 for top/bottom borders
+        let input_height = if self.lineage_inspection_label.is_some() {
+            3
+        } else {
+            content_lines + 2 // +2 for top/bottom borders
+        };
 
         // Calculate shortcuts area height based on content
         let shortcuts_height = Self::calculate_shortcuts_height(
@@ -92,13 +96,19 @@ impl ChatView {
         self.render_header(frame, chunks[0], chat_state);
         self.render_messages(frame, chunks[1], chat_state);
         self.render_status_bar(frame, chunks[2], chat_state);
-        self.render_input(frame, chunks[3], chat_state);
+        if self.lineage_inspection_label.is_some() {
+            self.render_lineage_inspection(frame, chunks[3]);
+        } else {
+            self.render_input(frame, chunks[3], chat_state);
+        }
         self.render_command_menu(frame, chunks[1]);
         self.workspace_reference_popup
             .render(frame, chunks[1], &self.theme);
         self.render_model_selector(frame, chunks[1]);
         self.render_agent_selector(frame, chunks[1]);
         self.render_session_selector(frame, chunks[1]);
+        self.session_lineage_selector
+            .render(frame, chunks[1], &self.theme);
         self.render_fork_selector(frame, chunks[1]);
         self.render_timeline_selector(frame, chunks[1]);
         self.prompt_stash_selector
@@ -141,6 +151,24 @@ impl ChatView {
             self.info_popup_scroll = scroll;
             self.info_popup_max_scroll = max_scroll;
         }
+    }
+
+    fn render_lineage_inspection(&self, frame: &mut Frame, area: Rect) {
+        let label = self
+            .lineage_inspection_label
+            .as_deref()
+            .unwrap_or("Subagent");
+        frame.render_widget(
+            Paragraph::new("Up parent  ←/→ siblings  Esc root")
+                .style(self.theme.style(StyleKind::Muted))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(self.theme.style(StyleKind::Border))
+                        .title(format!(" {label} · read-only ")),
+                ),
+            area,
+        );
     }
 
     fn render_theme_selector(&mut self, frame: &mut Frame, area: Rect) {
@@ -267,6 +295,24 @@ impl ChatView {
                 return;
             }
 
+            // Reconcile scroll_offset against the freshly computed total_lines.
+            // Presentation toggles (e.g. /thinking) invalidate the render cache
+            // and shrink total_lines, but leave scroll_offset stale — clamping
+            // here prevents the view from being pinned to the top with a frozen
+            // scrollbar.
+            if self.browse_mode {
+                if total_lines <= visible_lines {
+                    self.browse_mode = false;
+                    self.auto_scroll = true;
+                    self.scroll_offset = 0;
+                } else {
+                    let max_scroll = total_lines.saturating_sub(visible_lines);
+                    if self.scroll_offset > max_scroll {
+                        self.scroll_offset = max_scroll;
+                    }
+                }
+            }
+
             // prefix_sum[i] = total lines of messages 0..i (exclusive end).
             let prefix_sum = layout.prefix_sum;
 
@@ -330,15 +376,20 @@ impl ChatView {
                 }
             }
 
-            // Apply hover styling (without invalidating per-message render caches)
-            if let Some(ref hovered_id) = self.hovered_thinking_block_id {
-                for (block_id, y_start, y_end) in &self.thinking_regions {
-                    if block_id == hovered_id && y_start == y_end {
-                        let idx = *y_start as usize;
-                        if idx < messages.len() {
-                            messages[idx] = messages[idx]
-                                .clone()
-                                .style(Style::default().bg(self.theme.block_bg_hover));
+            // Apply hover styling (without invalidating per-message render
+            // caches). Hover is only shown while thinking is interactive
+            // (Hide mode); in fully-expanded (Show) mode blocks are
+            // non-interactive so no hover background is applied.
+            if self.presentation.thinking == crate::config::ThinkingMode::Hide {
+                if let Some(ref hovered_id) = self.hovered_thinking_block_id {
+                    for (block_id, y_start, y_end) in &self.thinking_regions {
+                        if block_id == hovered_id && y_start == y_end {
+                            let idx = *y_start as usize;
+                            if idx < messages.len() {
+                                messages[idx] = messages[idx]
+                                    .clone()
+                                    .style(Style::default().bg(self.theme.block_bg_hover));
+                            }
                         }
                     }
                 }
@@ -364,12 +415,12 @@ impl ChatView {
 
             // ── Scroll indicator ──
             if self.browse_mode {
-                let progress_pct = if self.scroll_offset == 0 {
+                let max_scroll = total_lines.saturating_sub(visible_lines);
+                let progress_pct = if max_scroll == 0 {
                     100
-                } else if self.scroll_offset >= total_lines {
-                    0
                 } else {
-                    ((total_lines - self.scroll_offset) * 100 / total_lines).min(100)
+                    let effective = self.scroll_offset.min(max_scroll);
+                    ((max_scroll - effective) * 100 / max_scroll).min(100)
                 };
 
                 let scroll_indicator = format!("{}%", progress_pct);
@@ -630,15 +681,37 @@ impl ChatView {
                         let trimmed = content.trim_end();
                         let clean_content = trimmed.trim_end_matches("<thinking_end>").trim_end();
 
-                        let collapsed = self.thinking_disclosures.is_collapsed(
-                            &thinking_block_id,
-                            self.presentation.thinking == crate::config::ThinkingMode::Hide,
-                        );
-                        let caret = if collapsed { "\u{25b8}" } else { "\u{25be}" }; // ▸ / ▾
+                        // `/thinking` toggles between fully-collapsed and
+                        // fully-expanded. Manual per-block expands are only
+                        // meaningful in collapsed (Hide) mode; in Show mode
+                        // every block is expanded regardless of overrides, so
+                        // manually-expanded blocks survive a full toggle
+                        // round-trip instead of being inverted by XOR.
+                        let collapsed = match self.presentation.thinking {
+                            crate::config::ThinkingMode::Show => false,
+                            crate::config::ThinkingMode::Hide => self
+                                .thinking_disclosures
+                                .is_collapsed(&thinking_block_id, true),
+                        };
+                        // In Show mode the header is non-interactive: hide the
+                        // caret so users don't expect to click-collapse an
+                        // already fully-expanded block.
+                        let caret =
+                            if self.presentation.thinking == crate::config::ThinkingMode::Show {
+                                ""
+                            } else if collapsed {
+                                "\u{25b8}"
+                            } else {
+                                "\u{25be}"
+                            };
 
                         let header_y = items.len().min(u16::MAX as usize) as u16;
                         thinking_regions.push((thinking_block_id.clone(), header_y, header_y));
-                        let left_label = format!("{} Thinking", caret);
+                        let left_label = if caret.is_empty() {
+                            "Thinking".to_string()
+                        } else {
+                            format!("{} Thinking", caret)
+                        };
                         if collapsed {
                             let hint = "click to expand";
                             let indent = "  ";
@@ -738,10 +811,7 @@ impl ChatView {
                                 };
                                 plain_lines.push(format!("{line_prefix}{wrapped}"));
                                 items.push(ListItem::new(Line::from(vec![
-                                    Span::styled(
-                                        line_prefix,
-                                        self.theme.style(StyleKind::Primary),
-                                    ),
+                                    Span::styled(line_prefix, self.theme.style(StyleKind::Primary)),
                                     Span::raw(wrapped),
                                 ])));
                             }
@@ -1158,6 +1228,54 @@ mod shortcut_contract_tests {
         assert!(plain.contains("Thinking"), "{plain}");
         assert!(plain.contains("click to expand"), "{plain}");
         assert!(!plain.contains("private streaming reasoning"), "{plain}");
+    }
+
+    #[test]
+    fn thinking_toggle_keeps_manual_expand_across_round_trip() {
+        let mut view = ChatView::new(Theme::dark(), Vec::new());
+        // Two thinking blocks in one message: block 0 will be manually
+        // expanded, block 1 stays collapsed by default.
+        let message = ChatMessage {
+            id: "assistant-1".to_string(),
+            turn_id: Some("turn-1".to_string()),
+            role: MessageRole::Assistant,
+            timestamp: std::time::SystemTime::now(),
+            flow_items: vec![
+                FlowItem::Thinking {
+                    content: "reasoning-alpha".to_string(),
+                },
+                FlowItem::Thinking {
+                    content: "reasoning-beta".to_string(),
+                },
+            ],
+            is_streaming: false,
+            version: 1,
+        };
+
+        // Default Hide: both collapsed (header only).
+        let plain = view.render_message(&message, 80).plain_lines.join("\n");
+        assert!(plain.contains("click to expand"), "{plain}");
+        assert!(!plain.contains("reasoning-alpha"), "{plain}");
+        assert!(!plain.contains("reasoning-beta"), "{plain}");
+
+        // Manually expand block 0; block 1 stays collapsed.
+        view.toggle_thinking_block_for_test("assistant-1", 0);
+        let plain = view.render_message(&message, 80).plain_lines.join("\n");
+        assert!(plain.contains("reasoning-alpha"), "{plain}");
+        assert!(!plain.contains("reasoning-beta"), "{plain}");
+
+        // `/thinking` → fully expanded: both blocks visible (spec 1).
+        view.toggle_thinking();
+        let plain = view.render_message(&message, 80).plain_lines.join("\n");
+        assert!(plain.contains("reasoning-alpha"), "{plain}");
+        assert!(plain.contains("reasoning-beta"), "{plain}");
+
+        // `/thinking` back → Hide default: manual expand persists for block 0
+        // while block 1 collapses again (spec 2).
+        view.toggle_thinking();
+        let plain = view.render_message(&message, 80).plain_lines.join("\n");
+        assert!(plain.contains("reasoning-alpha"), "{plain}");
+        assert!(!plain.contains("reasoning-beta"), "{plain}");
     }
 
     #[test]

@@ -582,6 +582,12 @@ enum DaemonAction {
     Uninstall,
     /// Show daemon and auto-start service status
     Status,
+    #[command(name = "__dispatch_identity", hide = true)]
+    DispatchIdentity,
+    #[command(name = "__dispatch_provision", hide = true)]
+    DispatchProvision { request_path: std::path::PathBuf },
+    #[command(name = "__dispatch_deprovision", hide = true)]
+    DispatchDeprovision { device_id: String, user_id: String },
 }
 
 #[derive(Subcommand)]
@@ -899,6 +905,16 @@ async fn run_interactive(
     let compatibility = runtime
         .as_ref()
         .map(|runtime| runtime.compatibility().clone());
+    if !shared {
+        if let Err(error) =
+            bitfun_core::external_sources::ensure_external_source_workspace_snapshot(Some(
+                &workspace_path,
+            ))
+            .await
+        {
+            tracing::warn!("Failed to initialize external agent sources: {error}");
+        }
+    }
     // 3.5 Restore persisted account session (if any)
     if !shared {
         if let Some(user_id) = account::try_restore_session().await {
@@ -950,6 +966,13 @@ async fn run_interactive(
     };
 
     let agent_type = startup_page.agent_type().to_string();
+    if matches!(startup_result, StartupResult::NewSession { .. }) {
+        if let Some(model_id) = startup_page.selected_model_id().map(str::to_string) {
+            agent
+                .ensure_session_with_model(&agent_type, Some(model_id))
+                .await?;
+        }
+    }
     // Use the current project workspace selected at process start.
     let workspace = startup_page.workspace();
     let config = startup_page.config().clone();
@@ -1257,6 +1280,11 @@ async fn run_cli() -> Result<()> {
             DaemonAction::Install => daemon::install_service()?,
             DaemonAction::Uninstall => daemon::uninstall_service()?,
             DaemonAction::Status => daemon::print_status()?,
+            DaemonAction::DispatchIdentity => daemon::print_identity()?,
+            DaemonAction::DispatchProvision { request_path } => daemon::provision(request_path)?,
+            DaemonAction::DispatchDeprovision { device_id, user_id } => {
+                daemon::deprovision(device_id, user_id)?
+            }
         },
 
         Some(Commands::Dispatch { action }) => {
@@ -1873,5 +1901,62 @@ mod dispatch_command_tests {
             .render_long_help()
             .to_string();
         assert!(!dispatch_help.contains("__run"));
+    }
+}
+
+#[cfg(test)]
+mod daemon_command_tests {
+    use super::{Cli, Commands, DaemonAction};
+    use clap::{CommandFactory, Parser};
+
+    #[test]
+    fn dispatch_daemon_bootstrap_commands_parse_and_stay_hidden() {
+        let identity = Cli::try_parse_from(["bitfun", "daemon", "__dispatch_identity"])
+            .expect("parse target identity command");
+        assert!(matches!(
+            identity.command,
+            Some(Commands::Daemon {
+                action: DaemonAction::DispatchIdentity
+            })
+        ));
+
+        let provision = Cli::try_parse_from([
+            "bitfun",
+            "daemon",
+            "__dispatch_provision",
+            "/tmp/request.json",
+        ])
+        .expect("parse target provisioning command");
+        assert!(matches!(
+            provision.command,
+            Some(Commands::Daemon {
+                action: DaemonAction::DispatchProvision { ref request_path }
+            }) if request_path == std::path::Path::new("/tmp/request.json")
+        ));
+
+        let rollback = Cli::try_parse_from([
+            "bitfun",
+            "daemon",
+            "__dispatch_deprovision",
+            "device-1",
+            "user-1",
+        ])
+        .expect("parse target rollback command");
+        assert!(matches!(
+            rollback.command,
+            Some(Commands::Daemon {
+                action: DaemonAction::DispatchDeprovision {
+                    ref device_id,
+                    ref user_id,
+                }
+            }) if device_id == "device-1" && user_id == "user-1"
+        ));
+
+        let daemon_help = Cli::command()
+            .find_subcommand_mut("daemon")
+            .expect("daemon command")
+            .render_long_help()
+            .to_string();
+        assert!(!daemon_help.contains("__dispatch_"));
     }
 }

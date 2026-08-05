@@ -85,6 +85,10 @@ interface ModelSelectorProps {
   onLoadingChange?: (loading: boolean) => void;
   /** Target-owned model catalog for transports that do not have a local backend session. */
   externalSelection?: ExternalModelSelection;
+  /** Agent-profile model used only when the session has no explicit selection. */
+  modeDefaultModelId?: string;
+  /** Whether a selection also changes BitFun's shared built-in mode default. */
+  persistSharedModeDefault?: boolean;
 }
 
 interface ModelInfo {
@@ -211,6 +215,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   contextUsageSource,
   onLoadingChange,
   externalSelection,
+  modeDefaultModelId,
+  persistSharedModeDefault = true,
 }) => {
   const { t } = useTranslation('flow-chat');
   const [allModels, setAllModels] = useState<AIModelConfig[]>([]);
@@ -553,7 +559,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
     // Legacy sessions created without a model selector fall back to the current
     // mode default until they are migrated by the send path.
-    const configuredModelId = modeModel;
+    const configuredModelId = modeDefaultModelId?.trim() || modeModel;
     if (configuredModelId === 'auto') return 'auto';
     if (configuredModelId === 'primary' || configuredModelId === 'fast') {
       const actualModelId = defaultModels[configuredModelId];
@@ -562,7 +568,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     }
     const model = allModels.find(m => m.id === configuredModelId);
     return model ? configuredModelId : 'auto';
-  }, [allModels, modeModel, defaultModels, activeSession?.config.modelName, targetIsSubagent]);
+  }, [allModels, modeDefaultModelId, modeModel, defaultModels, activeSession?.config.modelName, targetIsSubagent]);
 
   const currentModel = useMemo((): ModelInfo | null => {
     const modelId = getCurrentModelId();
@@ -721,16 +727,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         return;
       }
 
-      await configManager.setConfig('ai.agent_model_defaults.mode', modelId);
-      setModeModel(modelId);
+      if (persistSharedModeDefault) {
+        await configManager.setConfig('ai.agent_model_defaults.mode', modelId);
+        setModeModel(modelId);
+        globalEventBus.emit('mode:config:updated');
+      }
       await updateTargetSessionModel();
       if (sessionId) {
         setRecentReasoningPreset(resolveConcreteModelId(modelId, defaultModels) ?? modelId, nextReasoningPreset);
       }
 
       log.info('Mode model updated', { mode: currentMode, modelId });
-
-      globalEventBus.emit('mode:config:updated');
     } catch (error) {
       log.error('Failed to switch model', error);
       // Only a previously pinned selection can be restored: the store has no
@@ -757,6 +764,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     externalSelection,
     isAcpSession,
     loading,
+    persistSharedModeDefault,
     reasoningLoading,
     recentPresetForModel,
     sessionId,

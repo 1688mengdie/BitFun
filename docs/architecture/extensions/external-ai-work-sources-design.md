@@ -13,14 +13,16 @@ Desktop、交互式 TUI、Peer Host 和只读 Server 只显示宿主所需状态
 适配器已接入本地用户全局/项目来源；Desktop 可查看、刷新、抑制和处理跨来源冲突，交互式 TUI（ChatMode）可列出并执行
 Prompt Command；静态文件和经审阅的本地 shell 输出由共享归属模块完成装配。第二条端到端能力已让受支持的单文件 OpenCode `.js` standalone Tool 经静态
 预览、来源/能力确认和同名冲突选择后进入现有 Tool Runtime；Desktop 与交互式 TUI（ChatMode）使用同一决策状态。第三条纵向
-切片已把 OpenCode 全局/项目 Subagent 的安全子集通过独立 provider 契约接入现有 Subagent 归属模块：首次启用与
-同名冲突使用非阻塞决策，fresh 调用持续使用启动时选定的版本，更新和撤下不会静默切换到同名实现。第四条端到端能力
+切片已把 OpenCode 全局/项目 Agent 的安全子集通过独立 provider 契约接入现有 Agent 归属模块：首次启用与
+同名冲突使用非阻塞决策，`primary|subagent|all` 从同一 workspace route 投影到主选择器和 Task，调用持续使用启动时选定的
+版本，更新和撤下不会静默切换到同名实现。第四条端到端能力
 已把 OpenCode 用户/项目 MCP 的 local stdio 与 HTTPS remote 安全子集接入现有 MCP 归属模块，沿用显式审批、冲突、
 工作区隔离和失败反馈；现有 Skill 加载模块另行展示来源、用户/项目范围和固定优先级产生的覆盖结果，不并入上述
 可执行来源选择规则。第五条端到端能力在不增加新的 Rust Runtime 进程的前提下接入 Claude Code 的 legacy Command、Subagent、
 MCP 安全子集，以及 Codex Subagent、MCP 安全子集；三种生态使用同一个来源管理模块，并共享审批、冲突、刷新和故障隔离规则，
 但各自在 sibling adapter 内保留原生来源与覆盖语义。完整 TypeScript/Bun、包依赖、package plugin 执行、
-Codex/Claude Code 运行时适配、primary agent 替换和外部 Subagent 续接仍属于后续阶段，不能因来源被识别就宣称已经可用。OpenCode、Claude Code 与 Codex 的本地 Hook 脱敏目录
+Codex/Claude Code 运行时适配和外部 Subagent 续接仍属于后续阶段；Claude Code Agent 定义可按同一静态安全子集进入主选择器，
+Codex role 仍仅作为 Subagent，不能因来源被识别就宣称宿主运行时兼容。OpenCode、Claude Code 与 Codex 的本地 Hook 脱敏目录
 已作为独立只读切片接入；在此之上，Claude Code 与 Codex 的同步 command 子集可经精确命令审阅复制为 BitFun 管理的
 原生 Hook 层，仍由唯一 `AgentHookEngine` 执行。OpenCode handler、非 command/异步 handler 和未审阅声明仍不可执行。
 独立的 MCP C0a 快照导入复用上述来源与现有 MCP 配置 owner：Desktop 和根 CLI 可预览 OpenCode、Claude Code
@@ -46,9 +48,10 @@ native ID、disposition 和稳定 reason code，不包含 command arguments、UR
 
 environment 值或引用、header/authorization、cwd、未知字段和其他 transport 不猜测、不复制、不记录。导入条目始终为
 `enabled: false` 与 `autoStart: false`；local 条目不继承完整父进程环境，只保留 MCP runtime owner 提供的安全环境。
-Codex 的 legacy `name` 是上游忽略的展示字段，不进入导入结果或行为版本；`startup_timeout_sec`、`tool_timeout_sec`、
-`enabled_tools`、`disabled_tools`、approval、environment/scopes/OAuth 与并行调用等运行敏感字段仍按不支持处理，不能因
-静态发现成功而丢弃语义后导入。
+Codex 的 legacy `name` 是上游忽略的展示字段，不进入导入结果或行为版本；`startup_timeout_sec`（含旧
+`startup_timeout_ms`）和 `tool_timeout_sec` 可进入受审批保护的兼容运行投影，但当前原生快照格式不能无损保留它们，
+因此仍会阻断 C0a 导入。`enabled_tools`、`disabled_tools`、approval、environment/scopes/OAuth 与并行调用等运行敏感字段
+仍按不支持处理，不能因静态发现成功而丢弃语义后导入。
 Codex 未显式声明 cwd 时，其兼容运行投影仍会把当前 workspace 作为 effective cwd；现有原生快照格式不会保留这项隐式
 语义，因此 workspace 场景的 local 声明返回“需要设置”，不能以“没有 cwd 字段”为由导入后继承 BitFun 进程目录。
 
@@ -243,16 +246,16 @@ OpenCode Subagent 属于 L2：adapter 只读取声明，不执行外部代码；
 内容摘要”的不可变绑定；`Inherit` 则只在 fresh 子任务创建时解析一次父会话已经选择的模型。provider、模型名、endpoint
 或其他影响运行身份的配置变化都会生成新的审批决策。运行中的调用继续使用启动时租约固定的版本，不能静默回退。
 
-#### 4.2.1 外部 Subagent 模型引用与显式绑定
+#### 4.2.1 外部 Agent 模型引用与显式绑定
 
 当前生产链路已经按本节契约接通 OpenCode、Claude Code 与 Codex adapter、共享来源快照、现有偏好 owner、Desktop、
-Peer Host、Web 设置页、交互式 TUI 和 fresh child session 创建路径。本节解决的是“外部来源声明的模型如何绑定到用户
+Peer Host、Web 设置页、交互式 TUI、主 Session 和 fresh child session 创建路径。本节解决的是“外部来源声明的模型如何绑定到用户
 实际配置”，而不是维护 Claude、GPT、GLM、DeepSeek 等厂商或
 型号目录。生产代码把外部模型名视为不透明引用，不按名称片段推断质量、速度、推理能力、成本或等价型号，也不在 Product
 Domain、Assembly 或 UI 中维护跨厂商替换表。生态 adapter 只解释自身已验证的语法，并提交以下来源无关的模型请求：
 
-- `Default`：来源没有指定模型，使用 BitFun 已有 Subagent 默认选择；
-- `Inherit`：仅当来源规范明确声明继承父会话模型时使用，不能由通用模块根据字符串猜测；
+- `Default`：来源没有指定模型，调用时继承当前 Session 已选择的模型，不查询同名 BitFun Agent 的默认项；
+- `Inherit`：来源规范显式声明继承当前 Session 模型；运行语义与 `Default` 相同，但保留不同的来源意图，不能由通用模块根据字符串猜测；
 - `Reference`：保留 adapter 已解析的可选 provider 提示和原始模型引用，模型名保持不透明。
 
 来源还可以在模型请求之外声明一个可选 profile 意图，但只支持两个有明确消费点的形态：
@@ -284,11 +287,12 @@ profile 只是选择现有配置时的来源意图，不是新的模型配置 ow
 规范化外部模型引用、适用范围和执行域；同一决策身份影响的当前候选在管理界面聚合展示和一次选择，避免一个 Agent 包中
 几十个相同引用逐项询问。来源引用变化会产生新的决策身份，不能继承旧绑定。
 
-`Inherit` 不在发现或审批阶段伪装成某个固定模型。外部 Subagent 注册将继承意图交给现有 Subagent 模型选择 owner，
+`Default`（未声明模型）与 `Inherit` 都不在发现或审批阶段伪装成某个固定模型。外部 Agent 注册将继承意图交给现有模型选择 owner，
 在调用时使用当前父 Session 已明确选择的模型；审批 envelope 记录的是“继承父模型”这一行为，而不是某个偶然的父模型 ID。
 调用开始时只解析一次父模型，随后创建的 fresh 子 Session 仍保持 `ApprovedImmutable`，不会跟随父 Session 的后续模型切换；
-调用时父模型不可用则返回明确失败，不回退到默认模型。`Default`、`primary`、`fast` 和具体模型绑定仍在激活前解析为
-具体模型配置，并携带运行配置指纹。该路径扩展现有外部 generation lease 的模型绑定形态，不建立第二套 Subagent Runtime。
+调用时父模型不可用则返回明确失败，不回退到默认模型。只有显式模型引用及其用户绑定在激活前解析为具体模型配置并携带
+运行配置指纹；主 Agent 的固定模型只在创建无显式模型的新 Session 时作为默认值，随后仍可由用户修改。该路径扩展现有外部
+generation lease 的模型绑定形态，不建立第二套 Agent Runtime。
 
 Desktop、交互式 TUI 以及未来通过 Host 能力访问该状态的界面必须同时展示：来源请求、实际绑定、绑定方式和受影响候选数。
 例如“来源请求 `sonnet`；当前工作区由用户绑定到 Primary（实际为已配置模型 X）；影响 71 个 Agent”。用户可以选择其他
@@ -347,8 +351,9 @@ Plugin Host Runtime、LSP，以及通用动态模型路由器。现有 capabilit
 
 | 能力 | OpenCode | Claude Code | Codex | 当前边界 |
 |---|---|---|---|---|
+| Rules / Instructions | 用户级 `AGENTS.md`/Claude fallback 与本地 `instructions` 文件、glob；项目级本地文件、glob | 用户与项目 `CLAUDE.md`、项目导入及 `.claude/rules/**/*.md`；带 `paths` 的规则延迟生效 | 用户与项目 `AGENTS.md` | 无条件来源按既有 user → workspace 顺序进入启动上下文；Claude path-scoped rule 仅在 `Read` 成功返回且工作区相对路径命中后追加到当前会话历史。条件内容在压缩时丢弃，之后需再次命中读取才恢复；不增加 watcher、UI、Plugin Host Runtime 或第二套 Rules owner。Remote 只发现远端工作区来源，不回退控制端用户目录。 |
 | Prompt Command | JSON/JSONC、Markdown 的 prompt、本地文本文件与经审阅 shell 上下文子集 | legacy `commands/**/*.md` 的同一子集；Skills 仍由 Skill 归属模块处理 | 没有稳定、独立于 Skills 的声明式 Command 来源，因此不伪造 provider | `$ARGUMENTS`/位置参数及模板内 workspace 相对 UTF-8 `@file` 可展开；`!shell` 在展示精确计划并重新校验后仅把 stdout 加入 Prompt，参数相关计划不可记住。Claude `allowed-tools` 只校验宿主格式，不授予预批准；动态/绝对/越界文件、指定 Agent/模型等整体受限；Remote 不回退本机执行。 |
-| Subagent | 用户/项目声明的安全子集 | 用户/项目 `agents/**/*.md` 的安全子集 | 用户/项目 `[agents]`、角色文件与安全配置层子集 | prompt、描述、`Default`/真实继承/不透明模型引用、OpenCode 不透明 variant、Claude/Codex reasoning effort 和可表达工具请求进入既有归属模块；无 profile 的模型引用可唯一精确匹配，variant/effort profile 必须由用户绑定到现有配置后才可激活。来源请求、profile、实际模型和解析方式在 Web/TUI 可见。权限、私有 MCP/Hook、reasoning summary/verbosity、采样、并发等没有对应实现的字段仍会阻止或降级。 |
+| Agent | 用户/项目声明的安全子集与 `primary/subagent/all` role | 用户/项目 `agents/**/*.md` 的主 Agent/Subagent 共用安全子集 | 用户/项目 `[agents]`、角色文件与安全配置层的 Subagent 子集 | prompt、描述、继承/不透明模型引用、OpenCode 不透明 variant、Claude/Codex reasoning effort 和可表达工具请求进入既有归属模块；OpenCode/Claude 按 role 投影主选择器或 Task，Codex 保持 Subagent。无 profile 的显式模型引用可唯一精确匹配，variant/effort profile 必须由用户绑定到现有配置后才可激活。来源请求、profile、实际模型和解析方式在 Web/TUI 可见。权限、私有 MCP/Hook、reasoning summary/verbosity、采样、并发等没有对应实现的字段仍会阻止或降级。 |
 | MCP | 用户/显式目录/项目配置的安全子集 | user/project/local 原生层的安全子集 | 用户与项目 `config.toml` 原生层的安全子集 | 支持可表达的 stdio 与 HTTPS Streamable HTTP；发现不启动 Server，首次激活继续经 BitFun MCP 审批。OAuth、remote executor、per-tool policy 等不完整语义明确降级。 |
 | Standalone Tool | 已有单文件 JavaScript 子集 | 无稳定的 runtime-free standalone Tool 来源 | 无稳定的 runtime-free standalone Tool 来源 | TypeScript、package/plugin Tool 与动态工具注册依赖独立 Plugin Host，不在声明式 adapter 中猜测。 |
 | Skill | 由现有 Skill 加载模块发现 `.opencode` 标准根及 OpenCode 本地配置根 | 由现有 Skill 加载模块发现 `.claude` 标准根；目录名是调用身份，描述可回退正文首段，`when_to_use` 合入索引，声明参数可做纯文本命名展开 | 由现有 Skill 加载模块发现 `.codex`、`.agents` 标准根；`.codex` 缺少 `name` 时回退目录名 | OpenCode V1 `skills.paths`/当前本地字符串数组只经 `bitfun-core/external_sources` 组合边界投影根目录，递归、加载、覆盖、模式开关与执行仍由同一个 Skill 模块负责；URL 不加载。 |
@@ -356,6 +361,7 @@ Plugin Host Runtime、LSP，以及通用动态模型路由器。现有 capabilit
 
 生态原生语义由各 adapter 以契约测试固定，不抽象成全局优先级：
 
+- Claude path-scoped Instructions 只解析 `.claude/rules/**/*.md` front matter 中非空的 `paths` 字符串列表；无效 YAML、绝对路径、URL、父目录逃逸与无效 glob 均 fail closed。用户与项目规则沿用既有 Instructions 发现、去重和渲染预算，执行引擎只识别成功的 `Read`/deferred `Read` 工具结果，不根据 Grep、Edit 或失败结果推测规则生效。规则首次命中后作为带来源身份的内部提醒持久化，同一活动上下文不重复注入。
 - Claude legacy Command 扫描用户与项目 `.claude/commands/**/*.md`，保留 `frontend/component` 到
   `/frontend:component` 的原生命名空间；同层重名无效，遵循 Claude Code 当前“personal 覆盖 project”的 Skill/legacy Command
   规则，同名 Skill 仅通过有界名称索引遮蔽 Command。
@@ -628,8 +634,12 @@ Command；明确缺失且未被标记失败的 Command 是稳定删除。产品�
    扩展。删除项的一次性用户通知/有界墓碑尚未实现，当前行会在稳定重扫后消失；该展示增强
    留待后续 PR，不能改变“先撤 route、禁止新调用”的运行语义。
 8. 外部本地进程不继承 BitFun 的完整父进程环境，只保留启动所需的系统基线和配置显式声明的变量；这仍不是 OS
-   沙箱，进程继续拥有当前用户的文件、网络和子进程权限。Remote 执行域、OpenCode OAuth client 配置、SSE、完整
-   `timeout`/Agent 范围和通用凭据归属模块明确延后。
+   沙箱，进程继续拥有当前用户的文件、网络和子进程权限。OpenCode V1 标量 `timeout`、Codex 启动/工具 timeout 与
+   Claude Code 单服务器执行 timeout 已映射为统一的启动、目录读取、执行阶段事实；Codex `startup_timeout_sec` 同时约束
+   初始化和首次工具目录请求，`tool_timeout_sec` 只约束工具执行。只有来源显式声明时才覆盖现有运行行为；当前使用每次请求的
+   硬期限，不因 progress 重置，超时只停止
+   BitFun 的当前等待，不承诺服务端工作已经取消，也不触发自动重放或重启。Remote 执行域、OpenCode OAuth client 配置、SSE、OpenCode V2 分阶段 timeout
+   配置格式、Agent 范围和通用凭据归属模块明确延后。
 9. 本阶段只把外部 MCP 的 Tool 目录接入 Agent Tool 归属模块。通用 Resource/Prompt/MCP App Desktop 接口不接受无工作区
    上下文的外部 runtime id；外部服务器发起的 roots、sampling 和 elicitation 请求也一律拒绝，防止跨工作区读取或借用
    BitFun 宿主能力。后续若接入这些能力，必须先补独立契约、工作区路由与权限交互，不能复用全局连接绕过当前边界。

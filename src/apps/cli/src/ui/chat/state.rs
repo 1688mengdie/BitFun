@@ -25,6 +25,7 @@ use super::prompt_stash_selector::PromptStashSelectorState;
 use super::provider_selector::{ProviderSelection, ProviderSelectorState};
 use super::question::render_question_overlay;
 use super::session_selector::{SessionAction, SessionItem, SessionSelectorState};
+use super::session_lineage_selector::{SessionLineageAction, SessionLineageSelectorState};
 use super::skill_selector::{SkillItem, SkillSelectorAction, SkillSelectorState};
 use super::subagent_selector::{SubagentItem, SubagentSelectorAction, SubagentSelectorState};
 use super::text_input::TextInput;
@@ -76,6 +77,7 @@ pub(crate) enum PopupType {
     ModelSelector,
     AgentSelector,
     SessionSelector,
+    SessionLineageSelector,
     ForkSelector,
     TimelineSelector,
     PromptStashSelector,
@@ -241,10 +243,12 @@ pub(crate) struct ChatView {
     agent_selector: AgentSelectorState,
     /// Session selector popup state
     session_selector: SessionSelectorState,
+    session_lineage_selector: SessionLineageSelectorState,
     /// OpenCode-compatible session fork-point selector.
     fork_selector: ForkSelectorState,
     /// OpenCode-compatible user-message timeline selector.
     timeline_selector: TimelineSelectorState,
+    lineage_inspection_label: Option<String>,
     prompt_stash_selector: PromptStashSelectorState,
     export_dialog: ExportDialogState,
     /// Skill selector popup state
@@ -271,7 +275,10 @@ pub(crate) struct ChatView {
     focused_block_tool: Option<String>,
 
     // -- Thinking expand/collapse state --
-    /// Per-thinking-block overrides relative to the configured default.
+    /// Per-thinking-block manual-expand overrides. Only consulted while
+    /// thinking defaults to collapsed (Hide); in Show mode all blocks are
+    /// expanded regardless of these overrides so a `/thinking` round-trip
+    /// preserves manual expansions.
     thinking_disclosures: DisclosureOverrides,
     presentation: TranscriptPresentation,
 
@@ -370,8 +377,10 @@ impl ChatView {
             model_selector: ModelSelectorState::new(),
             agent_selector: AgentSelectorState::new(),
             session_selector: SessionSelectorState::new(),
+            session_lineage_selector: SessionLineageSelectorState::new(),
             fork_selector: ForkSelectorState::new(),
             timeline_selector: TimelineSelectorState::new(),
+            lineage_inspection_label: None,
             prompt_stash_selector: PromptStashSelectorState::new(),
             export_dialog: ExportDialogState::new(),
             skill_selector: SkillSelectorState::new(),
@@ -443,6 +452,20 @@ impl ChatView {
     #[cfg(test)]
     pub(crate) fn thinking_mode(&self) -> crate::config::ThinkingMode {
         self.presentation.thinking
+    }
+
+    /// Simulate a mouse click that manually expands/collapses a thinking
+    /// block, identified by the owning message id and the block's index
+    /// within that message. Mirrors the id scheme used by `render_message`.
+    #[cfg(test)]
+    pub(crate) fn toggle_thinking_block_for_test(
+        &mut self,
+        message_id: &str,
+        block_index: usize,
+    ) {
+        let id = format!("{}::thinking:{}", message_id, block_index);
+        self.thinking_disclosures.toggle(&id);
+        self.invalidate_render_cache();
     }
 
     #[cfg(test)]
