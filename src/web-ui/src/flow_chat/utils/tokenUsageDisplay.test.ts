@@ -160,7 +160,7 @@ describe('deriveContextUsageFromTurns', () => {
       content: 'hello',
       timestamp: 1000,
     },
-    modelRounds: [],
+    modelRounds: [{ id: 'round-1' }],
     status: 'completed',
     startTime: 1000,
     ...overrides,
@@ -218,11 +218,33 @@ describe('deriveContextUsageFromTurns', () => {
     expect(deriveContextUsageFromTurns(turns)).toMatchObject({ inputTokens: 420 });
   });
 
-  it('returns undefined for empty input or when no completed turn has usage', () => {
+  it('skips multi-round turns because accumulated usage would overestimate context', () => {
+    const turns = [
+      makeTurn({ id: 'turn-1', status: 'completed', tokenUsage: usage(1000) }),
+      makeTurn({
+        id: 'turn-2',
+        status: 'completed',
+        modelRounds: [{ id: 'round-1' }, { id: 'round-2' }],
+        tokenUsage: usage(8_900_000),
+      }),
+    ];
+
+    expect(deriveContextUsageFromTurns(turns)).toEqual(usage(1000));
+  });
+
+  it('returns undefined for empty input or when no completed single-round turn has usage', () => {
     expect(deriveContextUsageFromTurns([])).toBeUndefined();
     expect(deriveContextUsageFromTurns(undefined)).toBeUndefined();
     expect(deriveContextUsageFromTurns([
       makeTurn({ id: 'turn-1', status: 'processing' }),
+    ])).toBeUndefined();
+    expect(deriveContextUsageFromTurns([
+      makeTurn({
+        id: 'turn-1',
+        status: 'completed',
+        modelRounds: [{ id: 'round-1' }, { id: 'round-2' }],
+        tokenUsage: usage(9000),
+      }),
     ])).toBeUndefined();
   });
 });

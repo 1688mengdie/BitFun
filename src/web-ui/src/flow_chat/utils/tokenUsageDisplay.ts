@@ -36,11 +36,14 @@ function formatCompactNumber(value: number): string {
 }
 
 /**
- * Derive the last completed turn's token usage as a context-usage approximation.
+ * Derive the last completed single-round turn's token usage as a
+ * context-usage approximation.
  *
- * Used to restore `session.currentTokenUsage` when a session is hydrated from
- * persisted history (startup or opening a historical session): the exact value
- * is only reported by the backend after the next model response.
+ * Used as a fallback to restore `session.currentTokenUsage` when a session is
+ * hydrated from persisted history and no exact last-request usage was stored
+ * in session metadata. Only single-round turns are used: dialog turn usage
+ * accumulates across model rounds, so a multi-round turn's input total would
+ * badly overestimate the current context.
  */
 export function deriveContextUsageFromTurns(turns: DialogTurn[] | undefined): TokenUsage | undefined {
   if (!turns) {
@@ -58,7 +61,11 @@ export function deriveContextUsageFromTurns(turns: DialogTurn[] | undefined): To
       || turn.status === 'error'
       || turn.status === 'cancelled'
     ) {
-      if (typeof usage.inputTokens === 'number' && usage.inputTokens > 0) {
+      if (
+        turn.modelRounds.length === 1
+        && typeof usage.inputTokens === 'number'
+        && usage.inputTokens > 0
+      ) {
         return usage;
       }
     }

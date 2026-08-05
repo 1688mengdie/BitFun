@@ -5242,6 +5242,17 @@ describe('FlowChatStore historical session hydration state', () => {
       turns: [
         {
           ...createPersistedTurn(0),
+          modelRounds: [{
+            id: 'round-0',
+            turnId: 'turn-0',
+            roundIndex: 0,
+            timestamp: 1,
+            textItems: [],
+            toolItems: [],
+            thinkingItems: [],
+            startTime: 1,
+            status: 'completed',
+          }],
           endTime: 2,
           tokenUsage: {
             inputTokens: 1000,
@@ -5252,6 +5263,17 @@ describe('FlowChatStore historical session hydration state', () => {
         },
         {
           ...createPersistedTurn(1),
+          modelRounds: [{
+            id: 'round-1',
+            turnId: 'turn-1',
+            roundIndex: 0,
+            timestamp: 3,
+            textItems: [],
+            toolItems: [],
+            thinkingItems: [],
+            startTime: 3,
+            status: 'completed',
+          }],
           endTime: 4,
           tokenUsage: {
             inputTokens: 2400,
@@ -5297,6 +5319,17 @@ describe('FlowChatStore historical session hydration state', () => {
       turns: [
         {
           ...createPersistedTurn(0),
+          modelRounds: [{
+            id: 'round-0',
+            turnId: 'turn-0',
+            roundIndex: 0,
+            timestamp: 1,
+            textItems: [],
+            toolItems: [],
+            thinkingItems: [],
+            startTime: 1,
+            status: 'completed',
+          }],
           endTime: 2,
           tokenUsage: {
             inputTokens: 2400,
@@ -5332,5 +5365,59 @@ describe('FlowChatStore historical session hydration state', () => {
       outputTokens: 1,
       totalTokens: 1000,
     });
+  });
+
+  it('restores the exact last request token usage from persisted metadata', async () => {
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'history-1',
+        title: 'Saved session',
+        agentType: 'agentic',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: {
+          lastRequestTokenUsage: {
+            inputTokens: 42000,
+            outputTokens: 1500,
+            totalTokens: 43500,
+            timestamp: 21,
+          },
+        },
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('history-1')?.currentTokenUsage).toMatchObject({
+      inputTokens: 42000,
+      outputTokens: 1500,
+      totalTokens: 43500,
+    });
+  });
+
+  it('ignores invalid persisted last request token usage', async () => {
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'history-1',
+        title: 'Saved session',
+        agentType: 'agentic',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: {
+          lastRequestTokenUsage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            timestamp: 21,
+          },
+        },
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('history-1')?.currentTokenUsage).toBeUndefined();
   });
 });
