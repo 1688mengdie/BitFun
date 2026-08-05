@@ -78,6 +78,10 @@ test('publishes sigUrl when a signature is present, omits it otherwise', () => {
     path.join(assets, 'bitfun-cli-1.2.3-x86_64-unknown-linux-gnu.tar.gz.sig'),
     ''
   );
+  fs.writeFileSync(
+    path.join(assets, 'bitfun-cli-1.2.3-x86_64-unknown-linux-gnu.tar.gz.sha256.sig'),
+    ''
+  );
 
   const result = spawnSync(
     process.execPath,
@@ -98,7 +102,12 @@ test('publishes sigUrl when a signature is present, omits it otherwise', () => {
     manifest.platforms['linux-x86_64'].cli.sigUrl,
     /bitfun-cli-1\.2\.3-x86_64-unknown-linux-gnu\.tar\.gz\.sig$/
   );
+  assert.match(
+    manifest.platforms['linux-x86_64'].cli.sha256SigUrl,
+    /bitfun-cli-1\.2\.3-x86_64-unknown-linux-gnu\.tar\.gz\.sha256\.sig$/
+  );
   assert.equal(manifest.platforms['linux-x86_64'].relay.sigUrl, undefined);
+  assert.equal(manifest.platforms['linux-x86_64'].relay.sha256SigUrl, undefined);
   assert.equal(manifest.platforms['linux-aarch64'].cli.sigUrl, undefined);
 });
 
@@ -149,9 +158,15 @@ test('openbitfun sync mirrors both products and their checksums', () => {
 
   assert.match(syncScript, /linux-binaries\.json/);
   assert.match(syncScript, /for product in \("cli", "relay"\)/);
-  assert.match(syncScript, /for key in \("url", "sha256Url", "sigUrl"\)/);
+  assert.match(
+    syncScript,
+    /for key in \("url", "sha256Url", "sha256SigUrl", "sigUrl"\)/
+  );
   assert.match(syncScript, /OPENBITFUN_BASE_URL/);
   assert.match(syncScript, /WEBSITE_RELEASE_DIR.*linux-binaries\.json/);
+  assert.match(syncScript, /mirror_dispatch_macos_cli_archives/);
+  assert.match(syncScript, /x86_64-apple-darwin aarch64-apple-darwin/);
+  assert.match(syncScript, /WEBSITE_RELEASE_DIR.*relay-image\.json/);
 });
 
 test('openbitfun sync mirrors the website installer from the exact updater release', () => {
@@ -188,6 +203,60 @@ test('openbitfun sync mirrors the website installer from the exact updater relea
   assert.deepEqual(downloads, [
     `https://github.com/GCWing/BitFun/releases/download/v1.2.3/bitfun-installer.exe\t${versionDir}/bitfun-installer.exe`,
     `https://github.com/GCWing/BitFun/releases/download/v1.2.3/bitfun-installer.exe.sig\t${versionDir}/bitfun-installer.exe.sig`,
+  ]);
+});
+
+test('openbitfun sync mirrors complete signed macOS CLI sets for Dispatch', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'bitfun-macos-cli-mirror-'));
+  const versionDir = path.join(temp, 'release', '1.2.3');
+  const calls = path.join(temp, 'download-calls.tsv');
+  const checksums = path.join(temp, 'checksum-list.txt');
+  fs.mkdirSync(versionDir, { recursive: true });
+
+  const result = spawnSync(
+    'bash',
+    ['-c', `
+      source "$SYNC_SCRIPT"
+      VERSION="1.2.3"
+      VERSION_DIR="$TEST_VERSION_DIR"
+      RELEASE_ASSET_BASE_URL="https://github.com/GCWing/BitFun/releases/download/v1.2.3"
+      curl() { return 0; }
+      download_asset() {
+        printf '%s\\t%s\\n' "$1" "$2" >> "$DOWNLOAD_CALLS"
+      }
+      verify_mirrored_checksums() {
+        cat > "$CHECKSUM_LIST"
+      }
+      mirror_dispatch_macos_cli_archives
+    `],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        CHECKSUM_LIST: checksums,
+        DOWNLOAD_CALLS: calls,
+        SYNC_SCRIPT: path.join(repoRoot, 'scripts/openbitfun-release-sync.sh'),
+        TEST_VERSION_DIR: versionDir,
+      },
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+
+  const downloads = fs.readFileSync(calls, 'utf8').trim().split('\n');
+  assert.equal(downloads.length, 8);
+  for (const target of ['x86_64-apple-darwin', 'aarch64-apple-darwin']) {
+    const archive = `bitfun-cli-1.2.3-${target}.tar.gz`;
+    for (const suffix of ['', '.sha256', '.sha256.sig', '.sig']) {
+      assert.ok(
+        downloads.includes(
+          `https://github.com/GCWing/BitFun/releases/download/v1.2.3/${archive}${suffix}\t${versionDir}/${archive}${suffix}`
+        )
+      );
+    }
+  }
+  assert.deepEqual(fs.readFileSync(checksums, 'utf8').trim().split('\n'), [
+    'bitfun-cli-1.2.3-x86_64-apple-darwin.tar.gz.sha256',
+    'bitfun-cli-1.2.3-aarch64-apple-darwin.tar.gz.sha256',
   ]);
 });
 
@@ -282,9 +351,8 @@ test('the mirror retains enough releases for older Desktop builds', () => {
   );
   const keep = /^KEEP_VERSIONS=(\d+)$/m.exec(syncScript);
   assert.ok(keep, 'KEEP_VERSIONS must be set');
-  // One-click Relay deploy asks the mirror for the version baked into the
-  // running Desktop binary; too few kept versions sends older installs into a
-  // 20-minute source rebuild.
+  // Dispatch confirms an exact release before installation; keep that version
+  // available long enough for a later click or retry to finish safely.
   assert.ok(
     Number(keep[1]) >= 4,
     `KEEP_VERSIONS must retain several releases, got ${keep[1]}`
