@@ -18,9 +18,8 @@ use protocol::{
     DispatchCancelRequest, DispatchCancelResponse, DispatchContinueRequest,
     DispatchContinueResponse, DispatchJobListEntry, DispatchJobState, DispatchListRequest,
     DispatchProbeRequest, DispatchProbeResponse, DispatchQueryKind, DispatchQueryRequest,
-    DispatchStatusRequest, DispatchStatusResponse,
-    DispatchSubmitRequest, DispatchSubmitResponse, DispatchTurnKind,
-    DispatchWorkspaceBundleBeginRequest, DispatchWorkspaceBundleChunkRequest,
+    DispatchStatusRequest, DispatchStatusResponse, DispatchSubmitRequest, DispatchSubmitResponse,
+    DispatchTurnKind, DispatchWorkspaceBundleBeginRequest, DispatchWorkspaceBundleChunkRequest,
     DispatchWorkspaceBundleCommitRequest, DispatchWorkspaceProbe,
     DispatchWorkspaceProvisionRequest, DispatchWorkspaceSyncChunkRequest,
     DispatchWorkspaceSyncRequest, DISPATCH_PROTOCOL_VERSION, MAX_DISPATCH_TEXT_BYTES,
@@ -131,6 +130,10 @@ async fn probe(request: DispatchProbeRequest) -> Result<DispatchProbeResponse> {
     if runner::is_supported() {
         capabilities.push(
             bitfun_services_core::dispatch_contract::DISPATCH_DETACHED_WORKER_CAPABILITY
+                .to_string(),
+        );
+        capabilities.push(
+            bitfun_services_core::dispatch_contract::DISPATCH_ACCOUNT_DAEMON_PROVISIONING_CAPABILITY
                 .to_string(),
         );
     }
