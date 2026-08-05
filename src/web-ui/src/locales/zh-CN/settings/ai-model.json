@@ -228,6 +228,10 @@
     "openrouter": {
       "name": "OpenRouter",
       "description": "OpenRouter 大模型平台"
+    },
+    "tokendance": {
+      "name": "词元跳动",
+      "description": "统一的大模型 API 网关"
     }
   },
   "tabs": {
