@@ -289,10 +289,18 @@ export interface AIModelConfig {
 /** Subscription provider for in-app OAuth auth. */
 export type SubscriptionProvider = 'codex' | 'antigravity' | 'opencode';
 
+/** OpenCode billing/API product. Both plans reuse the same signed-in account. */
+export type OpenCodePlan = 'zen' | 'go';
+
 /** Authentication source persisted on each model entry. */
 export type AuthConfig =
   | { type: 'api_key' }
-  | { type: 'subscription'; provider: SubscriptionProvider };
+  | {
+      type: 'subscription';
+      provider: SubscriptionProvider;
+      /** Absent on legacy OpenCode configs, which continue to use Zen. */
+      plan?: OpenCodePlan;
+    };
 
 export interface ProxyConfig {
   enabled: boolean;

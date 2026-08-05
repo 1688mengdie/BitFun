@@ -12,9 +12,11 @@ use crate::infrastructure::ai::reasoning_catalog::{
     resolve_default_reasoning_preset,
 };
 use crate::infrastructure::ai::{build_stream_options_for_model, AIClient};
-use crate::infrastructure::subscription_auth::{self, SubscriptionProvider as AdapterProvider};
+use crate::infrastructure::subscription_auth::{
+    self, OpenCodePlan as AdapterOpenCodePlan, SubscriptionProvider as AdapterProvider,
+};
 use crate::service::config::types::{
-    model_runtime_binding_fingerprint, AuthConfig, SubscriptionProvider,
+    model_runtime_binding_fingerprint, AuthConfig, OpenCodePlan, SubscriptionProvider,
 };
 use crate::service::config::{get_global_config_service, ConfigService};
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -433,6 +435,13 @@ fn to_adapter_provider(provider: SubscriptionProvider) -> AdapterProvider {
     }
 }
 
+fn to_adapter_opencode_plan(plan: OpenCodePlan) -> AdapterOpenCodePlan {
+    match plan {
+        OpenCodePlan::Zen => AdapterOpenCodePlan::Zen,
+        OpenCodePlan::Go => AdapterOpenCodePlan::Go,
+    }
+}
+
 /// Resolve a subscription `AuthConfig` and overlay it onto the runtime
 /// `AIConfig`. No-op when `auth == AuthConfig::ApiKey`. Returns the resolved
 /// credential's expiry (Unix seconds) so callers can invalidate cached
@@ -443,16 +452,27 @@ pub async fn apply_subscription_auth(
 ) -> Result<Option<i64>> {
     let resolved = match auth {
         AuthConfig::ApiKey => return Ok(None),
-        AuthConfig::Subscription { provider } => {
-            subscription_auth::resolve(to_adapter_provider(*provider))
-                .await
-                .map_err(|e| {
-                    anyhow!(
-                        "Failed to resolve {provider:?} subscription credential: {e:#}. \
+        AuthConfig::Subscription { provider, plan } => {
+            let resolved = match (*provider, *plan) {
+                (SubscriptionProvider::Opencode, Some(plan)) => {
+                    subscription_auth::resolve_opencode(
+                        to_adapter_opencode_plan(plan),
+                        &ai_config.format,
+                    )
+                    .await
+                }
+                (_, None) => subscription_auth::resolve(to_adapter_provider(*provider)).await,
+                (_, Some(plan)) => Err(anyhow!(
+                    "OpenCode plan {plan:?} cannot be used with provider {provider:?}"
+                )),
+            };
+            resolved.map_err(|e| {
+                anyhow!(
+                    "Failed to resolve {provider:?} subscription credential: {e:#}. \
                      Subscription logins are stored on the local machine and are not \
                      available in remote workspaces."
-                    )
-                })?
+                )
+            })?
         }
     };
 

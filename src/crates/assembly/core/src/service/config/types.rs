@@ -1432,10 +1432,21 @@ pub enum SubscriptionProvider {
     Opencode,
 }
 
+/// OpenCode API product selected for a subscription-authenticated model.
+/// Zen and Go share one account credential but use different API namespaces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenCodePlan {
+    Zen,
+    Go,
+}
+
 /// Where to obtain the runtime auth material for an `AIModelConfig`.
 ///
 /// Stored on disk as `{"type":"api_key"}` or
 /// `{"type":"subscription","provider":"codex"|"antigravity"|"opencode"}`.
+/// OpenCode models may additionally persist `"plan":"zen"|"go"`; an absent
+/// plan preserves the legacy Zen Chat Completions behavior.
 /// Tokens live in the subscription auth store and are resolved at request time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1444,7 +1455,11 @@ pub enum AuthConfig {
     #[default]
     ApiKey,
     /// Use BitFun in-app subscription OAuth for the named provider.
-    Subscription { provider: SubscriptionProvider },
+    Subscription {
+        provider: SubscriptionProvider,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<OpenCodePlan>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -2000,9 +2015,10 @@ impl AIModelConfig {
 mod tests {
     use super::{
         AIConfig, AIExperienceConfig, AIModelConfig, AgentModelDefaultsConfig, AgentProfileConfig,
-        AgentProfileView, AppConfig, AppLoggingConfig, GlobalConfig, MemoryExternalContextPolicy,
-        ModelExchangeTracingMode, NotificationConfig, SubagentBatchExecutionPolicy,
-        SubagentModelSelection, UserSkillGroupsConfig, UserToolGroupsConfig,
+        AgentProfileView, AppConfig, AppLoggingConfig, AuthConfig, GlobalConfig,
+        MemoryExternalContextPolicy, ModelExchangeTracingMode, NotificationConfig, OpenCodePlan,
+        SubagentBatchExecutionPolicy, SubagentModelSelection, SubscriptionProvider,
+        UserSkillGroupsConfig, UserToolGroupsConfig,
     };
     use bitfun_runtime_ports::ToolPermissionConfig;
 
@@ -2013,6 +2029,40 @@ mod tests {
         let config: AppConfig =
             serde_json::from_value(serde_json::json!({})).expect("empty app config should default");
         assert!(!config.prevent_sleep);
+    }
+
+    #[test]
+    fn subscription_auth_preserves_legacy_opencode_and_roundtrips_go_plan() {
+        let legacy: AuthConfig = serde_json::from_value(serde_json::json!({
+            "type": "subscription",
+            "provider": "opencode"
+        }))
+        .expect("legacy OpenCode auth should deserialize");
+        assert_eq!(
+            legacy,
+            AuthConfig::Subscription {
+                provider: SubscriptionProvider::Opencode,
+                plan: None,
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&legacy).expect("legacy auth should serialize"),
+            serde_json::json!({
+                "type": "subscription",
+                "provider": "opencode"
+            })
+        );
+
+        let go = AuthConfig::Subscription {
+            provider: SubscriptionProvider::Opencode,
+            plan: Some(OpenCodePlan::Go),
+        };
+        let serialized = serde_json::to_value(&go).expect("Go auth should serialize");
+        assert_eq!(serialized["plan"], "go");
+        assert_eq!(
+            serde_json::from_value::<AuthConfig>(serialized).expect("Go auth should roundtrip"),
+            go
+        );
     }
 
     #[test]

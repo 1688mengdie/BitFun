@@ -18,8 +18,11 @@ import { normalizeProviderBaseUrl } from '../services/providerCatalog';
 import { supportsResponsesReasoning } from '../utils/reasoning';
 import { canonicalReasoningConfig, validateReasoningConfig } from '../utils/reasoningPresets';
 import { aiApi, systemAPI } from '@/infrastructure/api';
-import type { SubscriptionAccount } from '@/infrastructure/api/service-api/AIApi';
-import type { SubscriptionProvider } from '../types';
+import type {
+  SubscriptionAccount,
+  SubscriptionApiOffering,
+} from '@/infrastructure/api/service-api/AIApi';
+import type { OpenCodePlan, SubscriptionProvider } from '../types';
 import { useNotification } from '@/shared/notification-system';
 import { ConfigPageHeader, ConfigPageLayout, ConfigPageContent, ConfigPageSection, ConfigPageRow, ConfigCollectionItem } from './common';
 import DefaultModelConfig from './DefaultModelConfig';
@@ -234,7 +237,8 @@ function resolveRequestUrl(baseUrl: string, provider: string, _modelName = ''): 
     return trimmed.endsWith('responses') ? trimmed : `${trimmed}/responses`;
   }
   if (provider === 'anthropic') {
-    return trimmed.endsWith('v1/messages') ? trimmed : `${trimmed}/v1/messages`;
+    if (trimmed.endsWith('/messages')) return trimmed;
+    return trimmed.endsWith('/v1') ? `${trimmed}/messages` : `${trimmed}/v1/messages`;
   }
   if (provider === 'gemini') {
     return geminiBaseUrl(trimmed);
@@ -612,6 +616,24 @@ const AIModelConfig: React.FC = () => {
     activeRemoteFetchSignatureRef.current = null;
   }, []);
 
+  const getOpenCodePlanLabel = useCallback((plan: OpenCodePlan): string => (
+    plan === 'go'
+      ? t('subscriptionAuth.openCodePlans.go.label')
+      : t('subscriptionAuth.openCodePlans.zen.label')
+  ), [t]);
+
+  const getOpenCodePlanDescription = useCallback((plan: OpenCodePlan): string => (
+    plan === 'go'
+      ? t('subscriptionAuth.openCodePlans.go.description')
+      : t('subscriptionAuth.openCodePlans.zen.description')
+  ), [t]);
+
+  const getOpenCodeFormatLabel = useCallback((format: SubscriptionApiOffering['format']): string => {
+    if (format === 'responses') return t('subscriptionAuth.openCodeFormats.responses');
+    if (format === 'anthropic') return t('subscriptionAuth.openCodeFormats.messages');
+    return t('subscriptionAuth.openCodeFormats.chatCompletions');
+  }, [t]);
+
   const syncSelectedModelDrafts = (
     modelNames: string[],
     baseConfig?: Partial<AIModelConfigType>,
@@ -891,15 +913,28 @@ const AIModelConfig: React.FC = () => {
     setCreationMode('selection');
   };
 
-  const handleImportFromSubscription = useCallback((account: SubscriptionAccount) => {
+  const handleImportFromSubscription = useCallback((
+    account: SubscriptionAccount,
+    offering?: SubscriptionApiOffering,
+  ) => {
     resetRemoteModelDiscovery();
+    const offeringModels = (offering?.models || []).map((model) => ({
+      id: model.id,
+      display_name: model.display_name || undefined,
+    }));
+    if (offeringModels.length > 0) {
+      setRemoteModelOptions(offeringModels);
+      setHasAttemptedRemoteFetch(true);
+    }
     setManualModelInput('');
     setShowApiKey(false);
     setSelectedProviderId(null);
     setEditingConfig({
-      name: account.display_label,
-      provider: account.suggested_format,
-      base_url: account.suggested_base_url,
+      name: offering
+        ? getOpenCodePlanLabel(offering.plan)
+        : account.display_label,
+      provider: offering?.format || account.suggested_format,
+      base_url: offering?.base_url || account.suggested_base_url,
       // Leave request_url + model_name empty so the user must pick a model
       // from the live list. We never inject a hard-coded default slug.
       request_url: '',
@@ -912,14 +947,18 @@ const AIModelConfig: React.FC = () => {
       recommended_for: [],
       metadata: {},
       inline_think_in_text: true,
-      auth: { type: 'subscription', provider: account.provider },
+      auth: {
+        type: 'subscription',
+        provider: account.provider,
+        ...(offering ? { plan: offering.plan } : {}),
+      },
     });
     setSelectedModelDrafts([]);
     setEditingProviderModelIds(new Set());
     setShowAdvancedSettings(false);
     setCreationMode('form');
     setIsEditing(true);
-  }, [resetRemoteModelDiscovery]);
+  }, [getOpenCodePlanLabel, resetRemoteModelDiscovery]);
 
   const loginCoordinatorRef = React.useRef(new SubscriptionLoginCoordinator());
   const subscriptionLoginMountedRef = React.useRef(true);
@@ -1340,6 +1379,7 @@ const AIModelConfig: React.FC = () => {
       skip_ssl_verify: config.skip_ssl_verify ?? false,
       custom_request_body: config.custom_request_body,
       custom_request_body_mode: config.custom_request_body_mode,
+      auth: config.auth || { type: 'api_key' },
     });
     setSelectedModelDrafts(createDraftsFromConfigs(configuredProviderModels));
     setShowAdvancedSettings(
@@ -2218,14 +2258,22 @@ const AIModelConfig: React.FC = () => {
     const authIsSubscription = authType === 'subscription';
     const selectedSubscriptionProvider: SubscriptionProvider | undefined =
       editingConfig.auth?.type === 'subscription' ? editingConfig.auth.provider : undefined;
+    const selectedOpenCodePlan: OpenCodePlan | undefined =
+      editingConfig.auth?.type === 'subscription'
+      && editingConfig.auth.provider === 'opencode'
+        ? editingConfig.auth.plan || 'zen'
+        : undefined;
     const authSelectValue = authIsSubscription
-      ? `subscription:${selectedSubscriptionProvider || 'codex'}`
+      ? selectedSubscriptionProvider === 'opencode'
+        ? `subscription:opencode:${selectedOpenCodePlan || 'zen'}`
+        : `subscription:${selectedSubscriptionProvider || 'codex'}`
       : 'api_key';
     const authOptions: SelectOption[] = [
       { value: 'api_key', label: t('subscriptionAuth.options.apiKey') },
       { value: 'subscription:codex', label: t('subscriptionAuth.options.codex') },
       { value: 'subscription:antigravity', label: t('subscriptionAuth.options.antigravity') },
-      { value: 'subscription:opencode', label: t('subscriptionAuth.options.opencode') },
+      { value: 'subscription:opencode:zen', label: t('subscriptionAuth.options.opencodeZen') },
+      { value: 'subscription:opencode:go', label: t('subscriptionAuth.options.opencodeGo') },
     ];
     const matchedSubscription = selectedSubscriptionProvider
       ? subscriptionAccounts.find((account) => account.provider === selectedSubscriptionProvider)
@@ -2242,11 +2290,33 @@ const AIModelConfig: React.FC = () => {
                 setEditingConfig((prev) => ({ ...prev, auth: { type: 'api_key' } }));
                 return;
               }
-              const provider = next.replace('subscription:', '') as SubscriptionProvider;
-              setEditingConfig((prev) => ({
-                ...prev,
-                auth: { type: 'subscription', provider },
-              }));
+              const [, providerValue, planValue] = next.split(':');
+              const provider = providerValue as SubscriptionProvider;
+              const plan = provider === 'opencode'
+                ? (planValue || 'zen') as OpenCodePlan
+                : undefined;
+              setEditingConfig((prev) => {
+                if (!prev) return prev;
+                if (provider !== 'opencode') {
+                  return {
+                    ...prev,
+                    auth: { type: 'subscription', provider },
+                  };
+                }
+                const format = ['openai', 'responses', 'anthropic'].includes(prev.provider || '')
+                  ? prev.provider || 'openai'
+                  : 'openai';
+                const baseUrl = plan === 'go'
+                  ? 'https://opencode.ai/zen/go/v1'
+                  : 'https://opencode.ai/zen/v1';
+                return {
+                  ...prev,
+                  provider: format,
+                  base_url: baseUrl,
+                  request_url: resolveRequestUrl(baseUrl, format, prev.model_name || ''),
+                  auth: { type: 'subscription', provider, plan },
+                };
+              });
             }}
             options={authOptions}
             size="small"
@@ -2997,6 +3067,21 @@ const AIModelConfig: React.FC = () => {
                 ? Math.max(0, Math.ceil((loginPanel.deadlineMs - subscriptionLoginClock) / 1000))
                 : 0;
               const countdown = `${Math.floor(remainingSeconds / 60)}:${String(remainingSeconds % 60).padStart(2, '0')}`;
+              const openCodePlanRows = account.provider === 'opencode'
+                ? (['zen', 'go'] as const).map((plan) => {
+                    const planOfferings = (account.api_offerings || [])
+                      .filter((offering) => offering.plan === plan);
+                    const populatedOfferings = planOfferings
+                      .filter((offering) => offering.models.length > 0);
+                    return {
+                      plan,
+                      offerings: populatedOfferings.length > 0
+                        ? populatedOfferings
+                        : planOfferings,
+                    };
+                  }).filter((row) => row.offerings.length > 0)
+                : [];
+              const hasOpenCodeOfferings = openCodePlanRows.length > 0;
               return (
                 <React.Fragment key={account.provider}>
                   <ConfigPageRow
@@ -3031,14 +3116,16 @@ const AIModelConfig: React.FC = () => {
                           >
                             {t('subscriptionAuth.logout')}
                           </Button>
-                          <Button
-                            size="small"
-                            variant="primary"
-                            disabled={anyLoginInProgress}
-                            onClick={() => handleImportFromSubscription(account)}
-                          >
-                            {t('subscriptionAuth.import')}
-                          </Button>
+                          {(account.provider !== 'opencode' || !hasOpenCodeOfferings) && (
+                            <Button
+                              size="small"
+                              variant="primary"
+                              disabled={anyLoginInProgress}
+                              onClick={() => handleImportFromSubscription(account)}
+                            >
+                              {t('subscriptionAuth.import')}
+                            </Button>
+                          )}
                         </>
                       ) : account.vault_unavailable ? (
                         <Button
@@ -3072,6 +3159,39 @@ const AIModelConfig: React.FC = () => {
                       )}
                     </div>
                   </ConfigPageRow>
+
+                  {account.connected && openCodePlanRows.map(({ plan, offerings }) => (
+                    <ConfigPageRow
+                      key={`${account.provider}:${plan}`}
+                      label={getOpenCodePlanLabel(plan)}
+                      description={getOpenCodePlanDescription(plan)}
+                      className="bitfun-ai-model-config__opencode-plan"
+                      align="center"
+                    >
+                      <div className="bitfun-ai-model-config__cli-actions bitfun-ai-model-config__opencode-plan-actions">
+                        {offerings.map((offering) => {
+                          const formatLabel = getOpenCodeFormatLabel(offering.format);
+                          const label = offering.models.length > 0
+                            ? t('subscriptionAuth.useFormatWithCount', {
+                                format: formatLabel,
+                                modelCount: i18nService.formatNumber(offering.models.length),
+                              })
+                            : t('subscriptionAuth.useFormat', { format: formatLabel });
+                          return (
+                            <Button
+                              key={`${offering.plan}:${offering.format}`}
+                              size="small"
+                              variant="secondary"
+                              disabled={anyLoginInProgress}
+                              onClick={() => handleImportFromSubscription(account, offering)}
+                            >
+                              {label}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </ConfigPageRow>
+                  ))}
 
                   {loginPanel && (
                     <div
