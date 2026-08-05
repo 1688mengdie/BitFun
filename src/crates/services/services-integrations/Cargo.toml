@@ -308,6 +308,7 @@ remote-ssh-concrete = [
     "russh",
     "russh-sftp",
     "russh-keys",
+    "semver",
     "shellexpand",
     "ssh_config",
     "terminal-core",

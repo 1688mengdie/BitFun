@@ -15,6 +15,7 @@ use ratatui::{
 };
 
 use crate::ui::theme::{StyleKind, Theme};
+use bitfun_core_types::ProviderCatalog;
 
 /// A preset provider template
 #[derive(Debug, Clone)]
@@ -37,21 +38,7 @@ pub(crate) enum ProviderSelection {
 }
 
 /// Build built-in provider templates used by CLI model configuration.
-fn builtin_provider_templates() -> Vec<ProviderTemplate> {
-    let provider_catalog = tokio::runtime::Handle::try_current()
-        .ok()
-        .filter(|runtime| runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
-        .and_then(|runtime| {
-            tokio::task::block_in_place(|| {
-                runtime
-                    .block_on(bitfun_core::get_ai_model_catalog())
-                    .ok()
-                    .map(|catalog| catalog.provider_catalog)
-            })
-        })
-        .filter(|catalog| !catalog.providers.is_empty())
-        .unwrap_or_else(bitfun_core::get_builtin_ai_provider_catalog);
-
+fn provider_templates(provider_catalog: ProviderCatalog) -> Vec<ProviderTemplate> {
     provider_catalog
         .providers
         .into_iter()
@@ -115,8 +102,8 @@ impl ProviderSelectorState {
         }
     }
 
-    pub(super) fn show(&mut self) {
-        self.templates = builtin_provider_templates();
+    pub(super) fn show(&mut self, provider_catalog: ProviderCatalog) {
+        self.templates = provider_templates(provider_catalog);
         self.selected = 0;
         self.scroll_offset = 0;
         self.visible = true;
@@ -137,9 +124,7 @@ impl ProviderSelectorState {
 
     /// Reshow the provider selector (for back navigation)
     pub(super) fn reshow(&mut self) {
-        let templates = builtin_provider_templates();
-        if !self.templates.is_empty() || !templates.is_empty() {
-            self.templates = templates;
+        if !self.templates.is_empty() {
             self.build_rows();
             self.visible = true;
         }
