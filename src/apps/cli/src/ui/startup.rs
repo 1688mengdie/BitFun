@@ -56,7 +56,7 @@ use bitfun_core::agentic::tools::implementations::skills::{
 use bitfun_core::product_runtime::CoreAgentRuntimeCompatibility;
 use bitfun_core::service::config::GlobalConfigManager;
 
-use crate::agent::runtime_client::{CliAgentMode, CliAgentRuntimeClient};
+use crate::agent::tui_client::{TuiAgentClient, TuiAgentMode};
 
 /// Types of popups that can be shown on the startup page
 #[derive(Debug, Clone, PartialEq)]
@@ -205,7 +205,7 @@ pub(crate) struct StartupPage {
     theme_preview_original: Option<Theme>,
 
     // ── System context ──
-    agent: Arc<CliAgentRuntimeClient>,
+    agent: Arc<TuiAgentClient>,
     compatibility: Option<CoreAgentRuntimeCompatibility>,
 
     // ── State ──
@@ -230,7 +230,7 @@ pub(crate) struct StartupPage {
 impl StartupPage {
     pub(crate) fn new(
         config: CliConfig,
-        agent: Arc<CliAgentRuntimeClient>,
+        agent: Arc<TuiAgentClient>,
         compatibility: Option<CoreAgentRuntimeCompatibility>,
         default_agent: String,
         workspace: Option<String>,
@@ -1033,8 +1033,19 @@ impl StartupPage {
             ActionHandler::SelectModel => self.show_model_selector(),
             ActionHandler::SelectTheme => self.show_theme_selector(),
             ActionHandler::AddModel => {
-                self.push_current_popup_to_stack();
-                self.provider_selector.show();
+                let agent = self.agent.clone();
+                let catalog = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(agent.model_catalog())
+                });
+                match catalog {
+                    Ok(catalog) => {
+                        self.push_current_popup_to_stack();
+                        self.provider_selector.show(catalog.provider_catalog);
+                    }
+                    Err(error) => {
+                        self.status = Some(format!("Failed to load model providers: {error}"));
+                    }
+                }
             }
             ActionHandler::OpenAgentSelector => self.show_agent_selector(),
             ActionHandler::SwitchAgent => self.cycle_agent(1),
@@ -1806,23 +1817,12 @@ impl StartupPage {
                 let models: Vec<bitfun_core::service::config::AIModelConfig> =
                     config_service.get_ai_models().await.ok()?;
                 let model = models.into_iter().find(|m| m.id == model_id)?;
-                let reasoning_preset_options = bitfun_core::get_ai_model_catalog()
+                let reasoning_preset_options = self
+                    .agent
+                    .model_catalog()
                     .await
                     .ok()
-                    .and_then(|catalog| {
-                        catalog
-                            .models
-                            .into_iter()
-                            .find(|candidate| candidate.id == model.id)
-                    })
-                    .and_then(|model| model.reasoning)
-                    .map(|reasoning| {
-                        reasoning
-                            .presets
-                            .into_iter()
-                            .map(|preset| preset.id)
-                            .collect()
-                    })
+                    .and_then(|catalog| catalog.reasoning_presets_by_model.get(&model.id).cloned())
                     .unwrap_or_default();
                 Some((model, reasoning_preset_options))
             })
@@ -2475,7 +2475,7 @@ impl StartupPage {
         self.popup_stack.clear();
     }
 
-    fn get_mode_agents(&self) -> Vec<CliAgentMode> {
+    fn get_mode_agents(&self) -> Vec<TuiAgentMode> {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(self.agent.available_agent_modes())
@@ -2486,7 +2486,7 @@ impl StartupPage {
         })
     }
 
-    fn selected_agent_mode(&self) -> Option<CliAgentMode> {
+    fn selected_agent_mode(&self) -> Option<TuiAgentMode> {
         self.get_mode_agents()
             .into_iter()
             .find(|mode| mode.id == self.agent_type)
@@ -2587,7 +2587,7 @@ fn resolve_startup_model_id(
         .or(default_model_id)
 }
 
-fn should_persist_shared_model_default(mode: Option<&CliAgentMode>) -> bool {
+fn should_persist_shared_model_default(mode: Option<&TuiAgentMode>) -> bool {
     mode.is_some_and(|mode| !mode.is_external)
 }
 
@@ -2620,13 +2620,13 @@ mod logo_contract_tests {
 
     #[test]
     fn external_or_unknown_startup_modes_do_not_change_the_shared_default() {
-        let local = CliAgentMode {
+        let local = TuiAgentMode {
             id: "agentic".to_string(),
             description: String::new(),
             model_id: None,
             is_external: false,
         };
-        let external = CliAgentMode {
+        let external = TuiAgentMode {
             id: "reviewer".to_string(),
             description: String::new(),
             model_id: None,

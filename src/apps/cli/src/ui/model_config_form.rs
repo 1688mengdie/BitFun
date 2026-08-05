@@ -17,7 +17,7 @@ use ratatui::{
     Frame,
 };
 
-use bitfun_core::service::config::ReasoningConfig;
+use bitfun_core_types::ReasoningConfig;
 
 use crate::ui::theme::{StyleKind, Theme};
 
@@ -1202,7 +1202,7 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::reasoning_after_preset_selection;
-    use bitfun_core::service::config::{ReasoningConfig, ReasoningPreset, ReasoningPresetAction};
+    use bitfun_core_types::{ReasoningConfig, ReasoningPreset, ReasoningPresetAction};
 
     #[test]
     fn unchanged_toggle_preserves_custom_reasoning_config() {

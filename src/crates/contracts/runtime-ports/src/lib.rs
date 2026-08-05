@@ -13,7 +13,8 @@ use tokio_util::sync::CancellationToken;
 
 pub use bitfun_core_types::{
     SessionExecutionTarget, SessionExecutionTargetKind, SessionExecutionTargetRequest,
-    WorktreeError, WorktreeErrorCode, WorktreeLifecycle, WorktreeSettings, WorktreeSummary,
+    SessionUsageReport, WorktreeError, WorktreeErrorCode, WorktreeLifecycle, WorktreeSettings,
+    WorktreeSummary,
 };
 
 mod local_workspace_snapshot;
@@ -1179,6 +1180,7 @@ pub struct AgentSessionDeleteRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionRenameRequest {
     pub workspace_path: String,
@@ -1206,6 +1208,7 @@ pub struct AgentSessionArchiveRequest {
 /// This is separate from [`AgentSessionArchiveRequest`] so existing archive-only
 /// consumers keep their current request shape and behavior.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionArchiveStateRequest {
     pub workspace_path: String,
@@ -1267,6 +1270,7 @@ pub struct AgentUserShellCommandResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionModelUpdateRequest {
     pub session_id: String,
@@ -1291,6 +1295,7 @@ pub struct AgentSessionModelSelectionUpdateRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionModeUpdateRequest {
     pub session_id: String,
@@ -1340,7 +1345,29 @@ pub struct AgentContextReloadRequest {
     pub target: AgentContextReloadTarget,
 }
 
+#[async_trait::async_trait]
+pub trait AgentContextReloadPort: Send + Sync {
+    async fn reload_session_context(&self, request: AgentContextReloadRequest) -> PortResult<()>;
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+/// Delivers answers to a pending user-question tool call.
+pub struct AgentUserAnswersRequest {
+    pub tool_id: String,
+    pub answers: serde_json::Value,
+}
+
+#[async_trait::async_trait]
+/// Routes product responses to the existing user-input owner.
+///
+/// Implementations do not own approval policy or interaction lifecycle state.
+pub trait AgentInteractionResponsePort: Send + Sync {
+    async fn submit_user_answers(&self, request: AgentUserAnswersRequest) -> PortResult<()>;
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionForkRequest {
     pub workspace_path: String,
@@ -1356,6 +1383,7 @@ pub struct AgentSessionForkRequest {
 /// This is additive to [`AgentSessionForkRequest`] so existing Rust SDK
 /// consumers keep the source-compatible latest-turn request shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionForkAtTurnRequest {
     pub workspace_path: String,
@@ -1373,6 +1401,7 @@ pub struct AgentSessionForkAtTurnRequest {
 /// the fork. This stays separate from [`AgentSessionForkAtTurnRequest`] so its
 /// inclusive behavior remains source- and behavior-compatible.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionForkBeforeTurnRequest {
     pub workspace_path: String,
@@ -1385,6 +1414,7 @@ pub struct AgentSessionForkBeforeTurnRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSessionForkResult {
     pub session_id: String,

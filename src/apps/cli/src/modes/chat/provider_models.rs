@@ -144,23 +144,12 @@ impl ChatMode {
                 let models: Vec<bitfun_core::service::config::AIModelConfig> =
                     config_service.get_ai_models().await.ok()?;
                 let model = models.into_iter().find(|m| m.id == model_id)?;
-                let reasoning_preset_options = bitfun_core::get_ai_model_catalog()
+                let reasoning_preset_options = self
+                    .agent
+                    .model_catalog()
                     .await
                     .ok()
-                    .and_then(|catalog| {
-                        catalog
-                            .models
-                            .into_iter()
-                            .find(|candidate| candidate.id == model.id)
-                    })
-                    .and_then(|model| model.reasoning)
-                    .map(|reasoning| {
-                        reasoning
-                            .presets
-                            .into_iter()
-                            .map(|preset| preset.id)
-                            .collect()
-                    })
+                    .and_then(|catalog| catalog.reasoning_presets_by_model.get(&model.id).cloned())
                     .unwrap_or_default();
                 Some((model, reasoning_preset_options))
             })
