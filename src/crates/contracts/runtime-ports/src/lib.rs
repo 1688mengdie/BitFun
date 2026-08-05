@@ -2354,6 +2354,68 @@ pub trait AgentSubmissionPort: Send + Sync {
     async fn resolve_session_agent_type(&self, session_id: &str) -> PortResult<Option<String>>;
 }
 
+/// Request for a model-backed Warden audit judgement.
+///
+/// The judgement provider decides whether a finished tool call or failed turn
+/// deserves a poke, which candidate rules apply, and what evidence should be
+/// attached. When the port is unavailable or the judgement times out, the
+/// caller falls back to the mechanical rule ladder.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WardenAuditJudgementRequest {
+    /// Session whose tool call / turn is being judged.
+    pub session_id: String,
+    /// Effective tool name of the finished tool call.
+    pub tool_name: String,
+    /// Effective arguments of the finished tool call (scene fingerprint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_args: Option<serde_json::Value>,
+    /// Candidate rule ids the mechanical ladder would apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_ids: Vec<String>,
+    /// Evidence summary available to the judgement (failure counts, error
+    /// text, phase/target facts the caller can provide).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<serde_json::Value>,
+}
+
+/// Judgement result produced by a model-backed Warden provider.
+///
+/// A provider must not fail the audit loop: `should_poke = false` with empty
+/// rule ids is a valid "no poke" verdict.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WardenAuditJudgementResponse {
+    #[serde(default)]
+    pub should_poke: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rule_ids: Vec<String>,
+    /// Evidence items the model wants to see before poking (follow-ups).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence_requested: Vec<String>,
+}
+
+/// Model-backed judgement for Warden audit decisions.
+///
+/// Providers construct a judgement prompt from the request, parse the model
+/// response as [`WardenAuditJudgementResponse`], and return an error when the
+/// response cannot be parsed or the judgement times out; the caller then
+/// falls back to the mechanical rule ladder. Providers that do not support
+/// model judgement keep the default typed unsupported response.
+#[async_trait::async_trait]
+pub trait WardenModelJudgementPort: Send + Sync {
+    async fn judge_audit(
+        &self,
+        request: WardenAuditJudgementRequest,
+    ) -> PortResult<WardenAuditJudgementResponse> {
+        let _ = request;
+        Err(PortError::new(
+            PortErrorKind::NotAvailable,
+            "model-backed warden judgement is not supported by this provider",
+        ))
+    }
+}
+
 #[async_trait::async_trait]
 pub trait AgentSessionManagementPort: Send + Sync {
     async fn list_sessions(

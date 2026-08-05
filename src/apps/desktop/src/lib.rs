@@ -582,6 +582,7 @@ pub async fn run() {
         app_state.workspace_service.clone(),
         app_state.ssh_manager.clone(),
         app_state.acp_client_service.clone(),
+        ai_client_factory.clone(),
     ) {
         Ok(runtime) => runtime,
         Err(error) => {

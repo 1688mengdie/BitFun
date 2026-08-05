@@ -3,22 +3,25 @@ use std::sync::Arc;
 
 use bitfun_agent_runtime::sdk::{AgentRuntime, PermissionRequestEvent};
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
+use bitfun_core::infrastructure::ai::AIClientFactory;
 use bitfun_core::product_runtime::CoreLocalWorkspaceSnapshot;
 use bitfun_core::service::remote_ssh::SSHConnectionManager;
 use bitfun_core::service::token_usage::TokenUsageService;
 use bitfun_core::service::workspace::WorkspaceService;
-use bitfun_runtime_ports::LocalWorkspaceSnapshotPort;
+use bitfun_runtime_ports::{LocalWorkspaceSnapshotPort, WardenModelJudgementPort};
 use tokio::sync::RwLock;
 
 mod acp_client_port;
 mod acp_session_lifecycle;
 mod session_application;
 mod session_host_effects;
+mod warden_model_judgement_port;
 
 use session_host_effects::ProductionDesktopSessionHostEffects;
 
 pub(crate) use acp_client_port::DesktopAcpClientPort;
 pub(crate) use acp_session_lifecycle::AcpSessionLifecycleSubscriber;
+pub(crate) use warden_model_judgement_port::DesktopWardenModelJudgementPort;
 
 pub(crate) use session_application::{
     DesktopSessionApplication, DesktopSessionApplicationError, DesktopSessionScopeRequest,
@@ -34,6 +37,12 @@ pub(crate) use session_application::{
 pub struct DesktopRuntimeContext {
     session_application: DesktopSessionApplication,
     local_workspace_snapshot: Arc<dyn LocalWorkspaceSnapshotPort>,
+    /// Model-backed Warden judgement provider, assembled here per batch 1 of
+    /// the warden rework. Batch 2 wires this port into the scheduler/execution
+    /// audit loop (the consumer); until then the field is intentionally held
+    /// as the desktop assembly point.
+    #[allow(dead_code)]
+    warden_model_judgement: Arc<dyn WardenModelJudgementPort>,
     permission_events_started: AtomicBool,
 }
 
@@ -45,6 +54,7 @@ impl DesktopRuntimeContext {
         workspace_service: Arc<WorkspaceService>,
         ssh_manager: Arc<RwLock<Option<SSHConnectionManager>>>,
         acp_client_service: Option<Arc<bitfun_acp::AcpClientService>>,
+        ai_client_factory: Arc<AIClientFactory>,
     ) -> Result<Self, String> {
         let host_effects = Arc::new(ProductionDesktopSessionHostEffects::new(acp_client_service));
         let session_application = DesktopSessionApplication::build(
@@ -56,10 +66,16 @@ impl DesktopRuntimeContext {
             host_effects,
         )?;
         let local_workspace_snapshot = CoreLocalWorkspaceSnapshot::build();
+        // Desktop-side Warden model judgement provider. Batch 2 wires this
+        // port into the scheduler/execution audit loop; until then it is held
+        // on the desktop runtime context as the assembly point.
+        let warden_model_judgement: Arc<dyn WardenModelJudgementPort> =
+            Arc::new(DesktopWardenModelJudgementPort::new(ai_client_factory));
 
         Ok(Self {
             session_application,
             local_workspace_snapshot,
+            warden_model_judgement,
             permission_events_started: AtomicBool::new(false),
         })
     }
@@ -74,6 +90,12 @@ impl DesktopRuntimeContext {
 
     pub(crate) fn local_workspace_snapshot(&self) -> &dyn LocalWorkspaceSnapshotPort {
         self.local_workspace_snapshot.as_ref()
+    }
+
+    /// Warden model judgement port held for the batch-2 audit-loop consumer.
+    #[allow(dead_code)]
+    pub(crate) fn warden_model_judgement(&self) -> Arc<dyn WardenModelJudgementPort> {
+        self.warden_model_judgement.clone()
     }
 
     pub(crate) fn start_permission_event_forwarding(
