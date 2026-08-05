@@ -20,6 +20,10 @@ use tokio::fs;
 
 use crate::infrastructure::PathManager;
 
+pub use bitfun_services_core::dispatch_contract::{
+    DispatchAccountDaemonIdentity, DispatchAccountDaemonProvisionRequest,
+    DISPATCH_ACCOUNT_DAEMON_PROVISIONING_SCHEMA_VERSION,
+};
 #[cfg(all(feature = "agent-runtime", feature = "ssh-remote"))]
 pub use controller::{
     answer as answer_dispatch, append as append_dispatch, cancel as cancel_dispatch,
