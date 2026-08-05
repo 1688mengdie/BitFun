@@ -177,7 +177,7 @@ async fn warden_runtime_off_disables_turn_and_tool_tracking() {
         "no reminders queued (turn outcome)"
     );
 
-    rt.on_tool_outcome("sess-off", "ExecCommand", WardenToolOutcome::ExecutionFailed)
+    rt.on_tool_outcome("sess-off", "ExecCommand", "ExecCommand:{}", WardenToolOutcome::ExecutionFailed)
         .await;
     assert_eq!(rt.tool_failures("sess-off"), 0, "no tool failure tracking");
     assert!(
@@ -202,6 +202,17 @@ async fn warden_runtime_on_keeps_turn_and_tool_tracking() {
     ));
 
     rt.on_turn_outcome("sess-on", TurnOutcomeStatus::Failed, "t1").await;
+    assert_eq!(
+        rt.consecutive_failures("sess-on"),
+        0,
+        "first turn failure of a scene is exploratory"
+    );
+    assert!(
+        rt.shame_wall().entry_for_session("sess-on").is_none(),
+        "no violation recorded for the exploratory first failure"
+    );
+
+    rt.on_turn_outcome("sess-on", TurnOutcomeStatus::Failed, "t2").await;
     assert_eq!(rt.consecutive_failures("sess-on"), 1, "tracking active");
     assert_eq!(
         rt.shame_wall().entry_for_session("sess-on").unwrap().cumulative_penalty_level,
@@ -210,7 +221,14 @@ async fn warden_runtime_on_keeps_turn_and_tool_tracking() {
     );
     assert_eq!(rt.take_pending_reminders("sess-on").len(), 1);
 
-    rt.on_tool_outcome("sess-on", "ExecCommand", WardenToolOutcome::ExecutionFailed)
+    rt.on_tool_outcome("sess-on", "ExecCommand", "ExecCommand:{}", WardenToolOutcome::ExecutionFailed)
+        .await;
+    assert_eq!(
+        rt.tool_failures("sess-on"),
+        0,
+        "first tool failure of a scene is exploratory"
+    );
+    rt.on_tool_outcome("sess-on", "ExecCommand", "ExecCommand:{}", WardenToolOutcome::ExecutionFailed)
         .await;
     assert_eq!(rt.tool_failures("sess-on"), 1, "tool tracking active");
 

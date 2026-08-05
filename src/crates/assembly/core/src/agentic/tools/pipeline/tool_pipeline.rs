@@ -17,7 +17,7 @@ use crate::agentic::tools::restrictions::get_session_restrictions;
 use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
-use crate::agentic::warden::runtime::{WardenRuntime, WardenToolOutcome};
+use crate::agentic::warden::runtime::{tool_failure_scene_key, WardenRuntime, WardenToolOutcome};
 use crate::native_hooks::{self, NativeHookSessionFacts};
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -725,7 +725,10 @@ impl ToolPipeline {
     /// outside the hook dispatch channel.
     ///
     /// Only fires when a runtime was injected; a missing task lookup is a
-    /// benign no-op (the task may already be gone).
+    /// benign no-op (the task may already be gone). The failure scene is
+    /// fingerprinted from the effective tool name plus effective arguments so
+    /// repeated failures of the same argument shape escalate while a first
+    /// failure of a new shape stays exploratory.
     async fn notify_warden_tool_outcome(&self, task_id: &str, failure_kind: WardenToolOutcome) {
         let Some(warden_runtime) = self.warden_runtime.get() else {
             return;
@@ -735,9 +738,10 @@ impl ToolPipeline {
         };
         let session_id = task.context.session_id;
         let tool_name = task.invocation.effective_tool_name;
+        let scene_key = tool_failure_scene_key(&tool_name, &task.invocation.effective_arguments);
         let mut guard = warden_runtime.lock().await;
         guard
-            .on_tool_outcome(&session_id, &tool_name, failure_kind)
+            .on_tool_outcome(&session_id, &tool_name, &scene_key, failure_kind)
             .await;
     }
 
@@ -5191,13 +5195,40 @@ mod tests {
         ));
         assert_eq!(results.len(), 1);
 
-        // A real execution failure is unchanged: it counts and fires L1.
+        // The first failure of a scene is exploratory and is not counted.
+        let mut warden_guard = warden.lock().await;
+        assert_eq!(warden_guard.tool_failures("session_1"), 0);
+        assert!(
+            warden_guard.take_pending_reminders("session_1").is_empty(),
+            "no L1 reminder for the exploratory first failure"
+        );
+        drop(warden_guard);
+
+        // A repeated failure of the same scene (same tool, same arguments)
+        // counts and fires L1.
+        let results = pipeline
+            .execute_tools(
+                vec![test_tool_call("real-fail-2", "FailingProbe")],
+                test_tool_execution_context(),
+                ToolExecutionOptions::default(),
+            )
+            .await
+            .expect("execution failure surfaces as a tool result");
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            pipeline
+                .state_manager
+                .get_task("real-fail-2")
+                .map(|task| task.state),
+            Some(ToolExecutionState::Failed { .. })
+        ));
+
         let mut warden_guard = warden.lock().await;
         assert_eq!(warden_guard.tool_failures("session_1"), 1);
         assert_eq!(
             warden_guard.take_pending_reminders("session_1").len(),
             1,
-            "L1 fires on the first real tool failure"
+            "L1 fires on the repeated real tool failure"
         );
         assert_eq!(
             warden_guard
