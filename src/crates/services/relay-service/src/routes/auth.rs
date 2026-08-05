@@ -83,7 +83,7 @@ fn decoy_login_challenge(username: &str) -> LoginChallengeResponse {
     LoginChallengeResponse {
         salt: BASE64.encode(&salt_material[..16]),
         kdf_salt: BASE64.encode(&kdf_salt_material[..16]),
-        argon2_params: r#"{"m":65536,"t":3,"p":4}"#.to_string(),
+        argon2_params: r#"{"m":16384,"t":3,"p":4}"#.to_string(),
         wrapped_master_key: format!(
             "{}.{}",
             BASE64.encode(ciphertext),
@@ -905,6 +905,10 @@ mod tests {
         let first_body = to_bytes(first.into_body(), 16 * 1024).await.unwrap();
         let first_json: LoginChallengeResponse = serde_json::from_slice(&first_body).unwrap();
         assert!(first_json.login_idempotency_supported);
+        let params: serde_json::Value = serde_json::from_str(&first_json.argon2_params).unwrap();
+        assert_eq!(params["m"], 16 * 1024);
+        assert_eq!(params["t"], 3);
+        assert_eq!(params["p"], 4);
         assert_eq!(BASE64.decode(&first_json.salt).unwrap().len(), 16);
         assert_eq!(BASE64.decode(&first_json.kdf_salt).unwrap().len(), 16);
         let (ciphertext, nonce) = first_json.wrapped_master_key.split_once('.').unwrap();
