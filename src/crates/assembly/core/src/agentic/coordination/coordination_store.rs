@@ -399,6 +399,14 @@ WHERE task_pk = ?5 AND status = 'running'
         .await
     }
 
+    /// Resolve the background tasks a caller may wait on.
+    ///
+    /// With an empty `requested_bg_task_ids`, only undelivered tasks are
+    /// returned (the "what is still pending" query). With explicit ids, every
+    /// matching record is returned, including already-delivered ones, so
+    /// callers can explicitly tell a delivered task apart from a
+    /// not-yet-completed one via [`BackgroundTaskRecord::delivered_at_ms`]
+    /// instead of silently losing it (COORD-09).
     pub(crate) async fn wait_candidates(
         &self,
         parent_session_id: &str,
@@ -447,9 +455,9 @@ WHERE task_pk = ?5 AND status = 'running'
                 for row in rows {
                     let record = row.map_err(db_error)?;
                     found_ids.insert(record.bg_task_id.clone());
-                    if record.delivered_at_ms.is_none() {
-                        records.push(record);
-                    }
+                    // Keep delivered records in the result (marked by
+                    // delivered_at_ms) rather than dropping them silently.
+                    records.push(record);
                 }
             }
             for bg_task_id in &requested_bg_task_ids {
@@ -551,6 +559,45 @@ WHERE task_pk = ?5 AND status = 'running'
                 all_records.extend(collect_rows(rows)?);
             }
             Ok(all_records)
+        })
+        .await
+    }
+
+    /// Collect all descendant session ids under `root_session_id` by walking
+    /// the persisted `agents` parent→child edges (iterative BFS).
+    ///
+    /// The in-memory session tree is lazily loaded and can be empty/incomplete
+    /// right after a restart, so `agent_id` subtree scopes must not depend on
+    /// it alone. This persisted walk reconstructs the subtree from the
+    /// coordination database, which is authoritative for registered
+    /// background-task agents (COORD-06).
+    pub(crate) async fn descendant_session_ids(
+        &self,
+        root_session_id: &str,
+    ) -> BitFunResult<Vec<String>> {
+        let root_session_id = root_session_id.to_string();
+        self.with_connection(move |connection| {
+            let mut descendants = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            let mut stack = vec![root_session_id];
+            while let Some(parent) = stack.pop() {
+                let mut statement = connection
+                    .prepare(
+                        "SELECT child_session_id FROM agents WHERE parent_session_id = ?1 AND child_session_id IS NOT NULL AND state = 'active' ORDER BY agent_pk",
+                    )
+                    .map_err(db_error)?;
+                let rows = statement
+                    .query_map(params![parent], |row| row.get::<_, String>(0))
+                    .map_err(db_error)?;
+                for child in rows {
+                    let child = child.map_err(db_error)?;
+                    if seen.insert(child.clone()) {
+                        descendants.push(child.clone());
+                        stack.push(child);
+                    }
+                }
+            }
+            Ok(descendants)
         })
         .await
     }
@@ -1032,16 +1079,21 @@ fn initialize_schema(connection: &Connection) -> BitFunResult<()> {
     if version == SCHEMA_VERSION {
         return Ok(());
     }
+    // Idempotent schema initialization: `CREATE ... IF NOT EXISTS` makes the
+    // version-0 upgrade safe even when a previous run created the tables but
+    // crashed before persisting `PRAGMA user_version` (COORD-13). A table that
+    // already exists keeps its columns; the `PRAGMA user_version` bump below
+    // still records the schema as initialized.
     connection
         .execute_batch(
             r#"
-CREATE TABLE coordination_sessions (
+CREATE TABLE IF NOT EXISTS coordination_sessions (
     parent_session_id TEXT PRIMARY KEY,
     next_auto_agent_seq INTEGER NOT NULL DEFAULT 1,
     updated_at_ms INTEGER NOT NULL
 );
 
-CREATE TABLE agents (
+CREATE TABLE IF NOT EXISTS agents (
     agent_pk INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_session_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
@@ -1053,7 +1105,7 @@ CREATE TABLE agents (
     UNIQUE(parent_session_id, child_session_id)
 );
 
-CREATE TABLE background_tasks (
+CREATE TABLE IF NOT EXISTS background_tasks (
     task_pk INTEGER PRIMARY KEY AUTOINCREMENT,
     parent_session_id TEXT NOT NULL,
     agent_pk INTEGER NOT NULL,
@@ -1077,9 +1129,9 @@ CREATE TABLE background_tasks (
     FOREIGN KEY(agent_pk) REFERENCES agents(agent_pk) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_background_tasks_wait
+CREATE INDEX IF NOT EXISTS idx_background_tasks_wait
     ON background_tasks(parent_session_id, delivered_at_ms, status, task_pk);
-CREATE INDEX idx_background_tasks_parent_turn
+CREATE INDEX IF NOT EXISTS idx_background_tasks_parent_turn
     ON background_tasks(parent_session_id, parent_dialog_turn_id);
 
 PRAGMA user_version = 1;
@@ -1239,6 +1291,48 @@ mod tests {
             .resolve_agent_id_in_scope(&["parent-1".to_string()], "missing", false)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn descendant_session_ids_walks_persisted_tree_across_generations() {
+        // COORD-06: `agent_id` subtree scopes must be rebuildable from the
+        // persisted `agents` parent→child edges even when the in-memory session
+        // tree is incomplete right after a restart.
+        let (_root, store) = test_store();
+        store
+            .register_background_task(registration("parent", "child", "turn-1", None))
+            .await
+            .expect("register parent-child edge");
+        store
+            .register_background_task(registration("child", "grandchild", "turn-2", None))
+            .await
+            .expect("register child-grandchild edge");
+        store
+            .register_background_task(registration("unrelated", "child-x", "turn-1", None))
+            .await
+            .expect("register unrelated edge");
+
+        let mut descendants = store
+            .descendant_session_ids("parent")
+            .await
+            .expect("walk persisted subtree");
+        descendants.sort();
+        assert_eq!(
+            descendants,
+            vec!["child".to_string(), "grandchild".to_string()]
+        );
+
+        // A leaf has no descendants; an unknown root yields an empty walk.
+        assert!(store
+            .descendant_session_ids("grandchild")
+            .await
+            .expect("leaf walk")
+            .is_empty());
+        assert!(store
+            .descendant_session_ids("missing")
+            .await
+            .expect("unknown root walk")
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1445,5 +1539,106 @@ mod tests {
             .await
             .expect("load remaining tasks")
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn wait_candidates_with_explicit_ids_includes_delivered_tasks() {
+        let (_root, store) = test_store();
+        let delivered = store
+            .register_background_task(registration("parent", "child-1", "spawn-turn-1", None))
+            .await
+            .expect("register delivered task");
+        store
+            .update_task_status(
+                delivered.task_pk,
+                BackgroundTaskStatus::Completed,
+                None,
+                None,
+            )
+            .await
+            .expect("complete delivered task");
+        store
+            .claim_terminal_tasks("parent", &[delivered.task_pk], "delivery-turn")
+            .await
+            .expect("claim delivered task");
+
+        // An explicit-id query must return the delivered record explicitly
+        // (distinguishable via delivered_at_ms) instead of silently dropping
+        // it (COORD-09).
+        let candidates = store
+            .wait_candidates("parent", &[delivered.bg_task_id.clone()])
+            .await
+            .expect("load explicit candidates");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].bg_task_id, delivered.bg_task_id);
+        assert!(candidates[0].delivered_at_ms.is_some());
+
+        // The empty-request query still reports only undelivered tasks.
+        let pending = store
+            .wait_candidates("parent", &[])
+            .await
+            .expect("load pending candidates");
+        assert!(pending.is_empty());
+    }
+
+    #[tokio::test]
+    async fn descendant_session_ids_walks_the_persisted_agents_tree() {
+        let (_root, store) = test_store();
+        store
+            .register_background_task(registration("parent", "child-1", "turn-1", None))
+            .await
+            .expect("register child");
+        store
+            .register_background_task(registration("child-1", "grandchild-1", "turn-2", None))
+            .await
+            .expect("register grandchild");
+        store
+            .register_background_task(registration(
+                "unrelated",
+                "other-child",
+                "turn-3",
+                None,
+            ))
+            .await
+            .expect("register unrelated branch");
+
+        // The persisted parent→child walk must cover the whole subtree below
+        // the root but stay within it (COORD-06).
+        let descendants = store
+            .descendant_session_ids("parent")
+            .await
+            .expect("walk persisted tree");
+        assert!(descendants.contains(&"child-1".to_string()));
+        assert!(descendants.contains(&"grandchild-1".to_string()));
+        assert!(!descendants.contains(&"other-child".to_string()));
+        assert!(store
+            .descendant_session_ids("missing")
+            .await
+            .expect("unknown root")
+            .is_empty());
+    }
+
+    #[test]
+    fn initialize_schema_is_idempotent_when_tables_exist_but_version_is_zero() {
+        let root = tempfile::tempdir().expect("coordination store temp directory");
+        let db_path = root.path().join("coordination.sqlite");
+        // Simulate an interrupted earlier initialization: a table exists but
+        // `PRAGMA user_version` was never persisted (still 0). Re-initializing
+        // must not fail on the already-existing table (COORD-13).
+        let first = Connection::open(&db_path).expect("open db");
+        first
+            .execute_batch(
+                "CREATE TABLE coordination_sessions (parent_session_id TEXT PRIMARY KEY, next_auto_agent_seq INTEGER NOT NULL DEFAULT 1, updated_at_ms INTEGER NOT NULL);",
+            )
+            .expect("create coordination_sessions");
+        drop(first);
+
+        let connection = open_connection(db_path).expect("reopen and re-initialize");
+        let version = connection
+            .lock()
+            .expect("connection lock")
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .expect("read user_version");
+        assert_eq!(version, SCHEMA_VERSION);
     }
 }

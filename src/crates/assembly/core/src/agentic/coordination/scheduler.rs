@@ -12,7 +12,7 @@
 
 use super::coordinator::{
     session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
-    HiddenSubagentExecutionRequest, SubagentResult,
+    HiddenSubagentExecutionRequest, SubagentResult, SubagentResultStatus,
 };
 use super::plan_todo_binding::{
     auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
@@ -24,8 +24,8 @@ use crate::agentic::core::{
 };
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::goal_mode::{
-    goal_continuation_submit_retry_delay_ms, goal_internal_context_message,
-    goal_objective_updated_message, thread_goal_from_custom_metadata, GOAL_IDLE_WAKEUP_DELAY_MS,
+    goal_internal_context_message, goal_objective_updated_message, thread_goal_from_custom_metadata,
+    GOAL_IDLE_WAKEUP_DELAY_MS,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
@@ -38,7 +38,7 @@ use crate::agentic::warden::runtime::{warden_enforcement_for_goal, WardenRuntime
 use crate::infrastructure::PathManager;
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
-use bitfun_runtime_ports::{ThreadGoal, MAX_THREAD_GOAL_AUTO_CONTINUATIONS};
+use bitfun_runtime_ports::ThreadGoal;
 use log::{debug, info, warn};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -440,6 +440,11 @@ pub struct DialogScheduler {
     /// generation when they fire and exit without doing anything (re-entrancy
     /// guard for the idle safety net).
     goal_idle_wakeup_generations: Arc<dashmap::DashMap<String, u64>>,
+    /// Short-TTL cache of `session_has_active_goal` results (COORD-02). The
+    /// uncached check touches the goal store on disk, which is too expensive
+    /// to repeat on every outcome; a few seconds of staleness is harmless for
+    /// Warden enforcement gating. Cleaned in `cleanup_session_state`.
+    goal_active_cache: Arc<dashmap::DashMap<String, (Instant, bool)>>,
     /// Weak self-reference set after construction so spawned idle-wakeup tasks
     /// can upgrade to a strong reference and submit continuation turns.
     goal_idle_wakeup_self: OnceLock<std::sync::Weak<DialogScheduler>>,
@@ -549,6 +554,7 @@ impl DialogScheduler {
             round_injection_source,
             maintenance_background_sessions: Arc::new(dashmap::DashMap::new()),
             goal_idle_wakeup_generations: Arc::new(dashmap::DashMap::new()),
+            goal_active_cache: Arc::new(dashmap::DashMap::new()),
             goal_idle_wakeup_self: OnceLock::new(),
             warden_runtime,
             agent_reply_archive_root: std::sync::Mutex::new(None),
@@ -585,6 +591,21 @@ impl DialogScheduler {
     pub async fn cleanup_session_state(&self, session_id: &str) {
         let mut warden = self.warden_runtime.lock().await;
         warden.cleanup_session(session_id);
+        drop(warden);
+        // COORD-11: the per-session in-memory tables only ever grow without
+        // this cleanup. Removing them here keeps a recycled session id from
+        // inheriting a stale generation counter (which would silently invalidate
+        // new idle-wakeup schedules), a stale continuation-abort flag, or a
+        // stale cached goal-active fact.
+        self.goal_continuation_abort.clear(session_id);
+        self.goal_idle_wakeup_generations.remove(session_id);
+        self.goal_active_cache.remove(session_id);
+        // COORD-11: suppression marks and retired-outcome tombstones are also
+        // keyed by session id. A recycled session id must not inherit them:
+        // a stale suppression mark would silently drop a cancelled-reply
+        // bounce-back, and a stale tombstone would swallow a new turn outcome.
+        self.suppressed_cancelled_replies.clear_session(session_id);
+        self.retired_maintenance_outcomes.clear_session(session_id);
     }
 
     /// Inject the model-backed Warden judgement provider for Audit-Poke
@@ -601,6 +622,14 @@ impl DialogScheduler {
 
     async fn lock_session_operation(&self, session_id: &str) -> KeyedAsyncLockGuard {
         self.session_operation_locks.lock(session_id).await
+    }
+
+    /// Upgrade the weak self-reference installed at construction, when the
+    /// scheduler is still alive. Used to detach scheduler work into spawned
+    /// tasks that need an owned `Arc<Self>`.
+    fn self_arc(&self) -> Option<Arc<Self>> {
+        let weak = self.goal_idle_wakeup_self.get()?.clone();
+        weak.upgrade()
     }
 
     /// Pass to [`ConversationCoordinator::set_round_injection_source`](super::coordinator::ConversationCoordinator::set_round_injection_source).
@@ -824,7 +853,10 @@ impl DialogScheduler {
         display_content: Option<String>,
         user_message_metadata: Option<serde_json::Value>,
     ) -> Result<(), String> {
-        let _operation_guard = self.lock_session_operation(&session_id).await;
+        // COORD-16: resolve the session agent type before taking the session
+        // operation lock. `resolve_session_agent_type` performs disk I/O when
+        // the session is not loaded (storage-path resolution + restore), which
+        // must not block concurrent submit/cancel on this session's lock.
         let session_agent_type = self
             .resolve_session_agent_type(
                 &session_id,
@@ -833,6 +865,7 @@ impl DialogScheduler {
                 remote_ssh_host.as_deref(),
             )
             .await?;
+        let _operation_guard = self.lock_session_operation(&session_id).await;
         if session_agent_type != agent_type {
             debug!(
                 "Background result delivery replaced execution agent key with Session logical route: session_id={}, execution_agent_type={}, session_agent_type={}",
@@ -886,8 +919,20 @@ impl DialogScheduler {
                 Ok(())
             }
             BackgroundDeliveryAction::SubmitAgentSessionFollowUp { queue_priority } => {
-                self.submit_background_result_follow_up_locked(delivery, queue_priority)
-                    .await
+                // Type-erase the follow-up future so this delivery path no
+                // longer embeds the full concrete future chain. The
+                // review-reminder delivery route (COORD-04) leads back into
+                // `start_turn` -> the hidden-subagent spawn, which would
+                // otherwise form a recursive opaque future type that the
+                // compiler cannot check for `Send`. The awaited future is
+                // unchanged; only its static type is erased.
+                let follow_up: std::pin::Pin<
+                    Box<dyn std::future::Future<Output = Result<(), String>> + Send>,
+                > = Box::pin(self.submit_background_result_follow_up_locked(
+                    delivery,
+                    queue_priority,
+                ));
+                follow_up.await
             }
         }
     }
@@ -1532,13 +1577,41 @@ impl DialogScheduler {
     /// Reuses the `get_thread_goal` + `is_active()` pattern of the goal
     /// idle-wakeup check: only sessions with an active thread goal are under
     /// Warden enforcement, so failures of goal-less or non-active-goal
-    /// sessions never accumulate consecutive-failure counts. A goal lookup
-    /// failure keeps enforcement enabled (fail-open) so a transient store
-    /// error cannot silently disable discipline.
+    /// sessions never accumulate consecutive-failure counts.
+    ///
+    /// WARDEN-05: subagent / ephemeral sessions are **exempt** outright —
+    /// thread goals are only attachable to main sessions, so a subagent can
+    /// never hold an active goal and must not be pushed into fail-open
+    /// enforcement just because its session lacks a workspace or a persisted
+    /// goal. This is a hard exemption, not a fail-open: only main
+    /// (`SessionKind::Standard`) sessions fall through to the goal lookup. A
+    /// goal *lookup failure* on a main session still keeps enforcement
+    /// enabled (fail-open) so a transient store error cannot silently disable
+    /// discipline.
+    ///
+    /// COORD-02: this entry point is a short-TTL cache over the disk-backed
+    /// check below. Outcome handling can query it once per finished turn; a
+    /// few seconds of staleness is acceptable for enforcement gating and
+    /// keeps the outcome path off the storage layer.
     async fn session_has_active_goal(&self, session_id: &str) -> bool {
+        if let Some(cached) = self.goal_active_cache.get(session_id) {
+            if cached.value().0.elapsed() < GOAL_ACTIVE_CACHE_TTL {
+                return cached.value().1;
+            }
+        }
+        let active = self.session_has_active_goal_uncached(session_id).await;
+        self.goal_active_cache
+            .insert(session_id.to_string(), (Instant::now(), active));
+        active
+    }
+
+    async fn session_has_active_goal_uncached(&self, session_id: &str) -> bool {
         let Some(session) = self.session_manager.get_session(session_id) else {
             return false;
         };
+        if !matches!(session.kind, SessionKind::Standard) {
+            return false;
+        }
         let Some(workspace_path) = session.config.workspace_path.as_deref().map(Path::new) else {
             return true;
         };
@@ -2195,10 +2268,41 @@ impl DialogScheduler {
     ) -> Result<String, SchedulerSubmitError> {
         match &queued_turn.execution {
             QueuedTurnExecution::HiddenSubagent(execution) => {
-                return self
-                    .start_hidden_subagent_turn(session_id, queued_turn, execution)
-                    .await
-                    .map_err(SchedulerSubmitError::Message);
+                // The scheduler-side await chain
+                // `start_hidden_subagent_turn` -> spawned hidden execution ->
+                // coordinator -> `deliver_background_result` -> follow-up
+                // submission -> `submit_queued_turn_locked` ->
+                // `try_start_next_queued_locked` -> `start_turn` forms a
+                // cyclic opaque-future graph; a direct `.await` here would
+                // make every future in the cycle non-`Send` and break
+                // `tokio::spawn` at the hidden execution boundary. Run the
+                // turn start through a detached task and join it: the
+                // `JoinHandle` is a concrete `Send` type, so the cycle is
+                // broken while the returned turn id and the caller-held
+                // session operation permit semantics stay unchanged.
+                let Some(scheduler) = self.self_arc() else {
+                    return Err(SchedulerSubmitError::Message(
+                        "scheduler self-arc unavailable for hidden subagent start".to_string(),
+                    ));
+                };
+                let session_id_owned = session_id.to_string();
+                let queued_turn_owned = queued_turn.clone();
+                let execution_owned = execution.clone();
+                let start_handle = tokio::spawn(async move {
+                    scheduler
+                        .start_hidden_subagent_turn(
+                            &session_id_owned,
+                            &queued_turn_owned,
+                            &execution_owned,
+                        )
+                        .await
+                });
+                let start_result = start_handle.await.map_err(|join_error| {
+                    SchedulerSubmitError::Message(format!(
+                        "hidden subagent start task failed: {join_error}"
+                    ))
+                })?;
+                return start_result.map_err(SchedulerSubmitError::Message);
             }
             QueuedTurnExecution::FreshExternalSubagent(execution) => {
                 self.coordinator
@@ -2395,6 +2499,38 @@ impl DialogScheduler {
         Ok(resolved)
     }
 
+    /// Box the hidden-subagent execution future behind a `dyn Future` trait
+    /// object **outside** the scheduler state machine that spawns it.
+    ///
+    /// The review-reminder delivery path (COORD-04) routes from
+    /// `execute_hidden_subagent_internal` back into the scheduler
+    /// (`deliver_background_result` -> queued submit -> `start_turn` -> the
+    /// hidden-subagent spawn site). A `tokio::spawn` block that awaited the
+    /// concrete future directly would embed that whole chain in its own state
+    /// machine, forming a self-referential opaque future type the compiler
+    /// cannot check for `Send` (`fetching the hidden types of an opaque inside
+    /// of the defining scope is not supported`). Returning a `Pin<Box<dyn
+    /// Future + Send>>` from a plain function keeps the spawned task's state
+    /// machine small and the type chain finite. Semantics are unchanged.
+    fn box_hidden_subagent_execution(
+        coordinator: Arc<ConversationCoordinator>,
+        request: HiddenSubagentExecutionRequest,
+        execution_cancel_token: CancellationToken,
+        timeout_seconds: Option<u64>,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = BitFunResult<SubagentResult>> + Send>,
+    > {
+        Box::pin(async move {
+            coordinator
+                .execute_prepared_hidden_subagent(
+                    request,
+                    Some(&execution_cancel_token),
+                    timeout_seconds,
+                )
+                .await
+        })
+    }
+
     async fn start_hidden_subagent_turn(
         &self,
         session_id: &str,
@@ -2482,25 +2618,44 @@ impl DialogScheduler {
         self.active_internal_turns
             .insert(session_id.to_string(), ActiveInternalTurn::HiddenSubagent);
 
+        let hidden_subagent_task = Self::box_hidden_subagent_execution(
+            coordinator,
+            request,
+            execution_cancel_token,
+            timeout_seconds,
+        );
         tokio::spawn(async move {
-            let outcome = coordinator
-                .execute_prepared_hidden_subagent(
-                    request,
-                    Some(&execution_cancel_token),
-                    timeout_seconds,
-                )
-                .await;
+            let outcome = hidden_subagent_task.await;
             match outcome {
                 Ok(result) => {
-                    let _ = outcome_tx
-                        .send((
-                            session_id_owned.clone(),
-                            TurnOutcome::Completed {
-                                turn_id: turn_id_for_task.clone(),
-                                final_response: result.text.clone(),
-                            },
-                        ))
-                        .await;
+                    // COORD-08: a partial-timeout result is not a completed
+                    // turn; report it as Failed so callers never treat a
+                    // half-finished subagent as a successful completion.
+                    if result.status == SubagentResultStatus::PartialTimeout {
+                        let reason = result
+                            .reason
+                            .as_deref()
+                            .unwrap_or("timed out before completing the subagent task");
+                        let _ = outcome_tx
+                            .send((
+                                session_id_owned.clone(),
+                                TurnOutcome::Failed {
+                                    turn_id: turn_id_for_task.clone(),
+                                    error: format!("hidden subagent partial timeout: {reason}"),
+                                },
+                            ))
+                            .await;
+                    } else {
+                        let _ = outcome_tx
+                            .send((
+                                session_id_owned.clone(),
+                                TurnOutcome::Completed {
+                                    turn_id: turn_id_for_task.clone(),
+                                    final_response: result.text.clone(),
+                                },
+                            ))
+                            .await;
+                    }
                     result_tx.send(Ok(result));
                 }
                 Err(BitFunError::Cancelled(error_text)) => {
@@ -2738,294 +2893,238 @@ impl DialogScheduler {
         Ok(())
     }
 
-    /// Background loop that receives turn outcome notifications from the coordinator.
+    /// Background loop that receives turn outcome notifications from the
+    /// coordinator.
+    ///
+    /// COORD-02: each outcome is dispatched into its own spawned task instead
+    /// of being processed in one serial loop, so a slow outcome for one
+    /// session no longer delays every other session (the bounded 128-slot
+    /// channel was a global throughput bottleneck). Same-session ordering and
+    /// mutual exclusion against submit/cancel stay intact via the session
+    /// operation lock inside `process_turn_outcome`. The semaphore only caps
+    /// the number of concurrently processing outcome tasks.
     async fn run_outcome_handler(&self, mut outcome_rx: mpsc::Receiver<(String, TurnOutcome)>) {
+        let outcome_concurrency =
+            Arc::new(tokio::sync::Semaphore::new(OUTCOME_PROCESSING_MAX_CONCURRENCY));
         while let Some((session_id, outcome)) = outcome_rx.recv().await {
-            let (active_turn, active_internal_turn, lifecycle_plan) = {
-                let _operation_guard = self.lock_session_operation(&session_id).await;
-                let Some(active_turn_result) = take_active_turn_for_outcome(
-                    &self.active_turns,
-                    &self.retired_maintenance_outcomes,
-                    &session_id,
-                    outcome.turn_id(),
-                ) else {
+            let Some(scheduler) = self.self_arc() else {
+                break;
+            };
+            let permit = outcome_concurrency.clone();
+            tokio::spawn(async move {
+                let _permit = permit.acquire_owned().await;
+                scheduler.process_turn_outcome(&session_id, outcome).await;
+            });
+        }
+    }
+
+    /// Process a single turn outcome for one session. Runs inside a spawned
+    /// task (see `run_outcome_handler`), so different sessions are handled
+    /// concurrently; the session operation lock keeps same-session outcome
+    /// processing serialized and closed against concurrent submit/cancel.
+    async fn process_turn_outcome(&self, session_id: &str, outcome: TurnOutcome) {
+        let (active_turn, active_internal_turn, lifecycle_plan) = {
+            let _operation_guard = self.lock_session_operation(session_id).await;
+            let Some(active_turn_result) = take_active_turn_for_outcome(
+                &self.active_turns,
+                &self.retired_maintenance_outcomes,
+                session_id,
+                outcome.turn_id(),
+            ) else {
+                self.round_injection_buffer
+                    .drain_for_turn(session_id, outcome.turn_id());
+                self.take_suppressed_cancelled_reply(session_id, outcome.turn_id());
+                debug!(
+                    "Ignoring outcome retired by session deletion: session_id={}, turn_id={}",
+                    session_id,
+                    outcome.turn_id()
+                );
+                return;
+            };
+            let active_turn = match active_turn_result {
+                ActiveDialogTurnTakeResult::Matched(turn) => Some(turn),
+                ActiveDialogTurnTakeResult::Absent => None,
+                ActiveDialogTurnTakeResult::DifferentTurn => {
                     self.round_injection_buffer
-                        .drain_for_turn(&session_id, outcome.turn_id());
-                    self.take_suppressed_cancelled_reply(&session_id, outcome.turn_id());
+                        .drain_for_turn(session_id, outcome.turn_id());
+                    self.take_suppressed_cancelled_reply(session_id, outcome.turn_id());
                     debug!(
-                        "Ignoring outcome retired by session deletion: session_id={}, turn_id={}",
+                        "Ignoring stale turn outcome: session_id={}, turn_id={}",
                         session_id,
                         outcome.turn_id()
                     );
-                    continue;
-                };
-                let active_turn = match active_turn_result {
-                    ActiveDialogTurnTakeResult::Matched(turn) => Some(turn),
-                    ActiveDialogTurnTakeResult::Absent => None,
-                    ActiveDialogTurnTakeResult::DifferentTurn => {
-                        self.round_injection_buffer
-                            .drain_for_turn(&session_id, outcome.turn_id());
-                        self.take_suppressed_cancelled_reply(&session_id, outcome.turn_id());
-                        debug!(
-                            "Ignoring stale turn outcome: session_id={}, turn_id={}",
-                            session_id,
-                            outcome.turn_id()
-                        );
-                        continue;
-                    }
-                };
-                let active_internal_turn = active_turn.as_ref().and_then(|_| {
-                    self.active_internal_turns
-                        .remove(&session_id)
-                        .map(|(_, turn)| turn)
-                });
-                let lifecycle_plan =
-                    resolve_turn_outcome_lifecycle_plan(&outcome, active_turn.is_some());
-                if lifecycle_plan.queue_action == TurnOutcomeQueueAction::ClearQueue {
-                    debug!(
-                        "Turn {}, clearing queue: session_id={}",
-                        lifecycle_plan.status, session_id
-                    );
-                    let _ = self.clear_queue(&session_id).await;
+                    return;
                 }
-                (active_turn, active_internal_turn, lifecycle_plan)
             };
-            let status = lifecycle_plan.status;
-            let queue_action = lifecycle_plan.queue_action;
-            // Turn-driven Warden runtime: feed the finished turn outcome so
-            // consecutive-failure penalties and challenge pokes are queued for
-            // the next turn of this session. Batch-2 goal switch: Warden hooks
-            // only run while the session has an active thread goal, so
-            // failures of goal-less or non-active-goal sessions never
-            // accumulate (see `session_has_active_goal`).
-            if self.session_has_active_goal(&session_id).await {
-                let mut warden = self.warden_runtime.lock().await;
-                warden
-                    .on_turn_outcome(&session_id, status, outcome.turn_id())
-                    .await;
+            let active_internal_turn = active_turn.as_ref().and_then(|_| {
+                self.active_internal_turns
+                    .remove(session_id)
+                    .map(|(_, turn)| turn)
+            });
+            let lifecycle_plan =
+                resolve_turn_outcome_lifecycle_plan(&outcome, active_turn.is_some());
+            if lifecycle_plan.queue_action == TurnOutcomeQueueAction::ClearQueue {
+                debug!(
+                    "Turn {}, clearing queue: session_id={}",
+                    lifecycle_plan.status, session_id
+                );
+                let _ = self.clear_queue(session_id).await;
             }
-            // Only drop steering messages targeted at the *finished* turn. We
-            // must NOT clear the entire session buffer here: a user might have
-            // legitimately submitted steering against a brand-new follow-up
-            // turn that the dispatcher will pick up immediately after this
-            // outcome is processed (race window between turn finalize and the
-            // next turn starting). Targeting by turn_id keeps those alive.
-            if lifecycle_plan.drain_finished_turn_injections {
-                self.round_injection_buffer
-                    .drain_for_turn(&session_id, outcome.turn_id());
-            }
-            let suppressed_cancelled_reply =
-                self.take_suppressed_cancelled_reply(&session_id, outcome.turn_id());
-            let is_internal_turn = active_internal_turn.is_some();
-            if !is_internal_turn {
-                if let Some(active_turn) = active_turn.as_ref() {
-                    match resolve_agent_session_reply_action(
-                        &session_id,
-                        get_session_role(&session_id).map(|role| role.as_str()),
-                        self.coordinator.session_tree().get_depth(&session_id),
-                        active_turn,
-                        &outcome,
-                        suppressed_cancelled_reply,
-                    ) {
-                        AgentSessionReplyAction::NoReply => {}
-                        AgentSessionReplyAction::SkipSuppressedCancelledReply => {
-                            debug!(
+            (active_turn, active_internal_turn, lifecycle_plan)
+        };
+        let status = lifecycle_plan.status;
+        let queue_action = lifecycle_plan.queue_action;
+        // Turn-driven Warden runtime: feed the finished turn outcome so
+        // consecutive-failure penalties and challenge pokes are queued for
+        // the next turn of this session. Batch-2 goal switch: Warden hooks
+        // only run while the session has an active thread goal, so
+        // failures of goal-less or non-active-goal sessions never
+        // accumulate (see `session_has_active_goal`).
+        if self.session_has_active_goal(session_id).await {
+            let mut warden = self.warden_runtime.lock().await;
+            warden
+                .on_turn_outcome(session_id, status, outcome.turn_id())
+                .await;
+        } else {
+            // WARDEN-01: the session's goal left the active state (or the
+            // session is non-main) — drop the stale consecutive-failure
+            // counts here so a later, *new* goal generation starts from a
+            // clean ladder instead of firing the previous goal's L2/L3 on
+            // its first failure. Idempotent; harmless when already clear.
+            self.warden_runtime
+                .lock()
+                .await
+                .clear_failure_counts(session_id);
+        }
+        // Only drop steering messages targeted at the *finished* turn. We
+        // must NOT clear the entire session buffer here: a user might have
+        // legitimately submitted steering against a brand-new follow-up
+        // turn that the dispatcher will pick up immediately after this
+        // outcome is processed (race window between turn finalize and the
+        // next turn starting). Targeting by turn_id keeps those alive.
+        if lifecycle_plan.drain_finished_turn_injections {
+            self.round_injection_buffer
+                .drain_for_turn(session_id, outcome.turn_id());
+        }
+        let suppressed_cancelled_reply =
+            self.take_suppressed_cancelled_reply(session_id, outcome.turn_id());
+        let is_internal_turn = active_internal_turn.is_some();
+        if !is_internal_turn {
+            if let Some(active_turn) = active_turn.as_ref() {
+                // COORD-10: re-acquire the session operation lock around the
+                // reply decision and delivery. The take above released it, and
+                // this section reads session facts (role, tree depth) and
+                // forwards replies into other sessions; serializing it against
+                // a concurrent submit/cancel for this session removes the
+                // stale-window race.
+                let _reply_guard = self.lock_session_operation(session_id).await;
+                match resolve_agent_session_reply_action(
+                    session_id,
+                    get_session_role(session_id).map(|role| role.as_str()),
+                    self.coordinator.session_tree().get_depth(session_id),
+                    active_turn,
+                    &outcome,
+                    suppressed_cancelled_reply,
+                ) {
+                    AgentSessionReplyAction::NoReply => {}
+                    AgentSessionReplyAction::SkipSuppressedCancelledReply => {
+                        debug!(
                             "Skipping cancelled auto-reply because the source session explicitly cancelled its own SessionMessage request: session_id={}, turn_id={}",
                             session_id,
                             outcome.turn_id()
                         );
-                        }
-                        AgentSessionReplyAction::Forward(plan) => {
-                            self.forward_agent_session_reply(
-                                &session_id,
-                                outcome.turn_id(),
-                                plan,
-                            )
-                            .await;
-                        }
                     }
-
-                    // Plan-todo binding auto-complete (best-effort): when the
-                    // finished turn is an agent-session execution turn bound
-                    // to a plan todo (reply_route.is_some()) and it completed
-                    // normally, mark the todo completed. Failed/Cancelled
-                    // outcomes are intentionally left untouched (kept pending
-                    // for the commander to adjudicate). Reply turns have
-                    // reply_route = None and never trigger this hook. Failures
-                    // only warn; they never affect the outcome pipeline.
-                    if active_turn.reply_route().is_some() {
-                        auto_mark_todo_completed_if_bound(
-                            active_turn.user_message_metadata(),
-                            active_turn.workspace_path(),
-                            active_turn.remote_connection_id(),
-                            active_turn.remote_ssh_host(),
-                            &outcome,
+                    AgentSessionReplyAction::Forward(plan) => {
+                        self.forward_agent_session_reply(
+                            session_id,
+                            outcome.turn_id(),
+                            plan,
                         )
                         .await;
                     }
                 }
-            }
 
-            if !is_internal_turn {
-                if let Some(active_turn) = active_turn.as_ref() {
-                    match lifecycle_plan.goal_continuation {
-                        GoalContinuationAfterTurnAction::SkipNoActiveTurn => {}
-                        GoalContinuationAfterTurnAction::AbortForCancelled => {
-                            self.goal_continuation_abort.mark(&session_id);
-                            debug!(
-                            "Skipping thread goal continuation after user-cancelled turn: session_id={}, turn_id={}",
-                            session_id,
-                            outcome.turn_id()
-                        );
-                        }
-                        GoalContinuationAfterTurnAction::Evaluate { turn_completed } => {
-                            self.goal_continuation_abort.clear(&session_id);
-                            match self
-                                .coordinator
-                                .prepare_goal_continuation_after_turn(
-                                    &session_id,
-                                    outcome.turn_id(),
-                                    active_turn.user_input(),
-                                    active_turn.user_message_metadata(),
-                                    turn_completed,
-                                )
-                                .await
-                            {
-                                Ok(Some(plan)) => {
-                                    let prepended: Vec<Message> = plan
-                                        .prepended_reminders
-                                        .into_iter()
-                                        .map(|text| {
-                                            Message::internal_reminder(
-                                                InternalReminderKind::GoalContinuation,
-                                                text,
-                                            )
-                                        })
-                                        .collect();
-                                    let mut last_error = None;
-                                    for attempt in 1..=MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
-                                        if self.goal_continuation_abort.contains(&session_id) {
-                                            debug!(
-                                        "Aborting goal continuation submit retries after user cancellation: session_id={}",
-                                        session_id
-                                    );
-                                            break;
-                                        }
-                                        match self
-                                            .submit_with_prepended_messages(
-                                                session_id.clone(),
-                                                "Continue working toward the active thread goal."
-                                                    .to_string(),
-                                                Some(plan.display_message.clone()),
-                                                None,
-                                                active_turn.agent_type_owned(),
-                                                active_turn.workspace_path_owned(),
-                                                active_turn.remote_connection_id_owned(),
-                                                active_turn.remote_ssh_host_owned(),
-                                                DialogSubmissionPolicy::for_source(
-                                                    DialogTriggerSource::AgentSession,
-                                                ),
-                                                None,
-                                                Some(plan.user_message_metadata.clone()),
-                                                prepended.clone(),
-                                                None,
-                                            )
-                                            .await
-                                        {
-                                            Ok(_) => {
-                                                last_error = None;
-                                                break;
-                                            }
-                                            Err(error) => {
-                                                last_error = Some(error);
-                                                if self
-                                                    .goal_continuation_abort
-                                                    .contains(&session_id)
-                                                {
-                                                    debug!(
-                                                "Aborting goal continuation submit retries after user cancellation: session_id={}",
-                                                session_id
-                                            );
-                                                    break;
-                                                }
-                                                if attempt < MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
-                                                    let delay_ms =
-                                                        goal_continuation_submit_retry_delay_ms(
-                                                            attempt,
-                                                        );
-                                                    warn!(
-                                                "Goal continuation submit failed; retrying: session_id={}, attempt={}/{}, delay_ms={}, error={}",
-                                                session_id,
-                                                attempt,
-                                                MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
-                                                delay_ms,
-                                                last_error.as_ref().unwrap()
-                                            );
-                                                    tokio::time::sleep(
-                                                        std::time::Duration::from_millis(delay_ms),
-                                                    )
-                                                    .await;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if let Some(error) = last_error {
-                                        if !self.goal_continuation_abort.contains(&session_id) {
-                                            warn!(
-                                        "Failed to submit goal continuation turn after retries: session_id={}, error={}",
-                                        session_id, error
-                                    );
-                                        }
-                                    }
-                                }
-                                Ok(None) => {}
-                                Err(error) => {
-                                    warn!(
-                                "Goal verification failed after turn stopped: session_id={}, status={}, error={}",
-                                session_id, status, error
-                            );
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            match queue_action {
-                TurnOutcomeQueueAction::DispatchNext => {
-                    if status == TurnOutcomeStatus::Cancelled {
-                        debug!(
-                            "Turn cancelled, dispatching next queued message if present: session_id={}",
-                            session_id
-                        );
-                    }
-
-                    if let Err(e) = self.dispatch_next_if_idle(&session_id).await {
-                        warn!(
-                            "Failed to dispatch next queued message after {}: session_id={}, error={}",
-                            status, session_id, e
-                        );
-                    }
-                }
-                TurnOutcomeQueueAction::ClearQueue => {}
-            }
-
-            // Top-level turn finished: restart the goal idle-wakeup safety net
-            // so it counts from turn end, not from submission. Subagent and
-            // other internal turns skip this; they carry no goal of their own.
-            // schedule_goal_idle_wakeup bumps the session generation, which
-            // invalidates any older wakeup task, so a user submission that
-            // raced in ahead of this outcome is still honored.
-            if !is_internal_turn {
-                self.schedule_goal_idle_wakeup(&session_id);
-                // Immediate workspace-quiescent condition: this top-level turn
-                // just finished and (when nothing else is running or queued)
-                // every conversation in the workspace is now silent, so wake
-                // the goal right away instead of waiting for the 10-minute
-                // timer.
-                self.maybe_trigger_goal_wakeup_when_workspace_quiescent(&session_id)
+                // Plan-todo binding auto-complete (best-effort): when the
+                // finished turn is an agent-session execution turn bound
+                // to a plan todo (reply_route.is_some()) and it completed
+                // normally, mark the todo completed. Failed/Cancelled
+                // outcomes are intentionally left untouched (kept pending
+                // for the commander to adjudicate). Reply turns have
+                // reply_route = None and never trigger this hook. Failures
+                // only warn; they never affect the outcome pipeline.
+                if active_turn.reply_route().is_some() {
+                    auto_mark_todo_completed_if_bound(
+                        active_turn.user_message_metadata(),
+                        active_turn.workspace_path(),
+                        active_turn.remote_connection_id(),
+                        active_turn.remote_ssh_host(),
+                        &outcome,
+                    )
                     .await;
+                }
             }
+        }
+
+        if !is_internal_turn {
+            // The plan already encodes "no active turn" as SkipNoActiveTurn,
+            // so no extra active_turn guard is needed here.
+            match lifecycle_plan.goal_continuation {
+                GoalContinuationAfterTurnAction::SkipNoActiveTurn => {}
+                GoalContinuationAfterTurnAction::AbortForCancelled => {
+                    self.goal_continuation_abort.mark(session_id);
+                    debug!(
+                        "Skipping thread goal continuation after user-cancelled turn: session_id={}, turn_id={}",
+                        session_id,
+                        outcome.turn_id()
+                    );
+                }
+                GoalContinuationAfterTurnAction::Evaluate { .. } => {
+                    // COORD-02: `prepare_goal_continuation_after_turn`
+                    // always returns `Ok(None)` (the immediate after-turn
+                    // continuation channel is closed; only the idle-wakeup
+                    // safety net continues goals). The submit-retry loop
+                    // below it was therefore unreachable dead code and is
+                    // removed. The abort-flag clear is kept so a normal
+                    // completion un-sticks the flag for future goal paths.
+                    self.goal_continuation_abort.clear(session_id);
+                }
+            }
+        }
+
+        match queue_action {
+            TurnOutcomeQueueAction::DispatchNext => {
+                if status == TurnOutcomeStatus::Cancelled {
+                    debug!(
+                        "Turn cancelled, dispatching next queued message if present: session_id={}",
+                        session_id
+                    );
+                }
+
+                if let Err(e) = self.dispatch_next_if_idle(session_id).await {
+                    warn!(
+                        "Failed to dispatch next queued message after {}: session_id={}, error={}",
+                        status, session_id, e
+                    );
+                }
+            }
+            TurnOutcomeQueueAction::ClearQueue => {}
+        }
+
+        // Top-level turn finished: restart the goal idle-wakeup safety net
+        // so it counts from turn end, not from submission. Subagent and
+        // other internal turns skip this; they carry no goal of their own.
+        // schedule_goal_idle_wakeup bumps the session generation, which
+        // invalidates any older wakeup task, so a user submission that
+        // raced in ahead of this outcome is still honored.
+        if !is_internal_turn {
+            self.schedule_goal_idle_wakeup(session_id);
+            // Immediate workspace-quiescent condition: this top-level turn
+            // just finished and (when nothing else is running or queued)
+            // every conversation in the workspace is now silent, so wake
+            // the goal right away instead of waiting for the 10-minute
+            // timer.
+            self.maybe_trigger_goal_wakeup_when_workspace_quiescent(session_id)
+                .await;
         }
     }
 }
@@ -3349,10 +3448,16 @@ impl AgentTurnCancellationPort for DialogScheduler {
         let wait_timeout = Duration::from_millis(request.wait_timeout_ms.unwrap_or(1500));
 
         let cancelled_turn_id = if let Some(turn_id) = request.turn_id {
-            self.cancel_queued_or_active_turn(&session_id, &turn_id)
+            // COORD-12: map the removal result instead of discarding it. The
+            // previous code unconditionally reported `Some(turn_id)`, so
+            // `requested` was always true even when the turn was neither
+            // queued nor active. `cancel_queued_or_active_turn` returns true
+            // only when the turn was actually removed before it started.
+            let removed = self
+                .cancel_queued_or_active_turn(&session_id, &turn_id)
                 .await
                 .map_err(|error| PortError::new(PortErrorKind::Backend, error.to_string()))?;
-            Some(turn_id)
+            if removed { Some(turn_id) } else { None }
         } else if let Some(requester_session_id) = request.requester_session_id {
             self.cancel_active_turn_for_session_from_requester(
                 &session_id,
@@ -3434,6 +3539,18 @@ fn background_result_delivery_state_fact(
 }
 
 // ── Global instance ──────────────────────────────────────────────────────────
+
+/// TTL for the `session_has_active_goal` short-term cache (COORD-02). Kept
+/// small so goal state changes (pause/resume/complete) reach Warden
+/// enforcement within a few seconds, while outcome handling stays off the
+/// disk-backed goal store.
+const GOAL_ACTIVE_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// Ceiling for concurrently processing outcome tasks (COORD-02). The outcome
+/// channel itself stays bounded at 128; this semaphore only prevents an
+/// unbounded task pile-up when a burst of outcomes arrives while sessions
+/// are busy.
+const OUTCOME_PROCESSING_MAX_CONCURRENCY: usize = 64;
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<DialogScheduler>> = OnceLock::new();
 
@@ -5247,12 +5364,15 @@ mod tests {
     #[tokio::test]
     async fn in_progress_hook_direct_call_marks_real_plan_file() {
         let root = tempfile::tempdir().expect("test root");
-        let (plan_path, plan_file) = write_bound_plan_file(&root, "hook_in_progress_plan.plan.md");
         let workspace_path = root
             .path()
             .join("workspace")
             .to_string_lossy()
             .into_owned();
+        let (plan_path, plan_file) = write_bound_plan_file(&root, "hook_in_progress_plan.plan.md");
+
+        let _override_guard =
+            PathManager::set_plans_dir_override_guard(root.path().join("workspace"));
 
         auto_mark_todo_in_progress_if_bound(
             binding_metadata(&plan_file).as_ref(),
@@ -5314,6 +5434,9 @@ mod tests {
                 Some(sample_reply_route()),
             ),
         );
+
+        let _override_guard =
+            PathManager::set_plans_dir_override_guard(PathBuf::from(&workspace_path));
 
         scheduler
             .outcome_tx

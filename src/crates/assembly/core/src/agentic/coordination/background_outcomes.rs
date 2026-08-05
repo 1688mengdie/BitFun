@@ -219,10 +219,18 @@ impl BackgroundSubagentOutcomeStore {
     ) -> BitFunResult<BackgroundSubagentWaitResult> {
         self.reconcile_stale_running_tasks(parent_session_id)
             .await?;
-        let selected = self
+        let candidates = self
             .coordination_store
             .wait_candidates(parent_session_id, requested_bg_task_ids)
             .await?;
+        // `wait_candidates` now returns delivered records too (explicitly
+        // distinguishable via delivered_at_ms) instead of dropping them
+        // silently (COORD-09). A delivered task carries nothing new to wait
+        // on, so it is excluded from the wait set here.
+        let selected = candidates
+            .into_iter()
+            .filter(|record| record.delivered_at_ms.is_none())
+            .collect::<Vec<_>>();
         if selected.is_empty() {
             return Ok(wait_result(
                 BackgroundSubagentWaitStatus::NoMatchingTasks,
@@ -526,6 +534,19 @@ impl BackgroundSubagentOutcomeStore {
     ) -> BitFunResult<Vec<BackgroundTaskRecord>> {
         self.coordination_store
             .list_tasks_for_parents(parent_session_ids)
+            .await
+    }
+
+    /// Collects descendant session ids under `root_session_id` from the
+    /// persisted coordination database. Used to rebuild `agent_id` subtree
+    /// scopes after a restart, when the in-memory session tree may be
+    /// incomplete (COORD-06).
+    pub(crate) async fn descendant_session_ids(
+        &self,
+        root_session_id: &str,
+    ) -> BitFunResult<Vec<String>> {
+        self.coordination_store
+            .descendant_session_ids(root_session_id)
             .await
     }
 

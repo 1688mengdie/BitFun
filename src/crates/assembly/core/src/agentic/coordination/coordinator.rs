@@ -1170,6 +1170,29 @@ fn lineage_post_admission_cancellation_error(
     ))
 }
 
+/// Register a parent→child session-tree edge idempotently.
+///
+/// `SessionTreeManager::register_child` appends the child to the parent's
+/// children list and is therefore not idempotent; persistent subagents execute
+/// repeatedly, so a child already bound to the same parent must be left
+/// untouched. Returns `true` when a new edge was registered (COORD-14).
+fn register_session_tree_edge_idempotent(
+    tree: &SessionTreeManager,
+    parent_session_id: &str,
+    child_session_id: &str,
+    child_depth: u32,
+) -> bool {
+    let already_bound = tree
+        .get_parent(child_session_id)
+        .as_deref()
+        .is_some_and(|current_parent| current_parent == parent_session_id);
+    if already_bound {
+        return false;
+    }
+    let _ = tree.register_child(parent_session_id, child_session_id, child_depth);
+    true
+}
+
 /// Conversation coordinator
 pub struct ConversationCoordinator {
     pub(crate) session_manager: Arc<SessionManager>,
@@ -1522,8 +1545,10 @@ impl ConversationCoordinator {
         );
 
         if !external_sources_supported {
-            return local_binding.ok_or_else(|| {
-                BitFunError::Validation(format!("Unknown session mode: {agent_type}"))
+            // 契约升级：local_binding 现为 Result，Err（OwnerMismatch/
+            // CandidateUnavailable）直接 fail-closed，不回落任何 fallback。
+            return local_binding.map_err(|error| {
+                BitFunError::Validation(format!("Unknown session mode: {agent_type} ({error})"))
             });
         }
 
@@ -1531,7 +1556,7 @@ impl ConversationCoordinator {
         if let Err(error) =
             crate::external_sources::ensure_external_source_workspace_snapshot(workspace_root).await
         {
-            if let Some(external_binding) = registry.resolve_primary_agent_for_turn(
+            if let Ok(external_binding) = registry.resolve_primary_agent_for_turn(
                 agent_type,
                 workspace_root,
                 true,
@@ -1552,7 +1577,8 @@ impl ConversationCoordinator {
                     "candidate_unavailable: external main agent {agent_type} could not be refreshed"
                 )));
             }
-            if let Some(local_binding) = local_binding {
+            // local_binding 现为 Result：Err 时不回落，直接走下方 Service 错误。
+            if let Ok(local_binding) = local_binding {
                 warn!(
                     "External agent source discovery failed; continuing with local mode: agent_type={}, error_category={}",
                     agent_type,
@@ -1572,15 +1598,15 @@ impl ConversationCoordinator {
                 true,
                 expected_owner,
             )
-            .ok_or_else(|| {
+            .map_err(|error| {
                 if expected_owner == Some(SessionAgentRouteOwner::External)
                     || registry.is_external_subagent_route(agent_type, workspace_root)
                 {
                     BitFunError::Validation(format!(
-                        "candidate_unavailable: external main agent {agent_type} changed before the turn could start"
+                        "candidate_unavailable: external main agent {agent_type} changed before the turn could start: {error}"
                     ))
                 } else {
-                    BitFunError::Validation(format!("Unknown session mode: {agent_type}"))
+                    BitFunError::Validation(format!("Unknown session mode: {agent_type} ({error})"))
                 }
             })
     }
@@ -2919,13 +2945,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Custom SessionEnd cleanup (outside hook gating): unregister the RBAC
-    /// role and tool restrictions and drop the Warden per-session state.
+    /// role and tool restrictions, drop the Warden per-session state, and
+    /// clear coordinator-owned per-session in-memory registries.
     ///
     /// Called from durable deletion and from transient-family discard, so a
-    /// recycled session id cannot inherit stale lifecycle state.
+    /// recycled session id cannot inherit stale lifecycle state. The
+    /// scheduler-side registries (`goal_idle_wakeup_generations` etc.) are
+    /// cleaned by `DialogScheduler::cleanup_session_state` below; this function
+    /// covers the coordinator-side maps that are otherwise only released on the
+    /// execution path (COORD-11).
     async fn session_end_cleanup(&self, session_id: &str) {
         clear_session_role(session_id);
         clear_session_restrictions(session_id);
+        self.subagent_timeout_registry.write().await.remove(session_id);
+        self.active_subagent_executions.remove(session_id);
         if let Some(scheduler) = get_global_scheduler() {
             scheduler.cleanup_session_state(session_id).await;
         }
@@ -6688,6 +6721,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         active.cancel_token.cancel();
     }
 
+    /// Returns whether a cancellation request was triggered by a user-facing
+    /// stop action (desktop UI, remote control, CLI/ACP). Only these sources
+    /// pause the thread goal after cancellation so the UI can offer resume;
+    /// agent tool, subagent cascade, scheduled job, and SDK teardown
+    /// cancellations only abort goal auto-continuation.
+    fn cancel_is_user_triggered(source: Option<DialogTriggerSource>) -> bool {
+        matches!(
+            source,
+            Some(
+                DialogTriggerSource::DesktopUi
+                    | DialogTriggerSource::RemoteRelay
+                    | DialogTriggerSource::Cli
+            )
+        )
+    }
+
     /// Cancel dialog turn execution
     /// Immediately set state to Idle to allow new dialog, old turn ends naturally via cancel token
     pub async fn cancel_dialog_turn(
@@ -6695,11 +6744,31 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         dialog_turn_id: &str,
     ) -> BitFunResult<()> {
+        // Non-user entry points (scheduler-mediated agent/subagent cancellation)
+        // must not pause the thread goal; only user-initiated cancellations do.
+        self.cancel_dialog_turn_for_source(session_id, dialog_turn_id, false)
+            .await
+    }
+
+    /// Cancel a dialog turn with an explicit user-initiated flag.
+    ///
+    /// `user_initiated` is true only when the cancellation originates from a
+    /// user-facing stop action (desktop UI, remote control, CLI/ACP). It
+    /// decides whether the thread goal is paused afterwards so the UI can
+    /// offer resume; agent/system cancellations only abort goal
+    /// auto-continuation.
+    async fn cancel_dialog_turn_for_source(
+        &self,
+        session_id: &str,
+        dialog_turn_id: &str,
+        user_initiated: bool,
+    ) -> BitFunResult<()> {
         self.cancel_dialog_turn_with_descendant_policy(
             session_id,
             dialog_turn_id,
             true,
             Duration::from_millis(1500),
+            user_initiated,
         )
         .await
     }
@@ -6710,6 +6779,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         dialog_turn_id: &str,
         cancel_descendants: bool,
         drain_timeout: Duration,
+        user_initiated: bool,
     ) -> BitFunResult<()> {
         info!(
             "Received cancel request: dialog_turn_id={}, session_id={}, cancel_descendants={}",
@@ -6785,7 +6855,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             })
             .await;
             debug!("Session state change event sent");
-            self.pause_thread_goal_after_user_cancel(session_id).await;
+            if user_initiated {
+                self.pause_thread_goal_after_user_cancel(session_id).await;
+            }
         } else {
             debug!(
                 "Skipped idle event for stale cancellation: session_id={}, dialog_turn_id={}",
@@ -6847,7 +6919,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         wait_timeout: Duration,
     ) -> BitFunResult<Option<String>> {
-        self.cancel_active_turn_for_session_with_descendant_policy(session_id, wait_timeout, true)
+        self.cancel_active_turn_for_session_with_source(session_id, wait_timeout, true, false)
             .await
     }
 
@@ -6857,6 +6929,31 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
         wait_timeout: Duration,
         cancel_descendants: bool,
+    ) -> BitFunResult<Option<String>> {
+        // Non-user entry points (scheduler-mediated agent/subagent cancellation)
+        // must not pause the thread goal; only user-initiated cancellations do.
+        self.cancel_active_turn_for_session_with_source(
+            session_id,
+            wait_timeout,
+            cancel_descendants,
+            false,
+        )
+        .await
+    }
+
+    /// Cancel the active turn with an explicit user-initiated flag.
+    ///
+    /// `user_initiated` is true only when the cancellation originates from a
+    /// user-facing stop action (desktop UI, remote control, CLI/ACP). It
+    /// decides whether the thread goal is paused afterwards so the UI can
+    /// offer resume; agent/system cancellations only abort goal
+    /// auto-continuation.
+    async fn cancel_active_turn_for_session_with_source(
+        &self,
+        session_id: &str,
+        wait_timeout: Duration,
+        cancel_descendants: bool,
+        user_initiated: bool,
     ) -> BitFunResult<Option<String>> {
         abort_thread_goal_continuation_for_session(session_id);
 
@@ -6881,6 +6978,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             &current_turn_id,
             cancel_descendants,
             drain_timeout,
+            user_initiated,
         )
         .await?;
 
@@ -8899,12 +8997,19 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             return Err(error);
         }
 
-        // R-003: Register in memory tree
+        // R-003: Register in memory tree. A persistent subagent runs
+        // repeatedly and this code path fires per execution, while
+        // `SessionTreeManager::register_child` is not idempotent (it appends
+        // the child to the parent's children list). Only register the edge
+        // when the child is not already bound to this parent (COORD-14).
         if let Some(ref parent_info) = subagent_parent_info {
             let child_depth = parent_info.depth.map(|d| d + 1).unwrap_or(1);
-            let _ =
-                self.session_tree
-                    .register_child(&parent_info.session_id, &session_id, child_depth);
+            register_session_tree_edge_idempotent(
+                &self.session_tree,
+                &parent_info.session_id,
+                &session_id,
+                child_depth,
+            );
         }
 
         // Register timeout handle so it can be adjusted at runtime.
@@ -9548,9 +9653,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         };
 
-        // cleanup_guard automatically cleans up token on scope exit (via Drop trait)
-
-        // Persist turn lifecycle before cleaning up the hidden subagent runtime.
         let (workspace_turn_status, response_text) = match result {
             Ok(exec_result) => {
                 Self::persist_completed_dialog_turn(
@@ -9633,8 +9735,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // SubagentStop hooks observe the settled subagent turn. A blocking
         // decision is recorded for the operator; it does not restart the
         // subagent, because its result has already been persisted.
-        if let Some(reason) = native_hooks::dispatch_subagent_stop(
-            subagent_hook_facts,
+        if let Some(reason) = native_hooks::dispatch_subagent_stop(            subagent_hook_facts,
             &session_id,
             &agent_type,
             Some(response_text.as_str()).filter(|text| !text.trim().is_empty()),
@@ -9667,23 +9768,53 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             {
                 // Deliver the review signal to the parent session so the
                 // request is visible to the parent agent, not just a log line.
-                if let Err(error) = self
-                    .session_manager
-                    .add_message(
-                        &parent_session_id,
-                        Message::internal_reminder(
-                            InternalReminderKind::Generic,
-                            format!(
-                                "Subagent session {} has completed; review its output for correctness before continuing.",
-                                child_session_id
-                            ),
-                        ),
-                    )
-                    .await
-                {
+                // Route through the scheduler's background-result channel
+                // (inject into the running turn when the parent is processing,
+                // otherwise submit a follow-up) instead of writing the message
+                // directly, so delivery stays ordered with queued turns and is
+                // deduplicated against scheduler-owned delivery state
+                // (COORD-04).
+                let reminder = format!(
+                    "Subagent session {} has completed; review its output for correctness before continuing.",
+                    child_session_id
+                );
+                if let Some(scheduler) = get_global_scheduler() {
+                    let parent_session = self.session_manager.get_session(&parent_session_id);
+                    let parent_agent_type = parent_session
+                        .as_ref()
+                        .map(|session| session.agent_type.clone())
+                        .unwrap_or_default();
+                    let parent_workspace_path = parent_session
+                        .as_ref()
+                        .and_then(|session| session.config.workspace_path.clone());
+                    let parent_remote_connection_id = parent_session
+                        .as_ref()
+                        .and_then(|session| session.config.remote_connection_id.clone());
+                    let parent_remote_ssh_host = parent_session
+                        .as_ref()
+                        .and_then(|session| session.config.remote_ssh_host.clone());
+                    if let Err(error) = scheduler
+                        .deliver_background_result(
+                            parent_session_id.clone(),
+                            parent_agent_type,
+                            parent_workspace_path,
+                            parent_remote_connection_id,
+                            parent_remote_ssh_host,
+                            reminder.clone(),
+                            Some(reminder),
+                            None,
+                        )
+                        .await
+                    {
+                        warn!(
+                            "ReviewPropagation: failed to deliver review reminder to parent session {}: {}",
+                            parent_session_id, error
+                        );
+                    }
+                } else {
                     warn!(
-                        "ReviewPropagation: failed to deliver review reminder to parent session {}: {}",
-                        parent_session_id, error
+                        "ReviewPropagation: scheduler unavailable; skipping review reminder delivery to parent session {} (child {} completed)",
+                        parent_session_id, child_session_id
                     );
                 }
                 debug!(
@@ -10875,8 +11006,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // the caller opts in (e.g. read-only listing); mutating Task operations
         // (cancel/send_input/history) pass false so a scope miss is "not found"
         // instead of reaching subagents owned by other conversations.
-        let mut scope = vec![parent_session_id.to_string()];
-        scope.extend(self.session_tree.get_descendants(parent_session_id));
+        let scope = self
+            .session_subtree_scope(parent_session_id)
+            .await;
         self.background_subagent_outcomes
             .resolve_agent_id_in_scope(&scope, agent_id, allow_global_fallback)
             .await
@@ -10888,11 +11020,41 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     ) -> BitFunResult<Vec<BackgroundTaskRecord>> {
         // R-2: List background tasks spawned anywhere in the caller's session
         // subtree so a conversation can manage every subagent task it owns.
-        let mut scope = vec![parent_session_id.to_string()];
-        scope.extend(self.session_tree.get_descendants(parent_session_id));
+        let scope = self
+            .session_subtree_scope(parent_session_id)
+            .await;
         self.background_subagent_outcomes
             .list_records_for_parents(&scope)
             .await
+    }
+
+    /// Build the caller's session subtree scope for `agent_id`/task management.
+    ///
+    /// The in-memory session tree is lazily loaded and can be incomplete right
+    /// after a restart, so the persisted coordination database subtree is
+    /// unioned in (deduplicated) to avoid failing resolution against a
+    /// half-empty tree (COORD-06).
+    async fn session_subtree_scope(&self, parent_session_id: &str) -> Vec<String> {
+        let mut scope = vec![parent_session_id.to_string()];
+        scope.extend(self.session_tree.get_descendants(parent_session_id));
+        match self
+            .background_subagent_outcomes
+            .descendant_session_ids(parent_session_id)
+            .await
+        {
+            Ok(persisted) => {
+                for session_id in persisted {
+                    if !scope.iter().any(|existing| existing == &session_id) {
+                        scope.push(session_id);
+                    }
+                }
+            }
+            Err(error) => warn!(
+                "Failed to rebuild persisted session subtree for scope: parent_session_id={}, error={}",
+                parent_session_id, error
+            ),
+        }
+        scope
     }
 
     fn claim_background_subagent_controls(
@@ -13439,9 +13601,10 @@ impl bitfun_runtime_ports::AgentTurnCancellationPort for ConversationCoordinator
         &self,
         request: bitfun_runtime_ports::AgentTurnCancellationRequest,
     ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AgentTurnCancellationResult> {
+        let user_initiated = Self::cancel_is_user_triggered(request.source);
         let session_id = request.session_id;
         if let Some(turn_id) = request.turn_id {
-            self.cancel_dialog_turn(&session_id, &turn_id)
+            self.cancel_dialog_turn_for_source(&session_id, &turn_id, user_initiated)
                 .await
                 .map_err(|error| {
                     bitfun_runtime_ports::PortError::new(
@@ -13459,10 +13622,11 @@ impl bitfun_runtime_ports::AgentTurnCancellationPort for ConversationCoordinator
 
         let wait_timeout = Duration::from_millis(request.wait_timeout_ms.unwrap_or(1500));
         let cancelled_turn_id = self
-            .cancel_active_turn_for_session_with_descendant_policy(
+            .cancel_active_turn_for_session_with_source(
                 &session_id,
                 wait_timeout,
                 request.cancel_descendants,
+                user_initiated,
             )
             .await
             .map_err(|error| {
@@ -13867,16 +14031,16 @@ mod tests {
         build_subagent_session_relationship, lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error,
         lineage_session_is_settling_without_active_state, logical_subagent_type_or_runtime,
-        merge_prepended_messages_for_turn, normalize_subagent_max_concurrency,
-        resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
-        resolve_subagent_model_selection, runtime_port_error_preserving_message,
-        runtime_session_summary, runtime_tool_restrictions_for_session_lifetime,
-        runtime_transcript_messages_from_turns, session_storage_workspace_locator,
-        turn_review_manifest_for_agent, validate_required_lineage_turns_settled,
-        ActiveSubagentExecution, BackgroundSubagentWaitMode, ContextCompactionOutcome,
-        ConversationCoordinator, ManualCompactionCommitGate, SessionMemoryMode,
-        SessionReferenceLocator, SessionRelationshipKind, SubagentExecutionRequest,
-        TEST_AGENT_MODEL_DEFAULTS,
+        merge_prepended_messages_for_turn,         normalize_subagent_max_concurrency,
+        register_session_tree_edge_idempotent, resolve_agent_session_create_created_by,
+        resolve_agent_submission_turn_id, resolve_subagent_model_selection,
+        runtime_port_error_preserving_message, runtime_session_summary,
+        runtime_tool_restrictions_for_session_lifetime, runtime_transcript_messages_from_turns,
+        session_storage_workspace_locator, turn_review_manifest_for_agent,
+        validate_required_lineage_turns_settled, ActiveSubagentExecution,
+        BackgroundSubagentWaitMode, ContextCompactionOutcome, ConversationCoordinator,
+        ManualCompactionCommitGate, SessionMemoryMode, SessionReferenceLocator,
+        SessionRelationshipKind, SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::agents::ExternalSubagentModelBinding;
     use crate::agentic::coordination::coordination_store::{
@@ -19997,5 +20161,22 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn session_tree_edge_registration_is_idempotent() {
+        use bitfun_services_core::session::tree::SessionTreeManager;
+
+        let tree = SessionTreeManager::new(bitfun_core_types::session_tree::MAX_TREE_DEPTH);
+        // A persistent subagent re-executes the same registration repeatedly;
+        // only the first call must create the edge (COORD-14).
+        assert!(register_session_tree_edge_idempotent(&tree, "parent", "child", 1));
+        assert!(!register_session_tree_edge_idempotent(&tree, "parent", "child", 1));
+        assert_eq!(tree.get_children("parent"), vec!["child".to_string()]);
+        assert_eq!(tree.get_parent("child"), Some("parent".to_string()));
+
+        // A different parent still produces a new edge.
+        assert!(register_session_tree_edge_idempotent(&tree, "other-parent", "child", 1));
+        assert_eq!(tree.get_children("other-parent"), vec!["child".to_string()]);
     }
 }
