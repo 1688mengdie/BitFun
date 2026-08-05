@@ -103,6 +103,15 @@ function boundModelsDevProviderIds(overlay) {
           `provider ${provider.id} endpoint ${endpoint.id} has an invalid models.dev binding`);
         providerIds.add(providerId);
       }
+      for (const binding of endpoint.reasoning_catalog_bindings || []) {
+        assertString(binding.model_id,
+          `provider ${provider.id} endpoint ${endpoint.id} has an invalid reasoning model binding`);
+        assertString(binding.source_provider_id,
+          `provider ${provider.id} endpoint ${endpoint.id} has an invalid reasoning source provider`);
+        assertString(binding.source_model_id,
+          `provider ${provider.id} endpoint ${endpoint.id} has an invalid reasoning source model`);
+        providerIds.add(binding.source_provider_id);
+      }
     }
   }
   return [...providerIds].sort();
@@ -261,6 +270,19 @@ function validateBundledSnapshot(snapshot, provenance, overlay) {
   for (const providerId of requiredProviderIds) {
     assert(Object.hasOwn(snapshot, providerId),
       `bundled snapshot is missing provider overlay binding ${providerId}`);
+  }
+  for (const provider of overlay.providers) {
+    for (const endpoint of provider.endpoints || []) {
+      for (const binding of endpoint.reasoning_catalog_bindings || []) {
+        assert(
+          Object.hasOwn(
+            snapshot[binding.source_provider_id]?.models || {},
+            binding.source_model_id,
+          ),
+          `bundled snapshot is missing reasoning binding ${binding.source_provider_id}/${binding.source_model_id}`,
+        );
+      }
+    }
   }
   assert.deepEqual(
     Object.keys(snapshot).sort(),

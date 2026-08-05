@@ -632,6 +632,23 @@ mod tests {
         }
     }
 
+    fn relayed_reasoning_preset(
+        id: &str,
+        execution_provider: &str,
+        execution_model: &str,
+        actions: Vec<ReasoningPresetAction>,
+    ) -> ReasoningPresetDescriptor {
+        ReasoningPresetDescriptor {
+            id: id.to_string(),
+            label: id.to_string(),
+            order: 0,
+            actions,
+            source: bitfun_core_types::ReasoningPresetSource::ModelsDev,
+            execution_provider: Some(execution_provider.to_string()),
+            execution_model: Some(execution_model.to_string()),
+        }
+    }
+
     #[test]
     fn selected_reasoning_effort_overrides_model_custom_body() {
         let client = make_test_client(
@@ -1127,6 +1144,263 @@ mod tests {
     }
 
     #[test]
+    fn build_zhipu_openai_request_body_adds_glm_52_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "zhipu".to_string(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            request_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "openai".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&relayed_reasoning_preset(
+            "max",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Effort {
+                value: "xhigh".to_string(),
+            }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn build_zhipu_openai_request_body_disables_glm_52_reasoning() {
+        let client = AIClient::new(AIConfig {
+            name: "zhipu".to_string(),
+            base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+            request_url: "https://open.bigmodel.cn/api/paas/v4/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "openai".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&relayed_reasoning_preset(
+            "off",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn build_openbitfun_openai_request_body_adds_glm_52_reasoning_effort() {
+        let mut client = make_test_client("openai", None);
+        client.config.name = "openbitfun".to_string();
+        client.config.base_url = "https://api.openbitfun.com/v1".to_string();
+        client.config.request_url = "https://api.openbitfun.com/v1/chat/completions".to_string();
+        client.config.model = "glm-5.2".to_string();
+        client.config.context_window = 1_000_000;
+        let client = client.with_reasoning_preset(&relayed_reasoning_preset(
+            "max",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Effort {
+                value: "max".to_string(),
+            }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn build_openbitfun_openai_request_body_disables_glm_52_reasoning() {
+        let mut client = make_test_client("openai", None);
+        client.config.name = "openbitfun".to_string();
+        client.config.base_url = "https://api.openbitfun.com/v1".to_string();
+        client.config.request_url = "https://api.openbitfun.com/v1/chat/completions".to_string();
+        client.config.model = "glm-5.2".to_string();
+        client.config.context_window = 1_000_000;
+        let client = client.with_reasoning_preset(&relayed_reasoning_preset(
+            "off",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn build_openbitfun_openai_request_body_preserves_deepseek_flash_low_effort() {
+        let mut client = make_test_client("openai", None);
+        client.config.name = "openbitfun".to_string();
+        client.config.base_url = "https://api.openbitfun.com/v1".to_string();
+        client.config.request_url = "https://api.openbitfun.com/v1/chat/completions".to_string();
+        client.config.model = "deepseek-v4-flash".to_string();
+        let client = client.with_reasoning_preset(&relayed_reasoning_preset(
+            "low",
+            "deepseek",
+            "deepseek-v4-flash",
+            vec![ReasoningPresetAction::Effort {
+                value: "low".to_string(),
+            }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn build_openbitfun_openai_request_body_maps_deepseek_pro_xhigh_to_max() {
+        let mut client = make_test_client("openai", None);
+        client.config.name = "openbitfun".to_string();
+        client.config.base_url = "https://api.openbitfun.com/v1".to_string();
+        client.config.request_url = "https://api.openbitfun.com/v1/chat/completions".to_string();
+        client.config.model = "deepseek-v4-pro".to_string();
+        let client = client.with_reasoning_preset(&relayed_reasoning_preset(
+            "max",
+            "deepseek",
+            "deepseek-v4-pro",
+            vec![ReasoningPresetAction::Effort {
+                value: "xhigh".to_string(),
+            }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["reasoning_effort"], "max");
+    }
+
+    #[test]
+    fn build_openbitfun_openai_request_body_disables_deepseek_reasoning() {
+        let mut client = make_test_client("openai", None);
+        client.config.name = "openbitfun".to_string();
+        client.config.base_url = "https://api.openbitfun.com/v1".to_string();
+        client.config.request_url = "https://api.openbitfun.com/v1/chat/completions".to_string();
+        client.config.model = "deepseek-v4-pro".to_string();
+        let client = client.with_reasoning_preset(&relayed_reasoning_preset(
+            "off",
+            "deepseek",
+            "deepseek-v4-pro",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
+
+        let request_body = openai::chat::build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn openai_request_rejects_unknown_deepseek_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            request_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            format: "openai".to_string(),
+            context_window: 128_000,
+            max_tokens: Some(4096),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "invalid",
+            vec![ReasoningPresetAction::Effort {
+                value: "ultra".to_string(),
+            }],
+        ));
+
+        let error = openai::chat::try_build_request_body(
+            &client,
+            &client.config.request_url,
+            vec![json!({ "role": "user", "content": "hello" })],
+            None,
+            None,
+        )
+        .expect_err("unknown DeepSeek effort must be rejected");
+
+        assert!(error.to_string().contains("unsupported"));
+    }
+
+    #[test]
     fn build_openai_request_body_uses_enable_thinking_for_siliconflow() {
         let client = AIClient::new(AIConfig {
             name: "siliconflow".to_string(),
@@ -1436,6 +1710,208 @@ mod tests {
         assert_eq!(request_body["thinking"]["type"], "enabled");
         assert!(request_body["thinking"].get("budget_tokens").is_none());
         assert_eq!(request_body["output_config"]["effort"], "max");
+    }
+
+    #[test]
+    fn build_openbitfun_anthropic_request_body_adds_glm_52_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "openbitfun".to_string(),
+            base_url: "https://api.openbitfun.com".to_string(),
+            request_url: "https://api.openbitfun.com/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&relayed_reasoning_preset(
+            "max",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Effort {
+                value: "max".to_string(),
+            }],
+        ));
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["output_config"]["effort"], "max");
+        assert_eq!(request_body["thinking"]["type"], "adaptive");
+    }
+
+    #[test]
+    fn build_openbitfun_anthropic_request_body_disables_glm_52_reasoning() {
+        let client = AIClient::new(AIConfig {
+            name: "openbitfun".to_string(),
+            base_url: "https://api.openbitfun.com".to_string(),
+            request_url: "https://api.openbitfun.com/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&relayed_reasoning_preset(
+            "off",
+            "zhipuai",
+            "glm-5.2",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn build_zhipu_anthropic_request_body_disables_glm_52_reasoning() {
+        let client = AIClient::new(AIConfig {
+            name: "zhipu".to_string(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".to_string(),
+            request_url: "https://open.bigmodel.cn/api/anthropic/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "off",
+            vec![ReasoningPresetAction::Toggle { enabled: false }],
+        ));
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "disabled");
+        assert!(request_body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn build_zhipu_anthropic_request_body_adds_glm_52_reasoning_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "zhipu".to_string(),
+            base_url: "https://open.bigmodel.cn/api/anthropic".to_string(),
+            request_url: "https://open.bigmodel.cn/api/anthropic/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "glm-5.2".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&reasoning_preset(
+            "high",
+            vec![ReasoningPresetAction::Effort {
+                value: "medium".to_string(),
+            }],
+        ));
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "adaptive");
+        assert_eq!(request_body["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn build_openbitfun_anthropic_request_body_preserves_deepseek_flash_low_effort() {
+        let client = AIClient::new(AIConfig {
+            name: "openbitfun".to_string(),
+            base_url: "https://api.openbitfun.com".to_string(),
+            request_url: "https://api.openbitfun.com/v1/messages".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            format: "anthropic".to_string(),
+            context_window: 1_000_000,
+            max_tokens: Some(8192),
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+        .with_reasoning_preset(&relayed_reasoning_preset(
+            "low",
+            "deepseek",
+            "deepseek-v4-flash",
+            vec![ReasoningPresetAction::Effort {
+                value: "low".to_string(),
+            }],
+        ));
+
+        let request_body = anthropic::request::build_request_body(
+            &client,
+            &client.config.request_url,
+            None,
+            vec![json!({ "role": "user", "content": [{ "type": "text", "text": "hello" }] })],
+            None,
+            None,
+        );
+
+        assert_eq!(request_body["thinking"]["type"], "enabled");
+        assert_eq!(request_body["output_config"]["effort"], "low");
     }
 
     #[test]

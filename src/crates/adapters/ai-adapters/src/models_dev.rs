@@ -9,7 +9,9 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::client::quirks::is_deepseek_reasoning_effort_model;
+use crate::client::quirks::{
+    is_deepseek_reasoning_effort_model, is_glm_52_reasoning_effort_model, is_zhipuai_url,
+};
 use crate::providers::anthropic::request::{
     anthropic_thinking_capability, AnthropicThinkingCapability,
 };
@@ -558,6 +560,26 @@ pub fn project_reasoning_catalog_with_limit_and_auto_binding(
                 }
             }
             has_unmapped_reasoning |= source_model.has_unknown_options;
+
+            // models.dev currently describes GLM-5.2's effective effort levels
+            // but omits the vendor-documented thinking toggle. Fill only this
+            // tested adapter gap for trusted auto bindings; explicit bindings
+            // to arbitrary gateways do not gain adapter-inferred capability.
+            if matches!(binding, ReasoningCatalogBinding::Auto)
+                && source_provider.eq_ignore_ascii_case("zhipuai")
+                && is_glm_52_reasoning_effort_model(&source_model.id)
+                && support.toggle
+            {
+                for descriptor in toggle_descriptors(
+                    ReasoningPresetSource::AdapterFallback,
+                    source_provider,
+                    &source_model.id,
+                ) {
+                    descriptors
+                        .entry(descriptor.id.clone())
+                        .or_insert(descriptor);
+                }
+            }
         }
     }
 
@@ -683,6 +705,7 @@ fn auto_provider_id(provider: &str, base_url: &str) -> Option<&'static str> {
         ("anthropic", "api.anthropic.com") => Some("anthropic"),
         ("gemini" | "google", "generativelanguage.googleapis.com") => Some("google"),
         ("deepseek" | "openai" | "anthropic", "api.deepseek.com") => Some("deepseek"),
+        ("openai" | "anthropic", "open.bigmodel.cn" | "api.z.ai") => Some("zhipuai"),
         _ => None,
     }
 }
@@ -703,6 +726,29 @@ fn adapter_reasoning_support(
             ..Default::default()
         };
     }
+    if execution_provider == "deepseek"
+        && is_deepseek_reasoning_effort_model(&execution_model)
+        && matches!(provider.as_str(), "openai" | "anthropic")
+    {
+        return AdapterReasoningSupport {
+            effort: true,
+            toggle: true,
+            ..Default::default()
+        };
+    }
+    if (execution_provider == "zhipuai"
+        && is_glm_52_reasoning_effort_model(&execution_model)
+        && matches!(provider.as_str(), "openai" | "anthropic"))
+        || (is_zhipuai_url(base_url)
+            && is_glm_52_reasoning_effort_model(&execution_model)
+            && matches!(provider.as_str(), "openai" | "anthropic"))
+    {
+        return AdapterReasoningSupport {
+            effort: true,
+            toggle: true,
+            ..Default::default()
+        };
+    }
     if matches!(provider.as_str(), "response" | "responses")
         || (provider == "openai" && is_responses_endpoint(base_url))
     {
@@ -713,11 +759,6 @@ fn adapter_reasoning_support(
         };
     }
     match provider.as_str() {
-        "anthropic" if execution_provider == "deepseek" => AdapterReasoningSupport {
-            effort: true,
-            toggle: true,
-            ..Default::default()
-        },
         "anthropic" => {
             let capability = anthropic_thinking_capability(&execution_model);
             AdapterReasoningSupport {
@@ -873,6 +914,25 @@ fn adapter_fallback_descriptors(
                 && support.toggle =>
         {
             let mut descriptors = toggle_descriptors(source, provider, model_id.as_str());
+            let efforts = if model_id == "deepseek-v4-flash" {
+                vec![Some("low".into()), Some("high".into()), Some("max".into())]
+            } else {
+                vec![Some("high".into()), Some("max".into())]
+            };
+            descriptors.extend(effort_descriptors(
+                &efforts,
+                false,
+                source,
+                provider,
+                model_id.as_str(),
+            ));
+            descriptors
+        }
+        "zhipuai" if is_glm_52_reasoning_effort_model(&model_id) && support.effort => {
+            let mut descriptors = Vec::new();
+            if support.toggle {
+                descriptors.extend(toggle_descriptors(source, provider, model_id.as_str()));
+            }
             descriptors.extend(effort_descriptors(
                 &[Some("high".into()), Some("max".into())],
                 false,
@@ -1062,7 +1122,8 @@ fn display_label(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        project_reasoning_catalog, project_reasoning_catalog_with_limit, ModelsDevCatalog,
+        project_reasoning_catalog, project_reasoning_catalog_with_limit,
+        project_reasoning_catalog_with_limit_and_auto_binding, ModelsDevCatalog,
     };
     use bitfun_core_types::{
         ReasoningCapabilityStatus, ReasoningCatalogBinding, ReasoningConfig, ReasoningPreset,
@@ -1082,7 +1143,13 @@ mod tests {
                 }},
                 "deepseek": {"models": {
                     "deepseek-v4-flash": {"id":"deepseek-v4-flash","reasoning":true,
+                        "reasoning_options":[{"type":"toggle"},{"type":"effort","values":["low","high","max"]}]},
+                    "deepseek-v4-pro": {"id":"deepseek-v4-pro","reasoning":true,
                         "reasoning_options":[{"type":"toggle"},{"type":"effort","values":["high","max"]}]}
+                }},
+                "zhipuai": {"models": {
+                    "glm-5.2": {"id":"glm-5.2","reasoning":true,
+                        "reasoning_options":{"type":"effort","values":["high","max"]}}
                 }},
                 "google": {"models": {
                     "gemini-test": {"id":"gemini-test","reasoning":true,
@@ -1296,7 +1363,113 @@ mod tests {
 
         assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
         assert!(projection.presets.iter().any(|preset| preset.id == "off"));
+        assert!(projection.presets.iter().any(|preset| preset.id == "low"));
         assert!(projection.presets.iter().any(|preset| preset.id == "max"));
+    }
+
+    #[test]
+    fn deepseek_flash_adapter_fallback_preserves_low_effort() {
+        let projection = project_reasoning_catalog(
+            "openai",
+            "deepseek-v4-flash",
+            "https://api.deepseek.com/v1",
+            None,
+            None,
+        );
+
+        assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
+        assert_eq!(
+            projection
+                .presets
+                .iter()
+                .map(|preset| preset.id.as_str())
+                .collect::<Vec<_>>(),
+            ["off", "on", "low", "high", "max"]
+        );
+        assert!(projection
+            .presets
+            .iter()
+            .all(|preset| preset.source == ReasoningPresetSource::AdapterFallback));
+    }
+
+    #[test]
+    fn zhipu_glm_52_adapter_fallback_is_limited_to_official_endpoints() {
+        for (provider, base_url) in [
+            ("openai", "https://open.bigmodel.cn/api/paas/v4"),
+            ("anthropic", "https://api.z.ai/api/anthropic"),
+        ] {
+            let projection = project_reasoning_catalog(provider, "glm-5.2", base_url, None, None);
+            assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
+            assert_eq!(
+                projection
+                    .presets
+                    .iter()
+                    .map(|preset| preset.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["off", "on", "high", "max"]
+            );
+            assert!(projection
+                .presets
+                .iter()
+                .all(|preset| preset.source == ReasoningPresetSource::AdapterFallback));
+        }
+
+        let untrusted = project_reasoning_catalog(
+            "openai",
+            "glm-5.2",
+            "https://gateway.example.com/v1",
+            None,
+            None,
+        );
+        assert_eq!(untrusted.status, ReasoningCapabilityStatus::Unknown);
+        assert!(untrusted.presets.is_empty());
+    }
+
+    #[test]
+    fn trusted_relay_bindings_project_upstream_reasoning_options() {
+        for (model, source_provider, expected) in [
+            ("glm-5.2", "zhipuai", vec!["off", "on", "high", "max"]),
+            (
+                "deepseek-v4-flash",
+                "deepseek",
+                vec!["off", "on", "low", "high", "max"],
+            ),
+            (
+                "deepseek-v4-pro",
+                "deepseek",
+                vec!["off", "on", "high", "max"],
+            ),
+        ] {
+            let projection = project_reasoning_catalog_with_limit_and_auto_binding(
+                "anthropic",
+                model,
+                "https://api.openbitfun.com",
+                32_000,
+                None,
+                Some(&catalog()),
+                Some((source_provider, model)),
+            );
+
+            assert_eq!(projection.status, ReasoningCapabilityStatus::Known);
+            assert_eq!(
+                projection
+                    .presets
+                    .iter()
+                    .map(|preset| preset.id.as_str())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert!(projection.presets.iter().all(|preset| {
+                preset.execution_provider.as_deref() == Some(source_provider)
+                    && preset.execution_model.as_deref() == Some(model)
+            }));
+            assert!(projection.presets.iter().all(|preset| {
+                preset.source == ReasoningPresetSource::ModelsDev
+                    || (model == "glm-5.2"
+                        && matches!(preset.id.as_str(), "off" | "on")
+                        && preset.source == ReasoningPresetSource::AdapterFallback)
+            }));
+        }
     }
 
     #[test]

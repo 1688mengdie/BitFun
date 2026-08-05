@@ -1,11 +1,14 @@
 use crate::client::quirks::{
     apply_openai_compatible_toggle, is_deepseek_reasoning_effort_model, is_deepseek_url,
-    normalize_deepseek_reasoning_effort,
+    is_glm_52_reasoning_effort_model, is_zhipuai_url, normalize_deepseek_reasoning_effort,
+    normalize_glm_52_reasoning_effort,
 };
 use crate::client::utils::{dedupe_remote_models, normalize_base_url_for_discovery};
 use crate::client::AIClient;
 use crate::providers::shared;
-use crate::types::{ReasoningPresetAction, RemoteModelInfo, ToolDefinition};
+use crate::types::{
+    ReasoningPresetAction, ReasoningPresetDescriptor, RemoteModelInfo, ToolDefinition,
+};
 use anyhow::{anyhow, Result};
 use log::warn;
 use reqwest::RequestBuilder;
@@ -37,27 +40,70 @@ pub(crate) fn apply_headers(client: &AIClient, builder: RequestBuilder) -> Reque
 }
 
 pub(crate) fn compile_chat_reasoning_action(
+    preset: &ReasoningPresetDescriptor,
     action: &ReasoningPresetAction,
     request_body: &mut serde_json::Value,
     url: &str,
-    model: &str,
+    configured_model: &str,
 ) -> Result<bool> {
+    let execution_provider = preset.execution_provider.as_deref().unwrap_or("openai");
+    let execution_model = preset
+        .execution_model
+        .as_deref()
+        .unwrap_or(configured_model)
+        .trim()
+        .to_ascii_lowercase();
+    let is_deepseek_reasoning_target = execution_provider.eq_ignore_ascii_case("deepseek")
+        || is_deepseek_url(url)
+        || is_deepseek_reasoning_effort_model(&execution_model);
+    let is_glm_52_reasoning_target = is_glm_52_reasoning_effort_model(&execution_model)
+        && (execution_provider.eq_ignore_ascii_case("zhipuai") || is_zhipuai_url(url));
+
     match action {
-        ReasoningPresetAction::Toggle { enabled } => {
-            Ok(apply_openai_compatible_toggle(request_body, *enabled, url))
+        ReasoningPresetAction::Toggle { enabled } if is_deepseek_reasoning_target => {
+            request_body["thinking"] = serde_json::json!({
+                "type": if *enabled { "enabled" } else { "disabled" }
+            });
+            if !enabled {
+                request_body
+                    .as_object_mut()
+                    .map(|body| body.remove("reasoning_effort"));
+            }
+            Ok(true)
         }
-        ReasoningPresetAction::Effort { value }
-            if is_deepseek_url(url) || is_deepseek_reasoning_effort_model(model) =>
-        {
-            let normalized = normalize_deepseek_reasoning_effort(value).ok_or_else(|| {
-                anyhow!(
-                    "DeepSeek reasoning effort '{}' has no enabled mapping",
-                    value
-                )
-            })?;
+        ReasoningPresetAction::Effort { value } if is_deepseek_reasoning_target => {
+            let normalized = normalize_deepseek_reasoning_effort(&execution_model, value)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "DeepSeek reasoning effort '{}' is unsupported for model '{}'",
+                        value,
+                        execution_model
+                    )
+                })?;
             request_body["thinking"] = serde_json::json!({ "type": "enabled" });
             request_body["reasoning_effort"] = serde_json::json!(normalized);
             Ok(true)
+        }
+        ReasoningPresetAction::Toggle { enabled } if is_glm_52_reasoning_target => {
+            request_body["thinking"] = serde_json::json!({
+                "type": if *enabled { "enabled" } else { "disabled" }
+            });
+            if !enabled {
+                request_body
+                    .as_object_mut()
+                    .map(|body| body.remove("reasoning_effort"));
+            }
+            Ok(true)
+        }
+        ReasoningPresetAction::Effort { value } if is_glm_52_reasoning_target => {
+            let normalized = normalize_glm_52_reasoning_effort(value)
+                .ok_or_else(|| anyhow!("GLM-5.2 reasoning effort '{}' is unsupported", value))?;
+            request_body["thinking"] = serde_json::json!({ "type": "enabled" });
+            request_body["reasoning_effort"] = serde_json::json!(normalized);
+            Ok(true)
+        }
+        ReasoningPresetAction::Toggle { enabled } => {
+            Ok(apply_openai_compatible_toggle(request_body, *enabled, url))
         }
         ReasoningPresetAction::Effort { .. } | ReasoningPresetAction::BudgetTokens { .. } => {
             Ok(false)

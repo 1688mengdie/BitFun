@@ -53,7 +53,13 @@ pub(crate) fn try_build_request_body(
             protected_keys,
             &[],
             |action, body| {
-                common::compile_chat_reasoning_action(action, body, url, &client.config.model)
+                common::compile_chat_reasoning_action(
+                    preset,
+                    action,
+                    body,
+                    url,
+                    &client.config.model,
+                )
             },
         )?;
     }
@@ -86,7 +92,13 @@ pub(crate) fn try_build_request_body(
             protected_keys,
             &[],
             |action, body| {
-                common::compile_chat_reasoning_action(action, body, url, &client.config.model)
+                common::compile_chat_reasoning_action(
+                    preset,
+                    action,
+                    body,
+                    url,
+                    &client.config.model,
+                )
             },
         )?;
     }

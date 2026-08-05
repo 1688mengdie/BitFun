@@ -10,6 +10,16 @@ pub(crate) fn is_deepseek_url(url: &str) -> bool {
     url.contains("api.deepseek.com")
 }
 
+pub(crate) fn is_zhipuai_url(url: &str) -> bool {
+    reqwest::Url::parse(url.trim()).ok().is_some_and(|url| {
+        url.scheme() == "https"
+            && url.port_or_known_default() == Some(443)
+            && url.host_str().is_some_and(|host| {
+                matches!(host.trim_end_matches('.'), "open.bigmodel.cn" | "api.z.ai")
+            })
+    })
+}
+
 pub(crate) fn is_deepseek_reasoning_effort_model(model_name: &str) -> bool {
     matches!(
         model_name.trim().to_ascii_lowercase().as_str(),
@@ -17,15 +27,36 @@ pub(crate) fn is_deepseek_reasoning_effort_model(model_name: &str) -> bool {
     )
 }
 
-pub(crate) fn normalize_deepseek_reasoning_effort(effort: &str) -> Option<&'static str> {
+pub(crate) fn is_glm_52_reasoning_effort_model(model_name: &str) -> bool {
+    matches!(
+        model_name.trim().to_ascii_lowercase().as_str(),
+        "glm-5.2" | "glm-5-2" | "glm-5p2"
+    )
+}
+
+pub(crate) fn normalize_deepseek_reasoning_effort(
+    model_name: &str,
+    effort: &str,
+) -> Option<&'static str> {
+    let is_flash = model_name.trim().eq_ignore_ascii_case("deepseek-v4-flash");
     match effort.trim().to_ascii_lowercase().as_str() {
         "" => None,
+        "low" if is_flash => Some("low"),
         "high" => Some("high"),
         "max" => Some("max"),
         "low" | "medium" => Some("high"),
         "xhigh" => Some("max"),
         "none" | "minimal" => None,
-        _ => Some("high"),
+        _ => None,
+    }
+}
+
+pub(crate) fn normalize_glm_52_reasoning_effort(effort: &str) -> Option<&'static str> {
+    match effort.trim().to_ascii_lowercase().as_str() {
+        "high" | "low" | "medium" => Some("high"),
+        "max" | "xhigh" => Some("max"),
+        "" | "none" | "minimal" => None,
+        _ => None,
     }
 }
 
