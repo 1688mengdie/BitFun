@@ -184,12 +184,21 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
       });
 
   return (
-    <div ref={rootRef} className="bitfun-reasoning-preset-selector">
+    <div
+      ref={rootRef}
+      className="bitfun-reasoning-preset-selector"
+      data-bf-component="reasoning-preset-selector"
+      data-bf-part="root"
+      data-bf-state={open ? 'open' : undefined}
+    >
       <Tooltip content={tooltip}>
         <button
           ref={triggerRef}
           type="button"
           className={`bitfun-reasoning-preset-selector__trigger${open ? ' bitfun-reasoning-preset-selector__trigger--open' : ''}`}
+          data-bf-component="reasoning-preset-selector"
+          data-bf-part="trigger"
+          data-bf-state={open ? 'open' : undefined}
           data-testid="chat-reasoning-preset-selector-btn"
           aria-haspopup="menu"
           aria-expanded={open}
@@ -213,7 +222,13 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
           }}
         >
           <Brain size={10} aria-hidden="true" />
-          <span className="bitfun-reasoning-preset-selector__label">{currentLabel}</span>
+          <span
+            className="bitfun-reasoning-preset-selector__label"
+            data-bf-component="reasoning-preset-selector"
+            data-bf-part="label"
+          >
+            {currentLabel}
+          </span>
           <ChevronDown size={10} aria-hidden="true" />
         </button>
       </Tooltip>
@@ -223,13 +238,19 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
           id={menuId}
           ref={menuRef}
           className="bitfun-reasoning-preset-selector__menu"
+          data-bf-component="reasoning-preset-selector"
+          data-bf-part="menu"
           style={menuStyle}
           role="menu"
           aria-label={t('reasoningSelector.title')}
           data-testid="chat-reasoning-preset-selector-menu"
           onKeyDown={handleMenuKeyDown}
         >
-          <div className="bitfun-reasoning-preset-selector__header">
+          <div
+            className="bitfun-reasoning-preset-selector__header"
+            data-bf-component="reasoning-preset-selector"
+            data-bf-part="header"
+          >
             {t('reasoningSelector.title')}
           </div>
           <button
@@ -237,6 +258,9 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
             role="menuitemradio"
             aria-checked={!selected}
             className="bitfun-reasoning-preset-selector__option"
+            data-bf-component="reasoning-preset-selector"
+            data-bf-part="option"
+            data-bf-state={!selected ? 'selected' : undefined}
             onClick={() => select(null)}
           >
             <span>
@@ -263,6 +287,9 @@ export const ReasoningPresetSelector: React.FC<ReasoningPresetSelectorProps> = (
                   aria-checked={isSelected}
                   data-preset-id={preset.id}
                   className="bitfun-reasoning-preset-selector__option"
+                  data-bf-component="reasoning-preset-selector"
+                  data-bf-part="option"
+                  data-bf-state={isSelected ? 'selected' : undefined}
                   onClick={() => select(preset.id)}
                 >
                   <span>
