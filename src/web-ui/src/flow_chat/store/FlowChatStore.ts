@@ -56,6 +56,7 @@ import {
 } from '../utils/sessionMetadata';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
 import type { SessionTitleDescriptor } from '../utils/sessionTitle';
+import { deriveContextUsageFromTurns } from '../utils/tokenUsageDisplay';
 import {
   deriveSessionTitleState,
   deriveSessionTitleStateFromMetadata,
@@ -104,6 +105,13 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function isAcpSessionForContextUsage(session: Session): boolean {
+  return Boolean(
+    session.mode?.startsWith('acp:')
+    || session.config.agentType?.startsWith('acp:'),
+  );
 }
 
 function persistedSessionRemoteScope(
@@ -6878,6 +6886,11 @@ export class FlowChatStore {
           restored.session.lastUserDialogAgentType || session.lastUserDialogMode,
         lastSubmittedMode:
           restored.session.lastSubmittedAgentType ?? session.lastSubmittedMode,
+        currentTokenUsage:
+          session.currentTokenUsage
+          ?? (!isAcpSessionForContextUsage(session)
+            ? deriveContextUsageFromTurns(mergedTurns)
+            : undefined),
       });
       applied = true;
 
@@ -7330,6 +7343,11 @@ export class FlowChatStore {
           lastUserDialogMode: restoredLastUserDialogMode,
           lastSubmittedMode:
             restoredSessionInfo?.lastSubmittedAgentType ?? session.lastSubmittedMode,
+          currentTokenUsage:
+            session.currentTokenUsage
+            ?? (!isAcpSessionForContextUsage(session)
+              ? deriveContextUsageFromTurns(dialogTurns)
+              : undefined),
         };
         
         const newSessions = new Map(prev.sessions);

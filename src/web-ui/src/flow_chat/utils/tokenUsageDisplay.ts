@@ -1,4 +1,4 @@
-import type { Session, TokenUsage } from '../types/flow-chat';
+import type { DialogTurn, Session, TokenUsage } from '../types/flow-chat';
 
 export const DEFAULT_MAX_CONTEXT_TOKENS = 128128;
 
@@ -33,6 +33,37 @@ export function formatCompactTokenCount(value: number): string {
 
 function formatCompactNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, '');
+}
+
+/**
+ * Derive the last completed turn's token usage as a context-usage approximation.
+ *
+ * Used to restore `session.currentTokenUsage` when a session is hydrated from
+ * persisted history (startup or opening a historical session): the exact value
+ * is only reported by the backend after the next model response.
+ */
+export function deriveContextUsageFromTurns(turns: DialogTurn[] | undefined): TokenUsage | undefined {
+  if (!turns) {
+    return undefined;
+  }
+
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const turn = turns[i];
+    const usage = turn.tokenUsage;
+    if (!usage) {
+      continue;
+    }
+    if (
+      turn.status === 'completed'
+      || turn.status === 'error'
+      || turn.status === 'cancelled'
+    ) {
+      if (typeof usage.inputTokens === 'number' && usage.inputTokens > 0) {
+        return usage;
+      }
+    }
+  }
+  return undefined;
 }
 
 export function getSessionContextUsageDisplay(session?: Session): ContextUsageDisplay {
