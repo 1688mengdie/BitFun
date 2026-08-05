@@ -51,9 +51,8 @@ LOCK_FILE="/root/repos/BitFun-AutoUpdate/sync.lock"
 WINDOWS_INSTALLER_FILENAME="bitfun-installer.exe"
 WEBSITE_DOWNLOADS_MANIFEST="downloads.json"
 # Keep enough releases that the mirror still serves a Desktop build a few
-# versions behind. One-click Relay deploy asks the mirror for the version baked
-# into the running Desktop binary, so retaining too few removes its descriptor
-# fallback when GitHub metadata is temporarily unreachable.
+# versions behind and SSH Dispatch can finish an already-confirmed install even
+# after a newer release becomes current.
 KEEP_VERSIONS=6
 CONNECT_TIMEOUT=30
 MAX_TIME=1800          # per-request ceiling (30 min; installer packages can be large)
@@ -273,9 +272,9 @@ seen = set()
 for platform in data.get("platforms", {}).values():
     for product in ("cli", "relay"):
         entry = platform.get(product, {})
-        # sigUrl too: without the signature the mirrored copy cannot be verified
-        # as anything stronger than "not corrupted in transit".
-        for key in ("url", "sha256Url", "sigUrl"):
+        # Signatures too: without them the mirrored copy cannot be verified as
+        # anything stronger than "not corrupted in transit".
+        for key in ("url", "sha256Url", "sha256SigUrl", "sigUrl"):
             url = entry.get(key)
             if not url:
                 continue
@@ -311,7 +310,7 @@ version_base = f"{base}/{data['version']}"
 for platform in data.get("platforms", {}).values():
     for product in ("cli", "relay"):
         entry = platform.get(product, {})
-        for key in ("url", "sha256Url", "sigUrl"):
+        for key in ("url", "sha256Url", "sha256SigUrl", "sigUrl"):
             if entry.get(key):
                 entry[key] = f"{version_base}/{entry[key].rsplit('/', 1)[-1]}"
 with open(dest, "w", encoding="utf-8") as f:
@@ -331,6 +330,60 @@ PY
     # one-click Relay deploy both fall back to this file, so a single flaky run
     # must not take it offline for the next 10 minutes.
     log "WARN: Linux binaries manifest unreachable this run; keeping the published mirror."
+  fi
+}
+
+# macOS SSH Dispatch uses the standalone CLI archives published by the CLI
+# workflow after the Desktop release exists. They are not represented by
+# linux-binaries.json, so mirror the deterministic names separately. Missing
+# files are normal while that second workflow is still publishing; a later cron
+# run completes the set atomically enough for clients (every install verifies
+# the signed checksum before using an archive).
+mirror_dispatch_macos_cli_archives() {
+  local target filename base_url suffix ready failed checksum_list
+  checksum_list=""
+  for target in x86_64-apple-darwin aarch64-apple-darwin; do
+    filename="bitfun-cli-${VERSION}-${target}.tar.gz"
+    base_url="${RELEASE_ASSET_BASE_URL}/${filename}"
+    ready=1
+    for suffix in "" .sha256 .sha256.sig .sig; do
+      if ! curl -fsSIL \
+        --connect-timeout "$CONNECT_TIMEOUT" \
+        --max-time "$MAX_TIME" \
+        "${base_url}${suffix}" >/dev/null; then
+        ready=0
+        break
+      fi
+    done
+    if [ "$ready" -ne 1 ]; then
+      log "  macOS Dispatch CLI set is not complete yet: $filename"
+      continue
+    fi
+
+    failed=0
+    for suffix in "" .sha256 .sha256.sig .sig; do
+      log "  Mirroring macOS Dispatch CLI asset: ${filename}${suffix}"
+      if ! download_asset \
+        "${base_url}${suffix}" \
+        "${VERSION_DIR}/${filename}${suffix}"; then
+        failed=1
+        break
+      fi
+    done
+    if [ "$failed" -ne 0 ]; then
+      rm -f \
+        "${VERSION_DIR}/${filename}" \
+        "${VERSION_DIR}/${filename}.sha256" \
+        "${VERSION_DIR}/${filename}.sha256.sig" \
+        "${VERSION_DIR}/${filename}.sig"
+      log "WARN: incomplete macOS Dispatch CLI set removed; retrying next sync."
+      continue
+    fi
+    checksum_list="${checksum_list}${filename}.sha256"$'\n'
+  done
+
+  if [ -n "$checksum_list" ]; then
+    printf '%s' "$checksum_list" | verify_mirrored_checksums || exit 1
   fi
 }
 
@@ -386,6 +439,12 @@ PY
 
   mv "$descriptor_tmp" "${VERSION_DIR}/relay-image.json"
   mv "$signature_tmp" "${VERSION_DIR}/relay-image.json.sig"
+  publish_file_atomically \
+    "${VERSION_DIR}/relay-image.json" \
+    "${WEBSITE_RELEASE_DIR}/relay-image.json"
+  publish_file_atomically \
+    "${VERSION_DIR}/relay-image.json.sig" \
+    "${WEBSITE_RELEASE_DIR}/relay-image.json.sig"
   log "Published signed Relay image descriptor for $VERSION"
 }
 
@@ -443,6 +502,7 @@ print(bases.pop())
   # 4. Mirror small trust metadata and Linux archives first.
   mirror_relay_image_descriptor
   mirror_linux_binaries
+  mirror_dispatch_macos_cli_archives
 
   # 5. Download all platform installer packages
   #    Extract "<url>\t<filename>" pairs, then curl each one.
