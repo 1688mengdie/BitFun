@@ -420,6 +420,13 @@ pub enum AgenticEvent {
     ReviewPropagationNeeded {
         parent_session_id: String,
     },
+    /// A persisted reasoning preset became unavailable for the session's
+    /// concrete model and was canonically cleared to Auto.
+    SessionReasoningPresetAutoCleared {
+        session_id: String,
+        previous_preset_id: String,
+        reason: String,
+    },
 }
 
 /// Diagnostic evidence collected for an attempt that was superseded by an
@@ -673,7 +680,8 @@ impl AgenticEvent {
             | Self::ToolEvent { session_id, .. }
             | Self::UserSteeringInjected { session_id, .. }
             | Self::DeepReviewQueueStateChanged { session_id, .. }
-            | Self::SessionModelAutoMigrated { session_id, .. } => Some(session_id),
+            | Self::SessionModelAutoMigrated { session_id, .. }
+            | Self::SessionReasoningPresetAutoCleared { session_id, .. } => Some(session_id),
             Self::SubagentTurnCompleted { session_id, .. } => Some(session_id),
             Self::ReviewPropagationNeeded { parent_session_id, .. } => Some(parent_session_id),
             Self::SystemError { session_id, .. } => session_id.as_deref(),
@@ -714,6 +722,7 @@ impl AgenticEvent {
             | Self::SessionHistoryChanged { .. }
             | Self::SessionTitleGenerated { .. }
             | Self::SessionModelAutoMigrated { .. }
+            | Self::SessionReasoningPresetAutoCleared { .. }
             | Self::SubagentSessionLinked { .. }
             | Self::DeepReviewQueueStateChanged { .. }
             | Self::ContextCompressionFailed { .. } => AgenticEventPriority::High,
@@ -1076,5 +1085,19 @@ mod tests {
         let status = SubagentCompletionStatus::PartialTimeout;
         let json = serde_json::to_string(&status).unwrap();
         assert_eq!(json, "\"partial_timeout\"");
+    }
+
+    fn reasoning_preset_auto_clear_is_a_high_priority_session_event() {
+        let event = AgenticEvent::SessionReasoningPresetAutoCleared {
+            session_id: "session-1".to_string(),
+            previous_preset_id: "high".to_string(),
+            reason: "reasoning_catalog_updated".to_string(),
+        };
+
+        assert_eq!(event.session_id(), Some("session-1"));
+        assert_eq!(event.default_priority(), AgenticEventPriority::High);
+        let serialized = serde_json::to_value(event).expect("serialize event");
+        assert_eq!(serialized["type"], "SessionReasoningPresetAutoCleared");
+        assert_eq!(serialized["previous_preset_id"], "high");
     }
 }

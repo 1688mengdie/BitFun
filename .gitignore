@@ -24,6 +24,7 @@ dist-ssr
 target/
 **/target/
 .target/
+/.targets/
 # The deployable Rust services use the workspace lockfile for reproducible
 # container builds.
 !Cargo.lock

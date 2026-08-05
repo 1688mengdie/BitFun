@@ -1256,6 +1256,26 @@ describe('FlowChatStore session model selection', () => {
     expect(flowChatStore.getState().sessions.get(session.sessionId)?.config.modelName).toBe('auto');
   });
 
+  it('sets and clears the session reasoning preset independently of the model', () => {
+    const session = createSession({
+      config: { agentType: 'agentic', modelName: 'model-a' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.updateSessionReasoningPreset(session.sessionId, '  high  ');
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.config).toMatchObject({
+      modelName: 'model-a',
+      reasoningPreset: 'high',
+    });
+
+    flowChatStore.updateSessionReasoningPreset(session.sessionId, null);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.config.reasoningPreset)
+      .toBeUndefined();
+  });
+
   it('applies an auto-migration notice that matches the stored model', () => {
     const session = createSession({
       config: { agentType: 'agentic', modelName: 'removed-model' },
@@ -1321,6 +1341,41 @@ describe('FlowChatStore session model selection', () => {
     expect(
       flowChatStore.applySessionModelAutoMigration('missing-session', 'removed-model', 'auto'),
     ).toBe(false);
+  });
+
+  it('clears an invalidated reasoning preset when the notice matches', () => {
+    const session = createSession({
+      config: { agentType: 'agentic', modelName: 'model-a', reasoningPreset: 'high' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    expect(
+      flowChatStore.applySessionReasoningPresetAutoClear(session.sessionId, 'high'),
+    ).toBe(true);
+    expect(
+      flowChatStore.getState().sessions.get(session.sessionId)?.config.reasoningPreset,
+    ).toBeUndefined();
+  });
+
+  it('ignores a stale reasoning preset clear after a newer selection', () => {
+    const session = createSession({
+      config: { agentType: 'agentic', modelName: 'model-a', reasoningPreset: 'high' },
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+    flowChatStore.updateSessionReasoningPreset(session.sessionId, 'low');
+
+    expect(
+      flowChatStore.applySessionReasoningPresetAutoClear(session.sessionId, 'high'),
+    ).toBe(false);
+    expect(
+      flowChatStore.getState().sessions.get(session.sessionId)?.config.reasoningPreset,
+    ).toBe('low');
   });
 });
 
@@ -2385,13 +2440,14 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(stateMachineManagerMock.reset).not.toHaveBeenCalled();
   });
 
-  it('merges restored session model selection into an existing subagent shell', async () => {
+  it('merges restored model and reasoning selections into an existing subagent shell', async () => {
     apiMocks.restoreSessionView.mockResolvedValueOnce({
       session: {
         sessionId: 'subagent-1',
         sessionName: 'Subagent 1',
         agentType: 'Explore',
         modelName: 'model-subagent',
+        reasoningPreset: 'high',
         state: 'Idle',
         turnCount: 0,
         createdAt: 1,
@@ -2423,6 +2479,49 @@ describe('FlowChatStore historical session hydration state', () => {
 
     expect(flowChatStore.getState().sessions.get('subagent-1')?.config.modelName)
       .toBe('model-subagent');
+    expect(flowChatStore.getState().sessions.get('subagent-1')?.config.reasoningPreset)
+      .toBe('high');
+  });
+
+  it('normalizes a restored null reasoning preset to Auto', async () => {
+    apiMocks.restoreSessionView.mockResolvedValueOnce({
+      session: {
+        sessionId: 'subagent-auto',
+        sessionName: 'Subagent Auto',
+        agentType: 'Explore',
+        modelName: 'model-subagent',
+        reasoningPreset: null,
+        state: 'Idle',
+        turnCount: 0,
+        createdAt: 1,
+      },
+      turns: [],
+      contextRestoreState: 'ready',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['subagent-auto', createSession({
+          sessionId: 'subagent-auto',
+          sessionKind: 'subagent',
+          mode: 'Explore',
+          config: { agentType: 'Explore', reasoningPreset: 'high' },
+          workspacePath: 'D:/workspace/BitFun',
+        })],
+      ]),
+      activeSessionId: 'parent-1',
+    }));
+
+    await flowChatStore.loadSessionHistory(
+      'subagent-auto',
+      'D:/workspace/BitFun',
+      undefined,
+      undefined,
+      undefined,
+      { includeInternal: true },
+    );
+
+    expect(flowChatStore.getState().sessions.get('subagent-auto')?.config.reasoningPreset)
+      .toBeUndefined();
   });
 
   it('starts backend restore before notifying hydrating state', async () => {

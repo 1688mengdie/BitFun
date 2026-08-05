@@ -393,6 +393,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
+        "dispatch_provision_target",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "dispatch_list_jobs",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
@@ -511,6 +515,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     (
         "get_agent_profile_configs",
         RemoteWorkspacePolicy::LegacyUnaudited,
+    ),
+    (
+        "get_ai_model_catalog",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
         "get_all_modified_files",

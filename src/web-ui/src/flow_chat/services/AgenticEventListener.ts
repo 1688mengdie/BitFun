@@ -16,6 +16,7 @@ import type {
   SubagentTurnCompletedEvent,
   SessionTitleGeneratedEvent,
   SessionModelAutoMigratedEvent,
+  SessionReasoningPresetAutoClearedEvent,
   ImageAnalysisEvent,
   ModelRoundStartedEvent,
   ModelRoundCompletedEvent,
@@ -59,6 +60,9 @@ export interface AgenticEventCallbacks {
   onOpenBuiltInBrowser?: (event: OpenBuiltInBrowserEvent) => void;
   onSessionTitleGenerated?: (event: SessionTitleGeneratedEvent) => void;
   onSessionModelAutoMigrated?: (event: SessionModelAutoMigratedEvent) => void;
+  onSessionReasoningPresetAutoCleared?: (
+    event: SessionReasoningPresetAutoClearedEvent
+  ) => void;
   onUserSteeringInjected?: (event: UserSteeringInjectedEvent) => void;
 }
 
@@ -292,6 +296,14 @@ export class AgenticEventListener {
         this.unlistenFunctions.push(unlisten);
       }
 
+      if (callbacks.onSessionReasoningPresetAutoCleared) {
+        const unlisten = agentAPI.onSessionReasoningPresetAutoCleared((event) => {
+          logger.debug('Session reasoning preset auto-cleared', event);
+          callbacks.onSessionReasoningPresetAutoCleared?.(event);
+        });
+        this.unlistenFunctions.push(unlisten);
+      }
+
       this.isListening = true;
       logger.info(`Registered ${this.unlistenFunctions.length} event listeners`);
     } catch (error) {
@@ -397,6 +409,11 @@ export class AgenticEventListener {
       case 'agentic://session-model-auto-migrated':
         callbacks.onSessionModelAutoMigrated?.(
           payload as unknown as SessionModelAutoMigratedEvent,
+        );
+        break;
+      case 'agentic://session-reasoning-preset-auto-cleared':
+        callbacks.onSessionReasoningPresetAutoCleared?.(
+          payload as unknown as SessionReasoningPresetAutoClearedEvent,
         );
         break;
       case 'agentic://user-steering-injected':

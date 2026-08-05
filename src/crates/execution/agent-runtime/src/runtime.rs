@@ -11,8 +11,8 @@ use bitfun_agent_tools::{ToolRegistry, ToolRegistryItem};
 use bitfun_harness::HarnessRegistry;
 use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentDialogSteerRequest, AgentDialogTurnPort,
-    AgentDialogTurnRequest, AgentInputAttachment, AgentLifecycleDeliveryPort,
-    AgentLocalCommandTurnPort, AgentLocalCommandTurnRecordRequest,
+    AgentDialogTurnRequest, AgentInputAttachment, AgentInteractionResponsePort,
+    AgentLifecycleDeliveryPort, AgentLocalCommandTurnPort, AgentLocalCommandTurnRecordRequest,
     AgentLocalCommandTurnRecordResult, AgentMessageWorkspaceReferencesRequest,
     AgentSessionArchiveRequest, AgentSessionArchiveStateRequest, AgentSessionClosePort,
     AgentSessionCompactionPort, AgentSessionCompactionRequest, AgentSessionCompactionResult,
@@ -22,21 +22,22 @@ use bitfun_runtime_ports::{
     AgentSessionLineageInspection, AgentSessionLineagePort, AgentSessionLineageRequest,
     AgentSessionLineageSnapshot, AgentSessionLineageTranscriptRequest, AgentSessionListRequest,
     AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
-    AgentSessionModelPort, AgentSessionModelUpdateRequest, AgentSessionRenameRequest,
-    AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
-    AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
+    AgentSessionModelPort, AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRenameRequest, AgentSessionRevertPort, AgentSessionRevertRequest,
+    AgentSessionRevertResult, AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
     AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
     AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
     AgentThreadGoalManagementPort, AgentThreadGoalUpdateStatusRequest,
     AgentTransientSessionDiscardRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
     AgentTurnCancellationResult, AgentTurnSettlementPort, AgentTurnSettlementRequest,
-    AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
-    AgentWorkspaceReference, AgentWorkspaceReferencePort, AgentWorkspaceReferenceSearchRequest,
-    AgentWorkspaceReferenceSearchResult, DialogSteerOutcome, DialogSubmitOutcome,
-    PermissionAuditRecord, PermissionGrant, PermissionGrantKey, PluginRuntimeBinding, PortError,
-    PortErrorKind, PortResult, RuntimeEventEnvelope, SessionTranscript, SessionTranscriptReader,
-    SessionTranscriptRequest, ThreadGoal, WorkspaceDiffSnapshot,
+    AgentUserAnswersRequest, AgentUserShellCommandPort, AgentUserShellCommandRequest,
+    AgentUserShellCommandResult, AgentWorkspaceReference, AgentWorkspaceReferencePort,
+    AgentWorkspaceReferenceSearchRequest, AgentWorkspaceReferenceSearchResult, DialogSteerOutcome,
+    DialogSubmitOutcome, PermissionAuditRecord, PermissionGrant, PermissionGrantKey,
+    PluginRuntimeBinding, PortError, PortErrorKind, PortResult, RuntimeEventEnvelope,
+    SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal,
+    WorkspaceDiffSnapshot,
 };
 use bitfun_runtime_services::RuntimeServices;
 use bitfun_services_core::session::tree::SessionTreeManager;
@@ -128,22 +129,6 @@ pub trait AgentSessionRestorePort: Send + Sync {
         &self,
         request: AgentSessionRestoreRequest,
     ) -> PortResult<AgentSessionRestoreResult>;
-}
-
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-/// Delivers answers to a pending user-question tool call.
-pub struct AgentUserAnswersRequest {
-    pub tool_id: String,
-    pub answers: serde_json::Value,
-}
-
-#[async_trait::async_trait]
-/// Routes product responses to the existing user-input owner.
-///
-/// Implementations do not own approval policy or interaction lifecycle state.
-pub trait AgentInteractionResponsePort: Send + Sync {
-    async fn submit_user_answers(&self, request: AgentUserAnswersRequest) -> PortResult<()>;
 }
 
 #[derive(Clone, Default)]
@@ -1207,6 +1192,22 @@ impl AgentRuntime {
             .map_err(RuntimeError::from)
     }
 
+    pub async fn update_session_model_selection(
+        &self,
+        request: AgentSessionModelSelectionUpdateRequest,
+    ) -> Result<(), RuntimeError> {
+        let session_model = self.session_model.as_ref().ok_or_else(|| {
+            RuntimeError::Port(PortError::new(
+                PortErrorKind::NotAvailable,
+                "agent session model port is not registered",
+            ))
+        })?;
+        session_model
+            .update_session_model_selection(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
     pub async fn update_session_mode(
         &self,
         request: AgentSessionModeUpdateRequest,
@@ -1839,6 +1840,7 @@ mod tests {
                 session_name: "Main".to_string(),
                 agent_type: "agentic".to_string(),
                 model_id: None,
+                reasoning_preset: None,
                 last_user_dialog_agent_type: None,
                 last_submitted_agent_type: None,
                 turn_count: 3,
@@ -2013,6 +2015,7 @@ mod tests {
                     session_name: "Main".to_string(),
                     agent_type: "agentic".to_string(),
                     model_id: Some("provider/model".to_string()),
+                    reasoning_preset: Some("high".to_string()),
                     last_user_dialog_agent_type: Some("plan".to_string()),
                     last_submitted_agent_type: Some("agentic".to_string()),
                     turn_count: 3,
@@ -3158,6 +3161,7 @@ mod tests {
                 session_name: "Main".to_string(),
                 agent_type: "agentic".to_string(),
                 model_id: Some("provider/model".to_string()),
+                reasoning_preset: Some("high".to_string()),
                 last_user_dialog_agent_type: Some("plan".to_string()),
                 last_submitted_agent_type: Some("agentic".to_string()),
                 turn_count: 3,
