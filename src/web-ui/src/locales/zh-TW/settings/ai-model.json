@@ -46,7 +46,7 @@
   },
   "subscriptionAuth": {
     "sectionTitle": "訂閱賬號",
-    "sectionDescription": "登入 Codex / Antigravity / OpenCode 訂閱後，可直接作為模型 API 使用",
+    "sectionDescription": "OpenCode 帳號只需登入一次，即可分別使用 Zen 或 Go API 方案；同時支援 Codex 與 Antigravity",
     "rescan": "重新整理狀態",
     "import": "匯入使用",
     "login": "登入",
@@ -71,8 +71,26 @@
       "apiKey": "API Key",
       "codex": "Codex（ChatGPT 訂閱）",
       "antigravity": "Antigravity（Google 訂閱）",
-      "opencode": "OpenCode Zen 訂閱"
+      "opencodeZen": "OpenCode 帳號 · Zen API",
+      "opencodeGo": "OpenCode 帳號 · Go API"
     },
+    "openCodePlans": {
+      "zen": {
+        "label": "OpenCode Zen",
+        "description": "使用此 OpenCode 帳號可用的 Zen 按量計費與免費模型"
+      },
+      "go": {
+        "label": "OpenCode Go",
+        "description": "使用此 OpenCode 帳號的 Go 訂閱額度請求模型"
+      }
+    },
+    "openCodeFormats": {
+      "chatCompletions": "Chat Completions",
+      "responses": "Responses",
+      "messages": "Messages"
+    },
+    "useFormat": "使用 {{format}}",
+    "useFormatWithCount": "使用 {{format}}（{{modelCount}} 個模型）",
     "detected": "將使用 {{label}}（賬號 {{account}}）",
     "notConnected": "尚未登入 {{kind}}，請先在上方完成登入",
     "unknownAccount": "目前登入賬號",

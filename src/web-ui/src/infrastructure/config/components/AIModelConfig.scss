@@ -2167,6 +2167,16 @@
     }
   }
 
+  &__opencode-plan {
+    margin-left: var(--bf-appearance-token-size-gap-4);
+    padding-left: var(--bf-appearance-token-size-gap-3);
+    border-left: 2px solid var(--bf-appearance-token-color-accent-200);
+  }
+
+  &__opencode-plan-actions {
+    flex-wrap: wrap;
+  }
+
   &__subscription-migration-notice {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -2274,6 +2284,10 @@
     &__cli-actions {
       justify-content: flex-start;
       flex-wrap: wrap;
+    }
+
+    &__opencode-plan {
+      margin-left: 0;
     }
 
     &__subscription-migration-notice {
