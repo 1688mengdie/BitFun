@@ -145,6 +145,7 @@ export struct ChatTimeline {
       item: toConversationUiMessage(item.message!),
       isStreaming: item.isStreaming,
       isFinalizing: item.isFinalizing,
+      showRetryAction: item.showRetryAction === true,
       isBusy: this.isBusy,
       downloadingFilePath: this.downloadingFilePath,
       downloadedFilePath: this.downloadedFilePath,

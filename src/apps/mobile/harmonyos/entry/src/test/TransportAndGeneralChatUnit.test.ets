@@ -534,6 +534,21 @@ export default function transportAndGeneralChatUnitTest() {
       expect(messages.length).assertEqual(1);
       expect(messages[0].status).assertEqual('sent');
     });
+
+    it('does not persist assistant retry detail after an interrupted turn', 0, async () => {
+      const localStore = new FakeGeneralChatLocalStore();
+      const repository = new GeneralChatRepository(new MockGeneralChatAdapter(), localStore);
+      const session = await repository.createSession('中断恢复');
+      const interrupted = chatMessage('assistant-failed-1', 'assistant', 'Partial reply', 'failed');
+      interrupted.detail = 'Retry prompt';
+
+      await repository.recordAssistantMessage(session.id, interrupted);
+
+      const messages = await repository.messages(session.id);
+      expect(messages[0].status).assertEqual('failed');
+      expect(messages[0].detail || '').assertEqual('');
+      expect((await localStore.loadMessages(session.id))[0].detail || '').assertEqual('');
+    });
   });
 
   describe('GeneralChatExportFormatter', () => {
