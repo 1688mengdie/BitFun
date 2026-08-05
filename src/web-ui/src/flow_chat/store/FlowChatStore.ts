@@ -3717,6 +3717,8 @@ export class FlowChatStore {
       btwOrigin?: Session['btwOrigin'];
       parentToolCallId?: string;
       subagentType?: string;
+      /** ACP agent type (`acp:<client_id>`) for placeholder sessions created from ACP flow session ids. */
+      agentType?: string;
       depth?: number;
       isTransient?: boolean;
       agentBackedTransient?: boolean;
@@ -3766,6 +3768,7 @@ config: {
           projectWorkspacePath: meta?.projectWorkspacePath,
           executionTarget: meta?.executionTarget,
           workspaceId: meta?.workspaceId,
+          agentType: meta?.agentType,
         } as any,
         createdAt: Date.now(),
         lastActiveAt: Date.now(),
@@ -3960,10 +3963,24 @@ config: {
         return prev;
       }
 
+      // UI-07: 单调 updatedAt 比较。goal 清除后迟到的 thread-goal-updated 若携带
+      // 更旧的 updatedAt，不得复活旧 goal。每次写入（含清除）都推进时钟。
+      const now = Date.now();
+      const lastSeenAt = session.threadGoalUpdatedAt ?? 0;
+      const incomingUpdatedAt = goal?.updatedAt ?? now;
+      if (goal && lastSeenAt > 0 && incomingUpdatedAt < lastSeenAt) {
+        return prev;
+      }
+      const nextThreadGoalUpdatedAt = Math.max(
+        lastSeenAt,
+        goal ? incomingUpdatedAt : now,
+      );
+
       const updatedSession = {
         ...session,
         threadGoal: goal ?? undefined,
         goalModeActive: active,
+        threadGoalUpdatedAt: nextThreadGoalUpdatedAt,
         lastActiveAt: Date.now(),
       };
 
@@ -5349,11 +5366,18 @@ config: {
   }
 
   public addModelRound(sessionId: string, dialogTurnId: string, modelRound: ModelRound): void {
-    this.updateDialogTurn(sessionId, dialogTurnId, turn => ({
-      ...turn,
-      modelRounds: [...turn.modelRounds, synchronizeRoundAttempts(modelRound)],
-      status: 'processing'
-    }));
+    this.updateDialogTurn(sessionId, dialogTurnId, turn => {
+      // UI-03: 迟到的 model-round-started 与 B1 惰性建 round 可能命中同一 roundId，
+      // 按 roundId 去重，避免重复 round。
+      if (turn.modelRounds.some(round => round.id === modelRound.id)) {
+        return turn;
+      }
+      return {
+        ...turn,
+        modelRounds: [...turn.modelRounds, synchronizeRoundAttempts(modelRound)],
+        status: 'processing'
+      };
+    });
   }
 
   public updateModelRound(sessionId: string, dialogTurnId: string, modelRoundId: string, updater: (round: ModelRound) => ModelRound): void {

@@ -26,6 +26,7 @@ import { resolveThreadGoalUserMessageDisplay } from '../../utils/threadGoalDispl
 import { cleanRemoteUserInput } from '../../utils/userInputText';
 import { effectiveToolInvocation, getEffectiveToolName } from '../../utils/toolInvocationIdentity';
 import { absoluteSessionTurnIndexForId } from '../../utils/flowChatTurnOrdinal';
+import { isAcpFlowSession } from '../../utils/acpSession';
 import type {
   DeepReviewQueueStateChangedEvent,
   ImageAnalysisEvent,
@@ -75,6 +76,7 @@ import {
   processToolProgressInternal,
   handleToolExecutionProgress,
   handleToolTerminalReady,
+  cleanupPendingTerminalSessionIdsForTurn,
 } from './ToolEventModule';
 import { handleAcpPermissionRequestForToolCard } from './AcpPermissionToolCardModule';
 import {
@@ -244,6 +246,77 @@ function recoverIdleLatestTurnDataEvent(
     sessionId,
     turnId,
     eventName,
+  });
+  return true;
+}
+
+/**
+ * UI-04: ACP 直连投递会话在非流式状态（IDLE/ERROR）下收到更晚 turn 的数据事件时，
+ * 对齐 recoverIdleLatestTurnDataEvent 语义：更新 currentDialogTurnId 并（IDLE 时）
+ * START，使后续流式事件不再因 state_not_accepting_data / turn_id_mismatch 被丢弃。
+ * 放宽点：recoverIdleLatestTurnDataEvent 要求 currentDialogTurnId 为空且 turn 为
+ * 会话最后一个 turn；ACP 会话允许 currentDialogTurnId 已有值但目标 turn 更新。
+ */
+function recoverAcpIdleTurnForDataEvent(
+  sessionId: string,
+  turnId: string,
+  currentState: SessionExecutionState,
+  currentDialogTurnId: string | null,
+): boolean {
+  if (isStreamingExecutionState(currentState)) {
+    return false;
+  }
+
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  if (!session || !isAcpFlowSession(session)) {
+    return false;
+  }
+
+  const turnIndex = session.dialogTurns.findIndex((turn: DialogTurn) => turn.id === turnId);
+  if (turnIndex < 0) {
+    return false;
+  }
+  if (currentDialogTurnId) {
+    const currentIndex = session.dialogTurns.findIndex(
+      (turn: DialogTurn) => turn.id === currentDialogTurnId,
+    );
+    if (currentIndex < 0 || turnIndex <= currentIndex) {
+      return false;
+    }
+  }
+
+  const machine = stateMachineManager.get(sessionId);
+  const machineContext = machine?.getContext();
+  if (machineContext) {
+    machineContext.currentDialogTurnId = turnId;
+  }
+  if (machine?.getCurrentState() === SessionExecutionState.IDLE) {
+    void stateMachineManager
+      .transition(sessionId, SessionExecutionEvent.START, {
+        taskId: sessionId,
+        dialogTurnId: turnId,
+      })
+      .catch(error => {
+        log.error('State machine transition failed while recovering ACP idle data event', {
+          sessionId,
+          turnId,
+          error,
+        });
+      });
+  }
+
+  log.info('ACP idle turn recovered', {
+    sessionId,
+    turnId,
+    prevState: currentState,
+  });
+
+  log.debug('Recovered ACP data event after non-streaming state', {
+    sessionId,
+    turnId,
+    eventName: 'data',
+    currentState,
   });
   return true;
 }
@@ -775,6 +848,83 @@ function updateSubagentParentTaskModel(
 }
 
 /**
+ * UI-04: ACP 流会话 id 形状判定（对齐 session_message_tool.rs 的
+ * acp_flow_client_id_from_session_id + looks_like_uuid）：
+ * `acp_<client_id>_<uuid>`，尾部段为 8-4-4-4-12 的 UUID 形状，client_id 非空。
+ * 命中时返回 `acp:<client_id>`，否则返回 null。占位会话据此带 agentType，
+ * 使 isAcpFlowSession / ensureDialogTurnForAcpDataEvent 对 ACP 委派回复生效。
+ */
+const ACP_FLOW_SESSION_ID_UUID_RE =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+function acpAgentTypeFromFlowSessionId(sessionId: string): string | null {
+  if (!sessionId.startsWith('acp_')) {
+    return null;
+  }
+  const rest = sessionId.slice('acp_'.length);
+  const lastSeparatorIndex = rest.lastIndexOf('_');
+  if (lastSeparatorIndex <= 0) {
+    return null;
+  }
+  const clientId = rest.slice(0, lastSeparatorIndex);
+  const uuidSegment = rest.slice(lastSeparatorIndex + 1);
+  if (!clientId || !ACP_FLOW_SESSION_ID_UUID_RE.test(uuidSegment)) {
+    return null;
+  }
+  return `acp:${clientId}`;
+}
+
+/**
+ * UI-04: ACP 直连投递会话可能完全没有 dialog-turn-started / 状态机。
+ * text-chunk / tool-event 到达时惰性建 turn 并补齐状态机，避免数据事件被丢弃。
+ */
+function ensureDialogTurnForAcpDataEvent(sessionId: string, turnId: string): boolean {
+  if (!sessionId || !turnId) {
+    return false;
+  }
+
+  const store = FlowChatStore.getInstance();
+  const session = store.getState().sessions.get(sessionId);
+  if (!session || !isAcpFlowSession(session)) {
+    return false;
+  }
+
+  const existing = session.dialogTurns.find(turn => turn.id === turnId);
+  if (!existing) {
+    const lazyTurn: DialogTurn = {
+      id: turnId,
+      sessionId,
+      kind: 'user_dialog',
+      userMessage: {
+        id: `user_acp_lazy_${Date.now()}`,
+        content: '',
+        timestamp: Date.now(),
+      },
+      modelRounds: [],
+      status: 'pending',
+      startTime: Date.now(),
+    };
+    store.addDialogTurn(sessionId, lazyTurn);
+  }
+
+  const machine = stateMachineManager.getOrCreate(sessionId);
+  const ctx = machine.getContext();
+  if (ctx.currentDialogTurnId !== turnId) {
+    ctx.currentDialogTurnId = turnId;
+  }
+  if (machine.getCurrentState() === SessionExecutionState.IDLE) {
+    void stateMachineManager.transition(sessionId, SessionExecutionEvent.START, {
+      taskId: sessionId,
+      dialogTurnId: turnId,
+    }).catch(error => {
+      log.error('State machine transition failed on lazy ACP turn start', { sessionId, error });
+    });
+  }
+
+  return true;
+}
+
+/**
  * Event filtering mechanism: determines if an event should be processed
  */
 export function shouldProcessEvent(
@@ -790,6 +940,15 @@ export function shouldProcessEvent(
   const machine = stateMachineManager.get(sessionId);
   if (!machine) {
     if (eventType === 'data') {
+      // UI-04: ACP 直连投递会话在状态机缺失时，text-chunk / tool-event 到达先惰性建
+      // turn（含状态机），放行处理；其余场景维持丢弃并记录。
+      if (
+        (eventName === 'TextChunk' || eventName === 'ToolEvent') &&
+        turnId &&
+        ensureDialogTurnForAcpDataEvent(sessionId, turnId)
+      ) {
+        return true;
+      }
       logDroppedDataEvent(eventName, sessionId, turnId, { reason: 'missing_state_machine' });
     }
     return false;
@@ -813,6 +972,16 @@ export function shouldProcessEvent(
       currentState,
       context.currentDialogTurnId,
     )) {
+      return true;
+    }
+
+    // UI-04: ACP 直连投递会话在非流式状态（IDLE/ERROR）收到更晚 turn 的数据事件时，
+    // 对齐 recoverIdleLatestTurnDataEvent 语义恢复（更新 currentDialogTurnId + START），
+    // 使 ACP 委派回复在状态机就绪但 turn 已推进的场景不被丢弃。
+    if (
+      turnId &&
+      recoverAcpIdleTurnForDataEvent(sessionId, turnId, currentState, context.currentDialogTurnId)
+    ) {
       return true;
     }
 
@@ -1755,7 +1924,8 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
     const miniAppId = typeof userMessageMetadata?.appId === 'string'
       ? userMessageMetadata.appId
       : undefined;
-    log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size, isMiniAppAgentRun });
+    const acpAgentType = acpAgentTypeFromFlowSessionId(sessionId);
+    log.warn('DialogTurnStarted: session not in store, creating placeholder', { sessionId, sessionsCount: state.sessions.size, isMiniAppAgentRun, acpAgentType });
     store.addExternalSession(
       sessionId,
       isMiniAppAgentRun ? (miniAppId ? `MiniApp: ${miniAppId}` : 'MiniApp Agent') : 'Remote Session',
@@ -1763,7 +1933,9 @@ function handleDialogTurnStarted(context: FlowChatContext, event: any): void {
       resolveExternalSessionWorkspacePath(context, event),
       isMiniAppAgentRun
         ? { sessionKind: 'miniapp', isTransient: true, agentBackedTransient: true }
-        : undefined,
+        : acpAgentType
+          ? { agentType: acpAgentType }
+          : undefined,
       extractEventRemoteConnectionId(event),
       extractEventRemoteSshHost(event)
     );
@@ -1928,11 +2100,21 @@ function handleTextChunk(context: FlowChatContext, event: any): void {
     return;
   }
 
-  const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
+  let dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
   if (!dialogTurn) {
-    requestPeerSessionRefresh(sessionId);
-    log.debug('Dialog turn not found', { turnId });
-    return;
+    // UI-04: ACP 直连投递会话可能只有 text-chunk 而无 dialog-turn-started，
+    // 惰性建 turn（含状态机）后继续展示；其余会话维持原丢弃路径。
+    if (turnId && ensureDialogTurnForAcpDataEvent(sessionId, turnId)) {
+      dialogTurn = FlowChatStore.getInstance()
+        .getState()
+        .sessions.get(sessionId)
+        ?.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
+    }
+    if (!dialogTurn) {
+      requestPeerSessionRefresh(sessionId);
+      log.debug('Dialog turn not found', { turnId });
+      return;
+    }
   }
 
   clearRuntimeStatus(context, sessionId, turnId, { roundId });
@@ -2466,6 +2648,22 @@ function handleCompressionFailed(context: FlowChatContext, event: any): void {
 /**
  * Handle dialog turn completed event
  */
+// UI-05: 模型原生正常终止码（'eos' / 'tool_calls'）在后端可能被误报为
+// success=false。结合 hasFinalResponse 判断：只要该 turn 确实产出了最终回复，
+// 就按正常收尾处理，而不是失败。口径与 turnCompletionNotice.NORMAL_FINISH_REASONS 对齐。
+const MODEL_NATIVE_NORMAL_FINISH_REASONS = new Set(['eos', 'tool_calls']);
+
+function isModelNativeNormalTermination(
+  finishReason?: string,
+  hasFinalResponse?: boolean,
+): boolean {
+  if (typeof finishReason !== 'string') {
+    return false;
+  }
+  const reason = finishReason.trim();
+  return MODEL_NATIVE_NORMAL_FINISH_REASONS.has(reason) && hasFinalResponse === true;
+}
+
 function buildUnsuccessfulCompletionError(finishReason?: string): string {
   if (finishReason === 'empty_round') {
     return 'Model returned an empty response after retrying. finish_reason=empty_round';
@@ -2532,7 +2730,9 @@ export function handleDialogTurnComplete(
     return;
   }
 
-  if (success === false) {
+  // UI-05: finishReason 归一化残余——'eos' / 'tool_calls' 等模型原生正常终止码
+  // 若已产出最终回复（hasFinalResponse=true），不应被当作失败。
+  if (success === false && !isModelNativeNormalTermination(finishReason, hasFinalResponse)) {
     handleDialogTurnFailed(context, {
       ...event,
       sessionId,
@@ -2551,6 +2751,9 @@ export function handleDialogTurnComplete(
     return;
   }
   context.handledTerminalTurnEvents.add(terminalKey);
+
+  // UI-11: 终态清理该 turn 滞留的 pending terminal session 缓存。
+  cleanupPendingTerminalSessionIdsForTurn(sessionId, turnId);
 
   const machine = stateMachineManager.get(sessionId);
   if (machine) {
@@ -2617,6 +2820,9 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
       return;
     }
     context.handledTerminalTurnEvents.add(terminalKey);
+
+    // UI-11: 终态清理该 turn 滞留的 pending terminal session 缓存。
+    cleanupPendingTerminalSessionIdsForTurn(sessionId, turnId);
   }
 
   log.error('Dialog turn failed', { sessionId, turnId, error, errorDetail });
@@ -2717,6 +2923,9 @@ function handleDialogTurnCancelled(
       return;
     }
     context.handledTerminalTurnEvents.add(terminalKey);
+
+    // UI-11: 终态清理该 turn 滞留的 pending terminal session 缓存。
+    cleanupPendingTerminalSessionIdsForTurn(sessionId, turnId);
   }
 
   log.info('Dialog turn cancelled', { sessionId, turnId });

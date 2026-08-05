@@ -4975,14 +4975,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       
       e.preventDefault();
 
-      const isBtwCommand = isSlashCommand(inputState.value.trim(), '/btw');
+      const promptSlashCommandsEnabled = !isAcpInputSession;
+      const isBtwCommand =
+        promptSlashCommandsEnabled &&
+        caps.ops.has('btw') &&
+        isSlashCommand(inputState.value.trim(), '/btw');
       if (isBtwCommand) {
         // Allow /btw submission even while the main session is generating.
         void submitBtwFromInput();
         return;
       }
 
-      if (isGoalSlashCommand(inputState.value.trim())) {
+      const isGoalCommand =
+        promptSlashCommandsEnabled &&
+        caps.ops.has('goal') &&
+        isGoalSlashCommand(inputState.value.trim());
+      if (isGoalCommand) {
         void submitGoalFromInput();
         return;
       }
@@ -5000,7 +5008,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       e.preventDefault();
       void handleCancelCurrentTask();
     }
-  }, [handleSendOrCancel, submitBtwFromInput, submitGoalFromInput, derivedState, dispatchInput, handleCancelCurrentTask, slashCommandState, getFilteredSelectableModes, getActiveSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, selectSlashExternalPromptCommand, selectSlashPromptCommand, selectSlashAcpCommand, selectSlashSkill, canSwitchModes, getRichTextInlineTriggerController, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, removeContext, t]);
+  }, [handleSendOrCancel, submitBtwFromInput, submitGoalFromInput, derivedState, dispatchInput, handleCancelCurrentTask, slashCommandState, getFilteredSelectableModes, getActiveSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, selectSlashExternalPromptCommand, selectSlashPromptCommand, selectSlashAcpCommand, selectSlashSkill, canSwitchModes, getRichTextInlineTriggerController, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, removeContext, isAcpInputSession, caps.ops, t]);
 
   const handleImeCompositionStart = useCallback(() => {
     isImeComposingRef.current = true;

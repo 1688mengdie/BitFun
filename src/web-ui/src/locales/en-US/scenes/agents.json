@@ -360,6 +360,9 @@
     "edges": "Edges ({{count}})",
     "noEdges": "No edges",
     "usePattern": "Use this pattern",
+    "planning": "Planning",
+    "saved": "Legion preset \"{{name}}\" saved",
+    "saveFailed": "Failed to save legion preset",
     "meta": {
       "gate": "gates"
     },

@@ -8,12 +8,19 @@ import PATTERNS, {
   type LegionPatternEdge,
 } from '../data/orchestration-patterns';
 import { LegionPresetAPI } from '@/infrastructure/api/service-api/LegionPresetAPI';
+import { createLogger } from '@/shared/utils/logger';
 import '../AgentsView.scss';
 import './CreateLegionPage.scss';
 
 interface CreateLegionPageProps {
   onBack: () => void;
 }
+
+const log = createLogger('CreateLegionPage');
+
+// UI-01: 后端 create_legion_preset 未实现（LegionPresetAPI 注释确认），
+// 保存按钮保持禁用并标注"规划中"；后端实现后再打开真实保存。
+const LEGION_CREATE_BACKEND_READY = false;
 
 const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
   const { t } = useTranslation('scenes/agents');
@@ -48,14 +55,15 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
           condition: e.condition,
         })),
       });
-      notifySuccess(`Legion preset "${selectedPattern.name}" saved`);
+      notifySuccess(t('legionPattern.saved', { name: selectedPattern.name }));
       onBack();
     } catch (err) {
-      notifyError(`Failed to save legion preset: ${err}`);
+      log.warn('Failed to save legion preset', { error: err });
+      notifyError(t('legionPattern.saveFailed'));
     } finally {
       setSaving(false);
     }
-  }, [selectedPattern, saving, onBack, notifySuccess, notifyError]);
+  }, [selectedPattern, saving, onBack, notifySuccess, notifyError, t]);
 
   const renderNodeList = (nodes: LegionPatternNode[]) => (
     <div className="legion-node-list">
@@ -182,8 +190,13 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
             <Button variant="secondary" onClick={onBack}>
               {t('legionPattern.back')}
             </Button>
-            <Button variant="primary" onClick={handleSave} disabled={saving} data-testid="create-legion-save">
-              {saving ? t('loading') : t('legionPattern.usePattern')}
+            <Button
+              variant="primary"
+              onClick={handleSave}
+              disabled={saving || !LEGION_CREATE_BACKEND_READY}
+              data-testid="create-legion-save"
+            >
+              {saving ? t('loading') : !LEGION_CREATE_BACKEND_READY ? t('legionPattern.planning') : t('legionPattern.usePattern')}
             </Button>
           </div>
         </>

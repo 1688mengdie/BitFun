@@ -70,26 +70,33 @@ function mapGoal(goal: {
   };
 }
 
-const GOAL_KICKOFF_CONTENT_PREFIX = 'Continue working toward the thread goal:';
-
+// UI-13: goal kickoff 去重改用结构化标记（metadata.threadGoalKickoff），
+// 不再依赖英文文案前缀匹配（多语言下会失效）。
+// 局限：无 threadGoalKickoff 标记的 pending 项（标记引入前的历史队列）仅能靠
+// /goal 命令前缀兜底匹配；backend 注入的 kickoff 文案若无标记则不再在此处去重。
 function isRedundantGoalKickoffPendingItem(
   displayMessage: string | undefined,
-  content: string
+  content: string,
+  userMessageMetadata?: Record<string, unknown>,
 ): boolean {
   const display = displayMessage?.trim() ?? '';
   if (/^\/goal\b/i.test(display)) {
     return true;
   }
-  return (
-    content.startsWith(GOAL_KICKOFF_CONTENT_PREFIX) ||
-    /^\/goal\b/i.test(content.trim())
-  );
+  if (userMessageMetadata?.threadGoalKickoff === true) {
+    return true;
+  }
+  return /^\/goal\b/i.test(content.trim());
 }
 
 /** Drop legacy frontend kickoff rows; backend already steers via objective_updated. */
 function clearRedundantGoalKickoffPendingItems(sessionId: string): void {
   for (const item of pendingQueueManager.list(sessionId)) {
-    if (isRedundantGoalKickoffPendingItem(item.displayMessage, item.content)) {
+    if (isRedundantGoalKickoffPendingItem(
+      item.displayMessage,
+      item.content,
+      item.userMessageMetadata,
+    )) {
       pendingQueueManager.remove(sessionId, item.id);
     }
   }
@@ -98,6 +105,12 @@ function clearRedundantGoalKickoffPendingItems(sessionId: string): void {
 function syncGoalToStore(sessionId: string, goal: ThreadGoalSnapshot | null): void {
   if (!goal) {
     flowChatStore.setThreadGoal(sessionId, null);
+    return;
+  }
+  // UI-07: 单调 updatedAt 比较——只接受比 store 已记录的最新写入/清除更新的目标，
+  // 避免迟到的响应/事件把已清除的旧 goal 写回 UI（API 响应始终携带 updatedAt）。
+  const lastSeenAt = flowChatStore.getState().sessions.get(sessionId)?.threadGoalUpdatedAt ?? 0;
+  if (lastSeenAt > 0 && goal.updatedAt != null && goal.updatedAt < lastSeenAt) {
     return;
   }
   flowChatStore.setThreadGoal(sessionId, {

@@ -81,6 +81,15 @@
       "rightAriaLabel": "Resize right panel",
       "terminalBottomAriaLabel": "Resize bottom terminal panel",
       "title": "Drag to resize | Double-click to switch mode | Current: {{mode}}"
+    },
+    "beeColony": {
+      "title": "Bee colony architecture monitor",
+      "loading": "Loading...",
+      "notReady": "Bee colony MiniApp not ready",
+      "notReadyDetail": "{{error}}. Make sure it is compiled and deployed.",
+      "restore": "Restore",
+      "maximize": "Maximize",
+      "close": "Close"
     }
   },
   "runtimeStatus": {

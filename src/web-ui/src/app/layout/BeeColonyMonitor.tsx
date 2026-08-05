@@ -5,8 +5,9 @@
  *
  * Pattern: FloatingMiniChat-style floating panel with MiniAppRunner inside.
  */
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { GitBranch, X, Minimize2, Maximize2 } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { miniAppAPI } from '@/infrastructure/api/service-api/MiniAppAPI';
 import type { MiniApp } from '@/infrastructure/api/service-api/MiniAppAPI';
 import { useAppearance } from '@/infrastructure/appearance/hooks/useAppearance';
@@ -21,6 +22,7 @@ const log = createLogger('BeeColonyMonitor');
 const BEE_COLONY_APP_ID = 'bee-colony-dag';
 
 export const BeeColonyMonitor: React.FC = () => {
+  const { t } = useTranslation('flow-chat');
   const { current } = useAppearance();
   const themeType = current?.mode;
   const { workspacePath } = useCurrentWorkspace();
@@ -31,6 +33,7 @@ export const BeeColonyMonitor: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
+  const lastLoadedThemeRef = useRef<string | null>(null);
 
   // Only show in agent scene (where the DAG is relevant)
   const isAgentScene = useMemo(
@@ -48,7 +51,7 @@ export const BeeColonyMonitor: React.FC = () => {
         workspacePath || undefined,
       );
       if (!loaded?.compiled_html?.trim()) {
-        setError('MiniApp not compiled');
+        setError(t('layout.beeColony.notReady'));
         setApp(null);
         return;
       }
@@ -60,14 +63,20 @@ export const BeeColonyMonitor: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [themeType, workspacePath]);
+  }, [themeType, workspacePath, t]);
 
-  // Load app when panel opens
+  // UI-10: 打开面板时加载；主题切换时强制重载（重新编译该主题的 DAG）。
+  // 关闭面板时重置已加载主题，下次打开再重新加载。
   useEffect(() => {
-    if (isOpen && !app && !loading) {
+    if (!isOpen) {
+      lastLoadedThemeRef.current = null;
+      return;
+    }
+    if (lastLoadedThemeRef.current !== themeType) {
+      lastLoadedThemeRef.current = themeType ?? 'dark';
       void loadApp();
     }
-  }, [isOpen, app, loading, loadApp]);
+  }, [isOpen, themeType, loadApp]);
 
   const handleToggle = useCallback(() => {
     setIsOpen((prev) => !prev);
@@ -101,8 +110,8 @@ export const BeeColonyMonitor: React.FC = () => {
         type="button"
         className="bee-monitor__button"
         onClick={handleToggle}
-        title="Bee colony architecture monitor"
-        aria-label="Bee colony architecture monitor"
+        title={t('layout.beeColony.title')}
+        aria-label={t('layout.beeColony.title')}
         data-bf-component="bee-colony-monitor"
         data-bf-part="trigger"
       >
@@ -125,13 +134,13 @@ export const BeeColonyMonitor: React.FC = () => {
           data-bf-component="bee-colony-monitor"
           data-bf-part="header"
         >
-          <span className="bee-monitor__title">Bee colony architecture monitor</span>
+          <span className="bee-monitor__title">{t('layout.beeColony.title')}</span>
           <div className="bee-monitor__header-actions">
             <button
               type="button"
               className="bee-monitor__header-btn"
               onClick={() => setMaximized((v) => !v)}
-              title={maximized ? 'Restore' : 'Maximize'}
+              title={maximized ? t('layout.beeColony.restore') : t('layout.beeColony.maximize')}
             >
               {maximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </button>
@@ -139,7 +148,7 @@ export const BeeColonyMonitor: React.FC = () => {
               type="button"
               className="bee-monitor__header-btn bee-monitor__header-btn--close"
               onClick={handleClose}
-              title="Close"
+              title={t('layout.beeColony.close')}
             >
               <X size={14} />
             </button>
@@ -153,15 +162,15 @@ export const BeeColonyMonitor: React.FC = () => {
           data-bf-part="body"
         >
           {loading && (
-            <div className="bee-monitor__loading">Loading...</div>
+            <div className="bee-monitor__loading">{t('layout.beeColony.loading')}</div>
           )}
           {error && !app && (
             <div className="bee-monitor__error">
-              <p>Bee colony MiniApp not ready</p>
-              <small>{error}. Make sure it is compiled and deployed.</small>
+              <p>{t('layout.beeColony.notReady')}</p>
+              <small>{t('layout.beeColony.notReadyDetail', { error })}</small>
             </div>
           )}
-          {app && <MiniAppRunner key={app.id} app={app} />}
+          {app && <MiniAppRunner key={`${app.id}:${themeType ?? 'dark'}`} app={app} />}
         </div>
       </div>
     </div>

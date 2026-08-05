@@ -466,6 +466,13 @@ export interface Session {
   /** Whether `/goal` mode is active for this session. */
   goalModeActive?: boolean;
 
+  /**
+   * Monotonic clock for thread-goal writes. Every setThreadGoal call (including
+   * explicit clears) advances it, so a late thread-goal-updated event carrying a
+   * stale updatedAt cannot resurrect an already-cleared goal.
+   */
+  threadGoalUpdatedAt?: number;
+
   /** Latest thread goal snapshot for UI (/goal menu, edit, resume). */
   threadGoal?: {
     goalId: string;

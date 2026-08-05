@@ -360,6 +360,9 @@
     "edges": "連線（{{count}}）",
     "noEdges": "無連線",
     "usePattern": "使用此模式",
+    "planning": "規劃中",
+    "saved": "軍團編排模式「{{name}}」已儲存",
+    "saveFailed": "儲存軍團編排模式失敗",
     "meta": {
       "gate": "個閘門"
     },

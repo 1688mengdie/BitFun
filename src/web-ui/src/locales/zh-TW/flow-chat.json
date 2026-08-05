@@ -81,6 +81,15 @@
       "rightAriaLabel": "調整右側面板大小",
       "terminalBottomAriaLabel": "調整底部終端面板大小",
       "title": "拖拽調整面板大小 | 雙擊切換模式 | 目前: {{mode}}"
+    },
+    "beeColony": {
+      "title": "蜂群架構監視器",
+      "loading": "載入中...",
+      "notReady": "蜂群架構 MiniApp 尚未就緒",
+      "notReadyDetail": "{{error}}。請確認它已編譯並部署。",
+      "restore": "還原",
+      "maximize": "最大化",
+      "close": "關閉"
     }
   },
   "runtimeStatus": {
