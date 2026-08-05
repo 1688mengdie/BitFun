@@ -1,6 +1,7 @@
 import { ConnectionStatusPresenter } from '../../services/ConnectionStatusPresenter';
 import { CARD, GREEN, INK, MUTED, RED } from './Theme';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
+import { CompactMenuButton } from './CompactMenuButton';
 
 @ComponentV2
 export struct RemoteHeader {
@@ -9,6 +10,7 @@ export struct RemoteHeader {
   @Param isLoading: boolean = false;
   @Event onOpenSidebar: () => void = () => {};
   @Event onOpenActions: () => void = () => {};
+  @Event onOpenDevices: () => void = () => {};
 
   build() {
     Row() {
@@ -42,10 +44,25 @@ export struct RemoteHeader {
             .fontColor(MUTED)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
+          SymbolGlyph($r('sys.symbol.chevron_down'))
+            .fontSize(11)
+            .fontColor([MUTED])
+            .width(13)
+            .height(13)
+            .opacity(0.58)
         }
+        .height(28)
+        .padding({ left: 8, right: 8 })
+        .borderRadius(10)
+        .accessibilityText(RemoteI18n.t('connect.accountDevicesTitle'))
+        .onClick(() => {
+          this.onOpenDevices();
+        })
       }
       .layoutWeight(1)
+      .height(52)
       .alignItems(HorizontalAlign.Center)
+      .justifyContent(FlexAlign.Center)
       this.MoreButton()
     }
     .width('100%')
@@ -55,20 +72,10 @@ export struct RemoteHeader {
 
   @Builder
   private MenuButton() {
-    Stack({ alignContent: Alignment.Center }) {
-      SymbolGlyph($r('sys.symbol.line_3_horizontal'))
-        .fontSize(22)
-        .fontColor([INK])
-        .width(24)
-        .height(24)
-    }
-    .width(48)
-    .height(48)
-    .backgroundColor(CARD)
-    .borderRadius(24)
-    .shadow({ radius: 18, color: '#10000000', offsetY: 8 })
-    .onClick(() => {
-      this.onOpenSidebar();
+    CompactMenuButton({
+      onOpen: () => {
+        this.onOpenSidebar();
+      }
     })
   }
 

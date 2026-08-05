@@ -1,6 +1,6 @@
 import { RemoteSession } from '../../model/RemoteModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { CARD, FLOATING_PANEL_BG, INK, LINE, MUTED, SOFT, SUBTLE } from './Theme';
+import { CARD, GREEN, INK, LINE, MUTED, PAGE_BG, SOFT, SUBTLE } from './Theme';
 import { ConversationSource } from '../navigation/AppRouteContract';
 import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
 import { SidebarToggleButton } from './SidebarToggleButton';
@@ -133,7 +133,7 @@ export struct AppSidebar {
     .width('100%')
     .height('100%')
     .padding({ left: 20, right: 20, top: 4, bottom: 16 })
-    .backgroundColor(FLOATING_PANEL_BG)
+    .backgroundColor(PAGE_BG)
     .bindSheet($$this.showSessionActionSheet, this.SessionActionSheet(), this.sessionActionSheetOptions())
     .bindSheet($$this.showSessionDetails, this.SessionDetailsSheet(), this.sessionDetailsSheetOptions())
   }
@@ -503,11 +503,31 @@ export struct AppSidebar {
 
   @Builder
   RemoteGlyph() {
-    SymbolGlyph($r('sys.symbol.desktop'))
-      .fontSize(24)
-      .fontColor([this.connectionState === 'connected' || this.connectionState === 'reconnecting' ? INK : MUTED])
-      .width(35)
-      .height(34)
+    Stack({ alignContent: Alignment.Center }) {
+      if (this.connectionState === 'connected' || this.connectionState === 'reconnecting') {
+        Image($r('app.media.remote_ref_sidebar_connected'))
+          .width(35)
+          .height(34)
+          .objectFit(ImageFit.Contain)
+          .renderMode(ImageRenderMode.Template)
+          .foregroundColor(INK)
+        Text('')
+          .width(8)
+          .height(8)
+          .backgroundColor(GREEN)
+          .borderRadius(4)
+          .position({ x: 24, y: 22 })
+      } else {
+        Image($r('app.media.remote_logo'))
+          .width(34)
+          .height(34)
+          .objectFit(ImageFit.Contain)
+          .renderMode(ImageRenderMode.Template)
+          .foregroundColor(MUTED)
+      }
+    }
+    .width(35)
+    .height(34)
   }
 
   @Builder

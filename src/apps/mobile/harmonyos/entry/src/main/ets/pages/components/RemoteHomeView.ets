@@ -66,6 +66,9 @@ export struct RemoteHomeView {
           },
           onOpenActions: () => {
             this.openRemoteActions();
+          },
+          onOpenDevices: () => {
+            this.onAddConnection();
           }
         })
         if (this.isInitialLoading()) {
@@ -153,7 +156,7 @@ export struct RemoteHomeView {
             this.RemoteActionsLayer()
           }
             .width(330)
-            .height(390)
+            .height(292)
             .margin({ top: 4, right: 4 })
             .transition(TransitionEffect.translate({ x: 18, y: -12 })
               .combine(TransitionEffect.opacity(0))
@@ -222,9 +225,6 @@ export struct RemoteHomeView {
       },
       onSortModeChange: (mode: string) => {
         this.onSortModeChange(mode);
-      },
-      onAddConnection: () => {
-        this.onAddConnection();
       },
       onOpenSettings: () => {
         this.onOpenRemoteSettings();
