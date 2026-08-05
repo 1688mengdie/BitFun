@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AGENT_COMMAND_SCHEMA,
   decodeWsNotification,
   decodeResponseBody,
   encodeRequestBody,
   resolveWsMethod,
+  WebSocketTransportAdapter,
 } from './websocket-adapter';
 import type {
   SubmitDialogTurnBody,
@@ -330,5 +331,63 @@ describe('decodeResponseBody', () => {
     const result = { foo: 'bar' };
     expect(decodeResponseBody('some_unknown_action', result)).toBe(result);
     expect(decodeResponseBody('get_config', result)).toBe(result);
+  });
+});
+
+describe('WebSocketTransportAdapter reconnect lifecycle', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('cancels a scheduled reconnect when explicitly disconnected', async () => {
+    vi.useFakeTimers();
+
+    const sockets: MockWebSocket[] = [];
+    class MockWebSocket {
+      static readonly OPEN = 1;
+
+      readyState = 0;
+      onopen: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+
+      constructor(readonly url: string) {
+        sockets.push(this);
+      }
+
+      open(): void {
+        this.readyState = MockWebSocket.OPEN;
+        this.onopen?.({} as Event);
+      }
+
+      closeFromServer(): void {
+        this.readyState = 3;
+        this.onclose?.({} as CloseEvent);
+      }
+
+      close(): void {
+        this.readyState = 3;
+        this.onclose?.({} as CloseEvent);
+      }
+
+      send(): void {}
+    }
+
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    const adapter = new WebSocketTransportAdapter('ws://example.test/ws');
+    const connection = adapter.connect();
+
+    sockets[0].open();
+    await connection;
+    sockets[0].closeFromServer();
+    expect(vi.getTimerCount()).toBe(1);
+
+    await adapter.disconnect();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sockets).toHaveLength(1);
   });
 });
