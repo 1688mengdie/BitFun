@@ -7,6 +7,16 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::fs;
+use tokio::io::AsyncReadExt;
+
+/// PLAN-09: cap on how many plan files a single PlanList call reports, so a
+/// plans directory with thousands of files cannot blow up the tool result.
+const MAX_PLAN_LIST_ENTRIES: usize = 500;
+
+/// PLAN-09: only the YAML frontmatter (always well under this) is needed for
+/// todo progress. Reading a bounded prefix keeps PlanList fast and immune to
+/// huge plan bodies; anything past 64KB is a body, not frontmatter.
+const PLAN_FRONTMATTER_PREFIX_LIMIT: u64 = 64 * 1024;
 
 /// PlanList tool - list plan files
 pub struct PlanListTool;
@@ -116,6 +126,9 @@ impl Tool for PlanListTool {
         while let Some(entry) = entries.next_entry().await.map_err(|error| {
             BitFunError::tool(format!("Failed to read plans directory entry: {}", error))
         })? {
+            if plans.len() >= MAX_PLAN_LIST_ENTRIES {
+                break;
+            }
             let file_name = entry.file_name();
             let name = file_name.to_string_lossy().to_string();
             if !name.ends_with(".plan.md") {
@@ -135,16 +148,26 @@ impl Tool for PlanListTool {
                 })
                 .unwrap_or(0);
 
-            // Best-effort todo progress; legacy plans without todos (or
-            // unreadable/damaged files) report 0/0/0.
+            // Best-effort todo progress from the bounded frontmatter prefix;
+            // legacy plans without todos (or unreadable/damaged files) report
+            // 0/0/0. PLAN-09: never read the whole plan body.
             let mut todo_total: u64 = 0;
             let mut todo_completed: u64 = 0;
             let mut completion_pct: u64 = 0;
-            if let Ok(content) = fs::read_to_string(&path).await {
-                if let Some((total, completed)) = count_todo_progress(&content) {
-                    todo_total = total;
-                    todo_completed = completed;
-                    completion_pct = if total > 0 { completed * 100 / total } else { 0 };
+            let mut prefix = Vec::with_capacity(PLAN_FRONTMATTER_PREFIX_LIMIT as usize);
+            if let Ok(file) = fs::File::open(&path).await {
+                let read_ok = file
+                    .take(PLAN_FRONTMATTER_PREFIX_LIMIT)
+                    .read_to_end(&mut prefix)
+                    .await
+                    .is_ok();
+                if read_ok {
+                    let frontmatter_prefix = String::from_utf8_lossy(&prefix);
+                    if let Some((total, completed)) = count_todo_progress(&frontmatter_prefix) {
+                        todo_total = total;
+                        todo_completed = completed;
+                        completion_pct = if total > 0 { completed * 100 / total } else { 0 };
+                    }
                 }
             }
 

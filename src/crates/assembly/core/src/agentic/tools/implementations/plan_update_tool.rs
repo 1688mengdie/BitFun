@@ -3,7 +3,13 @@
 //! Updates todo statuses inside an existing plan file (YAML frontmatter),
 //! preserving every other frontmatter field and the markdown body byte-for-byte.
 
-use crate::agentic::tools::framework::{Tool, ToolExposure, ToolResult, ToolUseContext};
+use crate::agentic::tools::file_permissions::file_permission_intents;
+use crate::agentic::tools::framework::{
+    PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
+};
+use crate::agentic::tools::implementations::plan_read_tool::{
+    resolve_plan_path, resolve_plan_path_with_plans_dir,
+};
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -36,7 +42,9 @@ pub(crate) fn parse_plan_file(content: &str) -> BitFunResult<(Value, String)> {
     let end = after_open.find("\n---").ok_or_else(|| {
         BitFunError::tool("Plan file is missing the YAML frontmatter closer '---'")
     })?;
-    let yaml_part = &after_open[..end];
+    // PLAN-05: CRLF files keep a trailing '\r' on the last frontmatter line
+    // before the closer; strip it so serde_yaml never sees a dangling CR.
+    let yaml_part = after_open[..end].trim_end_matches('\r');
     let body_start = end + "\n---".len();
     let body = after_open[body_start..]
         .trim_start_matches(['\n', '\r'])
@@ -63,9 +71,33 @@ pub(crate) struct TodoUpdate {
 }
 
 /// Validate todo updates against a parsed frontmatter. Every update is checked
-/// before anything is written: the status value (when present) must be legal
-/// and the todo id must exist. Returns the applied updates for the tool result.
+/// before anything is written: the status value (when present) must be legal,
+/// the todo id must exist, duplicate ids in one batch are rejected, and every
+/// dependency referenced by an update must exist without introducing a
+/// self-loop or a cycle. Returns the applied updates for the tool result.
 pub(crate) fn validate_updates(frontmatter: &Value, updates: &[TodoUpdate]) -> BitFunResult<Vec<Value>> {
+    let todos = frontmatter
+        .get("todos")
+        .and_then(Value::as_array)
+        .map(|todos| todos.clone())
+        .unwrap_or_default();
+    let all_ids: std::collections::HashSet<&str> = todos
+        .iter()
+        .filter_map(|todo| todo.get("id").and_then(Value::as_str))
+        .collect();
+
+    // PLAN-08: reject duplicate ids in a single updates batch (the second
+    // occurrence would otherwise silently override the first).
+    let mut seen_ids = std::collections::HashSet::new();
+    for update in updates {
+        if !seen_ids.insert(update.id.as_str()) {
+            return Err(BitFunError::validation(format!(
+                "Duplicate todo id in updates: {}",
+                update.id
+            )));
+        }
+    }
+
     let mut applied = Vec::with_capacity(updates.len());
     for update in updates {
         if let Some(status) = &update.status {
@@ -76,20 +108,23 @@ pub(crate) fn validate_updates(frontmatter: &Value, updates: &[TodoUpdate]) -> B
                 )));
             }
         }
-        let found = frontmatter
-            .get("todos")
-            .and_then(|value| value.as_array())
-            .map(|todos| {
-                todos
-                    .iter()
-                    .any(|todo| todo.get("id").and_then(|v| v.as_str()) == Some(update.id.as_str()))
-            })
-            .unwrap_or(false);
-        if !found {
+        if !all_ids.contains(update.id.as_str()) {
             return Err(BitFunError::tool(format!(
                 "Todo id not found in plan: {}",
                 update.id
             )));
+        }
+        // PLAN-06: every dependency referenced by this update must exist in the
+        // plan (prevents dangling edges).
+        if let Some(dependencies) = &update.dependencies {
+            for dependency in dependencies {
+                if !all_ids.contains(dependency.as_str()) {
+                    return Err(BitFunError::tool(format!(
+                        "Dependency todo id not found in plan: {} (referenced by '{}')",
+                        dependency, update.id
+                    )));
+                }
+            }
         }
         let mut applied_item = json!({ "id": update.id });
         if let Some(status) = &update.status {
@@ -104,7 +139,133 @@ pub(crate) fn validate_updates(frontmatter: &Value, updates: &[TodoUpdate]) -> B
         }
         applied.push(applied_item);
     }
+
+    // PLAN-06: reject self-loops and cycles in the merged dependency graph.
+    validate_todo_dependency_graph(frontmatter, updates)?;
+
     Ok(applied)
+}
+
+/// PLAN-06: build the merged dependency graph (current frontmatter deps
+/// overlaid with this batch's dependency updates) and reject self-loops and
+/// cycles. Kahn's algorithm leaves every node of a cycle unprocessed.
+fn validate_todo_dependency_graph(frontmatter: &Value, updates: &[TodoUpdate]) -> BitFunResult<()> {
+    let todos = frontmatter
+        .get("todos")
+        .and_then(Value::as_array)
+        .map(|todos| todos.clone())
+        .unwrap_or_default();
+
+    let mut adjacency: std::collections::HashMap<String, Vec<String>> =
+        std::collections::HashMap::new();
+    for todo in &todos {
+        let id = match todo.get("id").and_then(Value::as_str) {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+        let existing_deps: Vec<String> = todo
+            .get("dependencies")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let deps = if let Some(update) = updates.iter().find(|update| update.id == id) {
+            update.dependencies.clone().unwrap_or(existing_deps)
+        } else {
+            existing_deps
+        };
+        adjacency.insert(id, deps);
+    }
+
+    // Self-loop: clear, targeted error before the generic cycle path.
+    for (id, deps) in &adjacency {
+        if deps.iter().any(|dep| dep == id) {
+            return Err(BitFunError::tool(format!(
+                "Todo dependency cycle detected: '{}' depends on itself",
+                id
+            )));
+        }
+    }
+
+    // Kahn's algorithm over edges that reference existing todos (dangling deps
+    // are ignored here; the caller already rejects newly-set dangling deps).
+    let mut in_degree: std::collections::HashMap<String, usize> = adjacency
+        .keys()
+        .map(|id| (id.clone(), 0usize))
+        .collect();
+    for deps in adjacency.values() {
+        for dep in deps {
+            if let Some(degree) = in_degree.get_mut(dep) {
+                *degree += 1;
+            }
+        }
+    }
+    let mut queue: Vec<String> = in_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut processed = 0usize;
+    while let Some(id) = queue.pop() {
+        processed += 1;
+        if let Some(deps) = adjacency.get(&id) {
+            for dep in deps {
+                if let Some(degree) = in_degree.get_mut(dep) {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        queue.push(dep.clone());
+                    }
+                }
+            }
+        }
+    }
+    if processed != adjacency.len() {
+        let remaining: Vec<String> = in_degree
+            .iter()
+            .filter(|(_, degree)| **degree > 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        return Err(BitFunError::tool(format!(
+            "Todo dependency cycle detected: {}",
+            remaining.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+/// PLAN-03: YAML 1.1 boolean tokens that a YAML 1.2-core parser (serde_yaml)
+/// resolves as plain strings but other consumers of the plan file resolve as
+/// booleans. Quoting them forces the todo content to stay a string no matter
+/// which YAML flavor reads the file back. The true/false variants are already
+/// caught by the serde_yaml non-string check in yaml_quote_single_line.
+fn is_yaml_11_boolean(value: &str) -> bool {
+    matches!(
+        value,
+        "y" | "Y"
+            | "yes" | "Yes" | "YES"
+            | "n" | "N"
+            | "no" | "No" | "NO"
+            | "on" | "On" | "ON"
+            | "off" | "Off" | "OFF"
+    )
+}
+
+/// A value with leading or trailing whitespace must be quoted: a plain YAML
+/// scalar has its surrounding whitespace trimmed on read-back, so an unquoted
+/// `padded ` would silently lose its trailing spaces.
+fn has_edge_whitespace(value: &str) -> bool {
+    value
+        .chars()
+        .next()
+        .is_some_and(char::is_whitespace)
+        || value
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
 }
 
 /// Quote a single-line YAML scalar value so it can be written back safely as
@@ -115,29 +276,37 @@ fn yaml_quote_single_line(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
-    let special = value.chars().any(|c| {
-        c.is_control()
-            || matches!(
-                c,
-                ':' | '#'
-                    | '"'
-                    | '\''
-                    | '{'
-                    | '}'
-                    | '['
-                    | ']'
-                    | ','
-                    | '&'
-                    | '*'
-                    | '!'
-                    | '|'
-                    | '>'
-                    | '%'
-                    | '@'
-                    | '`'
-            ) || (c == ' ' && value.starts_with(' '))
-            || (c == '-' && value.starts_with('-'))
-    });
+    // PLAN-03: values YAML parses as a non-string scalar (number, boolean,
+    // null, sequence, mapping) must be quoted, otherwise PlanRead parses them
+    // back as the wrong type and `as_str()` silently yields nothing.
+    let parses_as_non_string = serde_yaml::from_str::<serde_yaml::Value>(value)
+        .ok()
+        .is_some_and(|parsed| !parsed.is_string());
+    let special = parses_as_non_string
+        || is_yaml_11_boolean(value)
+        || has_edge_whitespace(value)
+        || value.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    ':' | '#'
+                        | '"'
+                        | '\''
+                        | '{'
+                        | '}'
+                        | '['
+                        | ']'
+                        | ','
+                        | '&'
+                        | '*'
+                        | '!'
+                        | '|'
+                        | '>'
+                        | '%'
+                        | '@'
+                        | '`'
+                ) || (c == '-' && value.starts_with('-'))
+        });
     if !special {
         return value.to_string();
     }
@@ -311,84 +480,37 @@ pub(crate) fn apply_updates_text(content: &str, updates: &[TodoUpdate]) -> BitFu
     Ok(out.join("\n"))
 }
 
-/// Resolve the plan file argument to a concrete filesystem path. Absolute
-/// paths (or paths containing a separator) are used as-is; bare file names
-/// are resolved against the current workspace plans directory. Minimal copy of
-/// plan_read_tool.rs::resolve_plan_path (kept local so plan files stay
-/// self-contained per tool module).
-async fn resolve_plan_path(plan_file: &str, context: &ToolUseContext) -> BitFunResult<PathBuf> {
-    let supplied = PathBuf::from(plan_file);
-    let looks_like_path = plan_file.contains('/') || plan_file.contains('\\');
-    if supplied.is_absolute() || looks_like_path {
-        // Note: extension() only returns the last suffix ("md" for
-        // "xxx.plan.md"), so validate the full file name suffix instead.
-        let file_name = supplied
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        if !file_name.ends_with(".plan.md") {
-            return Err(BitFunError::tool(format!(
-                "Plan file must end with .plan.md: {}",
-                plan_file
-            )));
-        }
-        if !supplied.exists() {
-            return Err(BitFunError::tool(format!(
-                "Plan file not found: {}",
-                plan_file
-            )));
-        }
-        return Ok(supplied);
-    }
-
-    let runtime_context = context.ensure_current_workspace_runtime().await?;
-    let plans_dir = runtime_context.plans_dir.clone();
-    let plan_path = plans_dir.join(plan_file);
-    if !plan_path.exists() {
+/// PLAN-04/11: atomic plan write - write a random-suffixed sibling temp file
+/// then rename over the target, so concurrent updates never collide on a fixed
+/// `{path}.tmp` and a crash never leaves a half-written plan file.
+pub(crate) async fn atomic_write_plan_file(path: &Path, content: &[u8]) -> BitFunResult<()> {
+    let nonce = uuid::Uuid::new_v4().simple().to_string();
+    let tmp_path = PathBuf::from(format!("{}.{}.tmp", path.to_string_lossy(), &nonce[..8]));
+    fs::write(&tmp_path, content)
+        .await
+        .map_err(|error| BitFunError::tool(format!("Failed to write plan file: {}", error)))?;
+    if let Err(error) = fs::rename(&tmp_path, path).await {
+        let _ = fs::remove_file(&tmp_path).await;
         return Err(BitFunError::tool(format!(
-            "Plan file not found in plans directory: {} (plans_dir={})",
-            plan_file,
-            plans_dir.to_string_lossy()
+            "Failed to replace plan file: {}",
+            error
         )));
     }
-    Ok(plan_path)
+    Ok(())
 }
 
 /// Resolve the plan file argument to a concrete filesystem path WITHOUT a
-/// ToolUseContext (backend scheduler use, e.g. plan-todo binding). Absolute
-/// paths (or paths containing a separator) are used as-is; bare file names are
-/// resolved against the plans directory derived from the given workspace root
-/// (`~/.bitfun/projects/<workspace-slug>/plans`). Mirrors `resolve_plan_path`
-/// semantics: `.plan.md` suffix validation + exists check for supplied paths,
-/// plans-dir join + exists check for bare names. Remote workspaces must be
-/// filtered by the caller: their plan files live on the remote host, not in
-/// the local mirror.
+/// ToolUseContext (backend scheduler use, e.g. plan-todo binding). Bare file
+/// names are resolved against the plans directory derived from the given
+/// workspace root (`~/.bitfun/projects/<workspace-slug>/plans`). Converges on
+/// the shared [`resolve_plan_path_with_plans_dir`] core so suffix validation
+/// and the plans-dir containment fence match the PlanRead/PlanUpdate tools.
+/// Remote workspaces must be filtered by the caller: their plan files live on
+/// the remote host, not in the local mirror.
 pub(crate) async fn resolve_plan_path_for_backend(
     plan_file: &str,
     workspace_path: Option<&Path>,
 ) -> BitFunResult<PathBuf> {
-    let supplied = PathBuf::from(plan_file);
-    let looks_like_path = plan_file.contains('/') || plan_file.contains('\\');
-    if supplied.is_absolute() || looks_like_path {
-        let file_name = supplied
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        if !file_name.ends_with(".plan.md") {
-            return Err(BitFunError::tool(format!(
-                "Plan file must end with .plan.md: {}",
-                plan_file
-            )));
-        }
-        if !supplied.exists() {
-            return Err(BitFunError::tool(format!(
-                "Plan file not found: {}",
-                plan_file
-            )));
-        }
-        return Ok(supplied);
-    }
-
     let workspace_path = workspace_path.ok_or_else(|| {
         BitFunError::tool(
             "A workspace path is required to resolve a plan file in the plans directory"
@@ -396,15 +518,9 @@ pub(crate) async fn resolve_plan_path_for_backend(
         )
     })?;
     let plans_dir = get_path_manager_arc().project_plans_dir(workspace_path);
-    let plan_path = plans_dir.join(plan_file);
-    if !plan_path.exists() {
-        return Err(BitFunError::tool(format!(
-            "Plan file not found in plans directory: {} (plans_dir={})",
-            plan_file,
-            plans_dir.to_string_lossy()
-        )));
-    }
-    Ok(plan_path)
+    // PLAN-12: 内部同步 `exists()`（plan_read_tool.rs `require_plan_file_exists`）
+    // 仅对单条计划路径做存在性检查，轻微阻塞可接受，保留现状。
+    resolve_plan_path_with_plans_dir(plan_file, &plans_dir, None)
 }
 
 /// Apply a single todo status update to a plan file at the given path (backend
@@ -430,18 +546,7 @@ pub(crate) async fn apply_todo_status_update(
     let applied = validate_updates(&frontmatter, &updates)?;
     let new_content = apply_updates_text(&content, &updates)?;
 
-    // Atomic write: write a sibling temp file, then rename over the target.
-    let tmp_path = PathBuf::from(format!("{}.tmp", plan_path.to_string_lossy()));
-    fs::write(&tmp_path, new_content.as_bytes())
-        .await
-        .map_err(|error| BitFunError::tool(format!("Failed to write plan file: {}", error)))?;
-    if let Err(error) = fs::rename(&tmp_path, plan_path).await {
-        let _ = fs::remove_file(&tmp_path).await;
-        return Err(BitFunError::tool(format!(
-            "Failed to replace plan file: {}",
-            error
-        )));
-    }
+    atomic_write_plan_file(plan_path, new_content.as_bytes()).await?;
     Ok(applied
         .into_iter()
         .next()
@@ -515,13 +620,37 @@ impl Tool for PlanUpdateTool {
     }
 
     fn is_readonly(&self) -> bool {
-        // Only writes the plan file, does not modify code (same semantics as
-        // CreatePlan: the plan family is a commander staple, not a code tool).
-        true
+        // PLAN-02: PlanUpdate writes the plan file, so it must NOT be declared
+        // readonly - otherwise permission_intents would be empty and the write
+        // would have no permission gate.
+        false
     }
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
-        true
+        // PLAN-04: concurrent updates to the same plan file would lose
+        // changes (read-modify-write is not atomic across calls).
+        false
+    }
+
+    fn permission_intents(
+        &self,
+        input: &Value,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<PermissionIntent>> {
+        // PLAN-02: emit an edit intent for the resolved plan file so permission
+        // rules actually gate the write (mirrors file_write_tool.rs).
+        let plan_file = input
+            .get("plan_file")
+            .and_then(Value::as_str)
+            .ok_or_else(|| BitFunError::validation("Missing required field: plan_file".to_string()))?;
+        let plans_dir = context.current_workspace_runtime_root()?.join("plans");
+        let plan_path = resolve_plan_path_with_plans_dir(
+            plan_file.trim(),
+            &plans_dir,
+            context.current_workspace_scope().as_deref(),
+        )?;
+        let plan_path_str = plan_path.to_string_lossy().to_string();
+        file_permission_intents("edit", [plan_path_str.as_str()], context)
     }
 
     async fn call_impl(
@@ -589,7 +718,10 @@ impl Tool for PlanUpdateTool {
             });
         }
 
-        let plan_path = resolve_plan_path(plan_file, context).await?;
+        // PLAN-12: `resolve_plan_path` 内部的存在性检查（plan_read_tool.rs 的
+        // `require_plan_file_exists`）是同步 `exists()`，在异步执行器中轻微阻塞，
+        // 开销极小且与仓库其他工具风格一致，保留现状可接受。
+        let plan_path = resolve_plan_path(plan_file, context)?;
         let content = fs::read_to_string(&plan_path)
             .await
             .map_err(|error| BitFunError::tool(format!("Failed to read plan file: {}", error)))?;
@@ -597,18 +729,7 @@ impl Tool for PlanUpdateTool {
         let applied = validate_updates(&frontmatter, &updates)?;
         let new_content = apply_updates_text(&content, &updates)?;
 
-        // Atomic write: write a sibling temp file, then rename over the target.
-        let tmp_path = PathBuf::from(format!("{}.tmp", plan_path.to_string_lossy()));
-        fs::write(&tmp_path, new_content.as_bytes())
-            .await
-            .map_err(|error| BitFunError::tool(format!("Failed to write plan file: {}", error)))?;
-        if let Err(error) = fs::rename(&tmp_path, &plan_path).await {
-            let _ = fs::remove_file(&tmp_path).await;
-            return Err(BitFunError::tool(format!(
-                "Failed to replace plan file: {}",
-                error
-            )));
-        }
+        atomic_write_plan_file(&plan_path, new_content.as_bytes()).await?;
 
         let plan_reference = context.build_runtime_artifact_reference(&format!(
             "plans/{}",
@@ -875,5 +996,229 @@ mod tests {
         assert!(parse_plan_file("no frontmatter here").is_err());
         assert!(parse_plan_file("").is_err());
         assert!(parse_plan_file("---\nname: x").is_err());
+    }
+
+    #[test]
+    fn parse_plan_file_handles_crlf_frontmatter() {
+        // PLAN-05: the trailing '\r' before the closer must not break YAML.
+        let content =
+            "---\r\ntodos:\r\n- id: a\r\n  content: A\r\n  status: pending\r\n---\r\n\r\nbody\r\n";
+        let (frontmatter, body) = parse_plan_file(content).expect("parse CRLF plan file");
+        assert_eq!(frontmatter["todos"][0]["id"].as_str(), Some("a"));
+        assert_eq!(frontmatter["todos"][0]["status"].as_str(), Some("pending"));
+        assert!(body.contains("body"));
+    }
+
+    #[test]
+    fn yaml_quote_single_line_quotes_non_string_scalars() {
+        // PLAN-03: numbers, booleans and null must be quoted so PlanRead
+        // parses them back as strings instead of the wrong scalar type.
+        for value in ["123", "true", "false", "null", "~", "1.5"] {
+            let quoted = yaml_quote_single_line(value);
+            assert_eq!(quoted, format!("\"{}\"", value), "value: {}", value);
+        }
+        // Plain string values stay bare.
+        assert_eq!(yaml_quote_single_line("Set up auth"), "Set up auth");
+        assert_eq!(yaml_quote_single_line("deploy-api"), "deploy-api");
+    }
+
+    #[test]
+    fn apply_updates_text_quotes_numeric_content() {
+        // PLAN-03: writing a numeric-looking content must round-trip as a
+        // string through the parser.
+        let content = "---\ntodos:\n- id: a\n  content: Old\n  status: pending\n---\n\nbody";
+        let updates = vec![TodoUpdate {
+            id: "a".to_string(),
+            status: None,
+            content: Some("123".to_string()),
+            dependencies: None,
+        }];
+        let updated = apply_updates_text(content, &updates).expect("apply updates");
+        assert!(updated.contains("  content: \"123\""), "{}", updated);
+
+        let (frontmatter, _) = parse_plan_file(&updated).expect("re-parse");
+        assert_eq!(
+            frontmatter["todos"][0]["content"].as_str(),
+            Some("123"),
+            "numeric content must parse back as a string"
+        );
+    }
+
+    #[test]
+    fn yaml_quote_single_line_quotes_yaml_11_booleans_and_padding() {
+        // PLAN-03: yes/no/on/off（YAML 1.1 布尔）与带前后空白的值必须加引号，
+        // 且引号包裹后的值经 YAML 解析必须回读为原始字符串（写-读自校验）。
+        for value in [
+            "yes", "Yes", "YES", "no", "No", "NO", "on", "On", "OFF", "y", "n",
+            " padded", "padded ", "  both  ", "\tleading", "trailing\t",
+        ] {
+            let quoted = yaml_quote_single_line(value);
+            assert_ne!(quoted, value, "value must be quoted: {:?}", value);
+            let parsed: serde_yaml::Value =
+                serde_yaml::from_str(&quoted).expect("quoted value must parse");
+            assert_eq!(parsed.as_str(), Some(value), "value: {:?} -> {}", value, quoted);
+        }
+        // Plain string values stay bare.
+        assert_eq!(yaml_quote_single_line("Set up auth"), "Set up auth");
+        assert_eq!(yaml_quote_single_line("deploy-api"), "deploy-api");
+    }
+
+    #[test]
+    fn apply_updates_text_round_trips_boolean_like_and_padded_content() {
+        // PLAN-03: 写后回读自校验 —— content 为数字/布尔/null/YAML 1.1 布尔
+        // 或带前后空白时，PlanRead 同款 parse_plan_file 必须按原始字符串回读，
+        // as_str() 不能得 None、也不能丢掉首尾空白。
+        let content = "---\ntodos:\n- id: a\n  content: Old\n  status: pending\n---\n\nbody";
+        for value in [
+            "123", "1.5", "true", "false", "null", "~",
+            "yes", "no", "on", "off",
+            " padded", "padded ", "  both  ", "\tleading", "trailing\t",
+        ] {
+            let updates = vec![TodoUpdate {
+                id: "a".to_string(),
+                status: None,
+                content: Some(value.to_string()),
+                dependencies: None,
+            }];
+            let updated = apply_updates_text(content, &updates).expect("apply updates");
+            let (frontmatter, _) = parse_plan_file(&updated).expect("re-parse updated plan");
+            assert_eq!(
+                frontmatter["todos"][0]["content"].as_str(),
+                Some(value),
+                "content {:?} must round-trip as a string (PlanRead-style parse)",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn validate_updates_rejects_duplicate_ids() {
+        // PLAN-08: duplicate ids in one batch must error instead of the second
+        // silently overriding the first.
+        let content = "---\ntodos:\n- id: a\n  content: A\n  status: pending\n- id: b\n  content: B\n  status: pending\n---\n\nbody";
+        let (frontmatter, _) = parse_plan_file(content).expect("parse plan file");
+        let updates = vec![
+            status_update("a", "in_progress"),
+            status_update("a", "completed"),
+        ];
+        let error = validate_updates(&frontmatter, &updates)
+            .expect_err("duplicate id must error");
+        assert!(
+            error.to_string().contains("Duplicate todo id in updates: a"),
+            "unexpected error: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn validate_updates_rejects_dangling_dependency() {
+        // PLAN-06: a dependency referencing a missing todo id must error.
+        let content = "---\ntodos:\n- id: a\n  content: A\n  status: pending\n- id: b\n  content: B\n  status: pending\n---\n\nbody";
+        let (frontmatter, _) = parse_plan_file(content).expect("parse plan file");
+        let updates = vec![TodoUpdate {
+            id: "b".to_string(),
+            status: None,
+            content: None,
+            dependencies: Some(vec!["missing-todo".to_string()]),
+        }];
+        let error = validate_updates(&frontmatter, &updates)
+            .expect_err("dangling dependency must error");
+        let message = error.to_string();
+        assert!(
+            message.contains("Dependency todo id not found in plan: missing-todo"),
+            "unexpected error: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn validate_updates_rejects_self_loop() {
+        // PLAN-06: a todo depending on itself must error.
+        let content = "---\ntodos:\n- id: a\n  content: A\n  status: pending\n---\n\nbody";
+        let (frontmatter, _) = parse_plan_file(content).expect("parse plan file");
+        let updates = vec![TodoUpdate {
+            id: "a".to_string(),
+            status: None,
+            content: None,
+            dependencies: Some(vec!["a".to_string()]),
+        }];
+        let error = validate_updates(&frontmatter, &updates)
+            .expect_err("self-loop must error");
+        let message = error.to_string();
+        assert!(
+            message.contains("Todo dependency cycle detected"),
+            "unexpected error: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn validate_updates_rejects_dependency_cycle() {
+        // PLAN-06: a -> b -> a must error (detected even when only 'a' is
+        // updated and 'b' keeps its existing dependency).
+        let content = "---\ntodos:\n- id: a\n  content: A\n  status: pending\n  dependencies:\n  - b\n- id: b\n  content: B\n  status: pending\n---\n\nbody";
+        let (frontmatter, _) = parse_plan_file(content).expect("parse plan file");
+        let updates = vec![TodoUpdate {
+            id: "b".to_string(),
+            status: None,
+            content: None,
+            dependencies: Some(vec!["a".to_string()]),
+        }];
+        let error = validate_updates(&frontmatter, &updates)
+            .expect_err("a -> b -> a cycle must error");
+        let message = error.to_string();
+        assert!(
+            message.contains("Todo dependency cycle detected"),
+            "unexpected error: {}",
+            message
+        );
+    }
+
+    #[test]
+    fn validate_updates_accepts_acyclic_dependencies() {
+        let content = "---\ntodos:\n- id: a\n  content: A\n  status: pending\n- id: b\n  content: B\n  status: pending\n- id: c\n  content: C\n  status: pending\n---\n\nbody";
+        let (frontmatter, _) = parse_plan_file(content).expect("parse plan file");
+        let updates = vec![TodoUpdate {
+            id: "c".to_string(),
+            status: None,
+            content: None,
+            dependencies: Some(vec!["b".to_string()]),
+        }];
+        let applied = validate_updates(&frontmatter, &updates).expect("acyclic update");
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0]["id"].as_str(), Some("c"));
+    }
+
+    #[test]
+    fn plan_update_permission_intents_emits_edit_for_resolved_plan() {
+        // PLAN-02: the write must surface a non-empty edit intent so the
+        // permission system can gate it.
+        let dir = std::env::temp_dir().join(format!("plan-update-intent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("plans")).expect("plans dir should be created");
+        let plan_path = dir.join("plans/my_plan_1234.plan.md");
+        std::fs::write(&plan_path, "---\nname: X\ntodos:\n- id: a\n  content: A\n  status: pending\n---\n\nbody")
+            .expect("write plan file");
+        let mut context = ToolUseContext::for_tool_listing(
+            Some(crate::agentic::WorkspaceBinding::new(None, dir.clone())),
+            None,
+        );
+        context.custom_data.insert(
+            "__bitfun_test_runtime_root".to_string(),
+            json!(dir.to_string_lossy().to_string()),
+        );
+
+        let intents = PlanUpdateTool::new()
+            .permission_intents(
+                &json!({
+                    "plan_file": plan_path.to_string_lossy(),
+                    "updates": [{"id": "a", "status": "completed"}]
+                }),
+                &context,
+            )
+            .expect("permission intents");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(!intents.is_empty(), "edit intent must be emitted");
+        assert_eq!(intents[0].action, "edit");
     }
 }
