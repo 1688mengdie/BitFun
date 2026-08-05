@@ -57,6 +57,7 @@ const pendingImageAnalysisTurns = new Map<string, string>();
 import { 
   debouncedSaveDialogTurn, 
   immediateSaveDialogTurn, 
+  persistLastRequestTokenUsage,
   saveDialogTurnToDisk,
   cleanupSaveState,
 } from './PersistenceModule';
@@ -2135,6 +2136,17 @@ function handleTokenUsageUpdate(context: FlowChatContext, event: any): void {
     outputTokens: typeof outputTokens === 'number' ? outputTokens : undefined,
     totalTokens
   }, turnId);
+
+  // Persist the exact last request usage so the context display survives a
+  // restart. Skip ACP sessions: their display is driven by
+  // currentAcpContextUsage instead.
+  if (!session.mode?.startsWith('acp:') && !session.config.agentType?.startsWith('acp:')) {
+    persistLastRequestTokenUsage(context, sessionId, {
+      inputTokens,
+      outputTokens: typeof outputTokens === 'number' ? outputTokens : undefined,
+      totalTokens,
+    });
+  }
 
   if (maxContextTokens !== undefined && maxContextTokens !== null) {
     store.updateSessionMaxContextTokens(sessionId, maxContextTokens);
