@@ -207,9 +207,22 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
   };
 
   return (
-    <div className="bitfun-reasoning-preset-editor" data-testid="settings-reasoning-preset-editor">
-      <section className="bitfun-reasoning-preset-editor__section">
-        <div className="bitfun-reasoning-preset-editor__primary-settings">
+    <div
+      className="bitfun-reasoning-preset-editor"
+      data-bf-component="reasoning-preset-editor"
+      data-bf-part="root"
+      data-testid="settings-reasoning-preset-editor"
+    >
+      <section
+        className="bitfun-reasoning-preset-editor__section"
+        data-bf-component="reasoning-preset-editor"
+        data-bf-part="section"
+      >
+        <div
+          className="bitfun-reasoning-preset-editor__primary-settings"
+          data-bf-component="reasoning-preset-editor"
+          data-bf-part="primarySettings"
+        >
           <div className="bitfun-reasoning-preset-editor__primary-setting">
             <span className="bitfun-reasoning-preset-editor__primary-setting-label">
               {t('reasoningPresets.catalogSource')}
@@ -269,7 +282,11 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
         </div>
 
         {catalog.source === 'models_dev' && (
-          <div className="bitfun-reasoning-preset-editor__models-dev-binding">
+          <div
+            className="bitfun-reasoning-preset-editor__models-dev-binding"
+            data-bf-component="reasoning-preset-editor"
+            data-bf-part="binding"
+          >
             <div className="bitfun-reasoning-preset-editor__binding-field">
               <span>{t('reasoningPresets.catalogProvider')}</span>
               <Input
@@ -302,7 +319,11 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
         {generatedProjection?.status === 'known'
           && (generatedProjection.presets?.some(preset => preset.source !== 'model_config') ?? false)
           && (
-          <div className="bitfun-reasoning-preset-editor__generated">
+          <div
+            className="bitfun-reasoning-preset-editor__generated"
+            data-bf-component="reasoning-preset-editor"
+            data-bf-part="generated"
+          >
             <div className="bitfun-reasoning-preset-editor__generated-title">
               {t('reasoningPresets.generatedTitle')}
             </div>
@@ -317,8 +338,16 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
           )}
       </section>
 
-      <section className="bitfun-reasoning-preset-editor__section">
-        <div className="bitfun-reasoning-preset-editor__header">
+      <section
+        className="bitfun-reasoning-preset-editor__section"
+        data-bf-component="reasoning-preset-editor"
+        data-bf-part="section"
+      >
+        <div
+          className="bitfun-reasoning-preset-editor__header"
+          data-bf-component="reasoning-preset-editor"
+          data-bf-part="header"
+        >
           <div className="bitfun-reasoning-preset-editor__section-title-group">
             <div className="bitfun-reasoning-preset-editor__section-title">
               {t('reasoningPresets.customTitle')}
@@ -341,18 +370,35 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
         </div>
 
         {presets.length === 0 ? (
-          <div className="bitfun-reasoning-preset-editor__empty">{t('reasoningPresets.empty')}</div>
+          <div
+            className="bitfun-reasoning-preset-editor__empty"
+            data-bf-component="reasoning-preset-editor"
+            data-bf-part="empty"
+          >
+            {t('reasoningPresets.empty')}
+          </div>
         ) : (
-          <div className="bitfun-reasoning-preset-editor__list">
+          <div
+            className="bitfun-reasoning-preset-editor__list"
+            data-bf-component="reasoning-preset-editor"
+            data-bf-part="list"
+          >
             {presets.map((preset, presetIndex) => {
               const expanded = expandedPresetIndex === presetIndex;
               return (
                 <div
                   key={`${preset.id}-${presetIndex}`}
                   className="bitfun-reasoning-preset-editor__row"
+                  data-bf-component="reasoning-preset-editor"
+                  data-bf-part="preset"
+                  data-bf-state={expanded ? 'expanded' : undefined}
                   data-expanded={expanded ? 'true' : 'false'}
                 >
-                  <div className="bitfun-reasoning-preset-editor__row-summary">
+                  <div
+                    className="bitfun-reasoning-preset-editor__row-summary"
+                    data-bf-component="reasoning-preset-editor"
+                    data-bf-part="presetSummary"
+                  >
                     <button
                       type="button"
                       className="bitfun-reasoning-preset-editor__row-toggle"
@@ -410,7 +456,11 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                   </div>
 
                   {expanded && (
-                    <div className="bitfun-reasoning-preset-editor__row-editor">
+                    <div
+                      className="bitfun-reasoning-preset-editor__row-editor"
+                      data-bf-component="reasoning-preset-editor"
+                      data-bf-part="presetEditor"
+                    >
                       <div className="bitfun-reasoning-preset-editor__row-head">
                         <div className="bitfun-reasoning-preset-editor__row-head-field">
                           <span>{t('reasoningPresets.id')}</span>
@@ -445,14 +495,23 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                         </div>
                       </div>
 
-                      <div className="bitfun-reasoning-preset-editor__actions">
+                      <div
+                        className="bitfun-reasoning-preset-editor__actions"
+                        data-bf-component="reasoning-preset-editor"
+                        data-bf-part="actions"
+                      >
                   {(preset.actions ?? []).map((action, actionIndex) => {
                     const jsonKey = `${presetIndex}:${actionIndex}`;
                     const jsonValue = jsonDrafts[jsonKey]
                       ?? (action.type === 'request_patch' ? JSON.stringify(action.body, null, 2) : '{}');
                     const jsonIsValid = action.type !== 'request_patch' || parseJsonObject(jsonValue) !== null;
                     return (
-                      <div key={jsonKey} className="bitfun-reasoning-preset-editor__action">
+                      <div
+                        key={jsonKey}
+                        className="bitfun-reasoning-preset-editor__action"
+                        data-bf-component="reasoning-preset-editor"
+                        data-bf-part="action"
+                      >
                         <Select
                           size="small"
                           value={action.type}
@@ -530,7 +589,11 @@ export const ReasoningPresetEditor: React.FC<ReasoningPresetEditorProps> = ({
                             />
                           </div>
                         )}
-                        <div className="bitfun-reasoning-preset-editor__action-controls">
+                        <div
+                          className="bitfun-reasoning-preset-editor__action-controls"
+                          data-bf-component="reasoning-preset-editor"
+                          data-bf-part="actionControls"
+                        >
                           <IconButton size="small" variant="ghost" tooltip={t('reasoningPresets.moveUp')} disabled={disabled || actionIndex === 0} onClick={() => moveAction(presetIndex, actionIndex, -1)}><ArrowUp size={14} /></IconButton>
                           <IconButton size="small" variant="ghost" tooltip={t('reasoningPresets.moveDown')} disabled={disabled || actionIndex === (preset.actions?.length ?? 0) - 1} onClick={() => moveAction(presetIndex, actionIndex, 1)}><ArrowDown size={14} /></IconButton>
                           <IconButton

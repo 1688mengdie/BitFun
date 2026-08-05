@@ -40,8 +40,16 @@ export const ReasoningConfigPanel: React.FC<ReasoningConfigPanelProps> = ({
   const invalid = editorInvalid || validationError !== null;
 
   return (
-    <div className="bitfun-reasoning-config-panel">
-      <div className="bitfun-reasoning-config-panel__body">
+    <div
+      className="bitfun-reasoning-config-panel"
+      data-bf-component="reasoning-config-panel"
+      data-bf-part="root"
+    >
+      <div
+        className="bitfun-reasoning-config-panel__body"
+        data-bf-component="reasoning-config-panel"
+        data-bf-part="body"
+      >
         <ReasoningPresetEditor
           value={draft}
           generatedProjection={activeGeneratedProjection}
@@ -49,14 +57,27 @@ export const ReasoningConfigPanel: React.FC<ReasoningConfigPanelProps> = ({
           onValidationChange={setEditorInvalid}
         />
       </div>
-      <div className="bitfun-reasoning-config-panel__footer">
+      <div
+        className="bitfun-reasoning-config-panel__footer"
+        data-bf-component="reasoning-config-panel"
+        data-bf-part="footer"
+      >
         {invalid && (
-          <div className="bitfun-reasoning-config-panel__error" role="alert">
+          <div
+            className="bitfun-reasoning-config-panel__error"
+            data-bf-component="reasoning-config-panel"
+            data-bf-part="error"
+            role="alert"
+          >
             <AlertTriangle size={14} aria-hidden="true" />
             <span>{t('reasoningPresets.validationError')}</span>
           </div>
         )}
-        <div className="bitfun-reasoning-config-panel__actions">
+        <div
+          className="bitfun-reasoning-config-panel__actions"
+          data-bf-component="reasoning-config-panel"
+          data-bf-part="actions"
+        >
           <Button variant="secondary" onClick={onCancel}>
             {t('actions.cancel')}
           </Button>

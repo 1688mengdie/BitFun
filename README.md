@@ -4,9 +4,9 @@
 
 ![BitFun](./png/BitFun_title.png)
 
-### An open-source desktop agent that builds the interface your task needs.
+### An open-source desktop AI agent that turns every task into an app you can open
 
-Agentic Mini Apps · self-hosted multi-device control · a Rust runtime you can reshape.
+Writes code, produces documents, drives the desktop. The Mini Apps, the runtime, and the device-sync server are all yours. MIT.
 
 [**⬇ Download for macOS · Windows · Linux**](https://github.com/GCWing/BitFun/releases/latest)
 
@@ -26,6 +26,21 @@ Agentic Mini Apps · self-hosted multi-device control · a Rust runtime you can 
      See scripts/record-demo.sh — this is the single highest-impact asset in this README. -->
 
 ![BitFun desktop app](./png/first_screen_screenshot.png)
+
+---
+
+## Key features
+
+| Feature | What it does |
+| --- | --- |
+| **Agentic Mini Apps** | A task gets its own interface — chart, board, form, panel — with a conversation bound to that interface's live state |
+| **Self-hosted multi-device control** | Login, cross-device session sync, and controlling one device from another run through a relay you deploy. Zero-knowledge; no vendor cloud in the path |
+| **Coding** | Plan, edit, test, and commit inside real Git repositories. Agentic, Plan, Debug, Deep Review, long-horizon tasks |
+| **Office work** | Research, writing, PPT, DOCX, XLSX, PDF, meeting notes, reports |
+| **Desktop execution** | Browser, terminal, desktop applications, the filesystem, and remote workspaces |
+| **Four tiers of customization** | Custom Agents → MCP / Skills / Hooks → Mini Apps → source-level changes |
+| **Performance** | 98.67% average KV cache hit rate; flashgrep searches Chromium-scale trees ~36x faster |
+| **Cross-platform and open** | Windows, macOS, and Linux. MIT. Model-agnostic — you choose what it runs on |
 
 ---
 
