@@ -13,6 +13,8 @@ fn base_input(action: SessionControlAction) -> SessionControlInput {
         session_id: None,
         session_name: None,
         agent_type: None,
+        short_name: None,
+        detail: None,
     }
 }
 
