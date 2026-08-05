@@ -1,7 +1,8 @@
 use crate::session_state::SessionState;
 pub use bitfun_core_types::SessionKind;
 pub use bitfun_core_types::{
-    SessionContinuationPolicy, SessionExecutionTarget, SessionModelBindingPolicy,
+    SessionAgentRouteOwner, SessionContinuationPolicy, SessionExecutionTarget,
+    SessionModelBindingPolicy,
 };
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
@@ -138,6 +139,7 @@ impl Session {
 impl From<Session> for bitfun_runtime_ports::AgentSessionCreateResult {
     fn from(session: Session) -> Self {
         let mut result = Self::new(session.session_id, session.session_name, session.agent_type);
+        result.model_id = session.config.model_id;
         result.workspace_path = session.config.workspace_path;
         result.workspace_id = session.config.workspace_id;
         result.project_workspace_path = session.config.project_workspace_path;
@@ -197,6 +199,10 @@ pub struct SessionConfig {
     /// Mutable sessions leave this unset and continue to resolve selectors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_fingerprint: Option<String>,
+    /// Durable owner of the logical main-agent route. External ownership is
+    /// revalidated for every turn and never falls back by name alone.
+    #[serde(default, skip_serializing_if = "is_local_agent_route_owner")]
+    pub agent_route_owner: SessionAgentRouteOwner,
 }
 
 fn is_reusable_continuation_policy(policy: &SessionContinuationPolicy) -> bool {
@@ -205,6 +211,10 @@ fn is_reusable_continuation_policy(policy: &SessionContinuationPolicy) -> bool {
 
 fn is_mutable_model_binding_policy(policy: &SessionModelBindingPolicy) -> bool {
     *policy == SessionModelBindingPolicy::Mutable
+}
+
+fn is_local_agent_route_owner(owner: &SessionAgentRouteOwner) -> bool {
+    *owner == SessionAgentRouteOwner::Local
 }
 
 impl Default for SessionConfig {
@@ -227,6 +237,7 @@ impl Default for SessionConfig {
             continuation_policy: SessionContinuationPolicy::default(),
             model_binding_policy: SessionModelBindingPolicy::default(),
             model_binding_fingerprint: None,
+            agent_route_owner: SessionAgentRouteOwner::Local,
         }
     }
 }
@@ -299,7 +310,8 @@ pub fn sanitize_persisted_session_state(state: &SessionState) -> SessionState {
 mod tests {
     use super::{
         sanitize_persisted_session_state, CompressionState, PersistedSessionStateFile, Session,
-        SessionConfig, SessionContinuationPolicy, SessionModelBindingPolicy,
+        SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy,
+        SessionModelBindingPolicy,
     };
     use crate::session_state::{ProcessingPhase, SessionState};
     use bitfun_core_types::{
@@ -332,6 +344,25 @@ mod tests {
             config.model_binding_policy,
             SessionModelBindingPolicy::Mutable
         );
+        assert_eq!(config.agent_route_owner, SessionAgentRouteOwner::Local);
+    }
+
+    #[test]
+    fn external_agent_route_owner_persists_and_legacy_sessions_default_local() {
+        let config = SessionConfig {
+            agent_route_owner: SessionAgentRouteOwner::External,
+            ..SessionConfig::default()
+        };
+        let mut serialized = serde_json::to_value(&config).expect("serialize session config");
+        assert_eq!(serialized["agent_route_owner"], "external");
+
+        serialized
+            .as_object_mut()
+            .expect("session config object")
+            .remove("agent_route_owner");
+        let restored: SessionConfig =
+            serde_json::from_value(serialized).expect("deserialize legacy session config");
+        assert_eq!(restored.agent_route_owner, SessionAgentRouteOwner::Local);
     }
 
     #[test]
@@ -401,6 +432,7 @@ mod tests {
             "Main".to_string(),
             "agentic".to_string(),
             SessionConfig {
+                model_id: Some("provider/model".to_string()),
                 workspace_path: Some("/worktrees/session_1".to_string()),
                 workspace_id: Some("workspace_1".to_string()),
                 project_workspace_path: Some("/workspace/project".to_string()),
@@ -414,6 +446,7 @@ mod tests {
         assert_eq!(result.session_id, "session_1");
         assert_eq!(result.session_name, "Main");
         assert_eq!(result.agent_type, "agentic");
+        assert_eq!(result.model_id.as_deref(), Some("provider/model"));
         assert_eq!(
             result.workspace_path.as_deref(),
             Some("/worktrees/session_1")

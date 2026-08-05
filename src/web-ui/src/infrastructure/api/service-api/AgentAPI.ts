@@ -80,6 +80,7 @@ export interface CreateSessionResponse {
   sessionId: string;
   sessionName: string;
   agentType: string;
+  modelId?: string;
   workspacePath?: string;
   workspaceId?: string;
   projectWorkspacePath?: string;
@@ -313,6 +314,15 @@ export interface UpdateSessionModelRequest {
   sessionId: string;
   modelName: string;
   reasoningPreset?: string | null;
+  workspacePath?: string;
+  remoteConnectionId?: string;
+  remoteSshHost?: string;
+  includeInternal?: boolean;
+}
+
+export interface UpdateSessionModeRequest {
+  sessionId: string;
+  modeId: string;
   workspacePath?: string;
   remoteConnectionId?: string;
   remoteSshHost?: string;
@@ -960,6 +970,14 @@ export class AgentAPI {
     }
   }
 
+  async updateSessionMode(request: UpdateSessionModeRequest): Promise<void> {
+    try {
+      await api.invoke<void>('update_session_mode', { request });
+    } catch (error) {
+      throw createTauriCommandError('update_session_mode', error, request);
+    }
+  }
+
   async reloadSessionContext(
     request: AgentContextReloadRequest,
   ): Promise<void> {
@@ -1356,9 +1374,15 @@ export class AgentAPI {
   
 
    
-  async getAvailableModes(): Promise<ModeInfo[]> {
+  async getAvailableModes(request: {
+    workspacePath?: string;
+    remoteConnectionId?: string;
+    remoteSshHost?: string;
+  } = {}): Promise<ModeInfo[]> {
     try {
-      return await api.invoke<ModeInfo[]>('get_available_modes');
+      return await api.invoke<ModeInfo[]>('get_available_modes', {
+        request,
+      });
     } catch (error) {
       throw createTauriCommandError('get_available_modes', error);
     }

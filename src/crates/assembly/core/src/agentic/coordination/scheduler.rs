@@ -32,7 +32,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::{ThreadGoal, MAX_THREAD_GOAL_AUTO_CONTINUATIONS};
 use log::{debug, info, warn};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::sync::OnceLock;
@@ -58,11 +58,12 @@ use bitfun_agent_runtime::scheduler::{
 use bitfun_runtime_ports::{
     resolve_dialog_submit_queue_action, AgentBackgroundResultRequest, AgentDialogPrependedReminder,
     AgentDialogSteerRequest, AgentDialogTurnExecution, AgentDialogTurnPort, AgentDialogTurnRequest,
-    AgentInputAttachment, AgentLifecycleDeliveryPort, AgentThreadGoalDeliveryKind,
-    AgentThreadGoalDeliveryRequest, AgentTurnCancellationPort, AgentTurnCancellationRequest,
-    AgentTurnCancellationResult, DialogSessionStateFact, DialogSubmitQueueAction,
-    DialogSubmitQueueFacts, PortError, PortErrorKind, PortResult, RoundInjection,
-    RoundInjectionKind, SessionStoragePathRequest, SessionStorePort,
+    AgentInputAttachment, AgentLifecycleDeliveryPort, AgentSessionLineageInspection,
+    AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest, AgentTurnCancellationPort,
+    AgentTurnCancellationRequest, AgentTurnCancellationResult, DialogSessionStateFact,
+    DialogSubmitQueueAction, DialogSubmitQueueFacts, PortError, PortErrorKind, PortResult,
+    RoundInjection, RoundInjectionKind, SessionStoragePathRequest, SessionStorePort,
+    SessionTranscriptRequest,
 };
 pub use bitfun_runtime_ports::{
     AgentSessionReplyRoute, DialogQueuePriority, DialogSteerOutcome, DialogSubmissionPolicy,
@@ -640,10 +641,24 @@ impl DialogScheduler {
         user_message_metadata: Option<serde_json::Value>,
     ) -> Result<(), String> {
         let _operation_guard = self.lock_session_operation(&session_id).await;
+        let session_agent_type = self
+            .resolve_session_agent_type(
+                &session_id,
+                workspace_path.as_deref(),
+                remote_connection_id.as_deref(),
+                remote_ssh_host.as_deref(),
+            )
+            .await?;
+        if session_agent_type != agent_type {
+            debug!(
+                "Background result delivery replaced execution agent key with Session logical route: session_id={}, execution_agent_type={}, session_agent_type={}",
+                session_id, agent_type, session_agent_type
+            );
+        }
         let display = display_content.unwrap_or_else(|| content.clone());
         let delivery = BackgroundResultDelivery {
             session_id: session_id.clone(),
-            agent_type,
+            agent_type: session_agent_type,
             workspace_path,
             remote_connection_id,
             remote_ssh_host,
@@ -1286,10 +1301,68 @@ impl DialogScheduler {
         session_id: &str,
         wait_timeout: Duration,
     ) -> BitFunResult<Option<String>> {
+        self.cancel_active_turn_for_session_with_descendant_policy(session_id, wait_timeout, true)
+            .await
+    }
+
+    pub(crate) async fn inspect_loaded_lineage_session(
+        &self,
+        storage_path: &Path,
+        request: SessionTranscriptRequest,
+        required_settled_turn_ids: &[String],
+    ) -> PortResult<Option<AgentSessionLineageInspection>> {
+        let _operation_guard = self.lock_session_operation(&request.session_id).await;
+        self.coordinator
+            .inspect_loaded_lineage_session_in_storage(
+                storage_path,
+                request,
+                required_settled_turn_ids,
+            )
+            .await
+    }
+
+    pub(crate) async fn cancel_lineage_session_in_storage(
+        &self,
+        storage_path: &Path,
+        session_id: &str,
+        expected_active_turn_id: Option<&str>,
+        wait_timeout: Duration,
+    ) -> BitFunResult<Option<String>> {
+        let deadline = Instant::now() + wait_timeout;
+        let _operation_guard = tokio::time::timeout(
+            wait_timeout,
+            self.lock_session_operation(session_id),
+        )
+        .await
+        .map_err(|_| {
+            BitFunError::Timeout(format!(
+                "Timed out acquiring the Session operation lock before lineage cancellation: session_id={session_id}"
+            ))
+        })?;
+        self.coordinator
+            .cancel_loaded_lineage_session_in_storage(
+                storage_path,
+                session_id,
+                expected_active_turn_id,
+                deadline.saturating_duration_since(Instant::now()),
+            )
+            .await
+    }
+
+    async fn cancel_active_turn_for_session_with_descendant_policy(
+        &self,
+        session_id: &str,
+        wait_timeout: Duration,
+        cancel_descendants: bool,
+    ) -> BitFunResult<Option<String>> {
         let _operation_guard = self.lock_session_operation(session_id).await;
         abort_thread_goal_continuation_for_session(session_id);
         self.coordinator
-            .cancel_active_turn_for_session(session_id, wait_timeout)
+            .cancel_active_turn_for_session_with_descendant_policy(
+                session_id,
+                wait_timeout,
+                cancel_descendants,
+            )
             .await
     }
 
@@ -2444,9 +2517,13 @@ impl AgentTurnCancellationPort for DialogScheduler {
             .await
             .map_err(|error| PortError::new(PortErrorKind::Backend, error.to_string()))?
         } else {
-            self.cancel_active_turn_for_session(&session_id, wait_timeout)
-                .await
-                .map_err(|error| PortError::new(PortErrorKind::Backend, error.to_string()))?
+            self.cancel_active_turn_for_session_with_descendant_policy(
+                &session_id,
+                wait_timeout,
+                request.cancel_descendants,
+            )
+            .await
+            .map_err(|error| PortError::new(PortErrorKind::Backend, error.to_string()))?
         };
 
         Ok(AgentTurnCancellationResult {
@@ -2755,6 +2832,40 @@ mod tests {
             .take_pending(session_id, turn_id);
         assert_eq!(pending.len(), 1);
         assert_eq!(scheduler.queue_depth(session_id), 0);
+    }
+
+    #[tokio::test]
+    async fn idle_background_result_uses_the_session_logical_agent_route() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "external-parent-session";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "External parent".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create parent session");
+
+        scheduler
+            .deliver_background_result(
+                session_id.to_string(),
+                "external::opencode::agentic::generation-v1".to_string(),
+                None,
+                None,
+                None,
+                "Background Bash command completed".to_string(),
+                None,
+                None,
+            )
+            .await
+            .expect("lifecycle delivery must follow the persisted logical session route");
     }
 
     fn standard_queued_turn(turn_id: &str) -> QueuedTurn {

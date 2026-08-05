@@ -75,6 +75,10 @@ restrictions remain enforced.
 - Local effects such as `/editor`, copy, and export stay local. Product work
   such as shell execution, session mutation, and permissions goes through typed
   Runtime owners.
+- Session-lineage membership, order, legacy relationship normalization,
+  transcript reads, and targeted cancellation stay in shared Runtime owners.
+  TUI may keep only the selector/read-only inspection state and must preserve
+  the root composer while a descendant is visible.
 - Always restore raw mode, alternate screen, mouse capture, paste mode, and the
   cursor on success, error, cancellation, initialization failure, or panic.
 - Protocol stdout contains only the selected result format. Logs are English,
@@ -84,6 +88,10 @@ restrictions remain enforced.
 
 - Assemble CLI through `DeliveryProfile::Cli` and validated product Runtime
   parts. Hiding a command is not a backend capability restriction.
+- The CLI selects the reviewed `bitfun-core` owner-feature closure
+  (`agent-runtime`, `canvas-runtime`, `external-sources`, `plugin-runtime`, and
+  `ssh-remote`). Do not replace it with `product-full` or a CLI-named umbrella;
+  add a Core feature only when a production CLI path consumes that owner.
 - CLI consumes typed external-source summaries and actions. It does not parse
   source files, import executable modules, start plugin workers, duplicate
   approval state, or treat static discovery as runtime availability.
@@ -96,6 +104,13 @@ restrictions remain enforced.
 Detailed compatibility rules belong in the dedicated architecture documents,
 not in this file.
 
+## Commands
+
+```bash
+pnpm run cli:dev
+pnpm run cli:install
+```
+
 ## Verification
 
 Run the smallest checks matching the changed path:
@@ -105,14 +120,11 @@ cargo check -p bitfun-cli
 cargo test -p bitfun-cli
 ```
 
-Also run focused owner tests when a surface crosses a shared boundary:
-
-- Agent Runtime port/SDK changes: `cargo test -p bitfun-agent-runtime`
-- Shared IPC/protocol changes: `cargo test -p bitfun-agent-runtime-ipc`
-- Core turn/tool/persistence behavior: the focused `bitfun-core` tests, then
-  the repository shared-Rust verification row
-- terminal lifecycle/input changes: the nearest PTY/ConPTY or input test
-- product/packaging changes: product assembly and archive smoke paths
+When a CLI change crosses a shared boundary, use the focused command maintained
+by that owner: Agent Runtime for port/SDK behavior, the IPC adapter for shared
+protocol behavior, Core for turn/tool/persistence behavior, Terminal for
+PTY/ConPTY lifecycle, and Product Assembly for packaging. Do not copy those
+owners' commands into this guide.
 
 Use [`README.md`](README.md) for user-facing behavior and installation. Keep
 developer internals here or in architecture docs instead of expanding the user

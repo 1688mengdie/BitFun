@@ -13,16 +13,20 @@ use bitfun_runtime_ports::{
     AgentBackgroundResultRequest, AgentDialogSteerRequest, AgentDialogTurnPort,
     AgentDialogTurnRequest, AgentInputAttachment, AgentLifecycleDeliveryPort,
     AgentLocalCommandTurnPort, AgentLocalCommandTurnRecordRequest,
-    AgentMessageWorkspaceReferencesRequest, AgentSessionArchiveRequest,
+    AgentLocalCommandTurnRecordResult, AgentMessageWorkspaceReferencesRequest,
+    AgentSessionArchiveRequest,
     AgentSessionArchiveStateRequest, AgentSessionClosePort, AgentSessionCompactionPort,
     AgentSessionCompactionRequest, AgentSessionCompactionResult, AgentSessionCreateRequest,
     AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest,
     AgentSessionForkBeforeTurnRequest, AgentSessionForkPort, AgentSessionForkRequest,
-    AgentSessionForkResult, AgentSessionListRequest, AgentSessionManagementPort,
-    AgentSessionModePort, AgentSessionModeUpdateRequest, AgentSessionModelPort,
-    AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest,
-    AgentSessionRenameRequest, AgentSessionRevertPort, AgentSessionRevertRequest,
-    AgentSessionRevertResult, AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
+    AgentSessionForkResult, AgentSessionLineageCancellationRequest,
+    AgentSessionLineageInspection, AgentSessionLineagePort, AgentSessionLineageRequest,
+    AgentSessionLineageSnapshot, AgentSessionLineageTranscriptRequest, AgentSessionListRequest,
+    AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
+    AgentSessionModelPort, AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRenameRequest,
+    AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
+    AgentSessionSummary, AgentSessionUsagePort, AgentSessionUsageRequest,
     AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
     AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
     AgentThreadGoalCreateRequest, AgentThreadGoalDeliveryRequest, AgentThreadGoalGetRequest,
@@ -63,6 +67,8 @@ pub enum RuntimeError {
     MissingCancellationPort,
     #[error("agent session management port is not registered")]
     MissingSessionManagementPort,
+    #[error("agent session lineage port is not registered")]
+    MissingSessionLineagePort,
     #[error("agent workspace reference port is not registered")]
     MissingWorkspaceReferencePort,
     #[error("agent session restore port is not registered")]
@@ -193,6 +199,7 @@ pub trait RuntimeAgentRegistry: Send + Sync {
 pub struct AgentRuntime {
     submission: Arc<dyn AgentSubmissionPort>,
     session_management: Option<Arc<dyn AgentSessionManagementPort>>,
+    session_lineage: Option<Arc<dyn AgentSessionLineagePort>>,
     workspace_references: Option<Arc<dyn AgentWorkspaceReferencePort>>,
     session_close: Option<Arc<dyn AgentSessionClosePort>>,
     session_mode: Option<Arc<dyn AgentSessionModePort>>,
@@ -232,6 +239,13 @@ impl std::fmt::Debug for AgentRuntime {
                     .session_management
                     .as_ref()
                     .map(|_| "<dyn AgentSessionManagementPort>"),
+            )
+            .field(
+                "session_lineage",
+                &self
+                    .session_lineage
+                    .as_ref()
+                    .map(|_| "<dyn AgentSessionLineagePort>"),
             )
             .field(
                 "workspace_references",
@@ -409,6 +423,7 @@ where
 pub struct AgentRuntimeBuilder {
     submission: Option<Arc<dyn AgentSubmissionPort>>,
     session_management: Option<Arc<dyn AgentSessionManagementPort>>,
+    session_lineage: Option<Arc<dyn AgentSessionLineagePort>>,
     workspace_references: Option<Arc<dyn AgentWorkspaceReferencePort>>,
     session_close: Option<Arc<dyn AgentSessionClosePort>>,
     session_mode: Option<Arc<dyn AgentSessionModePort>>,
@@ -453,6 +468,11 @@ impl AgentRuntimeBuilder {
         port: Arc<dyn AgentSessionManagementPort>,
     ) -> Self {
         self.session_management = Some(port);
+        self
+    }
+
+    pub fn with_session_lineage_port(mut self, port: Arc<dyn AgentSessionLineagePort>) -> Self {
+        self.session_lineage = Some(port);
         self
     }
 
@@ -622,6 +642,7 @@ impl AgentRuntimeBuilder {
         let Self {
             submission,
             session_management,
+            session_lineage,
             workspace_references,
             session_close,
             session_mode,
@@ -658,6 +679,7 @@ impl AgentRuntimeBuilder {
         Ok(AgentRuntime {
             submission: submission.ok_or(RuntimeBuildError::MissingSubmissionPort)?,
             session_management,
+            session_lineage,
             workspace_references,
             session_close,
             session_mode,
@@ -1114,7 +1136,7 @@ impl AgentRuntime {
     pub async fn record_completed_local_command_turn(
         &self,
         request: AgentLocalCommandTurnRecordRequest,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<AgentLocalCommandTurnRecordResult, RuntimeError> {
         let port = self
             .local_command_turn
             .as_ref()
@@ -1343,6 +1365,34 @@ impl AgentRuntime {
             .map_err(RuntimeError::from)
     }
 
+    pub async fn get_session_lineage(
+        &self,
+        request: AgentSessionLineageRequest,
+    ) -> Result<Option<AgentSessionLineageSnapshot>, RuntimeError> {
+        let lineage = self
+            .session_lineage
+            .as_ref()
+            .ok_or(RuntimeError::MissingSessionLineagePort)?;
+        lineage
+            .get_session_lineage(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
+    pub async fn read_lineage_session_transcript(
+        &self,
+        request: AgentSessionLineageTranscriptRequest,
+    ) -> Result<AgentSessionLineageInspection, RuntimeError> {
+        let lineage = self
+            .session_lineage
+            .as_ref()
+            .ok_or(RuntimeError::MissingSessionLineagePort)?;
+        lineage
+            .read_lineage_session_transcript(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
     pub async fn resolve_session_workspace_binding(
         &self,
         request: AgentSessionWorkspaceRequest,
@@ -1547,6 +1597,23 @@ impl AgentRuntime {
             .map_err(RuntimeError::from)
     }
 
+    /// Cancels one inspected descendant through the authoritative lineage
+    /// owner, which keeps workspace binding and membership validation adjacent
+    /// to the existing cancellation execution owner.
+    pub async fn cancel_lineage_session(
+        &self,
+        request: AgentSessionLineageCancellationRequest,
+    ) -> Result<AgentTurnCancellationResult, RuntimeError> {
+        let lineage = self
+            .session_lineage
+            .as_ref()
+            .ok_or(RuntimeError::MissingSessionLineagePort)?;
+        lineage
+            .cancel_lineage_session(request)
+            .await
+            .map_err(RuntimeError::from)
+    }
+
     pub async fn publish_event(&self, event: RuntimeEventEnvelope) -> Result<(), RuntimeError> {
         if self.services.is_none() && self.event_stream.is_none() {
             return Err(RuntimeError::MissingEventSink);
@@ -1624,18 +1691,21 @@ mod tests {
     use bitfun_runtime_ports::{
         AgentBackgroundResultRequest, AgentDialogTurnRequest, AgentLifecycleDeliveryPort,
         AgentSessionCompactionPort, AgentSessionCompactionRequest, AgentSessionCompactionResult,
-        AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionListRequest,
-        AgentSessionManagementPort, AgentSessionModePort, AgentSessionModeUpdateRequest,
-        AgentSessionRevertPort, AgentSessionRevertRequest, AgentSessionRevertResult,
-        AgentSessionSummary, AgentSessionWorkspaceRequest, AgentSubmissionResult,
-        AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest, AgentThreadGoalManagementPort,
-        AgentTurnCancellationResult, AgentUserShellCommandPort, AgentUserShellCommandRequest,
-        AgentUserShellCommandResult, ClockPort, DialogQueuePriority, DialogSubmissionPolicy,
-        DialogSubmitOutcome, FileSystemPort, PluginDispatchEnvelope, PluginResponseEnvelope,
-        PluginRuntimeAvailability, PluginRuntimeClient, PluginRuntimeUnavailableReason,
-        PortErrorKind, PortResult, RuntimeEventSink, RuntimeEventType, RuntimeServiceCapability,
-        SessionStorePort, SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest,
-        ThreadGoal, ThreadGoalStatus, TranscriptContent, TranscriptMessage, WorkspacePort,
+        AgentSessionCreateResult, AgentSessionDeleteRequest, AgentSessionLifecycleStatus,
+        AgentSessionLineageCancellationRequest, AgentSessionLineageEntry, AgentSessionLineagePort,
+        AgentSessionLineageRequest, AgentSessionLineageSnapshot,
+        AgentSessionLineageTranscriptRequest, AgentSessionListRequest, AgentSessionManagementPort,
+        AgentSessionModePort, AgentSessionModeUpdateRequest, AgentSessionRevertPort,
+        AgentSessionRevertRequest, AgentSessionRevertResult, AgentSessionSummary,
+        AgentSessionWorkspaceRequest, AgentSubmissionResult, AgentThreadGoalDeliveryKind,
+        AgentThreadGoalDeliveryRequest, AgentThreadGoalManagementPort, AgentTurnCancellationResult,
+        AgentUserShellCommandPort, AgentUserShellCommandRequest, AgentUserShellCommandResult,
+        ClockPort, DialogQueuePriority, DialogSubmissionPolicy, DialogSubmitOutcome,
+        FileSystemPort, PluginDispatchEnvelope, PluginResponseEnvelope, PluginRuntimeAvailability,
+        PluginRuntimeClient, PluginRuntimeUnavailableReason, PortErrorKind, PortResult,
+        RuntimeEventSink, RuntimeEventType, RuntimeServiceCapability, SessionStorePort,
+        SessionTranscript, SessionTranscriptReader, SessionTranscriptRequest, ThreadGoal,
+        ThreadGoalStatus, TranscriptContent, TranscriptMessage, WorkspacePort,
     };
     use bitfun_runtime_services::{test_support::FakeRuntimePort, RuntimeServicesBuilder};
 
@@ -1658,6 +1728,8 @@ mod tests {
         mode_updates: Mutex<Vec<AgentSessionModeUpdateRequest>>,
         undo_requests: Mutex<Vec<AgentSessionRevertRequest>>,
         transcript_requests: Mutex<Vec<SessionTranscriptRequest>>,
+        lineage_requests: Mutex<Vec<AgentSessionLineageRequest>>,
+        lineage_transcript_requests: Mutex<Vec<AgentSessionLineageTranscriptRequest>>,
         workspace_binding_requests: Mutex<Vec<AgentSessionWorkspaceRequest>>,
         thread_goal_gets: Mutex<Vec<AgentThreadGoalGetRequest>>,
         thread_goal_creates: Mutex<Vec<AgentThreadGoalCreateRequest>>,
@@ -1879,9 +1951,18 @@ mod tests {
         async fn record_completed_local_command_turn(
             &self,
             request: AgentLocalCommandTurnRecordRequest,
-        ) -> PortResult<()> {
-            self.local_command_turns.lock().unwrap().push(request);
-            Ok(())
+        ) -> PortResult<AgentLocalCommandTurnRecordResult> {
+            let mut turns = self.local_command_turns.lock().unwrap();
+            let storage_turn_index = turns.len();
+            let turn_id = request
+                .turn_id
+                .clone()
+                .unwrap_or_else(|| format!("local-command-{storage_turn_index}"));
+            turns.push(request);
+            Ok(AgentLocalCommandTurnRecordResult {
+                turn_id,
+                storage_turn_index,
+            })
         }
     }
 
@@ -1958,6 +2039,104 @@ mod tests {
                     content: TranscriptContent::Text("done".to_string()),
                 }],
             })
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AgentSessionLineagePort for FakeAgentRuntimePorts {
+        async fn get_session_lineage(
+            &self,
+            request: AgentSessionLineageRequest,
+        ) -> PortResult<Option<AgentSessionLineageSnapshot>> {
+            self.lineage_requests.lock().unwrap().push(request);
+            Ok(Some(AgentSessionLineageSnapshot {
+                root_session_id: "root_1".to_string(),
+                sessions: vec![
+                    AgentSessionLineageEntry {
+                        session_id: "root_1".to_string(),
+                        session_name: "Root".to_string(),
+                        agent_type: "agentic".to_string(),
+                        created_at_ms: 1,
+                        status: AgentSessionLifecycleStatus::Active,
+                        active_turn_id: None,
+                        parent_session_id: None,
+                        parent_tool_call_id: None,
+                        subagent_type: None,
+                        workspace_path: Some("/workspace/project".to_string()),
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        unread_completion: None,
+                        needs_user_attention: None,
+                    },
+                    AgentSessionLineageEntry {
+                        session_id: "child_1".to_string(),
+                        session_name: "Child".to_string(),
+                        agent_type: "explore".to_string(),
+                        created_at_ms: 3,
+                        status: AgentSessionLifecycleStatus::Completed,
+                        active_turn_id: None,
+                        parent_session_id: Some("root_1".to_string()),
+                        parent_tool_call_id: Some("tool_1".to_string()),
+                        subagent_type: Some("explore".to_string()),
+                        workspace_path: Some("/workspace/project".to_string()),
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        unread_completion: Some("completed".to_string()),
+                        needs_user_attention: None,
+                    },
+                ],
+            }))
+        }
+
+        async fn read_lineage_session_transcript(
+            &self,
+            request: AgentSessionLineageTranscriptRequest,
+        ) -> PortResult<AgentSessionLineageInspection> {
+            self.lineage_transcript_requests
+                .lock()
+                .unwrap()
+                .push(request.clone());
+            Ok(AgentSessionLineageInspection {
+                transcript: SessionTranscript {
+                    session_id: request.session_id,
+                    messages: vec![TranscriptMessage {
+                        id: Some("child_message".to_string()),
+                        role: "assistant".to_string(),
+                        turn_id: Some("child_turn".to_string()),
+                        timestamp_ms: Some(5),
+                        content: TranscriptContent::Text("child result".to_string()),
+                    }],
+                },
+                active_turn_id: Some("child_turn".to_string()),
+            })
+        }
+
+        async fn cancel_lineage_session(
+            &self,
+            request: AgentSessionLineageCancellationRequest,
+        ) -> PortResult<AgentTurnCancellationResult> {
+            if request.root_session_id != "root_1"
+                || request.session_id == request.root_session_id
+                || request.session_id != "child_1"
+            {
+                return Err(PortError::new(
+                    PortErrorKind::InvalidRequest,
+                    "lineage cancellation target is not a descendant of the requested root",
+                ));
+            }
+            AgentTurnCancellationPort::cancel_turn(
+                self,
+                AgentTurnCancellationRequest {
+                    session_id: request.session_id,
+                    turn_id: request.expected_active_turn_id,
+                    source: request.source,
+                    requester_session_id: None,
+                    reason: request.reason,
+                    wait_timeout_ms: request.wait_timeout_ms,
+                    cancel_descendants: true,
+                },
+            )
+            .await
         }
     }
 
@@ -2431,6 +2610,7 @@ mod tests {
                 requester_session_id: None,
                 reason: None,
                 wait_timeout_ms: None,
+                cancel_descendants: true,
             })
             .await
             .unwrap_err();
@@ -2455,6 +2635,7 @@ mod tests {
                 requester_session_id: Some("requester_session".to_string()),
                 reason: Some("user_cancelled".to_string()),
                 wait_timeout_ms: Some(100),
+                cancel_descendants: true,
             })
             .await
             .expect("cancel");
@@ -2604,7 +2785,7 @@ mod tests {
         let mut metadata = serde_json::Map::new();
         metadata.insert("kind".to_string(), serde_json::json!("usage_report"));
 
-        runtime
+        let result = runtime
             .record_completed_local_command_turn(AgentLocalCommandTurnRecordRequest {
                 session_id: "session_1".to_string(),
                 content: "report".to_string(),
@@ -2614,6 +2795,9 @@ mod tests {
             })
             .await
             .expect("record local command turn");
+
+        assert_eq!(result.turn_id, "turn_1");
+        assert_eq!(result.storage_turn_index, 0);
 
         let requests = ports.local_command_turns.lock().unwrap();
         assert_eq!(requests.len(), 1);
@@ -2790,6 +2974,100 @@ mod tests {
         assert_eq!(transcript.messages[0].id.as_deref(), Some("message_1"));
         assert_eq!(ports.restored_sessions.lock().unwrap().len(), 1);
         assert_eq!(ports.transcript_requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lineage_query_and_transcript_read_delegate_to_one_owner() {
+        let ports = Arc::new(FakeAgentRuntimePorts::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(ports.clone())
+            .with_session_lineage_port(ports.clone())
+            .build()
+            .expect("runtime");
+
+        let snapshot = runtime
+            .get_session_lineage(AgentSessionLineageRequest {
+                workspace_path: "/workspace/project".to_string(),
+                anchor_session_id: "child_1".to_string(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            })
+            .await
+            .expect("query lineage")
+            .expect("lineage");
+        let inspection = runtime
+            .read_lineage_session_transcript(AgentSessionLineageTranscriptRequest {
+                workspace_path: "/workspace/project".to_string(),
+                root_session_id: "root_1".to_string(),
+                session_id: "child_1".to_string(),
+                required_settled_turn_ids: Vec::new(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            })
+            .await
+            .expect("read child transcript");
+
+        assert_eq!(snapshot.root_session_id, "root_1");
+        assert_eq!(inspection.transcript.session_id, "child_1");
+        assert_eq!(inspection.active_turn_id.as_deref(), Some("child_turn"));
+        assert_eq!(ports.lineage_requests.lock().unwrap().len(), 1);
+        assert_eq!(ports.lineage_transcript_requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lineage_cancellation_delegates_scope_and_execution_to_one_owner() {
+        let ports = Arc::new(FakeAgentRuntimePorts::default());
+        let runtime = AgentRuntimeBuilder::new()
+            .with_submission_port(ports.clone())
+            .with_session_lineage_port(ports.clone())
+            .build()
+            .expect("runtime");
+
+        let result = runtime
+            .cancel_lineage_session(AgentSessionLineageCancellationRequest {
+                workspace_path: "/workspace/project".to_string(),
+                root_session_id: "root_1".to_string(),
+                session_id: "child_1".to_string(),
+                expected_active_turn_id: Some("child_turn".to_string()),
+                source: Some(AgentSubmissionSource::Cli),
+                reason: Some("user_cancelled".to_string()),
+                wait_timeout_ms: Some(5_000),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            })
+            .await
+            .expect("cancel child");
+
+        assert!(result.requested);
+        let cancellations = ports.cancelled_turns.lock().unwrap();
+        assert_eq!(cancellations.len(), 1);
+        assert_eq!(cancellations[0].session_id, "child_1");
+        assert!(cancellations[0].cancel_descendants);
+        drop(cancellations);
+
+        let error = runtime
+            .cancel_lineage_session(AgentSessionLineageCancellationRequest {
+                workspace_path: "/workspace/project".to_string(),
+                root_session_id: "root_1".to_string(),
+                session_id: "outside".to_string(),
+                expected_active_turn_id: Some("outside_turn".to_string()),
+                source: None,
+                reason: None,
+                wait_timeout_ms: None,
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            })
+            .await
+            .expect_err("reject unrelated session");
+
+        assert!(matches!(
+            error,
+            RuntimeError::Port(PortError {
+                kind: PortErrorKind::InvalidRequest,
+                ..
+            })
+        ));
+        assert_eq!(ports.cancelled_turns.lock().unwrap().len(), 1);
     }
 
     #[tokio::test]

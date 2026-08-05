@@ -18,9 +18,10 @@ use bitfun_agent_runtime::deep_review::sanitize_focused_review_public_metadata;
 use bitfun_agent_runtime::sdk::{
     AgentDialogSteerRequest, AgentDialogTurnExecution, AgentDialogTurnRequest,
     AgentInputAttachment, AgentSessionCreateResult, AgentSessionModelSelection,
-    AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest, AgentSubmissionSource,
-    AgentTurnCancellationRequest, DialogSteerOutcome, PermissionAuditRecord, PermissionGrant,
-    PermissionGrantKey, PermissionReply, PermissionRequest,
+    AgentSessionModeUpdateRequest, AgentSessionModelSelectionUpdateRequest,
+    AgentSessionModelUpdateRequest, AgentSubmissionSource, AgentTurnCancellationRequest,
+    DialogSteerOutcome, PermissionAuditRecord, PermissionGrant, PermissionGrantKey,
+    PermissionReply, PermissionRequest,
 };
 use bitfun_core::agentic::agents::AgentSource;
 use bitfun_core::agentic::coordination::{
@@ -50,6 +51,7 @@ use bitfun_core::service::config::project_permission_store::{
     deserialize_project_permission_config, project_permission_file_path,
     project_permission_file_path_for_remote, ProjectPermissionConfig,
 };
+use bitfun_core::service::remote_ssh::workspace_state::is_remote_path;
 use bitfun_core::service::remote_ssh::workspace_state::resolve_workspace_session_identity;
 use bitfun_core::service::session::{
     DialogTurnData, SessionMemoryMode, SessionMetadata, SessionRelationship,
@@ -203,6 +205,8 @@ fn existing_session_create_response(
         metadata.agent_type.clone(),
     );
     response.workspace_path = metadata.workspace_path.clone();
+    response.model_id =
+        (!metadata.model_name.trim().is_empty()).then(|| metadata.model_name.clone());
     response.workspace_id = request.workspace_id.clone();
     response.project_workspace_path = metadata.project_workspace_path.clone();
     response.execution_target = metadata.execution_target.clone();
@@ -245,6 +249,21 @@ where
     T: Deserialize<'de>,
 {
     Option::<T>::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSessionModeRequest {
+    pub session_id: String,
+    pub mode_id: String,
+    #[serde(default)]
+    pub workspace_path: Option<String>,
+    #[serde(default)]
+    pub remote_connection_id: Option<String>,
+    #[serde(default)]
+    pub remote_ssh_host: Option<String>,
+    #[serde(default)]
+    pub include_internal: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1702,6 +1721,34 @@ pub async fn create_session(
 }
 
 #[tauri::command]
+pub async fn update_session_mode(
+    runtime: State<'_, DesktopRuntimeContext>,
+    request: UpdateSessionModeRequest,
+) -> Result<(), String> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        return Err("session_id is required".to_string());
+    }
+    ensure_session_loaded_for_selector_update(
+        runtime.inner(),
+        &session_id,
+        request.workspace_path,
+        request.remote_connection_id,
+        request.remote_ssh_host,
+        request.include_internal,
+    )
+    .await?;
+    runtime
+        .agent_runtime()
+        .update_session_mode(AgentSessionModeUpdateRequest {
+            session_id,
+            mode_id: request.mode_id,
+        })
+        .await
+        .map_err(|error| format!("Failed to update session mode: {}", error.into_message()))
+}
+
+#[tauri::command]
 pub async fn update_session_model(
     runtime: State<'_, DesktopRuntimeContext>,
     request: UpdateSessionModelRequest,
@@ -1710,26 +1757,15 @@ pub async fn update_session_model(
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
     }
-    if let Some(workspace_path) = request
-        .workspace_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    {
-        runtime
-            .session_application()
-            .ensure_session_loaded(
-                desktop_session_scope(
-                    workspace_path.to_string(),
-                    request.remote_connection_id,
-                    request.remote_ssh_host,
-                ),
-                &session_id,
-                request.include_internal,
-            )
-            .await
-            .map_err(|error| format!("Failed to restore session before model update: {error}"))?;
-    }
+    ensure_session_loaded_for_selector_update(
+        runtime.inner(),
+        &session_id,
+        request.workspace_path,
+        request.remote_connection_id,
+        request.remote_ssh_host,
+        request.include_internal,
+    )
+    .await?;
     let update_result = match request.reasoning_preset {
         Some(reasoning_preset) => {
             let reasoning_preset = reasoning_preset
@@ -1760,6 +1796,37 @@ pub async fn update_session_model(
     };
     update_result
         .map_err(|error| format!("Failed to update session model: {}", error.into_message()))
+}
+
+async fn ensure_session_loaded_for_selector_update(
+    runtime: &DesktopRuntimeContext,
+    session_id: &str,
+    workspace_path: Option<String>,
+    remote_connection_id: Option<String>,
+    remote_ssh_host: Option<String>,
+    include_internal: bool,
+) -> Result<(), String> {
+    let Some(workspace_path) = workspace_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return Ok(());
+    };
+    runtime
+        .session_application()
+        .ensure_session_loaded(
+            desktop_session_scope(
+                workspace_path.to_string(),
+                remote_connection_id,
+                remote_ssh_host,
+            ),
+            session_id,
+            include_internal,
+        )
+        .await
+        .map_err(|error| format!("Failed to restore session before selector update: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -2559,6 +2626,7 @@ pub async fn cancel_dialog_turn(
             requester_session_id: None,
             reason: None,
             wait_timeout_ms: None,
+            cancel_descendants: true,
         })
         .await
         .map_err(|e| {
@@ -2635,15 +2703,20 @@ pub async fn control_deep_review_queue(
 
 #[tauri::command]
 pub async fn cancel_session(
-    coordinator: State<'_, Arc<ConversationCoordinator>>,
+    runtime: State<'_, DesktopRuntimeContext>,
     request: CancelSessionRequest,
 ) -> Result<CancelSessionResponse, String> {
-    let dialog_turn_id = coordinator
-        .cancel_active_turn_for_session_with_descendant_policy(
-            &request.session_id,
-            std::time::Duration::from_secs(5),
-            request.cancel_descendants,
-        )
+    let result = runtime
+        .agent_runtime()
+        .cancel_turn(AgentTurnCancellationRequest {
+            session_id: request.session_id.clone(),
+            turn_id: None,
+            source: Some(AgentSubmissionSource::DesktopUi),
+            requester_session_id: None,
+            reason: Some("user_cancelled".to_string()),
+            wait_timeout_ms: Some(5_000),
+            cancel_descendants: request.cancel_descendants,
+        })
         .await
         .map_err(|e| {
             log::error!(
@@ -2651,12 +2724,12 @@ pub async fn cancel_session(
                 request.session_id,
                 e
             );
-            format!("Failed to cancel session: {}", e)
+            format!("Failed to cancel session: {}", e.into_message())
         })?;
 
     Ok(CancelSessionResponse {
-        cancelled: dialog_turn_id.is_some(),
-        dialog_turn_id,
+        cancelled: result.requested,
+        dialog_turn_id: result.turn_id,
     })
 }
 
@@ -3268,9 +3341,31 @@ pub async fn generate_session_title(
 pub async fn get_available_modes(
     state: State<'_, AppState>,
     startup_trace: State<'_, DesktopStartupTrace>,
+    request: Option<GetAvailableModesRequest>,
 ) -> Result<Vec<ModeInfoDTO>, String> {
     let trace_started = Instant::now();
-    let mode_infos = state.agent_registry.get_modes_info().await;
+    let request = request.unwrap_or_default();
+    let workspace_path = request
+        .workspace_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from);
+    let external_sources_supported =
+        mode_catalog_supports_external_sources(&request, workspace_path.as_deref()).await;
+    if external_sources_supported {
+        if let Err(error) =
+            bitfun_core::external_sources::ensure_external_source_workspace_snapshot(
+                workspace_path.as_deref(),
+            )
+            .await
+        {
+            warn!("Failed to initialize external agent sources for mode selector: {error}");
+        }
+    }
+    let mode_infos = state
+        .agent_registry
+        .get_modes_info_for_workspace(workspace_path.as_deref(), external_sources_supported)
+        .await;
 
     let dtos: Vec<ModeInfoDTO> = mode_infos
         .into_iter()
@@ -3299,6 +3394,36 @@ pub async fn get_available_modes(
 
     startup_trace.record_tauri_command_elapsed("get_available_modes", None, trace_started);
     Ok(dtos)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAvailableModesRequest {
+    pub workspace_path: Option<String>,
+    pub remote_connection_id: Option<String>,
+    pub remote_ssh_host: Option<String>,
+}
+
+async fn mode_catalog_supports_external_sources(
+    request: &GetAvailableModesRequest,
+    workspace_path: Option<&Path>,
+) -> bool {
+    let has_remote_identity = request
+        .remote_connection_id
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || request
+            .remote_ssh_host
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    if has_remote_identity {
+        return false;
+    }
+
+    match workspace_path {
+        Some(path) => path.is_absolute() && !is_remote_path(&path.to_string_lossy()).await,
+        None => false,
+    }
 }
 
 #[tauri::command]
@@ -3417,6 +3542,19 @@ mod tests {
     };
     use bitfun_product_domains::tool_permissions::{PermissionEffect, PermissionRule};
     use serde_json::json;
+
+    #[tokio::test]
+    async fn remote_mode_catalog_never_scans_an_absolute_desktop_host_path() {
+        let desktop_host_path = std::env::current_dir().expect("desktop host working directory");
+        assert!(desktop_host_path.is_absolute());
+        let request = GetAvailableModesRequest {
+            workspace_path: Some(desktop_host_path.to_string_lossy().into_owned()),
+            remote_connection_id: Some("remote-1".to_string()),
+            remote_ssh_host: Some("build-host".to_string()),
+        };
+
+        assert!(!mode_catalog_supports_external_sources(&request, Some(&desktop_host_path)).await);
+    }
 
     #[test]
     fn update_session_model_distinguishes_omitted_null_and_explicit_reasoning_presets() {

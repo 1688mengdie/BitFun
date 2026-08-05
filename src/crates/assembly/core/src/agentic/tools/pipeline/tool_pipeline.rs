@@ -17,7 +17,8 @@ use crate::native_hooks::{self, NativeHookSessionFacts};
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_agent_runtime::permission::{
-    PendingPermissionReceiver, PermissionRequestManager, PermissionWaitOutcome,
+    plan_permission_intents, PendingPermissionReceiver, PermissionIntentPlan,
+    PermissionRequestManager, PermissionWaitOutcome,
 };
 use bitfun_agent_runtime::sdk::PermissionReplySource;
 use bitfun_agent_stream::ToolArgumentRepairKind;
@@ -32,13 +33,13 @@ use bitfun_agent_tools::{
     ToolExecutionErrorPresentation, GET_TOOL_SPEC_TOOL_NAME, USER_STEERING_INTERRUPTED_MESSAGE,
 };
 use bitfun_runtime_ports::{
-    wildcard_matches, PermissionEffect, PermissionGrant, PermissionReply, PermissionRequest,
-    PermissionRequestSource, PermissionRequestSourceKind, PermissionResourceCaseSensitivity,
-    ResolvedPermissionPolicy, RoundInjectionToolPreemption,
+    PermissionReply, PermissionRequest, PermissionRequestSource, PermissionRequestSourceKind,
+    PermissionResourceCaseSensitivity, RoundInjectionToolPreemption,
 };
 use futures::future::join_all;
 use log::{debug, error, info, warn};
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 use tokio::sync::{Mutex as TokioMutex, RwLock as TokioRwLock};
@@ -49,6 +50,25 @@ use tool_runtime::pipeline::{
     summarize_dialog_turn_cancellation, tool_call_concurrency_safe_for_batch,
     ToolCancellationTokenStore, ToolExecutionErrorClass, ToolRetryAttemptFacts,
 };
+
+fn resolve_contextual_tool(
+    tool: Arc<dyn crate::agentic::tools::framework::Tool>,
+    workspace_root: Option<&Path>,
+    remote: bool,
+) -> Option<Arc<dyn crate::agentic::tools::framework::Tool>> {
+    #[cfg(feature = "external-sources")]
+    {
+        return crate::external_tools::resolve_external_tool_for_workspace(
+            tool,
+            crate::external_tools::external_tool_route_root(workspace_root, remote),
+        );
+    }
+    #[cfg(not(feature = "external-sources"))]
+    {
+        let _ = (workspace_root, remote);
+        Some(tool)
+    }
+}
 
 fn persisted_effective_tool_name(
     wire_tool_name: &str,
@@ -546,93 +566,6 @@ fn permission_resource_case_sensitivity(
     }
 }
 
-fn permission_intent_effect(
-    intent: &PermissionIntent,
-    policy: &ResolvedPermissionPolicy,
-    grants: &[PermissionGrant],
-    case_sensitivity: PermissionResourceCaseSensitivity,
-) -> PermissionEffect {
-    let evaluator = bitfun_runtime_ports::PermissionEvaluator::new(case_sensitivity);
-    let mut aggregate = PermissionEffect::Allow;
-
-    for resource in &intent.resources {
-        let configured_effect = if intent.action == "bash" {
-            policy
-                .rules()
-                .iter()
-                .rev()
-                .find(|rule| {
-                    wildcard_matches(
-                        &intent.action,
-                        &rule.action,
-                        PermissionResourceCaseSensitivity::Sensitive,
-                    ) && match rule.effect {
-                        PermissionEffect::Allow => {
-                            rule.resource == *resource
-                                || (rule.action == "*" && rule.resource == "*")
-                        }
-                        PermissionEffect::Ask | PermissionEffect::Deny => {
-                            wildcard_matches(resource, &rule.resource, case_sensitivity)
-                        }
-                    }
-                })
-                .map(|rule| rule.effect)
-                .unwrap_or(PermissionEffect::Ask)
-        } else {
-            evaluator.evaluate_resource(&intent.action, resource, policy.rules())
-        };
-        let configured_effect =
-            policy
-                .constraint_layers()
-                .iter()
-                .fold(configured_effect, |effect, layer| {
-                    effect.most_restrictive(evaluator.evaluate_constraint_resource(
-                        &intent.action,
-                        resource,
-                        layer,
-                    ))
-                });
-
-        match configured_effect {
-            PermissionEffect::Deny => return PermissionEffect::Deny,
-            PermissionEffect::Allow => {}
-            PermissionEffect::Ask => {
-                let remembered = grants.iter().any(|grant| {
-                    if intent.action == "bash" {
-                        grant.action == intent.action && grant.resource == *resource
-                    } else {
-                        wildcard_matches(
-                            &intent.action,
-                            &grant.action,
-                            PermissionResourceCaseSensitivity::Sensitive,
-                        ) && wildcard_matches(resource, &grant.resource, case_sensitivity)
-                    }
-                });
-                if !remembered {
-                    aggregate = PermissionEffect::Ask;
-                }
-            }
-        }
-    }
-
-    let effect = if intent.resources.is_empty() {
-        PermissionEffect::Ask
-    } else {
-        aggregate
-    };
-    if effect != PermissionEffect::Deny
-        && intent
-            .display_metadata
-            .get("requiresFreshApproval")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
-    {
-        PermissionEffect::Ask
-    } else {
-        effect
-    }
-}
-
 const SUBAGENT_LAUNCH_TOOL_NAME: &str = "Task";
 
 /// Native hook session facts derived from one tool task.
@@ -731,13 +664,10 @@ impl ToolPipeline {
                 .map_err(|error| BitFunError::service(error.to_string()))?,
             None => Vec::new(),
         };
-        let mut asks = Vec::new();
-
-        for intent in intents {
-            match permission_intent_effect(&intent, &permission_policy, &grants, case_sensitivity) {
-                PermissionEffect::Allow => {}
-                PermissionEffect::Ask => asks.push(intent),
-                PermissionEffect::Deny => {
+        let asks =
+            match plan_permission_intents(intents, &permission_policy, &grants, case_sensitivity) {
+                PermissionIntentPlan::Allowed => return Ok(PermissionPlanDraft::Allowed),
+                PermissionIntentPlan::Denied(intent) => {
                     return Ok(PermissionPlanDraft::Rejected {
                         reason: format!(
                             "Permission policy denied '{}' for {}",
@@ -746,12 +676,8 @@ impl ToolPipeline {
                         ),
                     });
                 }
-            }
-        }
-
-        if asks.is_empty() {
-            return Ok(PermissionPlanDraft::Allowed);
-        }
+                PermissionIntentPlan::RequiresApproval(intents) => intents,
+            };
 
         // A PreToolUse hook already approved this call. The approval reaches
         // here — after policy evaluation — precisely so that it waives only
@@ -1419,21 +1345,19 @@ impl ToolPipeline {
                     if resolution_error.is_some() {
                         return false;
                     }
-                    let route_root = crate::external_tools::external_tool_route_root(
-                        context
-                            .workspace
-                            .as_ref()
-                            .map(|workspace| workspace.root_path()),
-                        context
-                            .workspace
-                            .as_ref()
-                            .is_some_and(|workspace| workspace.is_remote()),
-                    );
                     let tool_is_concurrency_safe = registry
                         .get_tool(&invocation.effective_tool_name)
                         .and_then(|tool| {
-                            crate::external_tools::resolve_external_tool_for_workspace(
-                                tool, route_root,
+                            resolve_contextual_tool(
+                                tool,
+                                context
+                                    .workspace
+                                    .as_ref()
+                                    .map(|workspace| workspace.root_path()),
+                                context
+                                    .workspace
+                                    .as_ref()
+                                    .is_some_and(|workspace| workspace.is_remote()),
                             )
                         })
                         .map(|tool| tool.is_concurrency_safe(Some(&invocation.effective_arguments)))
@@ -2209,12 +2133,10 @@ impl ToolPipeline {
 
         let execution_future = tool.call(task.effective_arguments(), &tool_context);
 
-        let timeout_owner = crate::external_tools::resolve_external_tool_for_workspace(
+        let timeout_owner = resolve_contextual_tool(
             Arc::clone(&tool),
-            crate::external_tools::external_tool_route_root(
-                tool_context.workspace_root(),
-                tool_context.is_remote(),
-            ),
+            tool_context.workspace_root(),
+            tool_context.is_remote(),
         );
         let pipeline_timeout_secs = if timeout_owner
             .as_ref()
@@ -2425,6 +2347,18 @@ impl ToolPipeline {
         );
         Ok(())
     }
+
+    #[cfg(test)]
+    pub(crate) async fn insert_tool_task_for_test(&self, task: ToolTask) {
+        self.state_manager.create_task(task).await;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tool_task_is_cancelled_for_test(&self, tool_id: &str) -> bool {
+        self.state_manager
+            .get_task(tool_id)
+            .is_some_and(|task| matches!(task.state, ToolExecutionState::Cancelled { .. }))
+    }
 }
 
 #[cfg(test)]
@@ -2446,13 +2380,15 @@ mod tests {
     };
     use bitfun_runtime_ports::{
         ClockPort, PermissionAuditEvent, PermissionAuditRecord, PermissionAuditStorePort,
-        PermissionConstraintLayer, PermissionGrant, PermissionGrantKey, PermissionGrantStorePort,
-        PermissionPolicyPreset, PermissionReplyStorePort, PermissionRule, PortResult,
-        RoundInjection, RoundInjectionExecutionPolicy, RoundInjectionKind, RoundInjectionTarget,
-        RoundInjectionToolPreemption, RuntimeServiceCapability, RuntimeServicePort,
+        PermissionConstraintLayer, PermissionEffect, PermissionGrant, PermissionGrantKey,
+        PermissionGrantStorePort, PermissionReplyStorePort, PermissionRule, PortResult,
+        ResolvedPermissionPolicy, RoundInjection, RoundInjectionExecutionPolicy,
+        RoundInjectionKind, RoundInjectionTarget, RoundInjectionToolPreemption,
+        RuntimeServiceCapability, RuntimeServicePort,
     };
     use serde_json::json;
     use std::collections::HashMap;
+    #[cfg(feature = "external-sources")]
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
@@ -2509,80 +2445,7 @@ mod tests {
     }
 
     #[test]
-    fn bash_permission_allows_only_exact_command_grants() {
-        let intent = PermissionIntent::new("bash", vec!["git status && rm -rf build".to_string()]);
-        let wildcard_allow = ResolvedPermissionPolicy::new(
-            vec![PermissionRule::new(
-                "bash",
-                "git *",
-                PermissionEffect::Allow,
-            )],
-            Vec::new(),
-        );
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &wildcard_allow,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Ask
-        );
-
-        let exact_allow = ResolvedPermissionPolicy::new(
-            vec![PermissionRule::new(
-                "bash",
-                "git status && rm -rf build",
-                PermissionEffect::Allow,
-            )],
-            Vec::new(),
-        );
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &exact_allow,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Allow
-        );
-
-        let wildcard_deny = ResolvedPermissionPolicy::new(
-            vec![PermissionRule::new("bash", "*", PermissionEffect::Deny)],
-            Vec::new(),
-        );
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &wildcard_deny,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Deny
-        );
-    }
-
-    #[test]
-    fn full_access_baseline_allows_bash_commands() {
-        let intent = PermissionIntent::new("bash", vec!["git status && rm -rf build".to_string()]);
-        let full_access_rules = ResolvedPermissionPolicy::new(
-            PermissionPolicyPreset::FullAccess.baseline_rules(),
-            Vec::new(),
-        );
-
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &full_access_rules,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Allow
-        );
-    }
-
-    #[test]
-    fn account_scoped_fresh_approval_works_without_a_workspace_and_ignores_allow_rules() {
+    fn account_scoped_permission_works_without_a_workspace() {
         let mut intent = PermissionIntent::new(
             "page_publish",
             vec!["page:demo; visibility=private; deploy=saved-version-only".to_string()],
@@ -2601,41 +2464,6 @@ mod tests {
                 ACCOUNT_PERMISSION_PROJECT_ID.to_string(),
                 ACCOUNT_PERMISSION_PROJECT_PATH.to_string(),
             )
-        );
-
-        let allow = ResolvedPermissionPolicy::new(
-            vec![PermissionRule::new(
-                "page_publish",
-                "*",
-                PermissionEffect::Allow,
-            )],
-            Vec::new(),
-        );
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &allow,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Ask
-        );
-        let deny = ResolvedPermissionPolicy::new(
-            vec![PermissionRule::new(
-                "page_publish",
-                "*",
-                PermissionEffect::Deny,
-            )],
-            Vec::new(),
-        );
-        assert_eq!(
-            permission_intent_effect(
-                &intent,
-                &deny,
-                &[],
-                PermissionResourceCaseSensitivity::Sensitive,
-            ),
-            PermissionEffect::Deny
         );
     }
 
@@ -2986,6 +2814,7 @@ mod tests {
         )
     }
 
+    #[cfg(feature = "external-sources")]
     #[test]
     fn remote_workspace_route_root_isolated_from_same_local_path() {
         let pipeline = test_tool_pipeline();

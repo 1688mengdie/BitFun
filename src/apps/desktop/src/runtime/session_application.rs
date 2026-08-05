@@ -11,14 +11,13 @@ use std::time::Instant;
 use async_trait::async_trait;
 use bitfun_agent_runtime::sdk::{
     AgentLocalCommandTurnRecordRequest, AgentRuntime, AgentSessionArchiveStateRequest,
-    AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest, AgentSessionRenameRequest,
-    AgentSessionUsageRequest, PortErrorKind, RuntimeError,
+    AgentSessionDeleteRequest, AgentSessionForkAtTurnRequest, AgentSessionLineageRequest,
+    AgentSessionLineageSnapshot, AgentSessionRenameRequest, AgentSessionUsageRequest,
+    PortErrorKind, RuntimeError,
 };
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
 use bitfun_core::agentic::core::Session;
-use bitfun_core::agentic::persistence::{
-    SessionBranchResult, SessionLineageSnapshot, SessionMetadataPage,
-};
+use bitfun_core::agentic::persistence::{SessionBranchResult, SessionMetadataPage};
 use bitfun_core::agentic::session::SessionViewRestoreTiming;
 use bitfun_core::product_runtime::{CoreAgentRuntimeCompatibility, CoreProductAgentRuntime};
 use bitfun_core::service::remote_ssh::workspace_state::{
@@ -128,6 +127,14 @@ pub(crate) struct DesktopSessionViewRestore {
     pub total_turn_count: usize,
     pub turn_catalog: SessionTurnCatalog,
     pub timings: SessionViewRestoreTiming,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct DesktopRecordedLocalCommandTurn {
+    pub turn_id: String,
+    pub storage_turn_index: usize,
+    pub total_turn_count: usize,
+    pub turn_catalog: SessionTurnCatalog,
 }
 
 #[derive(Debug)]
@@ -398,13 +405,17 @@ impl DesktopSessionApplication {
         &self,
         request: DesktopSessionScopeRequest,
         anchor_session_id: &str,
-    ) -> DesktopSessionApplicationResult<Option<SessionLineageSnapshot>> {
+    ) -> DesktopSessionApplicationResult<Option<AgentSessionLineageSnapshot>> {
         let scope = self.resolved_scope(request).await;
-        let storage_path = self.storage_path(&scope);
-        self.compatibility
-            .get_persisted_session_lineage(&storage_path, anchor_session_id)
+        self.agent_runtime
+            .get_session_lineage(AgentSessionLineageRequest {
+                workspace_path: scope.workspace_path,
+                anchor_session_id: anchor_session_id.to_string(),
+                remote_connection_id: scope.remote_connection_id,
+                remote_ssh_host: scope.resolved_remote_ssh_host,
+            })
             .await
-            .map_err(|error| DesktopSessionApplicationError::Core(error.to_string()))
+            .map_err(|error| DesktopSessionApplicationError::Runtime(error.into_message()))
     }
 
     pub(crate) async fn list_archived_sessions(
@@ -490,6 +501,7 @@ impl DesktopSessionApplication {
                 .agent_runtime
                 .record_completed_local_command_turn(local_command)
                 .await
+                .map(|_| ())
                 .map_err(desktop_runtime_session_error);
         }
         let mutation = self
@@ -501,6 +513,55 @@ impl DesktopSessionApplication {
             .save_persisted_dialog_turn(&mutation, turn)
             .await
             .map_err(desktop_core_session_error)
+    }
+
+    pub(crate) async fn record_local_command_turn(
+        &self,
+        request: DesktopSessionScopeRequest,
+        turn: &DialogTurnData,
+    ) -> DesktopSessionApplicationResult<DesktopRecordedLocalCommandTurn> {
+        let scope = self.resolved_scope(request).await;
+        self.ensure_runtime_ownership(&scope)?;
+        let storage_path = self.storage_path(&scope);
+        self.compatibility
+            .ensure_session_loaded_from_storage_path(&storage_path, &turn.session_id, false)
+            .await
+            .map_err(desktop_core_session_error)?;
+        let local_command = local_command_turn_record_request(turn)?.ok_or_else(|| {
+            DesktopSessionApplicationError::Validation(
+                "record_local_command_turn accepts only local_command Turns".to_string(),
+            )
+        })?;
+        let recorded = self
+            .agent_runtime
+            .record_completed_local_command_turn(local_command)
+            .await
+            .map_err(desktop_runtime_session_error)?;
+        let (_, _, total_turn_count, turn_catalog, _) = self
+            .compatibility
+            .restore_session_view_from_storage_path(&storage_path, &turn.session_id, false, Some(1))
+            .await
+            .map_err(desktop_core_session_error)?;
+        let catalog_entry = turn_catalog
+            .entries
+            .iter()
+            .find(|entry| {
+                entry.turn_id.as_deref() == Some(recorded.turn_id.as_str())
+                    && entry.storage_turn_index == recorded.storage_turn_index
+            })
+            .ok_or_else(|| {
+                DesktopSessionApplicationError::OutcomeUnknown(format!(
+                    "Recorded local command Turn is missing from the authoritative catalog: {}",
+                    recorded.turn_id
+                ))
+            })?;
+
+        Ok(DesktopRecordedLocalCommandTurn {
+            turn_id: recorded.turn_id,
+            storage_turn_index: catalog_entry.storage_turn_index,
+            total_turn_count,
+            turn_catalog,
+        })
     }
 
     pub(crate) async fn touch_session(

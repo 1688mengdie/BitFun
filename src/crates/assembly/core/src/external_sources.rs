@@ -40,6 +40,7 @@ pub use bitfun_product_domains::external_subagents::{
     ExternalSubagentModelRequest, ExternalSubagentSummary,
 };
 
+use crate::agentic::workspace::workspace_route_key;
 use crate::external_mcp::{
     reconcile_external_mcp_catalog, BitFunExternalMcpRuntime, ExternalMcpDecision,
     ExternalMcpDecisions, ExternalMcpProductState, ExternalMcpRuntimePort,
@@ -53,8 +54,8 @@ use crate::external_tools::{
     begin_external_tool_workspace_recovery, external_tool_workspace_requires_recovery,
     invalidate_external_tool_runtime_availability, merge_tool_state,
     project_external_tools_read_only, reconcile_external_tools, release_external_tool_workspace,
-    reset_external_tool_workspace_recovery_budget, workspace_route_key, ExternalToolDecisions,
-    ExternalToolProductState, TOOL_CONFLICT_RESELECTION_REQUIRED, UNRESOLVED_TOOL_CONFLICT_CHOICE,
+    reset_external_tool_workspace_recovery_budget, ExternalToolDecisions, ExternalToolProductState,
+    TOOL_CONFLICT_RESELECTION_REQUIRED, UNRESOLVED_TOOL_CONFLICT_CHOICE,
 };
 use crate::service::config::{subscribe_config_updates, ConfigUpdateEvent};
 use bitfun_claude_code_adapter::{
@@ -3999,7 +4000,7 @@ pub(crate) fn normalize_workspace_root(
         return Err("external source workspace root must be absolute".to_string());
     }
     Ok(Some(
-        dunce::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf()),
+        crate::agentic::workspace::canonical_local_workspace_path(workspace_root),
     ))
 }
 
@@ -6790,10 +6791,29 @@ fn incompatible_policy_error(detail: impl Into<String>) -> String {
     )
 }
 
-fn external_integration_error_code(error: &str) -> String {
+pub(crate) fn external_integration_error_code(error: &str) -> String {
     ExternalSourceOperationError::decode(error)
         .map(|error| error.code.as_str().to_string())
         .unwrap_or_else(|| "internal".to_string())
+}
+
+/// Ensure the workspace-scoped static source snapshot has been published once.
+/// This is the shared discovery gate for selectors and execution routing; it
+/// does not start or recover any executable extension runtime.
+pub async fn ensure_external_source_workspace_snapshot(
+    workspace_root: Option<&Path>,
+) -> Result<(), String> {
+    ensure_initial_external_source_workspace_service(workspace_root)
+        .await
+        .map(|_| ())
+}
+
+async fn ensure_initial_external_source_workspace_service(
+    workspace_root: Option<&Path>,
+) -> Result<Arc<WorkspaceExternalSourceService>, String> {
+    let service = service_for(workspace_root).await?;
+    service.ensure_initial_refresh().await?;
+    Ok(service)
 }
 
 /// Keep the external-source runtime aligned with an actively assembled product
@@ -6802,25 +6822,17 @@ fn external_integration_error_code(error: &str) -> String {
 /// exposed to the model. Existing services are only touched; file watchers and
 /// explicit refreshes remain responsible for later source changes.
 pub(crate) async fn ensure_external_source_workspace_runtime(workspace_root: Option<&Path>) {
-    let service = match service_for(workspace_root).await {
+    let service = match ensure_initial_external_source_workspace_service(workspace_root).await {
         Ok(service) => service,
         Err(error) => {
             log::warn!(
-                "Could not retain external source workspace runtime scope={} error_category={}",
+                "Could not initialize external source workspace runtime scope={} error_category={}",
                 external_log_scope(workspace_root),
                 external_log_error_category(&error),
             );
             return;
         }
     };
-    if let Err(error) = service.ensure_initial_refresh().await {
-        log::warn!(
-            "Could not initialize external source workspace runtime scope={} error_category={}",
-            external_log_scope(workspace_root),
-            external_log_error_category(&error),
-        );
-        return;
-    }
     if external_tool_workspace_requires_recovery(workspace_root).await {
         if let Err(error) = service.refresh_worker_loss_once().await {
             log::warn!(
@@ -6933,6 +6945,7 @@ mod tests {
             oauth: None,
             oauth_enabled: None,
             xaa: None,
+            timeouts: Default::default(),
         }
     }
 

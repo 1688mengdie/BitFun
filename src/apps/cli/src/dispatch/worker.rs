@@ -537,6 +537,7 @@ async fn cancel_turn(
             requester_session_id: None,
             reason: Some(reason.to_string()),
             wait_timeout_ms: None,
+            cancel_descendants: true,
         })
         .await
     {

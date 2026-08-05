@@ -43,6 +43,15 @@ static LOCAL_ONLY_COMMANDS: &[&str] = &[
     "restart_app",
     "check_for_updates",
     "install_update",
+    "appearance_market_browse",
+    "appearance_market_download_release",
+    "appearance_market_get_listing",
+    "appearance_market_get_review_submission",
+    "appearance_market_list_review_submissions",
+    "appearance_market_list_submissions",
+    "appearance_market_review_submission",
+    "appearance_market_submit_package",
+    "appearance_market_withdraw_submission",
     // Account identity / peer mode control (stay on controller)
     "account_login",
     "account_finalize_login",
@@ -100,6 +109,7 @@ static LOCAL_ONLY_COMMANDS: &[&str] = &[
     "dispatch_install_cli_start",
     "dispatch_install_cli_poll",
     "dispatch_install_cli_cancel",
+    "dispatch_provision_target",
     "dispatch_sync_model_config",
     "dispatch_submit",
     "dispatch_status",
@@ -447,6 +457,23 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+    }
+
+    #[test]
+    fn appearance_market_stays_on_the_controller_device() {
+        for command in [
+            "appearance_market_browse",
+            "appearance_market_get_listing",
+            "appearance_market_download_release",
+            "appearance_market_get_review_submission",
+            "appearance_market_list_review_submissions",
+            "appearance_market_list_submissions",
+            "appearance_market_review_submission",
+            "appearance_market_submit_package",
+            "appearance_market_withdraw_submission",
+        ] {
+            assert!(is_local_only_command(command), "{command}");
+        }
     }
 
     #[test]

@@ -92,23 +92,6 @@ export async function getModelMaxTokens(modelName?: string, agentType?: string):
   }
 }
 
-export async function resolveModelForSessionCreation(modelName?: string): Promise<string> {
-  const explicitModelName = modelName?.trim();
-  if (explicitModelName) {
-    return explicitModelName;
-  }
-
-  try {
-    const configManager = await import('@/infrastructure/config/services/ConfigManager').then(m => m.configManager);
-    const configData = await configManager.getConfigs(['ai.agent_model_defaults']);
-    const agentModelDefaults = configData['ai.agent_model_defaults'] as AgentModelDefaultsConfig | undefined;
-    return agentModelDefaults?.mode?.trim() || 'auto';
-  } catch (error) {
-    log.warn('Failed to resolve model default during session creation', { error });
-    return 'auto';
-  }
-}
-
 export async function resolveReasoningPresetForSessionCreation(
   modelName: string,
 ): Promise<string | undefined> {

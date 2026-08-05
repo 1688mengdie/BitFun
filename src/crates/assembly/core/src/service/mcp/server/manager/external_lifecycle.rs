@@ -1,5 +1,22 @@
 use super::*;
 
+const EXTERNAL_START_GUARD_ALLOWANCE: Duration = Duration::from_secs(30);
+
+fn notify_external_tool_registry_changed() {
+    #[cfg(feature = "external-sources")]
+    crate::external_sources::notify_external_tool_registry_changed();
+}
+
+fn external_start_timeout(timeouts: super::super::MCPServerTimeouts) -> Duration {
+    // The outer guard also covers bounded orchestration that sits outside the
+    // per-request initialize and Tool catalog deadlines.
+    let explicit_budget_ms = timeouts
+        .startup_ms
+        .unwrap_or_default()
+        .saturating_add(timeouts.catalog_ms.unwrap_or_default());
+    EXTERNAL_START_GUARD_ALLOWANCE.saturating_add(Duration::from_millis(explicit_budget_ms))
+}
+
 impl MCPServerManager {
     /// Adds a runtime-only MCP server without saving it to user or project config.
     pub async fn add_ephemeral_server(&self, config: MCPServerConfig) -> BitFunResult<()> {
@@ -97,9 +114,8 @@ impl MCPServerManager {
                     let _ = self.remove_ephemeral_server(&server_id).await;
                     return Err(error);
                 }
-                self.start_connection_event_listener(&server_id, &config.name, connection.clone())
+                self.start_connection_event_listener(&server_id, &config.name, connection)
                     .await;
-                self.warm_catalog_caches(&server_id, connection).await;
                 self.ephemeral_ready_servers
                     .write()
                     .await
@@ -146,11 +162,11 @@ impl MCPServerManager {
             // for a third-party process or network handshake. Registration is
             // synchronous so status reads immediately see Loading; startup is
             // bounded in the background and cleans up only this runtime item.
-            const EXTERNAL_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+            let start_timeout = external_start_timeout(config.timeouts);
             let manager = self.clone();
             tokio::spawn(async move {
                 let startup = tokio::time::timeout(
-                    EXTERNAL_START_TIMEOUT,
+                    start_timeout,
                     manager.start_server_with_external_token(
                         &server_id,
                         Some(Arc::clone(&start_token)),
@@ -163,7 +179,7 @@ impl MCPServerManager {
                             .external_start_token_matches(&server_id, &start_token)
                             .await
                         {
-                            crate::external_sources::notify_external_tool_registry_changed();
+                            notify_external_tool_registry_changed();
                         }
                     }
                     Ok(Err(error)) => {
@@ -175,7 +191,7 @@ impl MCPServerManager {
                             .remove_ephemeral_server_for_start(&server_id, &start_token)
                             .await
                         {
-                            crate::external_sources::notify_external_tool_registry_changed();
+                            notify_external_tool_registry_changed();
                         }
                     }
                     Err(_) => {
@@ -187,7 +203,7 @@ impl MCPServerManager {
                             .remove_ephemeral_server_for_start(&server_id, &start_token)
                             .await
                         {
-                            crate::external_sources::notify_external_tool_registry_changed();
+                            notify_external_tool_registry_changed();
                         }
                     }
                 }
@@ -352,5 +368,35 @@ impl MCPServerManager {
         self.runtime.remove_runtime_config(server_id).await;
         info!("Unregistered ephemeral MCP server: id={}", server_id);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod timeout_tests {
+    use super::external_start_timeout;
+    use crate::service::mcp::MCPServerTimeouts;
+    use std::time::Duration;
+
+    #[test]
+    fn external_start_guard_preserves_explicit_startup_and_catalog_budgets() {
+        assert_eq!(
+            external_start_timeout(MCPServerTimeouts::default()),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            external_start_timeout(MCPServerTimeouts {
+                startup_ms: Some(45_000),
+                catalog_ms: Some(20_000),
+                execution_ms: Some(90_000),
+            }),
+            Duration::from_secs(95)
+        );
+        assert_eq!(
+            external_start_timeout(MCPServerTimeouts {
+                execution_ms: Some(90_000),
+                ..Default::default()
+            }),
+            Duration::from_secs(30)
+        );
     }
 }

@@ -5,6 +5,7 @@ import type {
   DispatchCliRelease,
   DispatchInstallPoll,
   DispatchInstallStart,
+  DispatchProvisionTargetResult,
   DispatchContinueResponse,
   DispatchJobListEntry,
   DispatchSshProbe,
@@ -55,6 +56,12 @@ export const dispatchApi = {
 
   async installCliCancel(connectionId: string): Promise<void> {
     return api.invoke<void>('dispatch_install_cli_cancel', {
+      request: { connectionId },
+    });
+  },
+
+  async provisionTarget(connectionId: string): Promise<DispatchProvisionTargetResult> {
+    return api.invoke<DispatchProvisionTargetResult>('dispatch_provision_target', {
       request: { connectionId },
     });
   },

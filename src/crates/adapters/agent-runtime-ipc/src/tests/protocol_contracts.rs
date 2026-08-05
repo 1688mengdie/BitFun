@@ -1,18 +1,20 @@
 use crate::operation::RuntimeIpcSessionRequirement;
 use crate::{
-    serialize_frame_with_limit, InitializeRequest, RuntimeIpcError, RuntimeIpcErrorCode,
-    RuntimeIpcFrame, RuntimeIpcOperation, RuntimeIpcOperationResult, RuntimeSessionForkRequest,
-    RuntimeSessionRenameRequest, RuntimeUserAnswersRequest, MAX_REQUEST_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    serialize_frame_with_limit, InitializeRequest, RuntimeAgentModeSummary, RuntimeIpcError,
+    RuntimeIpcErrorCode, RuntimeIpcFrame, RuntimeIpcOperation, RuntimeIpcOperationResult,
+    RuntimeSessionForkRequest, RuntimeSessionRenameRequest, RuntimeUserAnswersRequest,
+    MAX_REQUEST_FRAME_BYTES, PROTOCOL_VERSION,
 };
 
 use bitfun_product_domains::tool_permissions::PermissionReply;
 use bitfun_runtime_ports::{
     AgentContextReloadRequest, AgentContextReloadTarget, AgentDialogSteerRequest,
     AgentDialogTurnRequest, AgentMessageWorkspaceReferencesRequest, AgentSessionCompactionRequest,
-    AgentSessionModeUpdateRequest, AgentSessionModelUpdateRequest, AgentSessionRevertRequest,
-    AgentSubmissionSource, AgentWorkspaceReferenceSearchRequest, DialogSubmissionPolicy,
-    WorkspaceDiffContent, WorkspaceDiffFile, WorkspaceDiffFileStatus, WorkspaceDiffSnapshot,
+    AgentSessionLineageCancellationRequest, AgentSessionLineageRequest,
+    AgentSessionLineageTranscriptRequest, AgentSessionModeUpdateRequest,
+    AgentSessionModelUpdateRequest, AgentSessionRevertRequest, AgentSubmissionSource,
+    AgentWorkspaceReferenceSearchRequest, DialogSubmissionPolicy, WorkspaceDiffContent,
+    WorkspaceDiffFile, WorkspaceDiffFileStatus, WorkspaceDiffSnapshot,
 };
 use serde_json::{json, Map};
 
@@ -72,8 +74,63 @@ fn protocol_round_trips_reviewed_permission_and_user_input_operations() {
 }
 
 #[test]
+fn protocol_round_trips_read_only_main_agent_catalog() {
+    assert_eq!(PROTOCOL_VERSION, 16);
+    let operation = RuntimeIpcOperation::ListAgentModes {
+        session_id: Some("session-1".to_string()),
+    };
+    let result = RuntimeIpcOperationResult::AgentModes {
+        modes: vec![RuntimeAgentModeSummary {
+            id: "review".to_string(),
+            description: "Review the current workspace".to_string(),
+            model_id: Some("provider/model".to_string()),
+            is_external: true,
+        }],
+    };
+
+    let operation_json =
+        serde_json::to_value(&operation).expect("serialize mode catalog operation");
+    assert_eq!(
+        operation_json,
+        json!({"operation": "list_agent_modes", "sessionId": "session-1"})
+    );
+    let decoded_operation: RuntimeIpcOperation =
+        serde_json::from_value(operation_json).expect("deserialize mode catalog operation");
+    assert_eq!(decoded_operation, operation);
+    assert_eq!(decoded_operation.session_id(), Some("session-1"));
+    let rules = decoded_operation.rules();
+    assert_eq!(
+        rules.session_requirement,
+        RuntimeIpcSessionRequirement::CurrentController
+    );
+    assert!(!rules.requires_idle);
+    assert!(!rules.serializes_session_selection);
+    assert!(!rules.side_effecting);
+
+    let result_json = serde_json::to_value(&result).expect("serialize mode catalog result");
+    assert_eq!(result_json["result"], "agent_modes");
+    assert_eq!(result_json["modes"][0]["id"], "review");
+    assert_eq!(result_json["modes"][0]["modelId"], "provider/model");
+    assert_eq!(result_json["modes"][0]["isExternal"], true);
+    let decoded_result: RuntimeIpcOperationResult =
+        serde_json::from_value(result_json).expect("deserialize mode catalog result");
+    assert_eq!(decoded_result, result);
+
+    let startup_operation = RuntimeIpcOperation::ListAgentModes { session_id: None };
+    assert_eq!(startup_operation.session_id(), None);
+    assert_eq!(
+        startup_operation.rules().session_requirement,
+        RuntimeIpcSessionRequirement::None
+    );
+    assert_eq!(
+        serde_json::to_value(startup_operation).expect("serialize startup mode catalog"),
+        json!({"operation": "list_agent_modes"})
+    );
+}
+
+#[test]
 fn protocol_round_trips_exact_turn_steering_without_replacing_turn_admission() {
-    assert_eq!(PROTOCOL_VERSION, 13);
+    assert_eq!(PROTOCOL_VERSION, 16);
     let operation = RuntimeIpcOperation::SteerTurn {
         request: AgentDialogSteerRequest {
             session_id: "session-1".to_string(),
@@ -143,8 +200,53 @@ fn protocol_round_trips_read_only_workspace_reference_operations() {
 }
 
 #[test]
+fn protocol_round_trips_root_scoped_lineage_operations() {
+    let operations = vec![
+        RuntimeIpcOperation::GetSessionLineage {
+            request: AgentSessionLineageRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                anchor_session_id: "root-1".to_string(),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        },
+        RuntimeIpcOperation::InspectLineageSession {
+            request: AgentSessionLineageTranscriptRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                root_session_id: "root-1".to_string(),
+                session_id: "child-1".to_string(),
+                required_settled_turn_ids: vec!["turn-terminal".to_string()],
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        },
+        RuntimeIpcOperation::CancelLineageSession {
+            request: AgentSessionLineageCancellationRequest {
+                workspace_path: "D:/workspace/project".to_string(),
+                root_session_id: "root-1".to_string(),
+                session_id: "child-1".to_string(),
+                expected_active_turn_id: Some("turn-child".to_string()),
+                source: Some(AgentSubmissionSource::Cli),
+                reason: Some("user_cancelled".to_string()),
+                wait_timeout_ms: Some(5_000),
+                remote_connection_id: None,
+                remote_ssh_host: None,
+            },
+        },
+    ];
+
+    for operation in operations {
+        let encoded = serde_json::to_value(&operation).expect("serialize lineage operation");
+        let decoded: RuntimeIpcOperation =
+            serde_json::from_value(encoded).expect("deserialize lineage operation");
+        assert_eq!(decoded, operation);
+        assert_eq!(decoded.session_id(), Some("root-1"));
+    }
+}
+
+#[test]
 fn protocol_round_trips_workspace_diff_as_a_read_only_workspace_operation() {
-    assert_eq!(PROTOCOL_VERSION, 13);
+    assert_eq!(PROTOCOL_VERSION, 16);
 
     let operation = RuntimeIpcOperation::WorkspaceDiff;
     let encoded = serde_json::to_value(&operation).expect("serialize workspace diff operation");
@@ -265,7 +367,7 @@ fn protocol_round_trips_the_reviewed_session_model_operation() {
 
 #[test]
 fn protocol_round_trips_the_current_session_rename_operation() {
-    assert_eq!(PROTOCOL_VERSION, 13);
+    assert_eq!(PROTOCOL_VERSION, 16);
 
     let operation = RuntimeIpcOperation::RenameSession {
         request: RuntimeSessionRenameRequest {

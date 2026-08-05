@@ -1,7 +1,7 @@
 use std::sync::Arc;
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 use std::sync::{OnceLock, RwLock};
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 use std::time::{Duration, Instant};
 
 use bitfun_ai_adapters::models_dev::{
@@ -10,13 +10,13 @@ use bitfun_ai_adapters::models_dev::{
 use bitfun_core_types::{
     ReasoningCatalogBinding, ReasoningCatalogProjection, ReasoningPresetDescriptor,
 };
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 use bitfun_events::{AIModelCatalogUpdatedEvent, AI_MODEL_CATALOG_UPDATED_EVENT};
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 use bitfun_services_integrations::models_dev::{
     ModelsDevCatalogService, ModelsDevRefreshOutcome, ModelsDevSnapshot, ModelsDevSnapshotSource,
 };
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 use log::debug;
 
 use crate::infrastructure::ai::provider_catalog::trusted_models_dev_binding;
@@ -26,30 +26,30 @@ use crate::service::config::types::AIModelConfig;
 #[derive(Clone)]
 pub(crate) struct ModelsDevReasoningCatalogSnapshot {
     pub(crate) catalog: Option<Arc<ModelsDevCatalog>>,
-    #[cfg(feature = "product-full")]
+    #[cfg(feature = "agent-runtime")]
     pub(crate) version: u64,
-    #[cfg(feature = "product-full")]
+    #[cfg(feature = "agent-runtime")]
     pub(crate) sha256: String,
-    #[cfg(feature = "product-full")]
+    #[cfg(feature = "agent-runtime")]
     pub(crate) source: ModelsDevSnapshotSource,
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 const CATALOG_RELOAD_INTERVAL: Duration = Duration::from_secs(60);
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 struct CachedReasoningCatalogSnapshot {
     loaded_at: Instant,
     snapshot: ModelsDevReasoningCatalogSnapshot,
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 fn parsed_catalog_cache() -> &'static RwLock<Option<CachedReasoningCatalogSnapshot>> {
     static CACHE: OnceLock<RwLock<Option<CachedReasoningCatalogSnapshot>>> = OnceLock::new();
     CACHE.get_or_init(|| RwLock::new(None))
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 fn models_dev_catalog_service() -> &'static ModelsDevCatalogService {
     static SERVICE: OnceLock<ModelsDevCatalogService> = OnceLock::new();
     SERVICE.get_or_init(|| {
@@ -61,7 +61,7 @@ fn models_dev_catalog_service() -> &'static ModelsDevCatalogService {
     })
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
 ) -> ModelsDevReasoningCatalogSnapshot {
     if let Ok(cache) = parsed_catalog_cache().read() {
@@ -85,7 +85,7 @@ pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
 
     let loaded = ModelsDevReasoningCatalogSnapshot {
         catalog,
-        #[cfg(feature = "product-full")]
+        #[cfg(feature = "agent-runtime")]
         version: snapshot.version,
         sha256: snapshot.sha256,
         source: snapshot.source,
@@ -100,7 +100,7 @@ pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
     loaded
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCatalogSnapshot {
     let loaded = load_models_dev_reasoning_catalog_without_refresh().await;
 
@@ -121,7 +121,7 @@ pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCat
     loaded
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 fn parse_models_dev_snapshot(
     snapshot: &ModelsDevSnapshot,
 ) -> Option<ModelsDevReasoningCatalogSnapshot> {
@@ -143,7 +143,7 @@ fn parse_models_dev_snapshot(
     })
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 fn replace_parsed_catalog_cache(updated: ModelsDevReasoningCatalogSnapshot) -> bool {
     let Ok(mut cache) = parsed_catalog_cache().write() else {
         return false;
@@ -151,7 +151,7 @@ fn replace_parsed_catalog_cache(updated: ModelsDevReasoningCatalogSnapshot) -> b
     replace_cached_catalog(&mut cache, updated)
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 fn replace_cached_catalog(
     cache: &mut Option<CachedReasoningCatalogSnapshot>,
     updated: ModelsDevReasoningCatalogSnapshot,
@@ -169,7 +169,7 @@ fn replace_cached_catalog(
     true
 }
 
-#[cfg(feature = "product-full")]
+#[cfg(feature = "agent-runtime")]
 async fn emit_models_dev_catalog_updated(snapshot: &ModelsDevSnapshot) {
     crate::service::config::GlobalConfigManager::broadcast_update(
         crate::service::config::ConfigUpdateEvent::ReasoningCatalogUpdated,
@@ -196,12 +196,12 @@ async fn emit_models_dev_catalog_updated(snapshot: &ModelsDevSnapshot) {
         .await;
 }
 
-#[cfg(not(feature = "product-full"))]
+#[cfg(not(feature = "agent-runtime"))]
 pub(crate) async fn load_models_dev_reasoning_catalog() -> ModelsDevReasoningCatalogSnapshot {
     ModelsDevReasoningCatalogSnapshot { catalog: None }
 }
 
-#[cfg(not(feature = "product-full"))]
+#[cfg(not(feature = "agent-runtime"))]
 pub(crate) async fn load_models_dev_reasoning_catalog_without_refresh(
 ) -> ModelsDevReasoningCatalogSnapshot {
     ModelsDevReasoningCatalogSnapshot { catalog: None }
@@ -654,7 +654,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "product-full")]
+    #[cfg(feature = "agent-runtime")]
     #[test]
     fn refreshed_catalog_replaces_projection_without_waiting_for_reload_interval() {
         let mut cache = Some(super::CachedReasoningCatalogSnapshot {

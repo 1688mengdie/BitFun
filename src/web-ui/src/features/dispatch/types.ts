@@ -142,6 +142,11 @@ export interface DispatchInstallPoll {
   status: 'running' | 'succeeded' | 'failed';
 }
 
+export interface DispatchProvisionTargetResult {
+  accountStatus: 'synced' | 'skipped_not_logged_in';
+  daemonInstalled: boolean;
+}
+
 export type DispatchEvent =
   | {
       type: 'audit';

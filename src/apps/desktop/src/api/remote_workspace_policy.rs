@@ -148,6 +148,42 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LocalOnly,
     ),
     (
+        "appearance_market_browse",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_download_release",
+        RemoteWorkspacePolicy::LocalOnly,
+    ),
+    (
+        "appearance_market_get_listing",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_get_review_submission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_list_review_submissions",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_list_submissions",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_submit_package",
+        RemoteWorkspacePolicy::LocalOnly,
+    ),
+    (
+        "appearance_market_review_submission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "appearance_market_withdraw_submission",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "account_token_expired",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
@@ -351,6 +387,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "dispatch_install_cli_start",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "dispatch_provision_target",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     (
@@ -1321,6 +1361,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("read_mcp_resource", RemoteWorkspacePolicy::LegacyUnaudited),
     ("record_file_change", RemoteWorkspacePolicy::LegacyUnaudited),
     (
+        "record_local_command_turn",
+        RemoteWorkspacePolicy::RemoteRouted,
+    ),
+    (
         "refresh_model_client",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -1903,6 +1947,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("update_miniapp", RemoteWorkspacePolicy::LegacyUnaudited),
+    ("update_session_mode", RemoteWorkspacePolicy::RemoteRouted),
     (
         "update_session_model",
         RemoteWorkspacePolicy::LegacyUnaudited,

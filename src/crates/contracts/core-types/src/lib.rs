@@ -25,7 +25,8 @@ pub use ai::{
 };
 pub use errors::{AiErrorDetail, ErrorCategory};
 pub use session::{
-    validate_session_id, SessionContinuationPolicy, SessionKind, SessionModelBindingPolicy,
+    validate_session_id, SessionAgentRouteOwner, SessionContinuationPolicy, SessionKind,
+    SessionModelBindingPolicy,
 };
 pub use session_usage::*;
 pub use speech::*;

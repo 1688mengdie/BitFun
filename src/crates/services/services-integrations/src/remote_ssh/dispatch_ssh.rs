@@ -13,6 +13,10 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
+use bitfun_services_core::dispatch_contract::{
+    DispatchAccountDaemonIdentity, DispatchAccountDaemonProvisionRequest,
+    DispatchAccountDaemonProvisionResponse, DISPATCH_ACCOUNT_DAEMON_PROVISIONING_CAPABILITY,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -35,6 +39,7 @@ const INSTALL_STEM: &str = "install-cli";
 const INSTALL_DONE_MARKER: &str = "BITFUN_DISPATCH_CLI_INSTALL_DONE";
 const INSTALL_PREPARE_GRACE_SECONDS: u64 = 30;
 const COMMAND_TIMEOUT_MS: u64 = 30_000;
+const ACCOUNT_DAEMON_COMMAND_TIMEOUT_MS: u64 = 90_000;
 const WORKSPACE_OPERATION_WAIT: Duration = Duration::from_secs(30 * 60);
 const WORKSPACE_OPERATION_POLL_INTERVAL: Duration = Duration::from_millis(750);
 /// A release archive is tens of megabytes and the target's uplink is unknown,
@@ -891,6 +896,201 @@ pub async fn install_cli_cancel(manager: &SSHConnectionManager, connection_id: &
         ));
     }
     Ok(())
+}
+
+/// Read the SSH target's stable, non-secret device identity after verifying
+/// that its CLI advertises the account-daemon bootstrap contract.
+pub async fn account_daemon_identity(
+    manager: &SSHConnectionManager,
+    connection_id: &str,
+) -> Result<DispatchAccountDaemonIdentity> {
+    let cli_path = account_daemon_cli_path(manager, connection_id).await?;
+    let command = format!(
+        "{} daemon __dispatch_identity",
+        shell_quote_posix(&cli_path)
+    );
+    let result = manager
+        .execute_command_with_options(
+            connection_id,
+            &command,
+            SSHCommandOptions {
+                timeout_ms: Some(COMMAND_TIMEOUT_MS),
+                cancellation_token: None,
+            },
+        )
+        .await?;
+    ensure_command_completed(&result, "read BitFun daemon target identity")?;
+    if result.exit_code != 0 {
+        return Err(remote_command_error(
+            "read BitFun daemon target identity",
+            result.exit_code,
+            &result.stdout,
+            &result.stderr,
+        ));
+    }
+    let identity: DispatchAccountDaemonIdentity = serde_json::from_str(result.stdout.trim())
+        .context("BitFun daemon target returned an invalid identity")?;
+    if identity.device_id.len() != 32
+        || !identity
+            .device_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+        || identity.device_name.trim().is_empty()
+        || identity.device_name.len() > 256
+        || identity.device_name.chars().any(char::is_control)
+    {
+        return Err(anyhow!("BitFun daemon target returned an unsafe identity"));
+    }
+    Ok(identity)
+}
+
+/// Stage one secret-bearing account bootstrap document, consume it through the
+/// target CLI, and remove it regardless of command outcome.
+pub async fn provision_account_daemon(
+    manager: &SSHConnectionManager,
+    connection_id: &str,
+    request: &DispatchAccountDaemonProvisionRequest,
+) -> Result<DispatchAccountDaemonProvisionResponse> {
+    let cli_path = account_daemon_cli_path(manager, connection_id).await?;
+    let target = probe_remote_target(manager, connection_id).await?;
+    let request_dir = format!("{}/{}", target.home, REQUEST_STATE_DIR);
+    exec_ok(
+        manager,
+        connection_id,
+        &format!(
+            "mkdir -p {dir} && chmod 700 {root} {dispatch} {dir}",
+            root = shell_quote_posix(&format!("{}/.bitfun", target.home)),
+            dispatch = shell_quote_posix(&format!("{}/.bitfun/dispatch", target.home)),
+            dir = shell_quote_posix(&request_dir),
+        ),
+    )
+    .await?;
+    let request_path = format!(
+        "{request_dir}/daemon-provision-{}.json",
+        uuid::Uuid::new_v4().as_simple()
+    );
+    let request_bytes =
+        serde_json::to_vec(request).context("encode daemon provisioning request")?;
+    exec_ok(
+        manager,
+        connection_id,
+        &format!(
+            "umask 077; : > {request}; chmod 600 {request}",
+            request = shell_quote_posix(&request_path),
+        ),
+    )
+    .await?;
+    if let Err(error) = manager
+        .sftp_write(connection_id, &request_path, &request_bytes)
+        .await
+        .context("stage daemon provisioning request")
+    {
+        let _ = manager.sftp_remove(connection_id, &request_path).await;
+        return Err(error);
+    }
+
+    let command = format!(
+        "request={request}; cleanup() {{ rm -f \"$request\"; }}; trap cleanup EXIT; \
+         trap 'exit 130' HUP INT TERM; {cli} daemon __dispatch_provision \"$request\"",
+        request = shell_quote_posix(&request_path),
+        cli = shell_quote_posix(&cli_path),
+    );
+    let result = manager
+        .execute_command_with_options(
+            connection_id,
+            &command,
+            SSHCommandOptions {
+                timeout_ms: Some(ACCOUNT_DAEMON_COMMAND_TIMEOUT_MS),
+                cancellation_token: None,
+            },
+        )
+        .await;
+    let _ = manager.sftp_remove(connection_id, &request_path).await;
+    let result = result?;
+    ensure_command_completed(&result, "provision persistent BitFun daemon")?;
+    if result.exit_code != 0 {
+        return Err(remote_command_error(
+            "provision persistent BitFun daemon",
+            result.exit_code,
+            &result.stdout,
+            &result.stderr,
+        ));
+    }
+    let response: DispatchAccountDaemonProvisionResponse =
+        serde_json::from_str(result.stdout.trim())
+            .context("BitFun daemon provisioning returned invalid JSON")?;
+    if response.device_id != request.device_id || !response.service_installed {
+        return Err(anyhow!(
+            "BitFun daemon provisioning returned an inconsistent result"
+        ));
+    }
+    Ok(response)
+}
+
+/// Best-effort rollback for a bootstrap whose relay-online verification did
+/// not complete. The target command refuses to touch a different session.
+pub async fn deprovision_account_daemon(
+    manager: &SSHConnectionManager,
+    connection_id: &str,
+    device_id: &str,
+    user_id: &str,
+) -> Result<()> {
+    let cli_path = account_daemon_cli_path(manager, connection_id).await?;
+    let command = format!(
+        "{} daemon __dispatch_deprovision {} {}",
+        shell_quote_posix(&cli_path),
+        shell_quote_posix(device_id),
+        shell_quote_posix(user_id),
+    );
+    let result = manager
+        .execute_command_with_options(
+            connection_id,
+            &command,
+            SSHCommandOptions {
+                timeout_ms: Some(ACCOUNT_DAEMON_COMMAND_TIMEOUT_MS),
+                cancellation_token: None,
+            },
+        )
+        .await?;
+    ensure_command_completed(&result, "roll back BitFun daemon provisioning")?;
+    if result.exit_code != 0 {
+        return Err(remote_command_error(
+            "roll back BitFun daemon provisioning",
+            result.exit_code,
+            &result.stdout,
+            &result.stderr,
+        ));
+    }
+    Ok(())
+}
+
+async fn account_daemon_cli_path(
+    manager: &SSHConnectionManager,
+    connection_id: &str,
+) -> Result<String> {
+    ensure_plain_ssh_target(manager, connection_id).await?;
+    let probed = probe(manager, connection_id, None).await?;
+    let protocol = probed
+        .protocol
+        .as_ref()
+        .ok_or_else(|| anyhow!("the SSH target has no compatible BitFun dispatch protocol"))?;
+    validate_dispatch_protocol(protocol, None)?;
+    let supports_provisioning = protocol
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .is_some_and(|capabilities| {
+            capabilities.iter().any(|capability| {
+                capability.as_str() == Some(DISPATCH_ACCOUNT_DAEMON_PROVISIONING_CAPABILITY)
+            })
+        });
+    if !supports_provisioning {
+        return Err(anyhow!(
+            "the target BitFun CLI does not support account daemon provisioning"
+        ));
+    }
+    probed
+        .cli_path
+        .ok_or_else(|| anyhow!("the SSH target has no BitFun CLI"))
 }
 
 /// Keys of the `ai` config section that make up "model configuration": the
@@ -2851,7 +3051,10 @@ mod tests {
             .lines()
             .find(|line| line.contains("mv -f \"$PRIMARY_NEW\""))
             .expect("commit fragment swaps the primary");
-        assert!(release.contains(shared), "release must use the shared commit");
+        assert!(
+            release.contains(shared),
+            "release must use the shared commit"
+        );
         assert!(
             release.contains(r#"PRIMARY_NEW="$STAGE/bitfun""#),
             "release must stage under real filenames"

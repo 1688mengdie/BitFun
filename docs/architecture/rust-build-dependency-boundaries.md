@@ -62,6 +62,14 @@ Cargo 会统一同一 package 在依赖图中的 feature；workspace dependency 
 - target-specific dependency 放在最接近平台实现的 owner，不因单一平台需求污染跨平台 crate；
 - 修改共享 dependency feature 视为构建影响变更，必须检查真实产品组合的 feature graph。
 
+### 3.4 Reqwest TLS 后端由客户端 owner 选择
+
+- workspace 级 `reqwest` 只统一版本以及跨产品共享的 HTTP、序列化和流能力，不启用 TLS 后端；
+- 真正创建 HTTPS client 的 app、service 或 adapter 必须在自身依赖声明中显式选择 `reqwest/rustls`，只使用 `reqwest::Url` 的 contract/assembly 路径不加载 TLS；
+- capability crate 的每个 Reqwest owner feature 必须独立带齐 `reqwest/rustls`，不能依赖 `product-full` 或其他 feature 的 Cargo feature-union 偶然补齐；
+- 边界检查以 Cargo metadata 的解码结果看护全部直接 consumer，并检查 resolved Reqwest feature union，防止传递依赖重新激活 Native TLS；
+- 不并列启用 native-tls 兼容栈。只有真实产品场景无法由 Rustls 平台证书验证承载时，才以明确行为证据评审替换方案，而不是重新叠加第二后端。
+
 ## 4. 依赖 owner 与准入检查
 
 第三方库应位于调用外部系统或实现具体能力的最低合理 owner：
@@ -114,6 +122,11 @@ Cargo 会统一同一 package 在依赖图中的 feature；workspace dependency 
 
 仅为减少文件行数、追求“一 crate 一 feature”、只有单一消费者且没有闭包收益，或必须先建立通用注册框架才能成立时，不拆 crate。可以先在原 crate 内按 owner 拆模块；只有物理 crate 边界带来真实依赖或独立验证收益时再升级。
 
+不可变的随版本发布内容只有在能够形成无第三方依赖、可独立验证的稳定 owner，并且实测能减少原 owner 的
+build-script 工作或增量编译成本时才适合独立成 crate。内容 crate 不得顺势承担选择、渲染、运行时状态、动态来源
+或通用注册职责；如果 Cargo 依赖指纹仍会让上层 crate 重检，PR 必须如实记录残余失效链，不能宣称已经隔离全部
+下游重编译。
+
 DTO/contract 抽取不等于 runtime owner 迁移。迁移 owner 必须先审查 port/provider、旧路径兼容、状态与错误语义、远程 workspace 行为和行为等价测试。
 
 ## 6. Test target 与 feature 组合
@@ -123,6 +136,7 @@ DTO/contract 抽取不等于 runtime owner 迁移。迁移 owner 必须先审查
 - integration test 只依赖被测 owner 的公开契约，不通过 `product-full` 获取测试便利；窄 feature 尚不能独立编译时，应将其记录为待拆分的 owner/feature 边界并保持现有 target 声明，不得新增或扩大 `product-full` 来制造已经收敛的假象；
 - 纯解析、策略和状态转换优先使用无外部系统的 owner-local fixture；
 - 需要真实 adapter/service 的测试单独作为 feature integration target；
+- 同一 owner 内 feature、平台与依赖闭包完全相同的 integration tests，应按稳定职责收敛为少量显式 target，避免每个源文件重复编译和链接同一闭包；本地通过 `--test <target> <module>::<filter>` 保留 focused test。不同 feature、平台、进程或外部系统边界不得为减少 target 数而合并；
 - 测试常用、真实的 feature 组合，不穷举指数级组合；
 - `--all-features` 用于兼容审计，不代替目标产品的最小组合测试。
 
