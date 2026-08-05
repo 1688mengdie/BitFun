@@ -322,6 +322,24 @@ enum McpAction {
         #[arg(long, value_enum, default_value_t = McpImportOutputFormat::Text)]
         format: McpImportOutputFormat,
     },
+    /// Add an MCP server (three-step wizard: name, type, command/URL)
+    Add {
+        /// Step 1: server name (also used as id; no spaces)
+        #[arg(long)]
+        name: Option<String>,
+        /// Step 2: server type — accepts `local` or `remote`
+        #[arg(long, value_parser = ["local", "remote"])]
+        r#type: Option<String>,
+        /// Step 3: launch command for a local server (e.g. `npx -y @modelcontextprotocol/server-xxx`)
+        #[arg(long)]
+        command: Option<String>,
+        /// Step 3: server URL for a remote server
+        #[arg(long)]
+        url: Option<String>,
+        /// Skip interactive prompts for missing fields; error instead
+        #[arg(long)]
+        non_interactive: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1200,6 +1218,22 @@ async fn run_cli() -> Result<()> {
                     candidates: candidate,
                     native_id,
                     format,
+                })
+                .await?;
+            }
+            Some(McpAction::Add {
+                name,
+                r#type,
+                command,
+                url,
+                non_interactive,
+            }) => {
+                management::add_mcp_server(management::McpAddInput {
+                    name,
+                    r#type,
+                    command,
+                    url,
+                    non_interactive,
                 })
                 .await?;
             }
