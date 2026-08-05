@@ -543,7 +543,7 @@ mod tests {
     #[test]
     fn overlay_is_valid_and_keeps_product_endpoint_decisions() {
         let overlay = parse_overlay().expect("valid overlay");
-        assert_eq!(overlay.providers.len(), 12);
+        assert_eq!(overlay.providers.len(), 13);
         let openbitfun = overlay
             .providers
             .iter()
@@ -580,6 +580,37 @@ mod tests {
                 .find(|endpoint| endpoint.is_default)
                 .map(|endpoint| endpoint.base_url.as_str()),
             Some("https://dashscope.aliyuncs.com/compatible-mode/v1")
+        );
+        let tokendance = overlay
+            .providers
+            .iter()
+            .find(|provider| provider.id == "tokendance")
+            .expect("tokendance");
+        assert_eq!(
+            tokendance.help_url.as_deref(),
+            Some("https://tokendance.space/keys")
+        );
+        assert_eq!(
+            tokendance
+                .endpoints
+                .iter()
+                .map(|endpoint| (
+                    endpoint.id.as_str(),
+                    endpoint.base_url.as_str(),
+                    endpoint.api_format.as_str(),
+                    endpoint.is_default,
+                ))
+                .collect::<Vec<_>>(),
+            [(
+                "default",
+                "https://tokendance.space/gateway/v1",
+                "openai",
+                true,
+            )]
+        );
+        assert_eq!(
+            tokendance.model_policy.curated_models,
+            ["glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro"]
         );
     }
 
@@ -734,7 +765,7 @@ mod tests {
             "bundle".to_string(),
             ProviderCatalogSource::Bundle,
         );
-        assert_eq!(resolved.providers.len(), 12);
+        assert_eq!(resolved.providers.len(), 13);
         assert!(resolved
             .providers
             .iter()
@@ -815,6 +846,15 @@ mod tests {
                 &relayed,
             ),
             Some(("deepseek".to_string(), "deepseek-v4-flash".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "openai",
+                "https://tokendance.space/gateway/v1/chat/completions",
+                "GLM-5.2",
+                &relayed,
+            ),
+            Some(("zhipuai".to_string(), "glm-5.2".to_string()))
         );
         assert_eq!(
             trusted_models_dev_binding(

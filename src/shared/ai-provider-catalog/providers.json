@@ -251,6 +251,36 @@
         "curated_models": [],
         "additional_models": []
       }
+    },
+    {
+      "id": "tokendance",
+      "display_order": 120,
+      "name": "TokenDance",
+      "description": "TokenDance unified AI model gateway",
+      "help_url": "https://tokendance.space/keys",
+      "requires_api_key": true,
+      "catalog_provider_ids": [],
+      "endpoints": [
+        {
+          "id": "default",
+          "base_url": "https://tokendance.space/gateway/v1",
+          "api_format": "openai",
+          "label": "default",
+          "is_default": true,
+          "trusted_for_auto_detection": true,
+          "catalog_provider_ids": [],
+          "reasoning_catalog_bindings": [
+            { "model_id": "glm-5.2", "source_provider_id": "zhipuai", "source_model_id": "glm-5.2" },
+            { "model_id": "deepseek-v4-flash", "source_provider_id": "deepseek", "source_model_id": "deepseek-v4-flash" },
+            { "model_id": "deepseek-v4-pro", "source_provider_id": "deepseek", "source_model_id": "deepseek-v4-pro" }
+          ]
+        }
+      ],
+      "model_policy": {
+        "mode": "curated",
+        "curated_models": ["glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro"],
+        "additional_models": []
+      }
     }
   ]
 }
