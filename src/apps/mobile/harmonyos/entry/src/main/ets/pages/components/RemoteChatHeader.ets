@@ -15,9 +15,12 @@ export struct RemoteChatHeader {
   @Param desktopName: string = '';
   @Param showBackButton: boolean = true;
   @Param showSidebarRestoreButton: boolean = false;
+  @Param showActionsMenu: boolean = false;
+  @BuilderParam actionsMenu: () => void = this.EmptyBuilder;
   @Event onBack: () => void = () => {};
   @Event onRestoreSidebar: () => void = () => {};
   @Event onOpenActions: () => void = () => {};
+  @Event onActionsMenuStateChange: (visible: boolean) => void = (_visible: boolean) => {};
   @Event onRenameSession: (title: string) => void = (_title: string) => {};
   @Local showTitleEditor: boolean = false;
   @Local renameTitle: string = '';
@@ -62,21 +65,7 @@ export struct RemoteChatHeader {
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
-      Stack({ alignContent: Alignment.Center }) {
-        Text('•••')
-          .fontSize(13)
-          .fontColor(INK)
-      }
-      .width(48)
-      .height(48)
-      .backgroundColor(CARD)
-      .borderRadius(24)
-      .border({ width: 1, color: LINE })
-      .accessibilityText(RemoteI18n.t('sidebar.more'))
-      .onClick(() => {
-        this.showTitleEditor = false;
-        this.onOpenActions();
-      })
+      this.ActionsControl()
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
@@ -94,15 +83,19 @@ export struct RemoteChatHeader {
       })
     } else if (this.showBackButton) {
       Stack({ alignContent: Alignment.Center }) {
-        SymbolGlyph($r('sys.symbol.chevron_left'))
-          .fontSize(22)
-          .fontColor([INK])
+        Image($r('app.media.remote_ref_back'))
+          .width(16)
+          .height(25)
+          .objectFit(ImageFit.Contain)
+          .renderMode(ImageRenderMode.Template)
+          .foregroundColor(INK)
       }
       .width(48)
       .height(48)
       .backgroundColor(CARD)
       .border({ width: 1, color: LINE })
       .borderRadius(24)
+      .shadow({ radius: 10, color: LINE, offsetY: 3 })
       .accessibilityText(RemoteI18n.t('common.back'))
       .onClick(() => {
         this.onBack();
@@ -110,6 +103,43 @@ export struct RemoteChatHeader {
     } else {
       Blank().width(48).height(48)
     }
+  }
+
+  @Builder
+  private ActionsControl() {
+    Stack({ alignContent: Alignment.Center }) {
+      Image($r('app.media.remote_ref_more'))
+        .width(25)
+        .height(8)
+        .objectFit(ImageFit.Contain)
+        .renderMode(ImageRenderMode.Template)
+        .foregroundColor(INK)
+    }
+    .width(48)
+    .height(48)
+    .backgroundColor(CARD)
+    .borderRadius(24)
+    .border({ width: 1, color: LINE })
+    .shadow({ radius: 10, color: LINE, offsetY: 3 })
+    .accessibilityText(RemoteI18n.t('sidebar.more'))
+    .bindPopup(this.showActionsMenu, {
+      builder: () => {
+        this.actionsMenu();
+      },
+      placement: Placement.BottomRight,
+      popupColor: '#00000000',
+      enableArrow: false,
+      autoCancel: true,
+      mask: false,
+      targetSpace: 8,
+      onStateChange: (event) => {
+        this.onActionsMenuStateChange(event.isVisible);
+      }
+    })
+    .onClick(() => {
+      this.showTitleEditor = false;
+      this.onOpenActions();
+    })
   }
 
   @Builder
@@ -164,6 +194,10 @@ export struct RemoteChatHeader {
     }
     const brand = 'BitFun';
     return this.workspaceBranch.length > 0 ? `${brand} · ${this.workspaceBranch}` : brand;
+  }
+
+  @Builder
+  private EmptyBuilder() {
   }
 
 }

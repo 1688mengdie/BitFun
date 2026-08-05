@@ -29,7 +29,6 @@ export struct RemoteActionsSheet {
   @Event onDisconnect: () => void = () => {};
   @Event onClearPairing: () => void = () => {};
   @Event onSortModeChange: (mode: string) => void = (_mode: string) => {};
-  @Event onAddConnection: () => void = () => {};
   @Event onOpenSettings: () => void = () => {};
   @Event onOpenViewSettings: () => void = () => {};
 
@@ -79,10 +78,6 @@ export struct RemoteActionsSheet {
           message: RemoteI18n.t('remote.menu.comingSoon'),
           duration: 1800
         });
-      })
-      this.IconRow('remote_actions_link', RemoteI18n.t('remote.menu.addConnection'), '', () => {
-        this.onAddConnection();
-        this.onDismiss();
       })
       this.IconRow('remote_actions_settings', RemoteI18n.t('remote.menu.settings'), '', () => {
         this.onDismiss();

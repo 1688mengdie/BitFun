@@ -1,5 +1,5 @@
 import { AppShellState } from '../state/AppShellState';
-import { CARD, PAGE_BG } from './Theme';
+import { PAGE_BG } from './Theme';
 
 const WIDE_SETTINGS_SHEET_MAX_WIDTH: number = 680;
 const WIDE_CONNECT_SHEET_MAX_WIDTH: number = 620;
@@ -49,7 +49,7 @@ export struct AppShell {
           }
           .width('100%')
           .height('100%')
-          .backgroundColor(CARD)
+          .backgroundColor(PAGE_BG)
           .opacity(0.62)
           .transition(TransitionEffect.opacity(0)
             .animation({ duration: 210, curve: Curve.EaseOut }))

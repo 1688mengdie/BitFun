@@ -16,7 +16,7 @@ import {
 import { ComposerBar, ComposerPresentation } from './ComposerBar';
 import { GeneralChatHeader } from './GeneralChatHeader';
 import { RemoteChatHeader } from './RemoteChatHeader';
-import { CARD, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
+import { CARD, FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
 
 @ComponentV2
 export struct ConversationView {
@@ -137,10 +137,6 @@ export struct ConversationView {
         this.MenuBackdrop(() => { this.showQuickActions = false; })
         this.QuickActionsMenu()
       }
-      if (this.showHeaderActions) {
-        this.MenuBackdrop(() => { this.showHeaderActions = false; })
-        this.HeaderActionsMenu()
-      }
     }
     .width('100%')
     .height('100%')
@@ -156,6 +152,10 @@ export struct ConversationView {
         showSidebarButton: this.showSidebarButton,
         showBackButton: this.showBackButton,
         showSidebarRestoreButton: this.showSidebarRestoreButton,
+        showActionsMenu: this.showHeaderActions,
+        actionsMenu: () => {
+          this.HeaderActionsPopover();
+        },
         onOpenSidebar: () => {
           this.onOpenSidebar();
         },
@@ -168,6 +168,9 @@ export struct ConversationView {
         onOpenActions: () => {
           this.showQuickActions = false;
           this.showHeaderActions = !this.showHeaderActions;
+        },
+        onActionsMenuStateChange: (visible: boolean) => {
+          this.showHeaderActions = visible;
         }
       })
     } else {
@@ -177,6 +180,10 @@ export struct ConversationView {
         desktopName: this.desktopName,
         showBackButton: this.showBackButton,
         showSidebarRestoreButton: this.showSidebarRestoreButton,
+        showActionsMenu: this.showHeaderActions,
+        actionsMenu: () => {
+          this.HeaderActionsPopover();
+        },
         onBack: () => {
           this.onBack();
         },
@@ -186,6 +193,9 @@ export struct ConversationView {
         onOpenActions: () => {
           this.showQuickActions = false;
           this.showHeaderActions = !this.showHeaderActions;
+        },
+        onActionsMenuStateChange: (visible: boolean) => {
+          this.showHeaderActions = visible;
         },
         onRenameSession: (title: string) => {
           this.onRenameSession(title);
@@ -436,54 +446,19 @@ export struct ConversationView {
   }
 
   @Builder
-  HeaderActionsMenu() {
-    if (this.composerPresentation === ComposerPresentation.Floating) {
-      this.HeaderActionsPopover()
-    } else {
-      this.HeaderActionsBottomSheet()
-    }
-  }
-
-  @Builder
   HeaderActionsPopover() {
     Column() {
       this.HeaderActionsContent()
     }
-    .width(330)
-    .padding({ left: 16, right: 16, top: 14, bottom: 14 })
-    .backgroundColor(CARD)
-    .border({ width: 1, color: '#0D000000' })
-    .borderRadius(20)
-    .shadow({ radius: 20, color: '#1A000000', offsetY: 8 })
-    .position({ right: 18, top: 14 })
-    .zIndex(6)
-    .transition(TransitionEffect.translate({ x: 18, y: -12 })
+    .width(292)
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .backgroundColor(FLOATING_PANEL_BG)
+    .border({ width: 1, color: LINE })
+    .borderRadius(16)
+    .shadow({ radius: 18, color: LINE, offsetY: 7 })
+    .transition(TransitionEffect.translate({ x: 8, y: -8 })
       .combine(TransitionEffect.opacity(0))
-      .animation({ duration: 220, curve: Curve.EaseOut }))
-  }
-
-  @Builder
-  HeaderActionsBottomSheet() {
-    Column() {
-      Text('')
-        .width(36)
-        .height(4)
-        .backgroundColor(LINE)
-        .borderRadius(2)
-        .margin({ bottom: 8 })
-      this.HeaderActionsContent()
-    }
-    .width('100%')
-    .padding({ left: 16, right: 16, top: 10, bottom: 20 })
-    .backgroundColor(CARD)
-    .border({ width: { top: 1 }, color: LINE })
-    .borderRadius({ topLeft: 18, topRight: 18 })
-    .position({ left: 0, bottom: 0 })
-    .zIndex(6)
-    .alignItems(HorizontalAlign.Center)
-    .transition(TransitionEffect.translate({ x: 0, y: 24 })
-      .combine(TransitionEffect.opacity(0))
-      .animation({ duration: 220, curve: Curve.EaseOut }))
+      .animation({ duration: 180, curve: Curve.EaseOut }))
   }
 
   @Builder
