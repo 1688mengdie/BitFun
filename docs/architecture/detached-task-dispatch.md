@@ -218,8 +218,12 @@ version equality is not evidence of this behavior.
 
 `probe` is read-only and never installs software. Immediately before SSH
 provisioning, submission probes again and automatically installs or upgrades a
-compatible prebuilt `bitfun` release when needed. Release resolution stays
-bound to the expected OS and architecture; the controller verifies the
+compatible latest prebuilt `bitfun` release when needed. Release resolution
+stays bound to the expected OS and architecture. GitHub is the default byte
+source; when its measured transfer rate is below 512 KiB/s, OpenBitFun is tried
+first and GitHub remains the fallback. The same policy applies whether the SSH
+target downloads directly or the controller has to push the archive. The
+controller verifies the
 checksum sidecar, its publisher signature when present, and the mandatory
 archive signature, pins the SHA-256 passed to the installer, waits with a
 bounded deadline, and probes the installed binary again before continuing.
