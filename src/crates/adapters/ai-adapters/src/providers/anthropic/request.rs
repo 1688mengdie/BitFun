@@ -1,6 +1,7 @@
 use super::AnthropicMessageConverter;
 use crate::client::quirks::{
-    is_deepseek_reasoning_effort_model, is_deepseek_url, normalize_deepseek_reasoning_effort,
+    is_deepseek_reasoning_effort_model, is_deepseek_url, is_glm_52_reasoning_effort_model,
+    is_zhipuai_url, normalize_deepseek_reasoning_effort, normalize_glm_52_reasoning_effort,
     should_append_tool_stream,
 };
 use crate::client::sse::execute_sse_request;
@@ -156,14 +157,47 @@ fn compile_reasoning_action(
                 Ok(true)
             }
             ReasoningPresetAction::Effort { value } => {
-                let effort = normalize_deepseek_reasoning_effort(value).ok_or_else(|| {
-                    anyhow!(
-                        "DeepSeek reasoning effort '{}' has no enabled mapping",
-                        value
-                    )
-                })?;
+                let effort = normalize_deepseek_reasoning_effort(&execution_model, value)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "DeepSeek reasoning effort '{}' has no enabled mapping",
+                            value
+                        )
+                    })?;
                 request_body["thinking"] = serde_json::json!({ "type": "enabled" });
                 request_body["output_config"] = serde_json::json!({ "effort": effort });
+                Ok(true)
+            }
+            ReasoningPresetAction::BudgetTokens { .. } => Ok(false),
+            ReasoningPresetAction::RequestPatch { .. } => {
+                unreachable!("patches are compiled by shared code")
+            }
+        };
+    }
+
+    let is_glm_52_reasoning_target = is_glm_52_reasoning_effort_model(&execution_model)
+        && (execution_provider.eq_ignore_ascii_case("zhipuai") || is_zhipuai_url(url));
+    if is_glm_52_reasoning_target {
+        return match action {
+            ReasoningPresetAction::Effort { value } => {
+                let normalized = normalize_glm_52_reasoning_effort(value).ok_or_else(|| {
+                    anyhow!("GLM-5.2 reasoning effort '{}' is unsupported", value)
+                })?;
+                request_body["thinking"] = serde_json::json!({ "type": "adaptive" });
+                request_body["output_config"] = serde_json::json!({
+                    "effort": normalized
+                });
+                Ok(true)
+            }
+            ReasoningPresetAction::Toggle { enabled } => {
+                request_body["thinking"] = serde_json::json!({
+                    "type": if *enabled { "adaptive" } else { "disabled" }
+                });
+                if !enabled {
+                    request_body
+                        .as_object_mut()
+                        .map(|body| body.remove("output_config"));
+                }
                 Ok(true)
             }
             ReasoningPresetAction::BudgetTokens { .. } => Ok(false),

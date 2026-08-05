@@ -341,6 +341,16 @@ mod tests {
                 "openai": {"models": {
                     "gpt-test": {"id":"gpt-test","reasoning":true,
                         "reasoning_options":{"type":"effort","values":["low","high"]}}
+                }},
+                "zhipuai": {"models": {
+                    "glm-5.2": {"id":"glm-5.2","reasoning":true,
+                        "reasoning_options":{"type":"effort","values":["high","max"]}}
+                }},
+                "deepseek": {"models": {
+                    "deepseek-v4-flash": {"id":"deepseek-v4-flash","reasoning":true,
+                        "reasoning_options":[{"type":"toggle"},{"type":"effort","values":["low","high","max"]}]},
+                    "deepseek-v4-pro": {"id":"deepseek-v4-pro","reasoning":true,
+                        "reasoning_options":[{"type":"toggle"},{"type":"effort","values":["high","max"]}]}
                 }}
             }"#,
         )
@@ -398,6 +408,88 @@ mod tests {
             [ReasoningPresetAction::Effort { value }] if value == "high"
         ));
         assert_eq!(resolve_default_reasoning_preset(&projection), Some(high));
+    }
+
+    #[test]
+    fn openbitfun_models_use_their_exact_upstream_reasoning_catalogs() {
+        for (provider, base_url) in [
+            ("anthropic", "https://api.openbitfun.com"),
+            ("openai", "https://api.openbitfun.com/v1"),
+        ] {
+            for (model_name, expected_provider, expected_presets) in [
+                ("glm-5.2", "zhipuai", vec!["off", "on", "high", "max"]),
+                (
+                    "deepseek-v4-flash",
+                    "deepseek",
+                    vec!["off", "on", "low", "high", "max"],
+                ),
+                (
+                    "deepseek-v4-pro",
+                    "deepseek",
+                    vec!["off", "on", "high", "max"],
+                ),
+            ] {
+                let projection = project_model_reasoning_catalog(
+                    &AIModelConfig {
+                        id: format!("openbitfun-{provider}-{model_name}"),
+                        name: model_name.to_string(),
+                        provider: provider.to_string(),
+                        model_name: model_name.to_string(),
+                        base_url: base_url.to_string(),
+                        ..Default::default()
+                    },
+                    Some(&catalog()),
+                );
+
+                assert_eq!(
+                    projection
+                        .presets
+                        .iter()
+                        .map(|preset| preset.id.as_str())
+                        .collect::<Vec<_>>(),
+                    expected_presets
+                );
+                assert!(projection.presets.iter().all(|preset| {
+                    preset.execution_provider.as_deref() == Some(expected_provider)
+                        && preset.execution_model.as_deref() == Some(model_name)
+                }));
+                assert!(projection.presets.iter().all(|preset| {
+                    preset.source == ReasoningPresetSource::ModelsDev
+                        || (model_name == "glm-5.2"
+                            && matches!(preset.id.as_str(), "off" | "on")
+                            && preset.source == ReasoningPresetSource::AdapterFallback)
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn zhipu_glm_52_projects_protocol_specific_toggle_and_effort_presets() {
+        for (provider, base_url) in [
+            ("openai", "https://open.bigmodel.cn/api/paas/v4"),
+            ("anthropic", "https://open.bigmodel.cn/api/anthropic"),
+        ] {
+            let projection = project_model_reasoning_catalog(
+                &AIModelConfig {
+                    id: format!("zhipu-{provider}-glm-5.2"),
+                    name: "GLM-5.2".to_string(),
+                    provider: provider.to_string(),
+                    model_name: "glm-5.2".to_string(),
+                    base_url: base_url.to_string(),
+                    ..Default::default()
+                },
+                Some(&catalog()),
+            );
+
+            assert_eq!(
+                projection
+                    .presets
+                    .iter()
+                    .map(|preset| preset.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["off", "on", "high", "max"]
+            );
+        }
     }
 
     #[test]

@@ -137,7 +137,11 @@
   "providers": {
     "openbitfun": {
       "name": "OpenBitFun",
-      "description": "OpenBitFun 大模型平臺"
+      "description": "OpenBitFun 大模型平臺",
+      "urlOptions": {
+        "default": "Anthropic格式-默認",
+        "openai": "OpenAI兼容格式"
+      }
     },
     "gemini": {
       "name": "Google Gemini",

@@ -46,6 +46,15 @@ struct EndpointOverlay {
     trusted_aliases: Vec<String>,
     #[serde(default)]
     catalog_provider_ids: Vec<String>,
+    #[serde(default)]
+    reasoning_catalog_bindings: Vec<ReasoningCatalogBindingOverlay>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ReasoningCatalogBindingOverlay {
+    model_id: String,
+    source_provider_id: String,
+    source_model_id: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
@@ -134,6 +143,16 @@ pub(crate) fn trusted_models_dev_binding(
                         .iter()
                         .any(|alias| normalize_base_url(alias) == normalized_base_url))
         })?;
+    if let Some(binding) = endpoint.reasoning_catalog_bindings.iter().find(|binding| {
+        binding
+            .model_id
+            .trim()
+            .eq_ignore_ascii_case(model_id.trim())
+    }) {
+        return models_dev
+            .canonical_model_id(&binding.source_provider_id, &binding.source_model_id)
+            .map(|canonical_model| (binding.source_provider_id.clone(), canonical_model));
+    }
     endpoint
         .catalog_provider_ids
         .iter()
@@ -259,6 +278,25 @@ fn validate_overlay(overlay: &ProviderOverlayDocument) -> Result<(), String> {
                     "provider '{}' endpoint '{}' references an unbound catalog provider",
                     provider.id, endpoint.id
                 ));
+            }
+            let mut reasoning_model_ids = BTreeSet::new();
+            for binding in &endpoint.reasoning_catalog_bindings {
+                let model_id = binding.model_id.trim();
+                if model_id.is_empty() || !reasoning_model_ids.insert(model_id.to_ascii_lowercase())
+                {
+                    return Err(format!(
+                        "provider '{}' endpoint '{}' has a duplicate or empty reasoning model binding",
+                        provider.id, endpoint.id
+                    ));
+                }
+                if binding.source_provider_id.trim().is_empty()
+                    || binding.source_model_id.trim().is_empty()
+                {
+                    return Err(format!(
+                        "provider '{}' endpoint '{}' has an incomplete reasoning catalog binding for model '{}'",
+                        provider.id, endpoint.id, binding.model_id
+                    ));
+                }
             }
             if endpoint.trusted_for_auto_detection {
                 for url in std::iter::once(&endpoint.base_url).chain(&endpoint.trusted_aliases) {
@@ -506,6 +544,31 @@ mod tests {
     fn overlay_is_valid_and_keeps_product_endpoint_decisions() {
         let overlay = parse_overlay().expect("valid overlay");
         assert_eq!(overlay.providers.len(), 12);
+        let openbitfun = overlay
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openbitfun")
+            .expect("openbitfun");
+        assert_eq!(
+            openbitfun.model_policy.curated_models,
+            ["glm-5.2", "deepseek-v4-flash", "deepseek-v4-pro"]
+        );
+        assert_eq!(
+            openbitfun
+                .endpoints
+                .iter()
+                .map(|endpoint| (
+                    endpoint.id.as_str(),
+                    endpoint.base_url.as_str(),
+                    endpoint.api_format.as_str(),
+                    endpoint.is_default,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("default", "https://api.openbitfun.com", "anthropic", true,),
+                ("openai", "https://api.openbitfun.com/v1", "openai", false,),
+            ]
+        );
         let qwen = overlay
             .providers
             .iter()
@@ -706,6 +769,70 @@ mod tests {
                 &deepseek,
             ),
             Some(("deepseek".to_string(), "deepseek-test".to_string()))
+        );
+        let relayed = ModelsDevCatalog::parse_str(
+            r#"{
+                "zhipuai":{"models":{"glm-5.2":{"id":"glm-5.2"}}},
+                "deepseek":{"models":{
+                    "deepseek-v4-flash":{"id":"deepseek-v4-flash"},
+                    "deepseek-v4-pro":{"id":"deepseek-v4-pro"}
+                }}
+            }"#,
+        )
+        .expect("relay catalog");
+        assert_eq!(
+            trusted_models_dev_binding(
+                "anthropic",
+                "https://api.openbitfun.com/v1/messages",
+                "GLM-5.2",
+                &relayed,
+            ),
+            Some(("zhipuai".to_string(), "glm-5.2".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "openai",
+                "https://api.openbitfun.com/v1",
+                "GLM-5.2",
+                &relayed,
+            ),
+            Some(("zhipuai".to_string(), "glm-5.2".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "anthropic",
+                "https://api.openbitfun.com",
+                "deepseek-v4-flash",
+                &relayed,
+            ),
+            Some(("deepseek".to_string(), "deepseek-v4-flash".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "openai",
+                "https://api.openbitfun.com/v1/chat/completions",
+                "deepseek-v4-flash",
+                &relayed,
+            ),
+            Some(("deepseek".to_string(), "deepseek-v4-flash".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "anthropic",
+                "https://api.openbitfun.com",
+                "deepseek-v4-pro",
+                &relayed,
+            ),
+            Some(("deepseek".to_string(), "deepseek-v4-pro".to_string()))
+        );
+        assert_eq!(
+            trusted_models_dev_binding(
+                "anthropic",
+                "https://api.openbitfun.com",
+                "unmapped-model",
+                &relayed,
+            ),
+            None
         );
         assert_eq!(
             trusted_models_dev_binding(
