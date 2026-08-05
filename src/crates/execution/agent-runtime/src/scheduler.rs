@@ -205,6 +205,15 @@ impl DialogReplySuppressionSet {
             .remove(&(session_id.to_string(), turn_id.to_string()))
             .is_some()
     }
+
+    /// Remove every entry belonging to `session_id`, regardless of turn id.
+    ///
+    /// Session-end cleanup: a recycled session id must not inherit suppression
+    /// marks or retired-outcome tombstones from the previous session.
+    pub fn clear_session(&self, session_id: &str) {
+        self.inner
+            .retain(|(entry_session_id, _), _| entry_session_id != session_id);
+    }
 }
 
 #[derive(Debug, Default)]

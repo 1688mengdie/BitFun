@@ -2246,12 +2246,35 @@ fn classify_exec_command(input: &Value) -> OperationClass {
     let cmd_lower = cmd.to_lowercase();
 
     // ── Delete operations ──────────────────────────────────────────────
-    // Detect file/directory deletion commands: rm, rmdir, del, Remove-Item
+    // Detect file/directory deletion commands: rm, rmdir, del, Remove-Item,
+    // erase, unlink, rd. The `erase` and `unlink` aliases were previously
+    // missed, so `erase foo.txt` was classified ExecuteCode and could slip
+    // past DeleteFile-only gates (LEGION-14).
+    //
+    // `rm -rf` 无空格变体（rm-rf、rm-rf/、rm-f 等）也必须命中；`mv`/`move`/
+    // `ren`/`rename` 可覆盖目标文件（覆盖即删除目标），同样归为删除类（LEGION-14）。
     if cmd_lower.contains("rm ")
+        || cmd_lower.contains("rm-r")
+        || cmd_lower.contains("rm-f")
         || cmd_lower.contains("rmdir ")
         || cmd_lower.starts_with("rmdir")
         || cmd_lower.contains("del ")
         || cmd_lower.contains("remove-item")
+        || cmd_lower.contains("erase ")
+        || cmd_lower.starts_with("erase")
+        || cmd_lower.contains("unlink ")
+        || cmd_lower.starts_with("unlink")
+        || cmd_lower.contains("rd ")
+        || cmd_lower.starts_with("rd ")
+        || cmd_lower.contains("mv ")
+        || cmd_lower.contains("mv-f")
+        || cmd_lower.contains("move ")
+        || cmd_lower.starts_with("move")
+        || cmd_lower.contains("move-item")
+        || cmd_lower.contains("ren ")
+        || cmd_lower.contains("rename ")
+        || cmd_lower.starts_with("rename")
+        || cmd_lower.contains("rename-item")
     {
         return OperationClass::DeleteFile;
     }
@@ -2288,8 +2311,15 @@ pub fn classify_tool_call(tool_name: &str, input: &Value) -> OperationClass {
         "Write" | "Edit" => OperationClass::WriteFile,
         "Delete" => OperationClass::DeleteFile,
         "ExecCommand" | "Bash" => classify_exec_command(input),
-        "Read" | "Grep" | "Glob" | "SessionHistory" => OperationClass::ReadOnly,
-        "SessionMessage" | "SessionControl" | "LegionControl" => OperationClass::Communicate,
+        // LEGION-08: read-only scanners belong to ReadOnly; the session todo
+        // list writer belongs to Communicate so RBAC gates it like the other
+        // session-mutating tools instead of defaulting to ExecuteCode.
+        "Read" | "Grep" | "Glob" | "SessionHistory" | "LionHeartSearch" | "WorkspaceScan" => {
+            OperationClass::ReadOnly
+        }
+        "SessionMessage" | "SessionControl" | "LegionControl" | "TodoWrite" => {
+            OperationClass::Communicate
+        }
         _ => OperationClass::ExecuteCode,
     }
 }
@@ -3215,6 +3245,96 @@ mod tests {
         );
     }
 
+    #[test]
+    fn classify_exec_command_erase_is_delete() {
+        // LEGION-14: Windows `erase` alias must classify as DeleteFile.
+        let input = json!({ "cmd": "erase report.tmp" });
+        assert_eq!(
+            classify_exec_command(&input),
+            OperationClass::DeleteFile
+        );
+        let input = json!({ "cmd": "erase" });
+        assert_eq!(
+            classify_exec_command(&input),
+            OperationClass::DeleteFile
+        );
+    }
+
+    #[test]
+    fn classify_exec_command_unlink_is_delete() {
+        // LEGION-14: POSIX `unlink` single-file deletion alias.
+        let input = json!({ "cmd": "unlink lockfile" });
+        assert_eq!(
+            classify_exec_command(&input),
+            OperationClass::DeleteFile
+        );
+    }
+
+    #[test]
+    fn classify_exec_command_rd_is_delete() {
+        // LEGION-14: Windows `rd` (remove directory) alias.
+        let input = json!({ "cmd": "rd /s /q build" });
+        assert_eq!(
+            classify_exec_command(&input),
+            OperationClass::DeleteFile
+        );
+    }
+
+    #[test]
+    fn classify_exec_command_rm_rf_no_space_is_delete() {
+        // LEGION-14: `rm -rf` 无空格变体（省略 rm 与旗标之间的空格）。
+        let cases = [
+            "rm-rf /data",
+            "rm-rf/data",
+            "rm-r /data",
+            "rm-f /data/file.txt",
+        ];
+        for c in cases {
+            assert_eq!(
+                classify_exec_command(&json!({ "cmd": c })),
+                OperationClass::DeleteFile,
+                "cmd: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_exec_command_move_is_delete() {
+        // LEGION-14: `mv`/`move` 可覆盖（覆盖即删除）目标文件。
+        let cases = [
+            "mv a.txt b.txt",
+            "mv -f a.txt b.txt",
+            "mv-f a.txt b.txt",
+            "move /y a.txt b.txt",
+            "move a.txt b.txt",
+            "move-item -Path a.txt -Destination b.txt -Force",
+        ];
+        for c in cases {
+            assert_eq!(
+                classify_exec_command(&json!({ "cmd": c })),
+                OperationClass::DeleteFile,
+                "cmd: {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_exec_command_ren_is_delete() {
+        // LEGION-14: `ren`/`rename`/`rename-item` 可覆盖（覆盖即删除）目标文件。
+        let cases = [
+            "ren a.txt b.txt",
+            "rename a.txt b.txt",
+            "rename-item -Path a.txt -NewName b.txt",
+        ];
+        for c in cases {
+            assert_eq!(
+                classify_exec_command(&json!({ "cmd": c })),
+                OperationClass::DeleteFile,
+                "cmd: {c}"
+            );
+        }
+    }
+
     // ── classify_tool_call tests ──────────────────────────────────────
 
     #[test]
@@ -3286,6 +3406,35 @@ mod tests {
         assert_eq!(
             classify_tool_call("UnknownTool", &json!({})),
             OperationClass::ExecuteCode
+        );
+    }
+
+    #[test]
+    fn classify_tool_call_lionheart_search_is_readonly() {
+        // LEGION-08: the LionHeart knowledge-base scanner is strictly read-only.
+        assert_eq!(
+            classify_tool_call("LionHeartSearch", &json!({ "keyword": "rule" })),
+            OperationClass::ReadOnly
+        );
+    }
+
+    #[test]
+    fn classify_tool_call_workspace_scan_is_readonly() {
+        // LEGION-08: WorkspaceScan lists workspaces without modifying them.
+        assert_eq!(
+            classify_tool_call("WorkspaceScan", &json!({ "scope": "opened" })),
+            OperationClass::ReadOnly
+        );
+    }
+
+    #[test]
+    fn classify_tool_call_todo_write_is_communicate() {
+        // LEGION-08: TodoWrite mutates the session todo list, so it belongs to
+        // the Communicate class like the other session-mutating tools instead of
+        // defaulting to ExecuteCode.
+        assert_eq!(
+            classify_tool_call("TodoWrite", &json!({ "todos": [] })),
+            OperationClass::Communicate
         );
     }
 

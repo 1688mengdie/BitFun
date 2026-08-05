@@ -293,10 +293,10 @@ impl PromptBuilder {
     /// Build the per-turn runtime facts reminder: current local/UTC time,
     /// weekday, timezone offset (chrono::Local, same shape as the GetTime
     /// tool) plus the live context usage ratio and tiered guidance.
-    pub fn build_runtime_facts_reminder(&self, usage: RuntimeFactsUsage) -> Option<String> {
+    pub fn build_runtime_facts_reminder(&self, usage: RuntimeFactsUsage) -> String {
         let now = chrono::Local::now();
         let utc = now.with_timezone(&chrono::Utc);
-        Some(render_runtime_facts_reminder(&RuntimeFactsInput {
+        render_runtime_facts_reminder(&RuntimeFactsInput {
             local_time_rfc3339: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
             utc_time_rfc3339: utc.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             weekday_name: now.format("%A").to_string(),
@@ -305,7 +305,7 @@ impl PromptBuilder {
             timezone_offset: now.format("%:z").to_string(),
             context_usage_ratio: usage.context_usage_ratio,
             compression_preview_ratio: usage.compression_preview_ratio,
-        }))
+        })
     }
 
     /// Get workspace context that is intentionally injected outside the system prompt cache.
@@ -453,7 +453,7 @@ impl PromptBuilder {
             skill_listing: self.build_skill_listing_reminder(),
             agent_listing: self.build_agent_listing_reminder(),
             runtime_context: self.build_runtime_context_reminder().await,
-            runtime_facts: self.build_runtime_facts_reminder(runtime_facts_usage),
+            runtime_facts: Some(self.build_runtime_facts_reminder(runtime_facts_usage)),
             user_context: self.build_user_context_reminder(user_context_policy).await,
         }
     }
@@ -776,12 +776,10 @@ mod tests {
     #[test]
     fn build_runtime_facts_reminder_includes_time_weekday_and_offset_shape() {
         let context = PromptBuilderContext::new(r"workspace\root", None, None);
-        let reminder = PromptBuilder::new(context)
-            .build_runtime_facts_reminder(RuntimeFactsUsage {
-                context_usage_ratio: Some(0.5),
-                compression_preview_ratio: Some(0.9),
-            })
-            .expect("runtime facts should build");
+        let reminder = PromptBuilder::new(context).build_runtime_facts_reminder(RuntimeFactsUsage {
+            context_usage_ratio: Some(0.5),
+            compression_preview_ratio: Some(0.9),
+        });
 
         // Time facts come from chrono::Local at build time; assert the key
         // shape (date/time/weekday/offset) without locking specific seconds.

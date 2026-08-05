@@ -749,6 +749,16 @@ pub struct PrependedPromptReminders {
 
 impl PrependedPromptReminders {
     pub fn ordered_reminders(&self) -> Vec<&str> {
+        let mut reminders = self.static_ordered_reminders();
+        reminders.extend(self.dynamic_ordered_reminders());
+        reminders
+    }
+
+    /// Static reminders that stay stable across rounds within a turn:
+    /// deferred tool listing, skill listing, agent listing, runtime context.
+    /// These keep the provider-side prompt/prefix cache stable when injected
+    /// right after the system message (before the conversation history).
+    pub fn static_ordered_reminders(&self) -> Vec<&str> {
         let mut reminders = Vec::new();
         if let Some(deferred_tool_listing) = self.deferred_tool_listing.as_deref() {
             reminders.push(deferred_tool_listing);
@@ -762,6 +772,16 @@ impl PrependedPromptReminders {
         if let Some(runtime_context) = self.runtime_context.as_deref() {
             reminders.push(runtime_context);
         }
+        reminders
+    }
+
+    /// Per-round dynamic reminders: runtime facts (live time + context usage
+    /// ratio, refreshed every round) and user context. These must be appended
+    /// at the end of the message sequence (after the newest user message) so
+    /// they never break the stable cache prefix built from the system message,
+    /// static reminders and the full conversation history.
+    pub fn dynamic_ordered_reminders(&self) -> Vec<&str> {
+        let mut reminders = Vec::new();
         if let Some(runtime_facts) = self.runtime_facts.as_deref() {
             reminders.push(runtime_facts);
         }
