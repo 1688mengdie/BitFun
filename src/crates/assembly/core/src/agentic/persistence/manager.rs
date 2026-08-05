@@ -1539,7 +1539,7 @@ impl PersistenceManager {
             .map_err(Self::session_metadata_store_error)
     }
 
-    async fn load_stored_session_state(
+    pub(crate) async fn load_stored_session_state(
         &self,
         workspace_path: &Path,
         session_id: &str,

@@ -6695,44 +6695,48 @@ impl SessionManager {
             // deletion) stop being listed and cannot be auto-saved back.
             self.reconcile_loaded_sessions_with_disk(workspace_path)
                 .await?;
-            self.persistence_manager
-                .list_session_metadata_with_options(workspace_path, include_internal)
-                .await
-                .map(|metadata_list| {
-                    let mut summaries = Vec::with_capacity(metadata_list.len());
-                    for metadata in metadata_list {
-                        summaries.push(SessionSummary {
-                            session_id: metadata.session_id,
-                            session_name: metadata.session_name,
-                            agent_type: metadata.agent_type,
-                            model_id: (!metadata.model_name.trim().is_empty())
-                                .then_some(metadata.model_name),
-                            last_user_dialog_agent_type: metadata.last_user_dialog_agent_type,
-                            last_submitted_agent_type: metadata.last_submitted_agent_type,
-                            created_by: metadata.created_by,
-                            kind: metadata.session_kind,
-                            turn_count: metadata.turn_count,
-                            created_at: std::time::UNIX_EPOCH
-                                + std::time::Duration::from_millis(metadata.created_at),
-                            last_activity_at: std::time::UNIX_EPOCH
-                                + std::time::Duration::from_millis(metadata.last_active_at),
-                            state: metadata
-                                .runtime_state
-                                .as_ref()
-                                .and_then(|v| {
-                                    serde_json::from_value::<SessionState>(v.clone()).ok()
-                                })
-                                .unwrap_or(SessionState::Idle),
-                            parent_session_id: metadata
-                                .relationship
-                                .as_ref()
-                                .and_then(|r| r.parent_session_id.clone()),
-                            is_daemon: metadata.is_daemon,
-                        });
-                    }
-                    summaries.sort_by_key(|summary| std::cmp::Reverse(summary.last_activity_at));
-                    summaries
-                })
+                let metadata_list = self
+                    .persistence_manager
+                    .list_session_metadata_with_options(workspace_path, include_internal)
+                    .await?;
+                let mut summaries = Vec::with_capacity(metadata_list.len());
+                for metadata in metadata_list {
+                    let reasoning_preset = self
+                        .persistence_manager
+                        .load_stored_session_state(workspace_path, &metadata.session_id)
+                        .await?
+                        .and_then(|value| value.config.reasoning_preset);
+                    let state = metadata
+                        .runtime_state
+                        .as_ref()
+                        .and_then(|v| serde_json::from_value::<SessionState>(v.clone()).ok())
+                        .unwrap_or(SessionState::Idle);
+                    summaries.push(SessionSummary {
+                        session_id: metadata.session_id,
+                        session_name: metadata.session_name,
+                        agent_type: metadata.agent_type,
+                        model_id: (!metadata.model_name.trim().is_empty())
+                            .then_some(metadata.model_name),
+                        reasoning_preset,
+                        last_user_dialog_agent_type: metadata.last_user_dialog_agent_type,
+                        last_submitted_agent_type: metadata.last_submitted_agent_type,
+                        created_by: metadata.created_by,
+                        kind: metadata.session_kind,
+                        turn_count: metadata.turn_count,
+                        created_at: std::time::UNIX_EPOCH
+                            + std::time::Duration::from_millis(metadata.created_at),
+                        last_activity_at: std::time::UNIX_EPOCH
+                            + std::time::Duration::from_millis(metadata.last_active_at),
+                        state,
+                        parent_session_id: metadata
+                            .relationship
+                            .as_ref()
+                            .and_then(|r| r.parent_session_id.clone()),
+                        is_daemon: metadata.is_daemon,
+                    });
+                }
+                summaries.sort_by_key(|summary| std::cmp::Reverse(summary.last_activity_at));
+                return Ok(summaries);
         } else {
             let summaries: Vec<_> = self
                 .sessions

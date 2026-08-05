@@ -87,6 +87,9 @@ pub(crate) enum SessionMigrationNotice {
 }
 
 impl SessionMigrationNotice {
+    /// Local CLI migration notice rendering, retained for the shared-runtime
+    /// path after the upstream app-server CLI refactor dropped its call sites.
+    #[allow(dead_code)]
     pub(crate) fn user_message(&self) -> String {
         let (setting, previous_id, restored_id) = match self {
             Self::Mode {
@@ -131,6 +134,9 @@ fn session_migration_notices(
 #[derive(Debug)]
 pub(crate) struct SessionOperationError {
     message: String,
+    /// Whether the remote outcome was unknown after the operation returned.
+    /// Retained for the shared-runtime path after the upstream CLI refactor.
+    #[allow(dead_code)]
     outcome_unknown: bool,
 }
 
@@ -142,6 +148,9 @@ impl fmt::Display for SessionOperationError {
 
 impl std::error::Error for SessionOperationError {}
 
+/// Local error-shaping helpers retained for the shared-runtime path after the
+/// upstream app-server CLI refactor dropped their call sites.
+#[allow(dead_code)]
 impl SessionOperationError {
     fn runtime(error: RuntimeError) -> Self {
         let outcome_unknown = matches!(
@@ -252,6 +261,7 @@ impl CliWorkspacePaths {
         self.remote = binding.remote_connection_id.is_some() || binding.remote_ssh_host.is_some();
     }
 
+    #[allow(dead_code)]
     fn reset_execution_to_project(&mut self) -> PathBuf {
         let project = self.project();
         self.execution = Some(project.clone());
@@ -262,6 +272,7 @@ impl CliWorkspacePaths {
         project
     }
 
+    #[allow(dead_code)]
     fn workspace_diff_unavailable_reason(&self) -> Option<&'static str> {
         if self.remote {
             return Some("Workspace diff is unavailable for remote Sessions");
@@ -277,6 +288,7 @@ impl CliWorkspacePaths {
     }
 }
 
+#[allow(dead_code)]
 fn same_workspace_location(left: &Path, right: &Path) -> bool {
     left == right
         || dunce::canonicalize(left)
@@ -296,6 +308,7 @@ pub(crate) struct ExecAgentRuntimeClient {
     /// Current turn ID (for cancellation)
     current_turn_id: Arc<Mutex<Option<String>>>,
     shared_agent_events: Option<SharedBroadcast<AgenticEventEnvelope>>,
+    #[allow(dead_code)]
     shared_permission_events:
         Option<SharedBroadcast<bitfun_agent_runtime::sdk::PermissionRequestEvent>>,
     shared_pending_permissions: Arc<RwLock<HashMap<String, PermissionRequest>>>,
@@ -304,10 +317,12 @@ pub(crate) struct ExecAgentRuntimeClient {
 #[allow(clippy::large_enum_variant)] // embedded runtime holds the full agent stack; boxing would churn every dispatch site
 enum CliAgentRuntimeBackend {
     Embedded(AgentRuntime),
+    #[allow(dead_code)]
     Shared(RuntimeIpcClient),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) struct CliAgentMode {
     pub(crate) id: String,
     pub(crate) description: String,
@@ -317,6 +332,10 @@ pub(crate) struct CliAgentMode {
 
 type SharedBroadcast<T> = Arc<RwLock<Option<broadcast::Sender<T>>>>;
 
+/// Local shared-runtime construction surface. The upstream app-server CLI
+/// refactor dropped the call sites of `new_shared` and friends; they are
+/// retained as the local shared-runtime capability surface.
+#[allow(dead_code)]
 impl ExecAgentRuntimeClient {
     pub(crate) fn new(runtime: &CliRuntimeContext, workspace_path: Option<PathBuf>) -> Self {
         Self {
@@ -1274,6 +1293,10 @@ impl ExecAgentRuntimeClient {
     }
 }
 
+/// Local shared-runtime client methods. The upstream app-server CLI refactor
+/// dropped the call sites of several of these; they are retained as the
+/// local shared-runtime capability surface until the local CLI wires them in.
+#[allow(dead_code)]
 impl ExecAgentRuntimeClient {
     pub(crate) async fn ensure_session(&self, agent_type: &str) -> Result<String> {
         self.ensure_session_with_model(agent_type, None).await
@@ -1856,6 +1879,7 @@ fn shared_receiver<T: Clone>(
         .ok_or_else(|| RuntimeError::Port(PortError::new(PortErrorKind::NotAvailable, message)))
 }
 
+#[allow(dead_code)]
 fn spawn_shared_event_bridge(
     mut source: broadcast::Receiver<RuntimeIpcClientEvent>,
     agent_sender: broadcast::Sender<AgenticEventEnvelope>,
@@ -1937,6 +1961,7 @@ fn spawn_shared_event_bridge(
     });
 }
 
+#[allow(dead_code)]
 fn shared_disconnect_message(reason: Option<RuntimeIpcStreamInvalidationReason>) -> String {
     if reason == Some(RuntimeIpcStreamInvalidationReason::FrameTooLarge) {
         format!(
@@ -1947,6 +1972,7 @@ fn shared_disconnect_message(reason: Option<RuntimeIpcStreamInvalidationReason>)
     }
 }
 
+#[allow(dead_code)]
 fn project_routed_permission_event(
     event: &mut bitfun_agent_runtime::sdk::PermissionRequestEvent,
     routed_session_id: &str,

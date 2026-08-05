@@ -264,6 +264,9 @@ impl AgentSessionRestorePort for SessionControlProvider {
                 turn_count: 4,
                 created_at_ms: 10,
                 last_active_at_ms: 20,
+                parent_session_id: None,
+                status: None,
+                is_daemon: false,
             },
             state: SessionState::Processing {
                 current_turn_id: "turn-active".to_string(),
@@ -385,6 +388,9 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for Phase2Provider {
                 turn_count: 1,
                 created_at_ms: 10,
                 last_active_at_ms: 20,
+                parent_session_id: None,
+                status: None,
+                is_daemon: false,
             },
             state: SessionState::Processing {
                 current_turn_id: "turn-active".to_string(),
@@ -830,6 +836,7 @@ async fn phase2_mutations_route_through_runtime_owner_ports() {
                     turn_id: "turn-active".to_string(),
                     content: "keep going".to_string(),
                     display_content: None,
+                    prepended_reminders: Vec::new(),
                 }))
                 .await
                 .expect("steer turn");
