@@ -154,6 +154,109 @@ test('openbitfun sync mirrors both products and their checksums', () => {
   assert.match(syncScript, /WEBSITE_RELEASE_DIR.*linux-binaries\.json/);
 });
 
+test('openbitfun sync mirrors the website installer from the exact updater release', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'bitfun-windows-installer-mirror-'));
+  const versionDir = path.join(temp, 'release', '1.2.3');
+  const calls = path.join(temp, 'download-calls.tsv');
+  fs.mkdirSync(versionDir, { recursive: true });
+
+  const result = spawnSync(
+    'bash',
+    ['-c', `
+      source "$SYNC_SCRIPT"
+      VERSION_DIR="$TEST_VERSION_DIR"
+      RELEASE_ASSET_BASE_URL="https://github.com/GCWing/BitFun/releases/download/v1.2.3"
+      WINDOWS_INSTALLER_FILENAME="bitfun-installer.exe"
+      download_asset() {
+        printf '%s\\t%s\\n' "$1" "$2" >> "$DOWNLOAD_CALLS"
+      }
+      mirror_windows_installer
+    `],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DOWNLOAD_CALLS: calls,
+        SYNC_SCRIPT: path.join(repoRoot, 'scripts/openbitfun-release-sync.sh'),
+        TEST_VERSION_DIR: versionDir,
+      },
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+
+  const downloads = fs.readFileSync(calls, 'utf8').trim().split('\n');
+  assert.deepEqual(downloads, [
+    `https://github.com/GCWing/BitFun/releases/download/v1.2.3/bitfun-installer.exe\t${versionDir}/bitfun-installer.exe`,
+    `https://github.com/GCWing/BitFun/releases/download/v1.2.3/bitfun-installer.exe.sig\t${versionDir}/bitfun-installer.exe.sig`,
+  ]);
+});
+
+test('website download manifest uses installer while updater manifest keeps setup', () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'bitfun-website-downloads-'));
+  const versionDir = path.join(temp, 'release', '1.2.3');
+  const updaterPath = path.join(versionDir, 'latest.json');
+  fs.mkdirSync(versionDir, { recursive: true });
+
+  const updater = {
+    version: '1.2.3',
+    notes: '',
+    pub_date: '2026-08-05T00:00:00Z',
+    platforms: {
+      'windows-x86_64': {
+        url: 'https://openbitfun.test/release/1.2.3/BitFun_1.2.3_windows-x86_64-setup.exe',
+      },
+      'darwin-aarch64': {
+        url: 'https://openbitfun.test/release/1.2.3/BitFun_1.2.3_darwin-aarch64.app.tar.gz',
+      },
+    },
+  };
+  fs.writeFileSync(updaterPath, `${JSON.stringify(updater, null, 2)}\n`);
+
+  const result = spawnSync(
+    'bash',
+    ['-c', `
+      source "$SYNC_SCRIPT"
+      VERSION_DIR="$TEST_VERSION_DIR"
+      OPENBITFUN_BASE_URL="https://openbitfun.test/release"
+      WINDOWS_INSTALLER_FILENAME="bitfun-installer.exe"
+      WEBSITE_DOWNLOADS_MANIFEST="downloads.json"
+      write_website_download_manifest
+    `],
+    {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        SYNC_SCRIPT: path.join(repoRoot, 'scripts/openbitfun-release-sync.sh'),
+        TEST_VERSION_DIR: versionDir,
+      },
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+
+  const updaterAfter = JSON.parse(fs.readFileSync(updaterPath, 'utf8'));
+  const website = JSON.parse(
+    fs.readFileSync(path.join(versionDir, 'downloads.json'), 'utf8')
+  );
+  assert.match(
+    updaterAfter.platforms['windows-x86_64'].url,
+    /windows-x86_64-setup\.exe$/
+  );
+  assert.equal(website.schemaVersion, 1);
+  assert.equal(website.version, '1.2.3');
+  assert.equal(
+    website.platforms['windows-x86_64'].url,
+    'https://openbitfun.test/release/1.2.3/bitfun-installer.exe'
+  );
+  assert.equal(
+    website.platforms['windows-x86_64'].signatureUrl,
+    'https://openbitfun.test/release/1.2.3/bitfun-installer.exe.sig'
+  );
+  assert.equal(
+    website.platforms['darwin-aarch64'].url,
+    updater.platforms['darwin-aarch64'].url
+  );
+});
+
 test('Linux archives are mirrored before the much larger Desktop packages', () => {
   const syncScript = fs.readFileSync(
     path.join(repoRoot, 'scripts/openbitfun-release-sync.sh'),
