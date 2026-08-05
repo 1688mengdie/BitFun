@@ -3146,6 +3146,7 @@ const AIModelConfig: React.FC = () => {
 
         <ConfigPageSection
           className="bitfun-ai-model-config__models-section"
+          mouseGlowSurface={false}
           title={tDefault('tabs.models')}
           description={t('subtitle')}
           extra={(
