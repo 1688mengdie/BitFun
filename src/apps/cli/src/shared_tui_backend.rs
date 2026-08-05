@@ -150,6 +150,10 @@ impl TuiBackend for SharedTuiBackend {
         ))
     }
 
+    async fn model_catalog(&self) -> Result<TuiModelCatalogResponse, TuiBackendError> {
+        load_model_catalog().await
+    }
+
     async fn health(&self) -> Result<HealthResponse, TuiBackendError> {
         self.client.health().await.map_err(map_client_error)?;
         Ok(HealthResponse {
@@ -625,6 +629,32 @@ impl SharedTuiBackend {
             other => Err(unexpected("fork_session", other)),
         }
     }
+}
+
+async fn load_model_catalog() -> Result<TuiModelCatalogResponse, TuiBackendError> {
+    let catalog = bitfun_core::get_ai_model_catalog()
+        .await
+        .map_err(|message| backend_error(message, false))?;
+    let reasoning_presets_by_model = catalog
+        .models
+        .into_iter()
+        .filter_map(|model| {
+            model.reasoning.map(|reasoning| {
+                (
+                    model.id,
+                    reasoning
+                        .presets
+                        .into_iter()
+                        .map(|preset| preset.id)
+                        .collect(),
+                )
+            })
+        })
+        .collect();
+    Ok(TuiModelCatalogResponse {
+        provider_catalog: catalog.provider_catalog,
+        reasoning_presets_by_model,
+    })
 }
 
 fn map_revert(

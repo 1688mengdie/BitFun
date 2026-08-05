@@ -965,6 +965,23 @@ impl ChatMode {
                             needs_redraw = true;
                         }
                     }
+                    AgenticEvent::SessionReasoningPresetAutoCleared {
+                        session_id,
+                        previous_preset_id,
+                        reason,
+                    } => {
+                        if session_id == &chat_state.core_session_id
+                            && chat_state.current_reasoning_preset.as_deref()
+                                == Some(previous_preset_id.as_str())
+                        {
+                            chat_state.current_reasoning_preset = None;
+                            chat_state.add_system_message(format!(
+                                "The current session reasoning preset changed from {previous_preset_id} to Auto because {reason}."
+                            ));
+                            chat_view.invalidate_lines_cache();
+                            needs_redraw = true;
+                        }
+                    }
                     _ => {
                         let projection = project_transcript_event(&mut chat_state, event, true);
                         if projection.changed {

@@ -155,6 +155,7 @@ fn registered_capabilities() -> Vec<CapabilityDescriptor> {
                 "config/getAgentProfileConfigs",
                 "config/getAgentProfileConfig",
                 "config/getModelConfigs",
+                "config/getTuiModelCatalog",
                 "config/getConfig",
                 "config/getConfigs",
                 "config/setConfig",

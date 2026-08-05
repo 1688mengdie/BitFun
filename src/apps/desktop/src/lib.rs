@@ -1516,6 +1516,7 @@ pub async fn run() {
             get_global_config_status,
             subscribe_config_updates,
             get_model_configs,
+            get_ai_model_catalog,
             get_recent_workspaces,
             remove_recent_workspace,
             cleanup_invalid_workspaces,

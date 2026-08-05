@@ -6,6 +6,11 @@
 //! 3. Invalidate cache when configuration changes
 //! 4. Provide global singleton access
 
+use crate::infrastructure::ai::reasoning_catalog::{
+    apply_default_reasoning_preset, apply_selected_reasoning_preset,
+    load_models_dev_reasoning_catalog, project_model_reasoning_catalog,
+    resolve_default_reasoning_preset,
+};
 use crate::infrastructure::ai::{build_stream_options_for_model, AIClient};
 use crate::infrastructure::subscription_auth::{self, SubscriptionProvider as AdapterProvider};
 use crate::service::config::types::{
@@ -27,6 +32,7 @@ pub struct AIClientFactory {
 
 struct CachedAIClient {
     configuration_fingerprint: String,
+    default_reasoning_preset: Option<bitfun_core_types::ReasoningPresetDescriptor>,
     client: Arc<AIClient>,
     /// Unix seconds when the resolved subscription credential expires;
     /// `None` for API-key auth or non-expiring credentials.
@@ -99,18 +105,83 @@ impl AIClientFactory {
             .await
     }
 
+    /// Resolve an approved base client and apply one session preset without
+    /// inserting the derived client into the factory cache.
+    pub async fn get_client_by_approved_binding_with_reasoning_preset(
+        &self,
+        model_id: &str,
+        configuration_fingerprint: &str,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let client = self
+            .get_client_by_approved_binding(model_id, configuration_fingerprint)
+            .await?;
+        self.apply_session_reasoning_preset(model_id, client, reasoning_preset)
+            .await
+    }
+
     /// Get a client (supports resolving primary/fast)
     pub async fn get_client_resolved(&self, model_id: &str) -> Result<Arc<AIClient>> {
+        let resolved_model_id = self.resolve_model_id(model_id).await?;
+        self.get_or_create_client(&resolved_model_id, None).await
+    }
+
+    /// Resolve a base client and apply one session preset without caching the
+    /// derived client. An unknown preset fails closed to the model default.
+    pub async fn get_client_resolved_with_reasoning_preset(
+        &self,
+        model_id: &str,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let resolved_model_id = self.resolve_model_id(model_id).await?;
+        let client = self.get_or_create_client(&resolved_model_id, None).await?;
+        self.apply_session_reasoning_preset(&resolved_model_id, client, reasoning_preset)
+            .await
+    }
+
+    async fn resolve_model_id(&self, model_id: &str) -> Result<String> {
         let global_config: crate::service::config::GlobalConfig =
             self.config_service.get_config(None).await?;
-        let resolved_model_id = resolve_required_model_selector(
+        resolve_required_model_selector(
             model_id,
             |selector| global_config.ai.resolve_model_selection(selector),
             |model_ref| global_config.ai.resolve_model_reference(model_ref),
         )
-        .map_err(|error| anyhow!(error.to_string()))?;
+        .map_err(|error| anyhow!(error.to_string()))
+    }
 
-        self.get_or_create_client(&resolved_model_id, None).await
+    async fn apply_session_reasoning_preset(
+        &self,
+        model_id: &str,
+        client: Arc<AIClient>,
+        reasoning_preset: Option<&str>,
+    ) -> Result<Arc<AIClient>> {
+        let Some(reasoning_preset) = reasoning_preset
+            .map(str::trim)
+            .filter(|preset| !preset.is_empty())
+        else {
+            return Ok(client);
+        };
+        let global_config: crate::service::config::GlobalConfig =
+            self.config_service.get_config(None).await?;
+        let model = global_config
+            .ai
+            .models
+            .iter()
+            .find(|model| model.id == model_id)
+            .ok_or_else(|| anyhow!("Model configuration not found: {}", model_id))?;
+        let models_dev = load_models_dev_reasoning_catalog().await;
+        let projection = project_model_reasoning_catalog(model, models_dev.catalog.as_deref());
+        let Some(client) = apply_selected_reasoning_preset(&client, &projection, reasoning_preset)
+        else {
+            warn!(
+                "Session reasoning preset is not available for the resolved model; falling back to model default: model_id={}, preset_id={}",
+                model_id, reasoning_preset
+            );
+            return Ok(client);
+        };
+
+        Ok(Arc::new(client))
     }
 
     pub fn invalidate_cache(&self) {
@@ -209,6 +280,12 @@ impl AIClientFactory {
             ));
         }
 
+        let models_dev = load_models_dev_reasoning_catalog().await;
+        let reasoning_projection =
+            project_model_reasoning_catalog(model_config, models_dev.catalog.as_deref());
+        let default_reasoning_preset =
+            resolve_default_reasoning_preset(&reasoning_projection).cloned();
+
         {
             let cache = match self.client_cache.read() {
                 Ok(cache) => cache,
@@ -221,6 +298,7 @@ impl AIClientFactory {
             };
             if let Some(cached) = cache.get(&normalized_model_id) {
                 if cached.configuration_fingerprint == configuration_fingerprint
+                    && cached.default_reasoning_preset == default_reasoning_preset
                     && !subscription_credential_stale(&model_config.auth, cached)
                 {
                     return Ok(cached.client.clone());
@@ -240,11 +318,11 @@ impl AIClientFactory {
         };
 
         let stream_options = build_stream_options_for_model(&global_config.ai, Some(model_config));
-        let client = Arc::new(AIClient::new_with_runtime_options(
-            ai_config,
-            proxy_config,
-            stream_options,
-        ));
+        let client = apply_default_reasoning_preset(
+            AIClient::new_with_runtime_options(ai_config, proxy_config, stream_options),
+            &reasoning_projection,
+        );
+        let client = Arc::new(client);
 
         {
             let mut cache = match self.client_cache.write() {
@@ -260,6 +338,7 @@ impl AIClientFactory {
                 model_config.id.clone(),
                 CachedAIClient {
                     configuration_fingerprint,
+                    default_reasoning_preset,
                     client: client.clone(),
                     credential_expires_at,
                 },

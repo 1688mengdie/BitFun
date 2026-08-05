@@ -436,6 +436,7 @@ async fn select_model(
         &runtime,
         &session_id,
         model_id,
+        None,
     )
     .await
     {

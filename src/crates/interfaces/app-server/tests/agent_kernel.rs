@@ -27,11 +27,12 @@ use bitfun_agent_runtime::sdk::{
     AgentSessionForkAtTurnRequest, AgentSessionForkPort, AgentSessionForkRequest,
     AgentSessionForkResult, AgentSessionListRequest, AgentSessionManagementPort,
     AgentSessionModePort, AgentSessionModeUpdateRequest, AgentSessionModelPort,
-    AgentSessionModelUpdateRequest, AgentSessionRenameRequest, AgentSessionRestorePort,
-    AgentSessionRestoreRequest, AgentSessionRestoreResult, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionPort,
-    AgentSubmissionRequest, AgentSubmissionResult, AgentSubmissionSource,
-    AgentTurnCancellationRequest, AgenticEvent, PortResult, ProcessingPhase, SessionState,
+    AgentSessionModelSelectionUpdateRequest, AgentSessionModelUpdateRequest,
+    AgentSessionRenameRequest, AgentSessionRestorePort, AgentSessionRestoreRequest,
+    AgentSessionRestoreResult, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest, AgentSubmissionPort, AgentSubmissionRequest,
+    AgentSubmissionResult, AgentSubmissionSource, AgentTurnCancellationRequest, AgenticEvent,
+    PortResult, ProcessingPhase, SessionState,
 };
 use bitfun_app_server::schema::{
     CancelTurnMessage, CreateSessionMessage, CreateSessionResponse, DeleteSessionMessage,
@@ -187,6 +188,20 @@ impl AgentSessionManagementPort for SessionControlProvider {
 
 #[async_trait]
 impl AgentSessionModelPort for SessionControlProvider {
+    async fn update_session_model_selection(
+        &self,
+        request: AgentSessionModelSelectionUpdateRequest,
+    ) -> PortResult<()> {
+        self.model_updates
+            .lock()
+            .unwrap()
+            .push(AgentSessionModelUpdateRequest {
+                session_id: request.session_id,
+                model_id: request.selection.model_id,
+            });
+        Ok(())
+    }
+
     async fn update_session_model(
         &self,
         request: AgentSessionModelUpdateRequest,
@@ -243,6 +258,7 @@ impl AgentSessionRestorePort for SessionControlProvider {
                 session_name: "Restored Session".to_string(),
                 agent_type: "agentic".to_string(),
                 model_id: Some("provider/model".to_string()),
+                reasoning_preset: None,
                 last_user_dialog_agent_type: None,
                 last_submitted_agent_type: Some("agentic".to_string()),
                 turn_count: 4,
@@ -363,6 +379,7 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for Phase2Provider {
                 session_name: "Phase 2".to_string(),
                 agent_type: "agentic".to_string(),
                 model_id: Some("provider/model".to_string()),
+                reasoning_preset: None,
                 last_user_dialog_agent_type: None,
                 last_submitted_agent_type: Some("agentic".to_string()),
                 turn_count: 1,

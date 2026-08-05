@@ -531,6 +531,8 @@ export interface Session {
 
 export interface SessionConfig {
   modelName?: string;
+  /** Explicit reasoning preset for the next turn; omitted means model default. */
+  reasoningPreset?: string;
   agentType?: string;
   context?: Record<string, string>;
   workspacePath?: string;
@@ -554,6 +556,10 @@ export interface SessionConfig {
   dispatchBaseRef?: string;
   /** Target model explicitly selected during preflight; omitted to use the target default. */
   dispatchModel?: string;
+  /** Target-owned canonical reasoning projection reported during preflight. */
+  dispatchModelCatalog?: import('@/infrastructure/api/service-api/AIApi').AIModelCatalog;
+  /** Target reasoning preset. `auto` explicitly clears a prior override. */
+  dispatchReasoningPreset?: string;
   /** Model ids reported by the selected target during dispatch preflight. */
   dispatchAvailableModels?: string[];
   /** Target-owned default model reported during dispatch preflight. */

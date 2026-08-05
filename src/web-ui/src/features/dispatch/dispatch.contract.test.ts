@@ -100,8 +100,8 @@ describe('dispatch wire contract single source', () => {
     }
   });
 
-  it('keeps the v4 feature capabilities required on both sides', () => {
-    for (const capability of ['per_turn_options', 'session_query', 'inline_attachments']) {
+  it('keeps the versioned feature capabilities required on both sides', () => {
+    for (const capability of ['per_turn_options', 'session_query', 'inline_attachments', 'reasoning_presets']) {
       expect(BASE_DISPATCH_CAPABILITIES).toContain(capability);
       expect(contractSource).toContain(`"${capability}",`);
     }
@@ -109,8 +109,8 @@ describe('dispatch wire contract single source', () => {
 });
 
 describe('dispatch preflight contract', () => {
-  it('fails closed on protocol v4 Git worktree delivery with per-turn options', () => {
-    expect(DISPATCH_PROTOCOL_VERSION).toBe(4);
+  it('fails closed on protocol v5 target reasoning and Git worktree delivery', () => {
+    expect(DISPATCH_PROTOCOL_VERSION).toBe(5);
     expect(BASE_DISPATCH_CAPABILITIES).toContain('per_turn_options');
     expect(BASE_DISPATCH_CAPABILITIES).toEqual(expect.arrayContaining([
       'workspace_serialization',

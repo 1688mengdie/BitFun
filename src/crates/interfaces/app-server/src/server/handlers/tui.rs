@@ -18,6 +18,34 @@ pub(in crate::server) fn builder(
         .builder()
         .name("tui core handlers")
         .on_receive_request(
+            async move |_: TuiModelCatalogRequest, responder, _cx| {
+                let catalog = bitfun_core::get_ai_model_catalog()
+                    .await
+                    .map_err(|error| Error::internal_error().data(error))?;
+                let reasoning_presets_by_model = catalog
+                    .models
+                    .into_iter()
+                    .filter_map(|model| {
+                        model.reasoning.map(|reasoning| {
+                            (
+                                model.id,
+                                reasoning
+                                    .presets
+                                    .into_iter()
+                                    .map(|preset| preset.id)
+                                    .collect(),
+                            )
+                        })
+                    })
+                    .collect();
+                responder.respond(TuiModelCatalogResponse {
+                    provider_catalog: catalog.provider_catalog,
+                    reasoning_presets_by_model,
+                })
+            },
+            agent_client_protocol::on_receive_request!(),
+        )
+        .on_receive_request(
             {
                 let runtime = runtime.clone();
                 async move |request: SyncSessionRequest, responder, _cx| {

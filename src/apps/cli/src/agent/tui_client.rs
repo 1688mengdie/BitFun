@@ -240,6 +240,10 @@ impl TuiAgentClient {
         self.shared
     }
 
+    pub(crate) async fn model_catalog(&self) -> Result<TuiModelCatalogResponse> {
+        Ok(self.backend.model_catalog().await?)
+    }
+
     pub(crate) async fn available_agent_modes(&self) -> Result<Vec<TuiAgentMode>> {
         self.host
             .available_agent_modes(
