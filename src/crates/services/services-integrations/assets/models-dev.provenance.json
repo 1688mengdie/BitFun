@@ -2,19 +2,19 @@
   "schema_version": 1,
   "artifact": {
     "path": "src/crates/services/services-integrations/assets/models-dev.json",
-    "sha256": "ac39d4424ebf1cf13ccb3dd029a3aed1600916a3171d61bd92315634118487f6",
-    "bytes": 3299
+    "sha256": "36d8ee5eb142b3d108d4f82b775b7232413ab8f8b7cd85c9a6c5538525cee571",
+    "bytes": 647504
   },
   "source": {
     "project": "models.dev",
     "api_url": "https://models.dev/api.json",
-    "api_sha256": "8fd2113007d51f0aa2ed0ff4138f8e892877395e1e397317bb686a206d3ee67e",
-    "api_bytes": 3478783,
+    "api_sha256": "a51a929503f14aed3d646ec71a497de265bac673690224ca7ed320d110545f1b",
+    "api_bytes": 3504153,
     "api_etag": null,
-    "retrieved_at": "2026-08-04T06:16:13.887Z",
+    "retrieved_at": "2026-08-05T02:02:14.800Z",
     "repository": "https://github.com/anomalyco/models.dev",
     "repository_branch": "dev",
-    "repository_revision": "980878f3f31ae0e14b49273760a9bc31a94dc0a5",
+    "repository_revision": "582eaaa208e55231d8482a20cac17f500118f9c6",
     "revision_role": "Upstream dev revision observed when the API document was retrieved; api_sha256 is authoritative for the retrieved source bytes."
   },
   "license": {
@@ -26,33 +26,79 @@
     "sha256": "dc2dc41c9fea2fd3c41c21c6f484844cab367800b88ff24781f980ad3a9d160a"
   },
   "transformation": {
-    "kind": "curated_reasoning_fallback",
-    "description": "Select only the listed providers and models, retain provider/model identity, reasoning capability fields, and limit.output, normalize reasoning_options to arrays, and serialize deterministic pretty-printed JSON.",
+    "kind": "builtin_provider_catalog_fallback",
+    "description": "Select every models.dev provider bound by the BitFun built-in provider overlay plus explicitly declared supplemental reasoning providers, retain the provider/model fields consumed by the provider and reasoning catalogs, normalize reasoning_options to arrays, and serialize deterministic pretty-printed JSON.",
+    "provider_overlay_path": "src/shared/ai-provider-catalog/providers.json",
+    "supplemental_reasoning_provider_ids": [
+      "openai"
+    ],
     "retained_provider_fields": [
       "id",
-      "name"
+      "name",
+      "api",
+      "doc",
+      "env"
     ],
     "retained_model_fields": [
       "id",
       "name",
+      "description",
+      "family",
+      "status",
+      "release_date",
+      "last_updated",
+      "knowledge",
+      "open_weights",
+      "attachment",
       "reasoning",
+      "tool_call",
+      "structured_output",
       "reasoning_options",
-      "limit.output"
+      "modalities.input",
+      "modalities.output",
+      "limit.context",
+      "limit.input",
+      "limit.output",
+      "cost.input",
+      "cost.output",
+      "cost.cache_read",
+      "cost.cache_write"
     ],
-    "included_models": {
-      "openai": [
-        "gpt-5.2-pro",
-        "gpt-5.4"
-      ],
-      "anthropic": [
-        "claude-sonnet-4-6",
-        "claude-sonnet-5",
-        "claude-opus-5"
-      ],
-      "deepseek": [
-        "deepseek-v4-flash",
-        "deepseek-v4-pro"
-      ]
+    "included_provider_ids": [
+      "alibaba",
+      "anthropic",
+      "deepseek",
+      "google",
+      "kimi-for-coding",
+      "minimax",
+      "minimax-cn",
+      "minimax-cn-coding-plan",
+      "minimax-coding-plan",
+      "moonshotai",
+      "moonshotai-cn",
+      "nvidia",
+      "openai",
+      "openrouter",
+      "siliconflow",
+      "zhipuai"
+    ],
+    "included_provider_model_counts": {
+      "alibaba": 52,
+      "anthropic": 15,
+      "deepseek": 4,
+      "google": 41,
+      "kimi-for-coding": 4,
+      "minimax": 7,
+      "minimax-cn": 7,
+      "minimax-cn-coding-plan": 7,
+      "minimax-coding-plan": 7,
+      "moonshotai": 10,
+      "moonshotai-cn": 10,
+      "nvidia": 98,
+      "openai": 47,
+      "openrouter": 337,
+      "siliconflow": 49,
+      "zhipuai": 13
     }
   },
   "maintenance": {

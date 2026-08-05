@@ -22,6 +22,13 @@ const ASSET_DIR = join(
 const SNAPSHOT_PATH = join(ASSET_DIR, 'models-dev.json');
 const PROVENANCE_PATH = join(ASSET_DIR, 'models-dev.provenance.json');
 const LICENSE_PATH = join(ASSET_DIR, 'models-dev.LICENSE.txt');
+const PROVIDER_OVERLAY_PATH = join(
+  ROOT,
+  'src',
+  'shared',
+  'ai-provider-catalog',
+  'providers.json',
+);
 const NOTICE_PATH = join(ROOT, 'THIRD_PARTY_NOTICES.md');
 const API_URL = 'https://models.dev/api.json';
 const REPOSITORY = 'https://github.com/anomalyco/models.dev';
@@ -30,6 +37,8 @@ const EXPECTED_ARTIFACT_PATH =
   'src/crates/services/services-integrations/assets/models-dev.json';
 const EXPECTED_LICENSE_PATH =
   'src/crates/services/services-integrations/assets/models-dev.LICENSE.txt';
+const EXPECTED_PROVIDER_OVERLAY_PATH =
+  'src/shared/ai-provider-catalog/providers.json';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -71,46 +80,126 @@ function normalizedOptions(value) {
   return [];
 }
 
-function buildCuratedSnapshot(source, provenance) {
+function readProviderOverlay() {
+  const overlay = readJson(PROVIDER_OVERLAY_PATH);
+  assert.equal(overlay.schema_version, 1,
+    'unsupported built-in provider overlay schema');
+  assert(Array.isArray(overlay.providers) && overlay.providers.length > 0,
+    'built-in provider overlay must define providers');
+  return overlay;
+}
+
+function boundModelsDevProviderIds(overlay) {
+  const providerIds = new Set();
+  for (const provider of overlay.providers) {
+    for (const providerId of provider.catalog_provider_ids || []) {
+      assertString(providerId,
+        `provider ${provider.id} has an invalid models.dev binding`);
+      providerIds.add(providerId);
+    }
+    for (const endpoint of provider.endpoints || []) {
+      for (const providerId of endpoint.catalog_provider_ids || []) {
+        assertString(providerId,
+          `provider ${provider.id} endpoint ${endpoint.id} has an invalid models.dev binding`);
+        providerIds.add(providerId);
+      }
+    }
+  }
+  return [...providerIds].sort();
+}
+
+function bundledModelsDevProviderIds(overlay, provenance) {
+  const providerIds = new Set(boundModelsDevProviderIds(overlay));
+  const supplementalProviderIds =
+    provenance.transformation?.supplemental_reasoning_provider_ids || [];
+  assert(Array.isArray(supplementalProviderIds),
+    'supplemental reasoning provider IDs must be an array');
+  for (const providerId of supplementalProviderIds) {
+    assertString(providerId, 'supplemental reasoning provider ID is invalid');
+    providerIds.add(providerId);
+  }
+  return [...providerIds].sort();
+}
+
+function copyDefinedFields(source, fields) {
+  return Object.fromEntries(fields
+    .filter(field => source[field] !== undefined && source[field] !== null)
+    .map(field => [field, source[field]]));
+}
+
+function copyModel(sourceModel, modelId) {
+  const model = {
+    id: sourceModel.id || modelId,
+    ...copyDefinedFields(sourceModel, [
+      'name',
+      'description',
+      'family',
+      'status',
+      'release_date',
+      'last_updated',
+      'knowledge',
+      'open_weights',
+      'attachment',
+      'reasoning',
+      'tool_call',
+      'structured_output',
+    ]),
+  };
+  if (Object.hasOwn(sourceModel, 'reasoning_options')) {
+    model.reasoning_options = normalizedOptions(sourceModel.reasoning_options);
+  }
+  if (sourceModel.modalities && typeof sourceModel.modalities === 'object') {
+    model.modalities = copyDefinedFields(sourceModel.modalities, ['input', 'output']);
+  }
+  if (sourceModel.limit && typeof sourceModel.limit === 'object') {
+    model.limit = copyDefinedFields(sourceModel.limit, ['context', 'input', 'output']);
+  }
+  if (sourceModel.cost && typeof sourceModel.cost === 'object') {
+    model.cost = copyDefinedFields(
+      sourceModel.cost,
+      ['input', 'output', 'cache_read', 'cache_write'],
+    );
+  }
+  return model;
+}
+
+function buildBundledSnapshot(source, overlay, provenance) {
   assert(source && typeof source === 'object' && !Array.isArray(source),
     'models.dev source must be a provider object');
-  const includedModels = provenance.transformation?.included_models;
-  assert(includedModels && typeof includedModels === 'object',
-    'provenance must declare transformation.included_models');
 
   const snapshot = {};
-  for (const [providerId, modelIds] of Object.entries(includedModels)) {
+  for (const providerId of bundledModelsDevProviderIds(overlay, provenance)) {
     const sourceProvider = source[providerId];
     assert(sourceProvider, `models.dev source is missing provider ${providerId}`);
-    assert(Array.isArray(modelIds) && modelIds.length > 0,
-      `provider ${providerId} must select at least one model`);
+    const sourceModels = sourceProvider.models;
+    assert(sourceModels && typeof sourceModels === 'object' && !Array.isArray(sourceModels),
+      `models.dev provider ${providerId} has no model catalog`);
+    const modelEntries = Object.entries(sourceModels).sort(([left], [right]) =>
+      (left < right ? -1 : left > right ? 1 : 0));
+    assert(modelEntries.length > 0,
+      `models.dev provider ${providerId} has no models`);
 
     const provider = {
       id: sourceProvider.id || providerId,
       name: sourceProvider.name || providerId,
+      ...copyDefinedFields(sourceProvider, ['api', 'doc', 'env']),
       models: {},
     };
-    for (const modelId of modelIds) {
-      const sourceModel = sourceProvider.models?.[modelId];
-      assert(sourceModel, `models.dev source is missing ${providerId}/${modelId}`);
-      assert.equal(sourceModel.reasoning, true,
-        `${providerId}/${modelId} is no longer marked as a reasoning model`);
-      const reasoningOptions = normalizedOptions(sourceModel.reasoning_options);
-      assert(reasoningOptions.length > 0,
-        `${providerId}/${modelId} has no reasoning options`);
-      assert(Number.isSafeInteger(sourceModel.limit?.output) && sourceModel.limit.output > 0,
-        `${providerId}/${modelId} has no positive limit.output`);
-      provider.models[modelId] = {
-        id: sourceModel.id || modelId,
-        name: sourceModel.name || modelId,
-        reasoning: true,
-        reasoning_options: reasoningOptions,
-        limit: { output: sourceModel.limit.output },
-      };
+    for (const [modelId, sourceModel] of modelEntries) {
+      assert(sourceModel && typeof sourceModel === 'object' && !Array.isArray(sourceModel),
+        `models.dev model ${providerId}/${modelId} is invalid`);
+      provider.models[modelId] = copyModel(sourceModel, modelId);
     }
     snapshot[providerId] = provider;
   }
   return snapshot;
+}
+
+function snapshotModelCounts(snapshot) {
+  return Object.fromEntries(Object.entries(snapshot).map(([providerId, provider]) => [
+    providerId,
+    Object.keys(provider.models || {}).length,
+  ]));
 }
 
 function validateProvenance(provenance, snapshotText, licenseText) {
@@ -151,8 +240,39 @@ function validateProvenance(provenance, snapshotText, licenseText) {
     /The above copyright notice and this permission notice shall be included/);
 }
 
-function validateCuratedSnapshot(snapshot, provenance) {
-  const rebuilt = buildCuratedSnapshot(snapshot, provenance);
+function validateBundledSnapshot(snapshot, provenance, overlay) {
+  const requiredProviderIds = boundModelsDevProviderIds(overlay);
+  const expectedProviderIds = bundledModelsDevProviderIds(overlay, provenance);
+  assert.equal(
+    provenance.transformation?.kind,
+    'builtin_provider_catalog_fallback',
+    'bundled snapshot must declare its provider catalog fallback role',
+  );
+  assert.equal(
+    provenance.transformation?.provider_overlay_path,
+    EXPECTED_PROVIDER_OVERLAY_PATH,
+    'bundled snapshot must declare the provider overlay that owns its coverage',
+  );
+  assert.deepEqual(
+    provenance.transformation?.included_provider_ids,
+    expectedProviderIds,
+    'provenance provider coverage must match the provider overlay and supplemental reasoning providers',
+  );
+  for (const providerId of requiredProviderIds) {
+    assert(Object.hasOwn(snapshot, providerId),
+      `bundled snapshot is missing provider overlay binding ${providerId}`);
+  }
+  assert.deepEqual(
+    Object.keys(snapshot).sort(),
+    expectedProviderIds,
+    'bundled snapshot must cover every models.dev binding in the provider overlay',
+  );
+  assert.deepEqual(
+    provenance.transformation?.included_provider_model_counts,
+    snapshotModelCounts(snapshot),
+    'provenance model counts must match the bundled snapshot',
+  );
+  const rebuilt = buildBundledSnapshot(snapshot, overlay, provenance);
   assert.deepEqual(rebuilt, snapshot,
     'bundled models.dev snapshot contains fields or entries outside the declared transformation');
 }
@@ -195,15 +315,22 @@ function validateReleaseDelivery() {
 }
 
 function checkAssets() {
-  for (const path of [SNAPSHOT_PATH, PROVENANCE_PATH, LICENSE_PATH, NOTICE_PATH]) {
+  for (const path of [
+    SNAPSHOT_PATH,
+    PROVENANCE_PATH,
+    LICENSE_PATH,
+    PROVIDER_OVERLAY_PATH,
+    NOTICE_PATH,
+  ]) {
     assert(existsSync(path), `required models.dev release asset is missing: ${path}`);
   }
   const snapshotText = readFileSync(SNAPSHOT_PATH, 'utf8');
   const licenseText = readFileSync(LICENSE_PATH, 'utf8');
   const snapshot = JSON.parse(snapshotText);
   const provenance = readJson(PROVENANCE_PATH);
+  const overlay = readProviderOverlay();
   validateProvenance(provenance, snapshotText, licenseText);
-  validateCuratedSnapshot(snapshot, provenance);
+  validateBundledSnapshot(snapshot, provenance, overlay);
   validateReleaseDelivery();
   console.log('models.dev snapshot, provenance, license, and release delivery are valid.');
 }
@@ -274,7 +401,8 @@ async function updateAssets(args) {
     'upstream models.dev license changed; review and update the preserved license before regenerating');
 
   const source = JSON.parse(sourceBytes.toString('utf8'));
-  const snapshot = buildCuratedSnapshot(source, provenance);
+  const overlay = readProviderOverlay();
+  const snapshot = buildBundledSnapshot(source, overlay, provenance);
   const snapshotText = serializedJson(snapshot);
   provenance.artifact.sha256 = sha256(snapshotText);
   provenance.artifact.bytes = Buffer.byteLength(snapshotText);
@@ -284,6 +412,9 @@ async function updateAssets(args) {
   provenance.source.retrieved_at = new Date().toISOString();
   provenance.source.repository_revision = revision;
   provenance.license.sha256 = sha256(localLicense);
+  provenance.transformation.included_provider_ids =
+    bundledModelsDevProviderIds(overlay, provenance);
+  provenance.transformation.included_provider_model_counts = snapshotModelCounts(snapshot);
 
   writeFileSync(SNAPSHOT_PATH, snapshotText, 'utf8');
   writeFileSync(PROVENANCE_PATH, serializedJson(provenance), 'utf8');

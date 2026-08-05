@@ -21,8 +21,9 @@
         }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": []
+        "mode": "curated",
+        "curated_models": [],
+        "additional_models": []
       }
     },
     {
@@ -42,8 +43,9 @@
         { "id": "international-coding-plan", "base_url": "https://api.z.ai/api/coding/paas/v4", "api_format": "openai", "label": "intlCodingPlan", "trusted_for_auto_detection": true, "catalog_provider_ids": ["zhipuai"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["glm-5.2", "glm-5.1", "glm-5"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["glm-5.2", "glm-5.1", "glm-5"],
+        "additional_models": []
       }
     },
     {
@@ -62,8 +64,9 @@
         { "id": "international-coding-plan", "base_url": "https://coding-intl.dashscope.aliyuncs.com/v1", "api_format": "openai", "label": "intlCodingPlan", "trusted_for_auto_detection": true, "catalog_provider_ids": ["alibaba"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["qwen3.7-plus", "qwen3.7-max", "qwen3.6-flash"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["qwen3.7-plus", "qwen3.7-max", "qwen3.6-flash"],
+        "additional_models": []
       }
     },
     {
@@ -79,8 +82,9 @@
         { "id": "anthropic", "base_url": "https://api.deepseek.com/anthropic", "api_format": "anthropic", "label": "anthropic", "trusted_for_auto_detection": true, "catalog_provider_ids": ["deepseek"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["deepseek-v4-flash", "deepseek-v4-pro"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["deepseek-v4-flash", "deepseek-v4-pro"],
+        "additional_models": []
       }
     },
     {
@@ -97,8 +101,9 @@
         { "id": "international", "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3", "api_format": "openai", "label": "intl", "trusted_for_auto_detection": true, "catalog_provider_ids": [] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["doubao-seed-2-1-pro-260628", "doubao-seed-2-0-code-preview-260215", "doubao-seed-2-0-pro-260215"]
+        "mode": "curated",
+        "curated_models": ["doubao-seed-2-1-pro-260628", "doubao-seed-2-0-code-preview-260215", "doubao-seed-2-0-pro-260215"],
+        "additional_models": []
       }
     },
     {
@@ -116,8 +121,9 @@
         { "id": "international-openai", "base_url": "https://api.minimax.io/v1", "api_format": "openai", "label": "intlOpenai", "trusted_for_auto_detection": true, "catalog_provider_ids": ["minimax", "minimax-coding-plan"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"],
+        "additional_models": []
       }
     },
     {
@@ -136,8 +142,9 @@
         { "id": "kimi-for-coding", "base_url": "https://api.kimi.com/coding", "api_format": "anthropic", "label": "kimiForCoding", "trusted_for_auto_detection": true, "catalog_provider_ids": ["kimi-for-coding"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.6"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["kimi-k3", "kimi-k2.7-code", "kimi-k2.6"],
+        "additional_models": []
       }
     },
     {
@@ -152,8 +159,9 @@
         { "id": "default", "base_url": "https://generativelanguage.googleapis.com", "api_format": "gemini", "label": "default", "is_default": true, "trusted_for_auto_detection": true, "catalog_provider_ids": ["google"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["gemini-3.1-pro-preview", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["gemini-3.1-pro-preview", "gemini-3.6-flash", "gemini-3.5-flash-lite"],
+        "additional_models": []
       }
     },
     {
@@ -168,8 +176,9 @@
         { "id": "default", "base_url": "https://api.anthropic.com", "api_format": "anthropic", "label": "default", "is_default": true, "trusted_for_auto_detection": true, "catalog_provider_ids": ["anthropic"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["claude-opus-5", "claude-fable-5", "claude-sonnet-5", "claude-haiku-4-5"],
+        "additional_models": []
       }
     },
     {
@@ -186,8 +195,9 @@
         { "id": "international", "base_url": "https://api.siliconflow.com/v1", "api_format": "openai", "label": "intl", "trusted_for_auto_detection": true, "catalog_provider_ids": ["siliconflow"] }
       ],
       "model_policy": {
-        "mode": "catalog_plus_curated",
-        "curated_models": ["zai-org/GLM-5.2", "deepseek-ai/DeepSeek-V4-Pro", "deepseek-ai/DeepSeek-V4-Flash"]
+        "mode": "catalog_with_fallback",
+        "curated_models": ["zai-org/GLM-5.2", "deepseek-ai/DeepSeek-V4-Pro", "deepseek-ai/DeepSeek-V4-Flash"],
+        "additional_models": []
       }
     },
     {
@@ -203,7 +213,8 @@
       ],
       "model_policy": {
         "mode": "catalog",
-        "curated_models": []
+        "curated_models": [],
+        "additional_models": []
       }
     },
     {
@@ -219,7 +230,8 @@
       ],
       "model_policy": {
         "mode": "catalog",
-        "curated_models": []
+        "curated_models": [],
+        "additional_models": []
       }
     }
   ]
