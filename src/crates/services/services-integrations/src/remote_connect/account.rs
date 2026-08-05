@@ -30,7 +30,7 @@ const NONCE_LEN: usize = 12;
 /// so the client can rebuild the identical KDF on login.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KdfParams {
-    /// Memory cost in KiB (e.g. 65536 = 64 MB).
+    /// Memory cost in KiB (e.g. 16384 = 16 MiB).
     pub m: u32,
     /// Time cost (iterations).
     pub t: u32,
@@ -40,9 +40,9 @@ pub struct KdfParams {
 
 impl Default for KdfParams {
     fn default() -> Self {
-        // OWASP-recommended Argon2id baseline: 64 MB, 3 iterations, 4 lanes.
+        // Resource-aware Argon2id baseline: 16 MiB, 3 iterations, 4 lanes.
         Self {
-            m: 65536,
+            m: 16 * 1024,
             t: 3,
             p: 4,
         }
