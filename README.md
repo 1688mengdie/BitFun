@@ -169,7 +169,7 @@ Please submit PRs directly to the `main` branch. For more details, see [CONTRIBU
 ## Disclaimer
 
 1. This project is spare-time exploration and research into next-generation human-machine collaboration, not a commercial profit-making project.
-2. This project is 97%+ built through Vibe Coding. Code feedback is welcome, and AI-assisted refactoring and optimization are encouraged.
+2. AI-assisted development is part of this project's workflow. Contributions are reviewed as code, and AI-assisted PRs should disclose their testing level; see [CONTRIBUTING.md](./CONTRIBUTING.md).
 3. This project depends on and references many open-source projects. Thanks to all open-source authors. **If your rights are affected, please contact us for remediation.**
 
 ---
