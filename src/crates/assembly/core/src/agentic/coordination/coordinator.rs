@@ -2665,6 +2665,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 snapshot_session_id: None,
                 tags: Vec::new(),
                 custom_metadata: None,
+                current_context_usage: None,
                 relationship: None,
                 todos: None,
                 review_action_state: None,
