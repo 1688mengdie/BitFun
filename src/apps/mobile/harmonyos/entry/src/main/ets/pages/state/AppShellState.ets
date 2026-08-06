@@ -1,5 +1,13 @@
+import { AppRoute } from '../navigation/AppRouteContract';
+
 @ObservedV2
 export class AppShellState {
+  /**
+   * Mirror of the navigation stack top. NavPathStack is not observable, so
+   * surfaces that live outside Navigation — the drawer above all — have no way
+   * to follow the route without this traced copy.
+   */
+  @Trace activeRoute: AppRoute = AppRoute.ChatHome;
   @Trace showSidebar: boolean = false;
   @Trace showSettings: boolean = false;
   @Trace settingsMode: string = 'general';

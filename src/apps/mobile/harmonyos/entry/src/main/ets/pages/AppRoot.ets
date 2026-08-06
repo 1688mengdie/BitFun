@@ -39,7 +39,6 @@ struct AppRoot {
         generalPageState: this.runtime.generalChatPageState,
         filePreviewState: this.runtime.filePreviewState,
         deviceId: this.runtime.remoteConnectionViewModel.getDeviceId(),
-        currentRoute: this.runtime.currentRoute(),
         actions: this.runtime.presentationActions
       })
     }
