@@ -642,6 +642,7 @@ export class AppRootRuntime {
     (route: AppRoute, intent: ConversationIntent): void => this.handleConversationIntent(route, intent),
     (): void => this.closeAppSidebar(),
     (source: ConversationSource): void => { this.switchWideConversationSource(source); },
+    (source: ConversationSource): void => { this.switchCompactConversationSource(source); },
     (): void => this.enterCompactLayout(),
     new RemoteHomePresentationActions(
       (): void => this.openAppSidebar(), (): void => this.enterCodeEntry(), (): void => this.openAddConnection(),
@@ -1289,6 +1290,37 @@ export class AppRootRuntime {
       this.startPolling();
       await this.loadActiveMessages();
     }
+  }
+
+  /**
+   * Compact counterpart of switchWideConversationSource. Switching source is a
+   * change of context, not a command to start something: it resumes the session
+   * the user was last in, and otherwise rests on the Remote landing surface
+   * rather than opening the create composer for them.
+   */
+  async switchCompactConversationSource(source: ConversationSource): Promise<void> {
+    this.closeAppSidebar();
+    if (AppRouteContract.conversationSource(this.currentRoute()) === source) {
+      return;
+    }
+    if (this.visibleVoiceListening()) {
+      await this.stopVoiceInput(false);
+    }
+    if (source === ConversationSource.General) {
+      this.stopPolling();
+      this.appShellViewModel.replaceRouteWithoutAnimation(AppRoute.ChatHome);
+      return;
+    }
+    this.persistVisibleGeneralChatDraft();
+    const activeRemoteSessionId = RemoteUiState.canUseRemote(this.connectionState) ?
+      (this.remotePageState.activeSession.sessionId || '') : '';
+    if (activeRemoteSessionId.length === 0) {
+      this.appShellViewModel.replaceRouteWithoutAnimation(AppRoute.RemoteHome);
+      return;
+    }
+    this.appShellViewModel.replaceRouteWithoutAnimation(AppRoute.RemoteChat, activeRemoteSessionId);
+    this.startPolling();
+    await this.loadActiveMessages();
   }
 
   private enterCompactLayout(): void {

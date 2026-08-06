@@ -18,12 +18,16 @@ export struct AppSidebar {
   @Prop accountUserId: string = '';
   @Prop showConversationSourceSwitcher: boolean = false;
   @Prop showCollapseButton: boolean = false;
+  @Prop showViewSettingsButton: boolean = false;
+  @Prop showCustomContent: boolean = false;
   @Prop conversationSource: ConversationSource = ConversationSource.General;
   onClose: () => void = () => {};
   onNewChat: () => void = () => {};
   onEnterCode: () => void = () => {};
   onConversationSource: (source: ConversationSource) => void = (_source: ConversationSource) => {};
   onCollapse: () => void = () => {};
+  onOpenViewSettings: () => void = () => {};
+  onSearchQueryChange: (query: string) => void = (_query: string) => {};
   onOpenSettings: () => void = () => {};
   onOpenAccount: () => void = () => {};
   onOpenSession: (session: RemoteSession) => void = (_session: RemoteSession) => {};
@@ -38,6 +42,12 @@ export struct AppSidebar {
   @State showSearch: boolean = false;
   @State sessionSearchQuery: string = '';
   @State archivedSessionsExpanded: boolean = false;
+  /**
+   * Session content for the current conversation source. The shell around it
+   * (header, source switcher, content origin, footer) stays identical for every
+   * source so switching Local/Remote never moves shared chrome.
+   */
+  @BuilderParam contentSlot: () => void = this.LocalSessionContent;
 
   build() {
     this.SidebarContent()
@@ -67,59 +77,17 @@ export struct AppSidebar {
       .width('100%')
       .margin({ top: 18 })
 
-      if (this.visiblePinnedSessions().length > 0) {
-        Text('置顶')
-          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(MUTED)
-          .width('100%').margin({ top: 16, bottom: 6 })
-        ForEach(this.visiblePinnedSessions(), (session: RemoteSession) => {
-          this.PinnedRow(session)
-        }, (session: RemoteSession) => session.id)
-      }
-
-      Text(RemoteI18n.t('sidebar.recent'))
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(MUTED)
-        .width('100%')
-        .margin({ top: 16, bottom: 6 })
-
       Stack({ alignContent: Alignment.Bottom }) {
-        List({ space: 2 }) {
-          if (this.visibleRecentSessions().length === 0) {
-            ListItem() {
-              this.EmptyRecent()
-            }
-          }
-          Repeat<RemoteSession>(this.visibleRecentSessions())
-            .each((obj: RepeatItem<RemoteSession>) => {
-              ListItem() {
-                this.RecentRow(obj)
-              }
-            })
-            .key((item: RemoteSession) => item.id)
-            .virtualScroll({ totalCount: this.visibleRecentSessions().length })
-          if (this.archivedSessionCount() > 0) {
-            ListItem() {
-              this.ArchivedDisclosureRow()
-            }
-          }
-          if (this.archivedSessionsExpanded) {
-            Repeat<RemoteSession>(this.visibleArchivedSessions())
-              .each((obj: RepeatItem<RemoteSession>) => {
-                ListItem() {
-                  this.RecentRow(obj)
-                }
-              })
-              .key((item: RemoteSession) => item.id)
-              .virtualScroll({ totalCount: this.visibleArchivedSessions().length })
+        Column() {
+          if (this.showCustomContent) {
+            this.contentSlot()
+          } else {
+            this.LocalSessionContent()
           }
         }
         .width('100%')
         .height('100%')
-        .margin({ left: 0 })
-        .padding({ bottom: 84 })
-        .scrollBar(BarState.Off)
-        .divider(null)
+        .alignItems(HorizontalAlign.Start)
 
         if (this.isAccountAuthenticated()) {
           this.AuthenticatedFooter()
@@ -139,6 +107,67 @@ export struct AppSidebar {
   }
 
   @Builder
+  LocalSessionContent() {
+    Column() {
+      if (this.visiblePinnedSessions().length > 0) {
+        Text('置顶')
+          .fontSize(14).fontWeight(FontWeight.Medium).fontColor(MUTED)
+          .width('100%').margin({ top: 16, bottom: 6 })
+        ForEach(this.visiblePinnedSessions(), (session: RemoteSession) => {
+          this.PinnedRow(session)
+        }, (session: RemoteSession) => session.id)
+      }
+
+      Text(RemoteI18n.t('sidebar.recent'))
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(MUTED)
+        .width('100%')
+        .margin({ top: 16, bottom: 6 })
+
+      List({ space: 2 }) {
+        if (this.visibleRecentSessions().length === 0) {
+          ListItem() {
+            this.EmptyRecent()
+          }
+        }
+        Repeat<RemoteSession>(this.visibleRecentSessions())
+          .each((obj: RepeatItem<RemoteSession>) => {
+            ListItem() {
+              this.RecentRow(obj)
+            }
+          })
+          .key((item: RemoteSession) => item.id)
+          .virtualScroll({ totalCount: this.visibleRecentSessions().length })
+        if (this.archivedSessionCount() > 0) {
+          ListItem() {
+            this.ArchivedDisclosureRow()
+          }
+        }
+        if (this.archivedSessionsExpanded) {
+          Repeat<RemoteSession>(this.visibleArchivedSessions())
+            .each((obj: RepeatItem<RemoteSession>) => {
+              ListItem() {
+                this.RecentRow(obj)
+              }
+            })
+            .key((item: RemoteSession) => item.id)
+            .virtualScroll({ totalCount: this.visibleArchivedSessions().length })
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .margin({ left: 0 })
+      .padding({ bottom: 84 })
+      .scrollBar(BarState.Off)
+      .divider(null)
+    }
+    .width('100%')
+    .height('100%')
+    .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
   private AuthenticatedHeader() {
     Row() {
       Text('BitFun')
@@ -146,7 +175,25 @@ export struct AppSidebar {
         .fontWeight(FontWeight.Bold)
         .fontColor(INK)
       Blank()
+      // Right-aligned so the search and collapse controls keep the same
+      // position whether or not the source-specific view-settings entry shows.
       Row({ space: 6 }) {
+        if (this.showViewSettingsButton) {
+          Stack({ alignContent: Alignment.Center }) {
+            this.MoreDotsGlyph()
+          }
+          .width(38)
+          .height(38)
+          .backgroundColor(CARD)
+          .border({ width: 1, color: LINE })
+          .borderRadius(19)
+          .shadow({ radius: 14, color: '#16000000', offsetY: 6 })
+          .accessibilityText(RemoteI18n.t('remote.actions'))
+          .onClick(() => {
+            this.onOpenViewSettings();
+          })
+        }
+
         Stack({ alignContent: Alignment.Center }) {
           this.SearchGlyph()
         }
@@ -160,7 +207,7 @@ export struct AppSidebar {
         .onClick(() => {
           this.showSearch = !this.showSearch;
           if (!this.showSearch) {
-            this.sessionSearchQuery = '';
+            this.updateSearchQuery('');
           }
         })
 
@@ -188,9 +235,14 @@ export struct AppSidebar {
         .borderRadius(8)
         .margin({ top: 12 })
         .onChange((value: string) => {
-          this.sessionSearchQuery = value;
+          this.updateSearchQuery(value);
         })
     }
+  }
+
+  private updateSearchQuery(value: string): void {
+    this.sessionSearchQuery = value;
+    this.onSearchQueryChange(value);
   }
 
   @Builder
@@ -425,15 +477,20 @@ export struct AppSidebar {
   }
 
   @Builder
+  private MoreDotsGlyph() {
+    Row({ space: 3 }) {
+      Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+      Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+      Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
+    }
+    .height(8)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  @Builder
   private SessionMoreButton(session: RemoteSession) {
     Stack({ alignContent: Alignment.Center }) {
-      Row({ space: 3 }) {
-        Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
-        Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
-        Text('').width(3.5).height(3.5).backgroundColor(MUTED).borderRadius(2)
-      }
-      .height(8)
-      .alignItems(VerticalAlign.Center)
+      this.MoreDotsGlyph()
     }
     .width(34)
     .height(40)
