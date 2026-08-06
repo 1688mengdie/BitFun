@@ -4111,6 +4111,7 @@ mod tests {
     };
     use crate::BitFunError;
     use bitfun_runtime_ports::SessionTurnWindowRequest;
+    use std::collections::HashSet;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Instant;
@@ -6767,6 +6768,123 @@ mod tests {
         assert_ne!(manager.project_sessions_dir(&runtime_root), runtime_root);
 
         let _ = std::fs::remove_dir_all(&test_root);
+    }
+
+    #[tokio::test]
+    async fn corrupt_remote_index_does_not_block_history_updates_or_new_sessions() {
+        let workspace = TestWorkspace::new();
+        let path_manager = workspace.path_manager();
+        let manager = PersistenceManager::new(path_manager.clone()).expect("persistence manager");
+        let sessions_dir = crate::service::WorkspaceRuntimeService::new(path_manager)
+            .context_for_remote_workspace("dev-host", "/home/wsp/project")
+            .sessions_dir;
+        let config = SessionConfig {
+            workspace_path: Some("/home/wsp/project".to_string()),
+            remote_connection_id: Some("ssh-1".to_string()),
+            remote_ssh_host: Some("dev-host".to_string()),
+            ..Default::default()
+        };
+        let historical_id = Uuid::new_v4().to_string();
+        let historical = Session::new_with_id(
+            historical_id.clone(),
+            "Historical remote session".to_string(),
+            "agentic".to_string(),
+            config.clone(),
+        );
+        manager
+            .create_session_if_absent(&sessions_dir, &historical)
+            .await
+            .expect("historical remote session should persist");
+        let first_turn = DialogTurnData::new(
+            "turn-0".to_string(),
+            0,
+            historical_id.clone(),
+            UserMessageData {
+                id: "user-0".to_string(),
+                content: "before restart".to_string(),
+                timestamp: 1,
+                metadata: None,
+            },
+        );
+        manager
+            .save_dialog_turn(&sessions_dir, &first_turn)
+            .await
+            .expect("historical remote turn should persist");
+        let state_path = sessions_dir.join(&historical_id).join("state.json");
+        let first_turn_path = sessions_dir
+            .join(&historical_id)
+            .join("turns")
+            .join("turn-0000.json");
+        let state_before = std::fs::read(&state_path).expect("historical state should exist");
+        let first_turn_before =
+            std::fs::read(&first_turn_path).expect("historical turn should exist");
+
+        std::fs::write(sessions_dir.join("index.json"), b"")
+            .expect("simulate an empty remote index after abnormal restart");
+        let restored = manager
+            .load_session(&sessions_dir, &historical_id)
+            .await
+            .expect("history must open even before the derived index is repaired");
+        assert_eq!(restored.dialog_turn_ids, vec!["turn-0"]);
+
+        let second_turn = DialogTurnData::new(
+            "turn-1".to_string(),
+            1,
+            historical_id.clone(),
+            UserMessageData {
+                id: "user-1".to_string(),
+                content: "after restart".to_string(),
+                timestamp: 2,
+                metadata: None,
+            },
+        );
+        manager
+            .save_dialog_turn(&sessions_dir, &second_turn)
+            .await
+            .expect("the historical Session must accept a new turn with a corrupt index");
+
+        std::fs::write(sessions_dir.join("index.json"), b"{")
+            .expect("simulate another interrupted index write before Session creation");
+        let new_session_id = Uuid::new_v4().to_string();
+        let new_session = Session::new_with_id(
+            new_session_id.clone(),
+            "New remote session".to_string(),
+            "agentic".to_string(),
+            config,
+        );
+        manager
+            .create_session_if_absent(&sessions_dir, &new_session)
+            .await
+            .expect("a corrupt remote index must not block new Session creation");
+
+        std::fs::write(sessions_dir.join("index.json"), b" ")
+            .expect("simulate a corrupt index before listing");
+        let listed = manager
+            .list_session_metadata(&sessions_dir)
+            .await
+            .expect("remote Session listing should rebuild its derived index");
+        let listed_ids = listed
+            .iter()
+            .map(|metadata| metadata.session_id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            listed_ids,
+            HashSet::from([historical_id.as_str(), new_session_id.as_str()])
+        );
+
+        let restored = manager
+            .load_session(&sessions_dir, &historical_id)
+            .await
+            .expect("updated historical Session should remain restorable");
+        assert_eq!(restored.dialog_turn_ids, vec!["turn-0", "turn-1"]);
+        assert_eq!(
+            std::fs::read(state_path).expect("historical state remains readable"),
+            state_before
+        );
+        assert_eq!(
+            std::fs::read(first_turn_path).expect("historical turn remains readable"),
+            first_turn_before
+        );
     }
 
     #[tokio::test]
