@@ -349,15 +349,20 @@ export struct RemoteSessionList {
           this.chatsCollapsed = !this.chatsCollapsed;
         })
         Blank()
-        SymbolGlyph($r('sys.symbol.square_and_pencil'))
-          .fontSize(18)
-          .fontColor([MUTED])
-          .width(22)
-          .height(22)
-          .opacity(0.52)
-          .onClick(() => {
-            this.onCreateAssistantSession();
-          })
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.square_and_pencil'))
+            .fontSize(18)
+            .fontColor([MUTED])
+            .width(22)
+            .height(22)
+            .opacity(0.52)
+        }
+        .width(40)
+        .height(40)
+        .accessibilityText(RemoteI18n.t('remote.newChat'))
+        .onClick(() => {
+          this.onCreateAssistantSession();
+        })
       }
       .width('100%')
       .height(44)

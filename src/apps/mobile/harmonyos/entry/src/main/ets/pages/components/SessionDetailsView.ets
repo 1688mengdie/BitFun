@@ -35,15 +35,19 @@ export struct SessionDetailsView {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(17)
-          .fontColor([MUTED])
-          .width(44)
-          .height(44)
-          .backgroundColor(SOFT)
-          .borderRadius(22)
-          .accessibilityText(RemoteI18n.t('common.close'))
-          .onClick(() => this.onClose())
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(17)
+            .fontColor([MUTED])
+            .width(20)
+            .height(20)
+        }
+        .width(44)
+        .height(44)
+        .backgroundColor(SOFT)
+        .borderRadius(22)
+        .accessibilityText(RemoteI18n.t('common.close'))
+        .onClick(() => this.onClose())
       }
       .width('100%')
       .padding({ left: 20, right: 16, top: 18, bottom: 16 })

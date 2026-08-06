@@ -8,6 +8,7 @@ These rules apply to all changes under `src/apps/mobile/harmonyos`.
 - Conversation header controls must use the approved `remote_ref_back` and `remote_ref_more` assets. Do not replace them with a system chevron or text such as `...` / bullet characters.
 - Render monochrome reference assets in template mode and tint them with semantic theme colors such as `INK`. Never rely on the bitmap's original black or white pixels; the same control must remain legible in light and dark themes.
 - Keep paired header controls on the same fixed touch-target size and optical alignment. A responsive layout may reposition a control, but must not silently change its icon geometry or visual weight.
+- Keep `SymbolGlyph` geometry separate from its touch target. When a glyph is clickable or sits in a decorated control, wrap it in `Stack({ alignContent: Alignment.Center })` (or use a centered `Button`) and give the glyph its visual size; do not stretch the glyph itself to the full 32vp/40vp/44vp target, because font metrics can make the icon look off-center.
 
 ## Responsive interaction semantics
 

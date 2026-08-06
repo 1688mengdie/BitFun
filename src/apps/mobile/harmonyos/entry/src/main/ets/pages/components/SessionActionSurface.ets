@@ -51,13 +51,17 @@ export struct SessionActionSurface {
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(16)
-          .fontColor([MUTED])
-          .width(40)
-          .height(40)
-          .accessibilityText(RemoteI18n.t('common.close'))
-          .onClick(() => this.onClose())
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(16)
+            .fontColor([MUTED])
+            .width(20)
+            .height(20)
+        }
+        .width(40)
+        .height(40)
+        .accessibilityText(RemoteI18n.t('common.close'))
+        .onClick(() => this.onClose())
       }
       .width('100%')
       .height(52)
@@ -125,7 +129,7 @@ export struct SessionActionSurface {
     .height(46)
     .padding({ left: 10, right: 10 })
     .borderRadius(8)
-    .backgroundColor(destructive ? SOFT : '#00000000')
+    .backgroundColor('#00000000')
     .onClick(action)
   }
 

@@ -14,6 +14,7 @@ import { ConversationSourceSwitcher } from './ConversationSourceSwitcher';
 import { ComposerPresentation } from './ComposerBar';
 import { ConversationViewSettings } from './ConversationViewSettings';
 import { ConversationViewHost } from './ConversationViewHost';
+import { toConversationUiModelCatalog } from './ConversationUiModels';
 import { FilePreviewSurface } from './FilePreviewSurface';
 import { RemoteControlSettingsSheet } from './RemoteControlSettingsSheet';
 import { RemoteCreateSessionView } from './RemoteCreateSessionView';
@@ -128,6 +129,8 @@ export class RemoteCreatePresentationActions {
   readonly selectDevice: (device: CloudAccountDevice) => void;
   readonly selectWorkspace: (path: string) => void;
   readonly draftChanged: (value: string) => void;
+  readonly voiceInput: () => void;
+  readonly selectModel: (modelId: string) => void;
   readonly send: () => void;
 
   constructor(
@@ -137,6 +140,8 @@ export class RemoteCreatePresentationActions {
     selectDevice: (device: CloudAccountDevice) => void,
     selectWorkspace: (path: string) => void,
     draftChanged: (value: string) => void,
+    voiceInput: () => void,
+    selectModel: (modelId: string) => void,
     send: () => void
   ) {
     this.back = back;
@@ -145,6 +150,8 @@ export class RemoteCreatePresentationActions {
     this.selectDevice = selectDevice;
     this.selectWorkspace = selectWorkspace;
     this.draftChanged = draftChanged;
+    this.voiceInput = voiceInput;
+    this.selectModel = selectModel;
     this.send = send;
   }
 }
@@ -309,7 +316,7 @@ export struct AppRootPresentation {
     new RemoteHomePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {},
       () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
-    new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
+    new RemoteCreatePresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SidebarPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}, () => {}),
     new SettingsPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, async (_relayUrl: string, _username: string, _password: string): Promise<string> => '', async (): Promise<string> => '', async (): Promise<void> => {}, async (): Promise<CloudAccountDevice[]> => [], async (): Promise<RemotePermissionMode> => 'ask', async (mode: RemotePermissionMode): Promise<RemotePermissionMode> => mode, async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => '', async (_url: string, _key: string, _model: string, _clear: boolean): Promise<string> => ''),
     new ConnectPresentationActions(() => {}, () => {}, () => {}, () => {}, () => {}, () => false, () => {}, () => {},
@@ -452,6 +459,9 @@ export struct AppRootPresentation {
         RemoteCreateSessionView({
           state: this.remoteCreateState,
           presentation: useWidePresentation ? ComposerPresentation.Floating : ComposerPresentation.Create,
+          isVoiceListening: this.remoteCreateState.isVoiceListening,
+          modelCatalog: toConversationUiModelCatalog(this.remotePageState.modelCatalog),
+          selectedModelId: this.remoteCreateState.selectedModelId,
           showSidebarRestoreButton: showSidebarRestoreButton,
           onRestoreSidebar: () => {
             this.restoreWideMasterPane();
@@ -462,6 +472,8 @@ export struct AppRootPresentation {
           onSelectDevice: this.actions.onRemoteCreate.selectDevice,
           onSelectWorkspace: (workspace) => this.actions.onRemoteCreate.selectWorkspace(workspace?.path || ''),
           onDraftChange: this.actions.onRemoteCreate.draftChanged,
+          onVoiceInput: this.actions.onRemoteCreate.voiceInput,
+          onSelectModel: this.actions.onRemoteCreate.selectModel,
           onSend: this.actions.onRemoteCreate.send
         })
       } else {

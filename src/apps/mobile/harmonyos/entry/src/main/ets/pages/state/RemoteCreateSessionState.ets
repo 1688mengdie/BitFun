@@ -26,9 +26,11 @@ export class RemoteCreateSessionState {
   @Trace isLoadingDevices: boolean = false;
   @Trace isLoadingWorkspaces: boolean = false;
   @Trace isSubmitting: boolean = false;
+  @Trace isVoiceListening: boolean = false;
+  @Trace selectedModelId: string = '';
   @Trace errorText: string = '';
 
-  prepare(deviceId: string, deviceName: string): void {
+  prepare(deviceId: string, deviceName: string, selectedModelId: string = ''): void {
     this.draft = '';
     this.devices = [];
     this.workspaces = [];
@@ -40,11 +42,18 @@ export class RemoteCreateSessionState {
     this.isLoadingDevices = false;
     this.isLoadingWorkspaces = false;
     this.isSubmitting = false;
+    this.isVoiceListening = false;
+    this.selectedModelId = selectedModelId;
     this.errorText = '';
   }
 
   setDraft(draft: string): void {
     this.draft = draft;
+    this.errorText = '';
+  }
+
+  setSelectedModelId(modelId: string): void {
+    this.selectedModelId = modelId;
     this.errorText = '';
   }
 

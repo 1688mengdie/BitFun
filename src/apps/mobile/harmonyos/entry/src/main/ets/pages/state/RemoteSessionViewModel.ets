@@ -112,7 +112,8 @@ export class RemoteSessionViewModel {
   async createSession(
     agentType: string,
     instruction: string = '',
-    onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat
+    onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat,
+    modelId: string = ''
   ): Promise<void> {
     await this.sessions.create(
       agentType,
@@ -129,7 +130,8 @@ export class RemoteSessionViewModel {
         await this.hooks.onLoadActiveMessages();
         this.hooks.onStartPolling();
       },
-      instruction
+      instruction,
+      modelId
     );
   }
 
@@ -138,15 +140,16 @@ export class RemoteSessionViewModel {
     currentPath: string,
     instruction: string = '',
     agentType: string = 'code',
-    onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat
+    onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat,
+    modelId: string = ''
   ): Promise<void> {
     if (path.length > 0 && path !== currentPath) {
       await this.hooks.onSelectWorkspace(path);
-      await this.createSession(agentType, instruction, onRouteChat);
+      await this.createSession(agentType, instruction, onRouteChat, modelId);
       return;
     }
     if (path.length === 0 || path === currentPath) {
-      await this.createSession(agentType, instruction, onRouteChat);
+      await this.createSession(agentType, instruction, onRouteChat, modelId);
     }
   }
 

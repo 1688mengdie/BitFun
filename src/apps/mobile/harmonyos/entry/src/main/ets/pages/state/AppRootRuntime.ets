@@ -669,6 +669,8 @@ export class AppRootRuntime {
       (device: CloudAccountDevice): void => { this.selectRemoteCreateDevice(device); },
       (path: string): void => this.selectRemoteCreateWorkspace(path),
       (value: string): void => this.remoteCreateState.setDraft(value),
+      async (): Promise<void> => { await this.toggleVoiceInput(); },
+      (modelId: string): void => this.selectRemoteCreateModel(modelId),
       (): void => { this.submitRemoteCreateSession(); }
     ),
     new SidebarPresentationActions(
@@ -800,6 +802,9 @@ export class AppRootRuntime {
   }
 
   visibleChatInput(): string {
+    if (this.currentRoute() === AppRoute.RemoteCreate) {
+      return this.remoteCreateState.draft;
+    }
     return AppRootRouteState.chatInput(this.currentRoute(), this.generalChatPageState, this.remotePageState);
   }
 
@@ -808,10 +813,17 @@ export class AppRootRuntime {
   }
 
   visibleVoiceListening(): boolean {
+    if (this.currentRoute() === AppRoute.RemoteCreate) {
+      return this.remoteCreateState.isVoiceListening;
+    }
     return AppRootRouteState.voiceListening(this.currentRoute(), this.generalChatPageState, this.remotePageState);
   }
 
   setChatInputForRoute(route: AppRoute, value: string): void {
+    if (route === AppRoute.RemoteCreate) {
+      this.remoteCreateState.setDraft(value);
+      return;
+    }
     AppRootRouteState.setChatInput(route, value, this.generalChatPageState, this.remotePageState);
   }
 
@@ -832,6 +844,10 @@ export class AppRootRuntime {
   }
 
   setVoiceListeningForRoute(route: AppRoute, isVoiceListening: boolean): void {
+    if (route === AppRoute.RemoteCreate) {
+      this.remoteCreateState.isVoiceListening = isVoiceListening;
+      return;
+    }
     AppRootRouteState.setVoiceListening(
       route,
       isVoiceListening,
@@ -846,6 +862,15 @@ export class AppRootRuntime {
   }
 
   voiceInputSnapshot(route: AppRoute = this.currentRoute()): VoiceInputRouteSnapshot {
+    if (route === AppRoute.RemoteCreate) {
+      return {
+        routeId: `${route}`,
+        isListening: this.remoteCreateState.isVoiceListening,
+        isBusy: this.remoteCreateState.isSubmitting,
+        inputText: this.remoteCreateState.draft,
+        selectedImageCount: 0
+      };
+    }
     return AppRootRouteState.snapshot(
       route,
       this.visibleChatBusy(),
@@ -1815,7 +1840,7 @@ export class AppRootRuntime {
     }
     const deviceId = this.remotePageState.controlTargetDeviceId || this.remotePageState.desktopId;
     const deviceName = this.remotePageState.controlTargetDeviceName || this.remotePageState.desktopName;
-    this.remoteCreateState.prepare(deviceId, deviceName);
+    this.remoteCreateState.prepare(deviceId, deviceName, this.remotePageState.selectedModelId);
     if (deviceId.length > 0) {
       this.remoteCreateState.setDevices([{
         deviceId,
@@ -1826,10 +1851,12 @@ export class AppRootRuntime {
     this.remoteCreateState.setWorkspaces(this.remotePageState.recentWorkspaces);
     this.pushRoute(AppRoute.RemoteCreate);
     this.loadRemoteCreateChoices();
+    this.loadRemoteCreateModelCatalog();
   }
 
   closeRemoteCreateSession(): void {
     this.remoteCreateWorkspaceLoadVersion += 1;
+    this.stopVoiceInput(false);
     this.remoteCreateState.closeMenu();
     this.popRoute(AppRoute.RemoteHome);
   }
@@ -1839,6 +1866,23 @@ export class AppRootRuntime {
       this.loadRemoteCreateDevices(),
       this.loadRemoteCreateWorkspaces()
     ]);
+  }
+
+  async loadRemoteCreateModelCatalog(): Promise<void> {
+    if (this.remotePageState.modelCatalog.models.length > 0) {
+      return;
+    }
+    try {
+      const catalog = await this.sessionManager.getModelCatalog();
+      const selectedModelId = RemoteUiState.selectedModelIdForCatalog(
+        catalog,
+        this.remotePageState.selectedModelId
+      );
+      this.remotePageState.setModelCatalog(catalog, selectedModelId);
+      this.remoteCreateState.setSelectedModelId(selectedModelId);
+    } catch (_err) {
+      // Model selection remains hidden when the remote does not expose a catalog.
+    }
   }
 
   async loadRemoteCreateDevices(): Promise<void> {
@@ -1933,6 +1977,10 @@ export class AppRootRuntime {
     this.remoteCreateState.selectWorkspace(workspace);
   }
 
+  selectRemoteCreateModel(modelId: string): void {
+    this.remoteCreateState.setSelectedModelId(modelId);
+  }
+
   async submitRemoteCreateSession(): Promise<void> {
     const instruction = this.remoteCreateState.draft.trim();
     if (instruction.length === 0 || this.remoteCreateState.isSubmitting || !this.ensureRemoteAvailable()) {
@@ -1953,10 +2001,17 @@ export class AppRootRuntime {
           context.workspacePath,
           this.workspacePath,
           instruction,
-          context.agentType
+          context.agentType,
+          undefined,
+          this.remoteCreateState.selectedModelId
         );
       } else {
-        await this.remoteSessionViewModel.createSession(context.agentType, instruction);
+        await this.remoteSessionViewModel.createSession(
+          context.agentType,
+          instruction,
+          undefined,
+          this.remoteCreateState.selectedModelId
+        );
       }
       if (this.isRoute(AppRoute.RemoteCreate)) {
         this.remoteCreateState.errorText = this.statusText || RemoteI18n.t('remote.create.submitFailed');

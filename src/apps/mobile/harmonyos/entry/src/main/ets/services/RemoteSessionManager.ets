@@ -182,6 +182,10 @@ export class RemoteSessionManager implements RemoteChatCommandClient, RemoteFile
     const command = RemoteCommandFactory.createSession(options, workspacePath);
     const response = await this.send<CreateSessionResponse>(command);
     const sessionId = response.session_id || response.id || '';
+    const modelId = options.modelId?.trim() || '';
+    if (modelId.length > 0) {
+      await this.setSessionModel(sessionId, modelId);
+    }
     const normalizedAgentType = options.agentType.toLowerCase();
     const fallbackTitle = normalizedAgentType === 'claw' || normalizedAgentType === 'assistant' || normalizedAgentType === 'chat' ?
       'Assistant Session' : normalizedAgentType === 'cowork' ? 'Cowork Session' : 'Code Session';

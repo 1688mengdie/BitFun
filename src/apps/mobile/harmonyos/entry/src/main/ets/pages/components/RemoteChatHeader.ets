@@ -84,41 +84,41 @@ export struct RemoteChatHeader {
     } else if (this.showBackButton) {
       Stack({ alignContent: Alignment.Center }) {
         Image($r('app.media.remote_ref_back'))
-          .width(16)
-          .height(25)
+          .width(15)
+          .height(23)
           .objectFit(ImageFit.Contain)
           .renderMode(ImageRenderMode.Template)
           .foregroundColor(INK)
       }
-      .width(48)
-      .height(48)
+      .width(44)
+      .height(44)
       .backgroundColor(CARD)
       .border({ width: 1, color: LINE })
-      .borderRadius(24)
+      .borderRadius(22)
       .shadow({ radius: 10, color: LINE, offsetY: 3 })
       .accessibilityText(RemoteI18n.t('common.back'))
       .onClick(() => {
         this.onBack();
       })
     } else {
-      Blank().width(48).height(48)
+      Blank().width(44).height(44)
     }
   }
 
   @Builder
   private ActionsControl() {
     Stack({ alignContent: Alignment.Center }) {
-      Image($r('app.media.remote_ref_more'))
-        .width(25)
-        .height(8)
+        Image($r('app.media.remote_ref_more'))
+        .width(23)
+        .height(7)
         .objectFit(ImageFit.Contain)
         .renderMode(ImageRenderMode.Template)
         .foregroundColor(INK)
     }
-    .width(48)
-    .height(48)
+    .width(44)
+    .height(44)
     .backgroundColor(CARD)
-    .borderRadius(24)
+    .borderRadius(22)
     .border({ width: 1, color: LINE })
     .shadow({ radius: 10, color: LINE, offsetY: 3 })
     .accessibilityText(RemoteI18n.t('sidebar.more'))

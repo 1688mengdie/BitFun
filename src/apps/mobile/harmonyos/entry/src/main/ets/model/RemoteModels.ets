@@ -83,6 +83,7 @@ export interface CreateSessionOptions {
   agentType: string;
   title: string;
   instruction: string;
+  modelId?: string;
 }
 
 export type RemotePermissionMode = 'ask' | 'auto' | 'full_access';
