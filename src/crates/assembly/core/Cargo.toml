@@ -97,6 +97,7 @@ bitfun-product-domains = { path = "../../contracts/product-domains", default-fea
 
 # Tool runtime
 tool-runtime = { path = "../../execution/tool-execution", default-features = false, optional = true, features = [
+    "document-read",
     "web-readable",
 ] }
 
