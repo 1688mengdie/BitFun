@@ -10,7 +10,7 @@ Writes code, produces documents, and drives the desktop — with Mini Apps, a Ru
 
 [**⬇ Download for macOS · Windows · Linux**](https://github.com/GCWing/BitFun/releases/latest)
 
-[Website](https://openbitfun.com/) · [Docs](./docs) · [Discussions](https://github.com/GCWing/BitFun/discussions) · [Contributing](./CONTRIBUTING.md)
+[Website](https://openbitfun.com/) · [Quick start](#first-run) · [Security](./SECURITY.md) · [Discussions](https://github.com/GCWing/BitFun/discussions) · [Contributing](./CONTRIBUTING.md)
 
 [![GitHub release](https://img.shields.io/github/v/release/GCWing/BitFun?style=flat-square&color=blue)](https://github.com/GCWing/BitFun/releases)
 [![Downloads](https://img.shields.io/github/downloads/GCWing/BitFun/total?style=flat-square&color=brightgreen)](https://github.com/GCWing/BitFun/releases)
