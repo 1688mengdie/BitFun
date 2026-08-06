@@ -8,7 +8,7 @@
 
 能写代码、能做文档、能操控桌面，并提供小应用、Rust Runtime 和可自部署的多设备互控服务器。
 
-[**⬇ 下载 macOS · Windows · Linux 版**](https://github.com/GCWing/BitFun/releases/latest)
+[**⬇ 下载 macOS · Windows · Linux 版**](https://github.com/GCWing/BitFun/releases/latest) · [校验下载](./docs/verify-downloads.zh-CN.md)
 
 [官网](https://openbitfun.com/) · [文档](./docs) · [讨论区](https://github.com/GCWing/BitFun/discussions) · [参与贡献](./CONTRIBUTING_CN.md)
 
