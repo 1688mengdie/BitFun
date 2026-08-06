@@ -10,7 +10,7 @@
 
 [**⬇ 下载 macOS · Windows · Linux 版**](https://github.com/GCWing/BitFun/releases/latest)
 
-[官网](https://openbitfun.com/) · [文档](./docs) · [讨论区](https://github.com/GCWing/BitFun/discussions) · [参与贡献](./CONTRIBUTING_CN.md)
+[官网](https://openbitfun.com/) · [快速开始](#第一次运行) · [安全策略](./SECURITY_CN.md) · [讨论区](https://github.com/GCWing/BitFun/discussions) · [参与贡献](./CONTRIBUTING_CN.md)
 
 [![GitHub release](https://img.shields.io/github/v/release/GCWing/BitFun?style=flat-square&color=blue)](https://github.com/GCWing/BitFun/releases)
 [![Downloads](https://img.shields.io/github/downloads/GCWing/BitFun/total?style=flat-square&color=brightgreen)](https://github.com/GCWing/BitFun/releases)
