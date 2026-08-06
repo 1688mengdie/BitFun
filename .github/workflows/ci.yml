@@ -58,8 +58,8 @@ jobs:
           done < <(git ls-files -z '*.sh' '*.bash')
           exit "$rc"
 
-      - name: Verify release manifest and mirror contracts
-        run: node --test scripts/tauri-release-manifest.test.mjs scripts/linux-binaries-manifest.test.mjs
+      - name: Verify release and version-generation contracts
+        run: node --test scripts/tauri-release-manifest.test.mjs scripts/linux-binaries-manifest.test.mjs scripts/version-generation.test.mjs
 
       - name: Verify minisign download fallback
         run: |
