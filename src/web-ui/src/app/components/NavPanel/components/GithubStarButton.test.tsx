@@ -68,6 +68,7 @@ describe('GithubStarButton', () => {
 
     expect(starButton()).not.toBeNull();
     expect(container.textContent).toContain('Star');
+    expect(container.querySelector('[data-testid="nav-footer-github-star-dismiss"]')).toBeNull();
   });
 
   it('opens the repository in the system browser and retires itself', () => {
@@ -75,15 +76,6 @@ describe('GithubStarButton', () => {
     click('nav-footer-github-star-btn');
 
     expect(openExternal).toHaveBeenCalledWith(GITHUB_STAR_URL);
-    expect(starButton()).toBeNull();
-    expect(store.get(GITHUB_STAR_CTA_DISMISSED_KEY)).toBe('true');
-  });
-
-  it('retires itself on dismiss without opening the repository', () => {
-    render();
-    click('nav-footer-github-star-dismiss');
-
-    expect(openExternal).not.toHaveBeenCalled();
     expect(starButton()).toBeNull();
     expect(store.get(GITHUB_STAR_CTA_DISMISSED_KEY)).toBe('true');
   });
