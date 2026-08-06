@@ -1739,7 +1739,6 @@ $_section-header-height: 24px;
   display: flex;
   align-items: center;
   height: 28px;
-  padding-right: 2px;
   border: 1px solid var(--bf-appearance-token-border-subtle);
   border-radius: $size-radius-sm;
   flex-shrink: 1;
@@ -1791,42 +1790,6 @@ $_section-header-height: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-// Dismiss keeps its slot reserved so revealing it never shifts the footer row.
-.bitfun-nav-panel__footer-star-dismiss {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  padding: 0;
-  border: none;
-  border-radius: $size-radius-sm;
-  background: transparent;
-  color: var(--bf-appearance-token-color-text-muted);
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity $motion-fast $easing-standard,
-              color $motion-fast $easing-standard,
-              background $motion-fast $easing-standard;
-
-  &:hover {
-    color: var(--bf-appearance-token-color-text-primary);
-    background: var(--bf-appearance-token-element-bg-soft);
-  }
-
-  &:focus-visible {
-    opacity: 1;
-    outline: 2px solid var(--bf-appearance-token-color-accent-500);
-    outline-offset: -1px;
-  }
-}
-
-.bitfun-nav-panel__footer-star:hover .bitfun-nav-panel__footer-star-dismiss,
-.bitfun-nav-panel__footer-star:focus-within .bitfun-nav-panel__footer-star-dismiss {
-  opacity: 1;
 }
 
 // ──────────────────────────────────────────────

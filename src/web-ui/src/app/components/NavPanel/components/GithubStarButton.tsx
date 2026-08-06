@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { Star, X } from 'lucide-react';
+import { Star } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
@@ -13,8 +13,8 @@ import {
 const log = createLogger('GithubStarButton');
 
 /**
- * One-shot invitation to star the repo on GitHub. Both starring and the inline
- * dismiss retire the button for good, so it never becomes a standing nag.
+ * One-shot invitation to star the repo on GitHub. Clicking it retires the
+ * button for good, so it never becomes a standing nag.
  */
 const GithubStarButton: React.FC = () => {
   const { t } = useI18n('common');
@@ -50,20 +50,6 @@ const GithubStarButton: React.FC = () => {
             <Star size={14} fill="currentColor" className="bitfun-nav-panel__footer-btn-icon-swap-hover" />
           </span>
           <span className="bitfun-nav-panel__footer-star-label">{t('nav.githubStar.label')}</span>
-        </button>
-      </Tooltip>
-
-      <Tooltip content={t('nav.githubStar.dismiss')} placement="top">
-        <button
-          type="button"
-          className="bitfun-nav-panel__footer-star-dismiss"
-          aria-label={t('nav.githubStar.dismiss')}
-          onClick={retire}
-          data-testid="nav-footer-github-star-dismiss"
-          data-bf-component="nav-panel"
-          data-bf-part="footerButton"
-        >
-          <X size={11} aria-hidden="true" />
         </button>
       </Tooltip>
     </div>
