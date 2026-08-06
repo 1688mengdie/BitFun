@@ -110,8 +110,7 @@
     },
     "githubStar": {
       "label": "Star",
-      "tooltip": "在 GitHub 上為 BitFun 點個 Star",
-      "dismiss": "不再顯示"
+      "tooltip": "在 GitHub 上為 BitFun 點個 Star"
     },
     "displayModes": {
       "pro": "專業模式",
