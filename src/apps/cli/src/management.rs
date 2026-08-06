@@ -282,12 +282,7 @@ pub(crate) async fn add_mcp_server(input: McpAddInput) -> Result<()> {
             input.command.as_deref(),
             input.non_interactive,
         )?;
-        let parts: Vec<String> = raw.split_whitespace().map(str::to_string).collect();
-        if parts.is_empty() {
-            return Err(anyhow!("Command cannot be empty"));
-        }
-        let command_value = parts[0].clone();
-        let args_value = parts[1..].to_vec();
+        let (command_value, args_value) = parse_local_command(&raw)?;
         (Some(command_value), args_value, None)
     } else {
         let url_value = read_required_field(
@@ -325,6 +320,15 @@ pub(crate) async fn add_mcp_server(input: McpAddInput) -> Result<()> {
         .validate()
         .map_err(|error| anyhow!("Invalid MCP server config: {}", error))?;
 
+    if mcp_service
+        .config_service()
+        .get_server_config(&config.id)
+        .await?
+        .is_some()
+    {
+        return Err(anyhow!("MCP server already exists: {}", config.id));
+    }
+
     mcp_service
         .config_service()
         .save_server_config(&config)
@@ -341,8 +345,7 @@ pub(crate) async fn add_mcp_server(input: McpAddInput) -> Result<()> {
 
 /// Returns `true` for local, `false` for remote. Uses up/down arrow keys
 /// (also left/right, vim-style h/l and j/k) when no flag pre-fills the choice;
-/// falls back to the flag value or the default (`local`) in `--non-interactive`
-/// mode.
+/// requires an explicit flag value in `--non-interactive` mode.
 fn select_server_type(pre_filled: Option<&str>, non_interactive: bool) -> Result<bool> {
     if let Some(value) = pre_filled {
         let trimmed = value.trim();
@@ -353,7 +356,9 @@ fn select_server_type(pre_filled: Option<&str>, non_interactive: bool) -> Result
         };
     }
     if non_interactive {
-        return Ok(true);
+        return Err(anyhow!(
+            "Server type is required in non-interactive mode (pass `--type local` or `--type remote`)"
+        ));
     }
 
     use crossterm::event::{self, KeyCode, KeyEventKind};
@@ -399,6 +404,49 @@ fn select_server_type(pre_filled: Option<&str>, non_interactive: bool) -> Result
     println!();
     let _ = disable_raw_mode();
     Ok(is_local)
+}
+
+fn parse_local_command(value: &str) -> Result<(String, Vec<String>)> {
+    let parts = split_command_line(value)
+        .ok_or_else(|| anyhow!("Command contains an unclosed quote or invalid escaping"))?;
+    let mut parts = parts.into_iter();
+    let command = parts
+        .next()
+        .filter(|command| !command.is_empty())
+        .ok_or_else(|| anyhow!("Command cannot be empty"))?;
+    Ok((command, parts.collect()))
+}
+
+#[cfg(not(windows))]
+fn split_command_line(value: &str) -> Option<Vec<String>> {
+    shlex::split(value)
+}
+
+#[cfg(windows)]
+fn split_command_line(value: &str) -> Option<Vec<String>> {
+    let parts = winsplit::split(value);
+    if parts.is_empty() || has_unclosed_windows_quote(value) {
+        None
+    } else {
+        Some(parts)
+    }
+}
+
+#[cfg(windows)]
+fn has_unclosed_windows_quote(value: &str) -> bool {
+    let mut quoted = false;
+    let mut backslashes = 0usize;
+    for character in value.chars() {
+        match character {
+            '\\' => backslashes += 1,
+            '"' if backslashes % 2 == 0 => {
+                quoted = !quoted;
+                backslashes = 0;
+            }
+            _ => backslashes = 0,
+        }
+    }
+    quoted
 }
 
 fn render_type_prompt(stdout: &mut std::io::Stdout, is_local: bool) -> Result<()> {
@@ -1013,7 +1061,36 @@ pub(crate) async fn print_doctor(product_runtime: &ProductRuntimeParts) -> Resul
 
 #[cfg(test)]
 mod tests {
-    use super::validate_usage_session_id;
+    use super::{parse_local_command, select_server_type, validate_usage_session_id};
+
+    #[test]
+    fn local_command_parser_preserves_quoted_arguments() {
+        let (command, args) =
+            parse_local_command(r#"node "path with spaces/server.js" --flag "hello world""#)
+                .expect("parse quoted command");
+
+        assert_eq!(command, "node");
+        assert_eq!(
+            args,
+            ["path with spaces/server.js", "--flag", "hello world"]
+        );
+    }
+
+    #[test]
+    fn local_command_parser_rejects_unclosed_quotes() {
+        let error =
+            parse_local_command(r#"node "unterminated"#).expect_err("unclosed quotes must fail");
+
+        assert!(error.to_string().contains("unclosed quote"), "{error}");
+    }
+
+    #[test]
+    fn non_interactive_server_type_must_be_explicit() {
+        let error = select_server_type(None, true)
+            .expect_err("non-interactive add must require an explicit type");
+
+        assert!(error.to_string().contains("--type"), "{error}");
+    }
 
     #[test]
     fn usage_rejects_path_like_session_ids_before_runtime_initialization() {
