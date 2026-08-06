@@ -56,6 +56,7 @@ import {
 } from '../utils/sessionMetadata';
 import { sessionProjectWorkspacePath } from '../utils/sessionWorkspace';
 import type { SessionTitleDescriptor } from '../utils/sessionTitle';
+import { deriveContextUsageFromTurns } from '../utils/tokenUsageDisplay';
 import {
   deriveSessionTitleState,
   deriveSessionTitleStateFromMetadata,
@@ -104,6 +105,31 @@ function firstNonEmptyString(...values: unknown[]): string | undefined {
     }
   }
   return undefined;
+}
+
+function isAcpSessionForContextUsage(session: Session): boolean {
+  return Boolean(
+    session.mode?.startsWith('acp:')
+    || session.config.agentType?.startsWith('acp:'),
+  );
+}
+
+function deriveRestoredCurrentTokenUsage(value: unknown): TokenUsage | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const inputTokens = record.inputTokens;
+  if (typeof inputTokens !== 'number' || !Number.isFinite(inputTokens) || inputTokens <= 0) {
+    return undefined;
+  }
+  const totalTokens = record.totalTokens;
+  return {
+    inputTokens,
+    outputTokens: typeof record.outputTokens === 'number' ? record.outputTokens : undefined,
+    totalTokens: typeof totalTokens === 'number' && Number.isFinite(totalTokens) ? totalTokens : inputTokens,
+    timestamp: typeof record.timestamp === 'number' ? record.timestamp : Date.now(),
+  };
 }
 
 function persistedSessionRemoteScope(
@@ -6243,6 +6269,9 @@ export class FlowChatStore {
           remoteConnectionId,
           remoteSshHost,
         );
+        const restoredCurrentTokenUsage = deriveRestoredCurrentTokenUsage(
+          metadata.customMetadata?.lastRequestTokenUsage,
+        );
 
         this.setState(prev => {
           if (surfaceGeneration !== this.surfaceGeneration) {
@@ -6284,6 +6313,7 @@ export class FlowChatStore {
             historyState: 'metadata-only',
             todos: (metadata as any).todos || [],
             maxContextTokens,
+            currentTokenUsage: restoredCurrentTokenUsage,
             mode: validatedAgentType,
             lastUserDialogMode: metadata.lastUserDialogAgentType,
             lastSubmittedMode: metadata.lastSubmittedAgentType,
@@ -6621,6 +6651,9 @@ export class FlowChatStore {
             remoteConnectionId,
             remoteSshHost,
           );
+          const restoredCurrentTokenUsage = deriveRestoredCurrentTokenUsage(
+            metadata.customMetadata?.lastRequestTokenUsage,
+          );
 
           this.setState(prev => {
             if (prev.sessions.has(metadata.sessionId)) {
@@ -6659,6 +6692,7 @@ export class FlowChatStore {
               historyState: 'metadata-only',
               todos: (metadata as any).todos || [],
               maxContextTokens,
+              currentTokenUsage: restoredCurrentTokenUsage,
               mode: validatedAgentType,
               lastUserDialogMode: metadata.lastUserDialogAgentType,
               lastSubmittedMode: metadata.lastSubmittedAgentType,
@@ -6878,6 +6912,11 @@ export class FlowChatStore {
           restored.session.lastUserDialogAgentType || session.lastUserDialogMode,
         lastSubmittedMode:
           restored.session.lastSubmittedAgentType ?? session.lastSubmittedMode,
+        currentTokenUsage:
+          session.currentTokenUsage
+          ?? (!isAcpSessionForContextUsage(session)
+            ? deriveContextUsageFromTurns(mergedTurns)
+            : undefined),
       });
       applied = true;
 
@@ -7330,6 +7369,11 @@ export class FlowChatStore {
           lastUserDialogMode: restoredLastUserDialogMode,
           lastSubmittedMode:
             restoredSessionInfo?.lastSubmittedAgentType ?? session.lastSubmittedMode,
+          currentTokenUsage:
+            session.currentTokenUsage
+            ?? (!isAcpSessionForContextUsage(session)
+              ? deriveContextUsageFromTurns(dialogTurns)
+              : undefined),
         };
         
         const newSessions = new Map(prev.sessions);
