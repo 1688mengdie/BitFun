@@ -1945,6 +1945,14 @@ async fn init_agentic_system() -> anyhow::Result<(
     );
     event_router.subscribe_internal("token_usage".to_string(), token_usage_subscriber);
     event_router.subscribe_internal(
+        "session_context_usage".to_string(),
+        Arc::new(
+            bitfun_core::agentic::session::SessionContextUsageSubscriber::new(
+                session_manager.clone(),
+            ),
+        ),
+    );
+    event_router.subscribe_internal(
         "thread_goal_tokens".to_string(),
         Arc::new(bitfun_core::agentic::goal_mode::ThreadGoalTokenSubscriber),
     );

@@ -179,7 +179,10 @@ describe('deriveContextUsageFromTurns', () => {
       makeTurn({ id: 'turn-2', status: 'completed', tokenUsage: usage(2000) }),
     ];
 
-    expect(deriveContextUsageFromTurns(turns)).toEqual(usage(2000));
+    expect(deriveContextUsageFromTurns(turns)).toEqual({
+      ...usage(2000),
+      turnId: 'turn-2',
+    });
   });
 
   it('skips unfinished turns and falls back to the last completed turn', () => {
@@ -189,7 +192,10 @@ describe('deriveContextUsageFromTurns', () => {
       makeTurn({ id: 'turn-3', status: 'pending', tokenUsage: usage(300) }),
     ];
 
-    expect(deriveContextUsageFromTurns(turns)).toEqual(usage(1000));
+    expect(deriveContextUsageFromTurns(turns)).toEqual({
+      ...usage(1000),
+      turnId: 'turn-1',
+    });
   });
 
   it('skips turns without usage and returns the last completed one that has it', () => {
@@ -198,10 +204,13 @@ describe('deriveContextUsageFromTurns', () => {
       makeTurn({ id: 'turn-2', status: 'error', tokenUsage: usage(2500) }),
     ];
 
-    expect(deriveContextUsageFromTurns(turns)).toEqual(usage(2500));
+    expect(deriveContextUsageFromTurns(turns)).toEqual({
+      ...usage(2500),
+      turnId: 'turn-2',
+    });
   });
 
-  it('skips completed turns with zero or invalid input tokens', () => {
+  it('uses the latest valid terminal usage even when an older turn is invalid', () => {
     const turns = [
       makeTurn({
         id: 'turn-1',
@@ -215,10 +224,26 @@ describe('deriveContextUsageFromTurns', () => {
       }),
     ];
 
-    expect(deriveContextUsageFromTurns(turns)).toMatchObject({ inputTokens: 420 });
+    expect(deriveContextUsageFromTurns(turns)).toMatchObject({
+      inputTokens: 420,
+      turnId: 'turn-2',
+    });
   });
 
-  it('skips multi-round turns because accumulated usage would overestimate context', () => {
+  it('does not scan past the latest terminal turn when its usage is invalid', () => {
+    const turns = [
+      makeTurn({ id: 'turn-1', status: 'completed', tokenUsage: usage(1000) }),
+      makeTurn({
+        id: 'turn-2',
+        status: 'completed',
+        tokenUsage: { inputTokens: 0, totalTokens: 0, timestamp: 3000 },
+      }),
+    ];
+
+    expect(deriveContextUsageFromTurns(turns)).toBeUndefined();
+  });
+
+  it('does not scan past the latest terminal turn when its multi-round usage is accumulated', () => {
     const turns = [
       makeTurn({ id: 'turn-1', status: 'completed', tokenUsage: usage(1000) }),
       makeTurn({
@@ -229,7 +254,7 @@ describe('deriveContextUsageFromTurns', () => {
       }),
     ];
 
-    expect(deriveContextUsageFromTurns(turns)).toEqual(usage(1000));
+    expect(deriveContextUsageFromTurns(turns)).toBeUndefined();
   });
 
   it('returns undefined for empty input or when no completed single-round turn has usage', () => {
