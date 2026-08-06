@@ -4,9 +4,9 @@
 
 ![BitFun](./png/BitFun_title.png)
 
-### An open-source desktop AI agent that turns every task into an app you can open
+### A desktop AI agent that turns every task into an app you can open
 
-Writes code, produces documents, drives the desktop. The Mini Apps, the runtime, and the device-sync server are all yours. MIT.
+Writes code, produces documents, and drives the desktop — with Mini Apps, a Rust runtime, and a self-hostable device-sync server.
 
 [**⬇ Download for macOS · Windows · Linux**](https://github.com/GCWing/BitFun/releases/latest)
 
@@ -15,7 +15,7 @@ Writes code, produces documents, drives the desktop. The Mini Apps, the runtime,
 [![GitHub release](https://img.shields.io/github/v/release/GCWing/BitFun?style=flat-square&color=blue)](https://github.com/GCWing/BitFun/releases)
 [![Downloads](https://img.shields.io/github/downloads/GCWing/BitFun/total?style=flat-square&color=brightgreen)](https://github.com/GCWing/BitFun/releases)
 [![Stars](https://img.shields.io/github/stars/GCWing/BitFun?style=flat-square&color=yellow)](https://github.com/GCWing/BitFun/stargazers)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](https://github.com/GCWing/BitFun/blob/main/LICENSE)
+[![Core code: MIT](https://img.shields.io/badge/core_code-MIT-yellow?style=flat-square)](https://github.com/GCWing/BitFun/blob/main/LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue?style=flat-square)](https://github.com/GCWing/BitFun/releases)
 
 [![Trendshift](https://trendshift.io/api/badge/repositories/44672)](https://trendshift.io/repositories/44672)
@@ -40,7 +40,7 @@ Writes code, produces documents, drives the desktop. The Mini Apps, the runtime,
 | **Desktop execution** | Browser, terminal, desktop applications, the filesystem, and remote workspaces |
 | **Four tiers of customization** | Custom Agents → MCP / Skills / Hooks → Mini Apps → source-level changes |
 | **Performance** | 98.67% average KV cache hit rate; flashgrep searches Chromium-scale trees ~36x faster |
-| **Cross-platform and open** | Windows, macOS, and Linux. MIT. Model-agnostic — you choose what it runs on |
+| **Cross-platform and model-agnostic** | Windows, macOS, and Linux. You choose what it runs on |
 
 ---
 
@@ -49,6 +49,8 @@ Writes code, produces documents, drives the desktop. The Mini Apps, the runtime,
 **Agentic Mini Apps.** Most agents push every task through the same chat box. BitFun builds the task its own interface instead — a chart, a board, a form, a panel — and binds a conversation to that interface's live state. You ask about what is on screen rather than re-describing it. Community builds already range from market dashboards to domain-specific tools.
 
 ![Mini Apps gallery](./png/miniapps_gallery.png)
+
+[Browse the public Mini Apps gallery →](https://market.openbitfun.com/miniapp/)
 
 **Self-hosted multi-device control.** Account login, cross-device session and settings sync, and controlling one signed-in device from another all run through a relay *you* deploy. Nothing is brokered by a vendor's cloud — the distinction that decides whether this is allowed inside a company network at all. The relay is zero-knowledge: clients derive keys locally, and the server only ever holds Argon2id hashes and AES-GCM-wrapped material.
 
@@ -72,6 +74,13 @@ pnpm run desktop:dev
 ```
 
 Prerequisites: [Node.js](https://nodejs.org/) 22.12+ (LTS recommended), [pnpm](https://pnpm.io/) 10.15.0 via Corepack, the [Rust toolchain](https://rustup.rs/), and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). More detail in [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+### First run
+
+1. Launch BitFun, click **Open** on the Welcome tab, and choose a project folder.
+2. Open **More options (…) → Settings → Models → Create First Configuration**.
+3. Choose a provider, enter its API key, select one or more models, and click **Save**. BitFun makes the first saved model primary and tests the connection automatically.
+4. Return to the **Session** tab, type a concrete task, and press Enter or click **Send**.
 
 ---
 
@@ -99,7 +108,7 @@ The data below evaluates BitFun's core Agent capabilities, all measured with **D
 > [!NOTE]
 > These are BitFun's initial evaluation results, with each case run once. Benchmarks fluctuate with task sampling, model versions, runtime environment, and single-run variance, so treat these as an initial sanity signal that the Agent is already reasonably capable — not as a fixed ranking claim or a final ceiling. Full benchmark details will follow.
 
-**1. Completion results** — BitFun leads Open Code and Claude Code on both **SWE-Bench-Pro** (complex software engineering) and **SWE-Bench-Verified** (human-verified GitHub issue fixes).
+**1. Initial completion snapshot** — The chart below compares the current single-run results on **SWE-Bench-Pro** (complex software engineering) and **SWE-Bench-Verified** (human-verified GitHub issue fixes).
 
 ![Agent benchmark scores](./png/agent_benchmark_scores.svg)
 
