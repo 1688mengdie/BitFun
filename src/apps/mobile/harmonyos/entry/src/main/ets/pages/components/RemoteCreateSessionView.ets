@@ -4,7 +4,9 @@ import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { ACCENT, CARD, INK, LINE, MUTED, PAGE_BG, RED, SOFT, SUBTLE } from './Theme';
-import { ComposerPresentation } from './ComposerBar';
+import { ComposerBar, ComposerPresentation } from './ComposerBar';
+import { ConversationUiModelCatalog } from './ConversationUiModels';
+import { REMOTE_CREATE_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
 import { SidebarToggleButton } from './SidebarToggleButton';
 
 @ComponentV2
@@ -12,6 +14,13 @@ export struct RemoteCreateSessionView {
   @Param state: RemoteCreateSessionState = new RemoteCreateSessionState();
   @Param presentation: ComposerPresentation = ComposerPresentation.Create;
   @Param showSidebarRestoreButton: boolean = false;
+  @Param isVoiceListening: boolean = false;
+  @Param modelCatalog: ConversationUiModelCatalog = {
+    version: 0,
+    models: [],
+    default_models: {}
+  };
+  @Param selectedModelId: string = '';
   @Event onBack: () => void = () => {};
   @Event onRestoreSidebar: () => void = () => {};
   @Event onToggleDeviceMenu: () => void = () => {};
@@ -20,6 +29,8 @@ export struct RemoteCreateSessionView {
   @Event onSelectWorkspace: (workspace?: RecentWorkspaceEntry) => void = (_workspace?: RecentWorkspaceEntry) => {};
   @Event onDraftChange: (value: string) => void = (_value: string) => {};
   @Event onSend: () => void = () => {};
+  @Event onVoiceInput: () => void = () => {};
+  @Event onSelectModel: (modelId: string) => void = (_modelId: string) => {};
   @Local showSelectorSheet: boolean = false;
   private previousKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
 
@@ -35,19 +46,85 @@ export struct RemoteCreateSessionView {
 
   build() {
     Column() {
-      this.Header()
-      Blank()
-        .layoutWeight(1)
-        .onClick(() => {
-          this.state.closeMenu();
-          this.keepComposerFocused();
-        })
-      this.TaskComposer()
+      if (this.presentation === ComposerPresentation.Floating) {
+        this.Header()
+        Blank()
+          .layoutWeight(1)
+          .onClick(() => {
+            this.state.closeMenu();
+            this.keepComposerFocused();
+          })
+      } else {
+        this.CompactNavigationSpace()
+        this.ContextControls()
+        this.CompactComposerBar()
+      }
+      if (this.presentation === ComposerPresentation.Floating) {
+        this.TaskComposer()
+      }
     }
     .width('100%')
     .height('100%')
     .backgroundColor(PAGE_BG)
     .bindSheet($$this.showSelectorSheet, this.SelectorSheet(), this.selectorSheetOptions())
+  }
+
+  @Builder
+  CompactComposerBar() {
+    ComposerBar({
+      presentation: ComposerPresentation.Create,
+      capabilities: REMOTE_CREATE_COMPOSER_CAPABILITIES,
+      inputId: 'remote-create-composer',
+      chatInput: this.state.draft,
+      isBusy: this.state.isSubmitting,
+      connectionState: 'connected',
+      isVoiceListening: this.isVoiceListening,
+      modelCatalog: this.modelCatalog,
+      selectedModelId: this.selectedModelId,
+      onSend: () => this.onSend(),
+      onChatInputChange: (value: string) => this.onDraftChange(value),
+      onVoiceInput: () => this.onVoiceInput(),
+      onSelectModel: (modelId: string) => this.onSelectModel(modelId)
+    })
+  }
+
+  @Builder
+  CompactNavigationSpace() {
+    Column() {
+      Row() {
+        Button() {
+          Image($r('app.media.remote_ref_back'))
+            .width(15)
+            .height(23)
+            .objectFit(ImageFit.Contain)
+            .renderMode(ImageRenderMode.Template)
+            .foregroundColor(INK)
+        }
+        .width(44)
+        .height(44)
+        .padding(0)
+        .type(ButtonType.Circle)
+        .backgroundColor(CARD)
+        .border({ width: 1, color: LINE })
+        .borderRadius(22)
+        .shadow({ radius: 16, color: '#10000000', offsetY: 7 })
+        .accessibilityText(RemoteI18n.t('common.back'))
+        .onClick(() => this.onBack())
+      }
+      .width('100%')
+      .height(78)
+      .padding({ left: 18, top: 14 })
+      .alignItems(VerticalAlign.Top)
+      Column()
+        .width('100%')
+        .layoutWeight(1)
+        .onClick(() => {
+          this.state.closeMenu();
+          this.keepComposerFocused();
+        })
+    }
+    .width('100%')
+    .layoutWeight(1)
   }
 
   @Builder
@@ -93,11 +170,13 @@ export struct RemoteCreateSessionView {
   @Builder
   ContextControls() {
     Column({ space: 2 }) {
-      this.ContextRow(
-        'device',
-        this.state.isLoadingDevices,
-        () => this.onToggleDeviceMenu()
-      )
+      if (this.presentation === ComposerPresentation.Floating) {
+        this.ContextRow(
+          'device',
+          this.state.isLoadingDevices,
+          () => this.onToggleDeviceMenu()
+        )
+      }
       this.ContextRow(
         'workspace',
         this.state.isLoadingWorkspaces,
@@ -105,7 +184,12 @@ export struct RemoteCreateSessionView {
       )
     }
     .width('100%')
-    .padding({ left: 10, right: 10, top: 8, bottom: 4 })
+    .padding({
+      left: this.presentation === ComposerPresentation.Floating ? 10 : 28,
+      right: this.presentation === ComposerPresentation.Floating ? 10 : 28,
+      top: this.presentation === ComposerPresentation.Floating ? 8 : 0,
+      bottom: 4
+    })
   }
 
   @Builder
@@ -122,7 +206,8 @@ export struct RemoteCreateSessionView {
         .fontColor(loading ? MUTED : INK)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-      SymbolGlyph($r('sys.symbol.chevron_down'))
+      SymbolGlyph(this.state.openMenu === (kind === 'device' ? 'devices' : 'workspaces') ?
+        $r('sys.symbol.chevron_up') : $r('sys.symbol.chevron_down'))
         .fontSize(13)
         .fontColor([MUTED])
         .width(22)
@@ -135,8 +220,7 @@ export struct RemoteCreateSessionView {
     .height(48)
     .padding({ left: 8, right: 10 })
     .borderRadius(12)
-    .bindPopup(this.presentation === ComposerPresentation.Floating &&
-      this.state.openMenu === (kind === 'device' ? 'devices' : 'workspaces'), {
+    .bindPopup(this.state.openMenu === (kind === 'device' ? 'devices' : 'workspaces'), {
       builder: () => {
         if (kind === 'device') {
           this.DeviceMenu(false)
@@ -158,11 +242,7 @@ export struct RemoteCreateSessionView {
     })
     .onClick(() => {
       onClick();
-      if (this.presentation === ComposerPresentation.Floating) {
-        this.keepComposerFocused();
-      } else {
-        this.showSelectorSheet = this.state.openMenu !== 'none';
-      }
+      this.keepComposerFocused();
     })
   }
 
@@ -193,7 +273,7 @@ export struct RemoteCreateSessionView {
         }, (device: CloudAccountDevice) => device.deviceId)
       }
     }
-    .width(asSheet ? '100%' : 360)
+    .width(asSheet ? '100%' : (this.presentation === ComposerPresentation.Floating ? 360 : 340))
     .padding({ top: 8, bottom: 8 })
     .backgroundColor(CARD)
     .borderRadius(asSheet ? 0 : 16)
@@ -260,11 +340,13 @@ export struct RemoteCreateSessionView {
           }
         }
         .width('100%')
-        .constraintSize({ maxHeight: 190 })
+        .constraintSize({
+          maxHeight: this.presentation === ComposerPresentation.Floating ? 190 : 92
+        })
         .scrollBar(BarState.Off)
       }
     }
-    .width(asSheet ? '100%' : 360)
+    .width(asSheet ? '100%' : (this.presentation === ComposerPresentation.Floating ? 360 : 340))
     .padding({ top: 8, bottom: 8 })
     .backgroundColor(CARD)
     .borderRadius(asSheet ? 0 : 16)
@@ -336,13 +418,17 @@ export struct RemoteCreateSessionView {
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(INK)
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(16)
-          .fontColor([MUTED])
-          .width(44)
-          .height(44)
-          .accessibilityText(RemoteI18n.t('common.close'))
-          .onClick(() => this.closeSelectorSheet())
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(16)
+            .fontColor([MUTED])
+            .width(20)
+            .height(20)
+        }
+        .width(44)
+        .height(44)
+        .accessibilityText(RemoteI18n.t('common.close'))
+        .onClick(() => this.closeSelectorSheet())
       }
       .width('100%')
       .height(52)
@@ -362,10 +448,12 @@ export struct RemoteCreateSessionView {
   @Builder
   TaskComposer() {
     Column({ space: 6 }) {
-      this.ContextControls()
-      Divider()
-        .color(LINE)
-        .margin({ left: 18, right: 18 })
+      if (this.presentation === ComposerPresentation.Floating) {
+        this.ContextControls()
+        Divider()
+          .color(LINE)
+          .margin({ left: 18, right: 18 })
+      }
       if (this.state.errorText.length > 0) {
         Text(this.state.errorText)
           .width('100%')
@@ -407,25 +495,44 @@ export struct RemoteCreateSessionView {
         .onClick(() => this.onSend())
       }
       .width('100%')
-      .height(72)
+      .height(this.presentation === ComposerPresentation.Floating ? 72 : 66)
       .padding({ left: 12, right: 7, top: 5, bottom: 5 })
+      .backgroundColor(this.presentation === ComposerPresentation.Floating ? '#00000000' : CARD)
+      .borderRadius(this.presentation === ComposerPresentation.Floating ? 0 : 25)
+      .border({
+        width: this.presentation === ComposerPresentation.Floating ? 0 : 1,
+        color: this.presentation === ComposerPresentation.Floating ? '#00000000' : SOFT
+      })
+      .shadow({
+        radius: this.presentation === ComposerPresentation.Floating ? 0 : 22,
+        color: this.presentation === ComposerPresentation.Floating ? '#00000000' : '#18000000',
+        offsetY: this.presentation === ComposerPresentation.Floating ? 0 : 7
+      })
     }
     .width('100%')
     .constraintSize({ maxWidth: this.presentation === ComposerPresentation.Floating ? 760 : 10000 })
     .alignSelf(ItemAlign.Center)
-    .padding({ top: 4, bottom: 4 })
-    .backgroundColor(CARD)
-    .borderRadius(18)
-    .border({ width: 1, color: SOFT })
+    .padding({
+      left: this.presentation === ComposerPresentation.Floating ? 0 : 16,
+      right: this.presentation === ComposerPresentation.Floating ? 0 : 16,
+      top: this.presentation === ComposerPresentation.Floating ? 4 : 0,
+      bottom: this.presentation === ComposerPresentation.Floating ? 4 : 14
+    })
+    .backgroundColor(this.presentation === ComposerPresentation.Floating ? CARD : '#00000000')
+    .borderRadius(this.presentation === ComposerPresentation.Floating ? 18 : 0)
+    .border({
+      width: this.presentation === ComposerPresentation.Floating ? 1 : 0,
+      color: this.presentation === ComposerPresentation.Floating ? SOFT : '#00000000'
+    })
     .shadow({
-      radius: this.presentation === ComposerPresentation.Floating ? 20 : 12,
-      color: this.presentation === ComposerPresentation.Floating ? '#18000000' : '#0D000000',
-      offsetY: this.presentation === ComposerPresentation.Floating ? 6 : 2
+      radius: this.presentation === ComposerPresentation.Floating ? 20 : 0,
+      color: this.presentation === ComposerPresentation.Floating ? '#18000000' : '#00000000',
+      offsetY: this.presentation === ComposerPresentation.Floating ? 6 : 0
     })
     .margin({
-      left: this.presentation === ComposerPresentation.Floating ? 24 : 16,
-      right: this.presentation === ComposerPresentation.Floating ? 24 : 16,
-      bottom: this.presentation === ComposerPresentation.Floating ? 24 : 14
+      left: this.presentation === ComposerPresentation.Floating ? 24 : 0,
+      right: this.presentation === ComposerPresentation.Floating ? 24 : 0,
+      bottom: this.presentation === ComposerPresentation.Floating ? 24 : 0
     })
   }
 

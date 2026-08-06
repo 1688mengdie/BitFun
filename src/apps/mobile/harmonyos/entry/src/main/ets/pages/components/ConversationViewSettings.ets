@@ -116,13 +116,17 @@ export struct ConversationViewSettings {
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(17)
-          .fontColor([MUTED])
-          .width(44)
-          .height(44)
-          .accessibilityText(RemoteI18n.t('common.close'))
-          .onClick(() => this.onClose())
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph($r('sys.symbol.xmark'))
+            .fontSize(17)
+            .fontColor([MUTED])
+            .width(20)
+            .height(20)
+        }
+        .width(44)
+        .height(44)
+        .accessibilityText(RemoteI18n.t('common.close'))
+        .onClick(() => this.onClose())
       }
       .width('100%')
       .height(64)

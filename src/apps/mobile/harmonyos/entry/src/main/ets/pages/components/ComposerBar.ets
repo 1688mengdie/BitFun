@@ -24,6 +24,7 @@ const COMPOSER_EXPANDED_INPUT_HEIGHT: number = 74;
 export struct ComposerBar {
   @Param presentation: ComposerPresentation = ComposerPresentation.Compact;
   @Param capabilities: ChatComposerCapabilities = REMOTE_CHAT_COMPOSER_CAPABILITIES;
+  @Param inputId: string = 'conversation-composer-input';
   @Param chatInput: string = '';
   @Local inputText: string = '';
   @Local inputFocused: boolean = false;
@@ -212,15 +213,19 @@ export struct ComposerBar {
             .fontWeight(FontWeight.Medium)
             .fontColor(MUTED)
           Blank()
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(15)
-            .fontColor([MUTED])
-            .width(32)
-            .height(32)
-            .accessibilityText(RemoteI18n.t('common.close'))
-            .onClick(() => {
-              this.closeModelSelector();
-            })
+          Stack({ alignContent: Alignment.Center }) {
+            SymbolGlyph($r('sys.symbol.xmark'))
+              .fontSize(15)
+              .fontColor([MUTED])
+              .width(18)
+              .height(18)
+          }
+          .width(32)
+          .height(32)
+          .accessibilityText(RemoteI18n.t('common.close'))
+          .onClick(() => {
+            this.closeModelSelector();
+          })
         }
         .width('100%')
       }
@@ -312,7 +317,7 @@ export struct ComposerBar {
         this.ListeningWave()
       }
       TextArea({ placeholder: this.inputPlaceholder(), text: this.inputText })
-        .id('conversation-composer-input')
+        .id(this.inputId)
         .layoutWeight(1)
         .height(this.isComposerExpanded() ? COMPOSER_EXPANDED_INPUT_HEIGHT : COMPOSER_INPUT_HEIGHT)
         .fontSize(16)
@@ -369,8 +374,14 @@ export struct ComposerBar {
             .fontWeight(FontWeight.Medium)
             .fontColor([INK])
             .opacity(this.canSend() ? 1 : 0.38)
-        } else {
+        } else if (this.capabilities.showVoiceInput) {
           this.MicrophoneGlyph()
+        } else {
+          SymbolGlyph($r('sys.symbol.arrow_up'))
+            .fontSize(23)
+            .fontWeight(FontWeight.Medium)
+            .fontColor([INK])
+            .opacity(0.38)
         }
       }
       .width(40)
@@ -498,7 +509,8 @@ export struct ComposerBar {
   }
 
   private canUseVoice(): boolean {
-    return ChatComposerPolicy.canUseVoice(this.inputText, this.selectedImages.length, this.isBusy);
+    return this.capabilities.showVoiceInput &&
+      ChatComposerPolicy.canUseVoice(this.inputText, this.selectedImages.length, this.isBusy);
   }
 
   private hasComposedContent(): boolean {
@@ -506,7 +518,8 @@ export struct ComposerBar {
   }
 
   private shouldShowAddButton(): boolean {
-    return this.capabilities.supportsAttachments || this.capabilities.surface === ChatSurface.General;
+    return this.capabilities.showAddButton &&
+      (this.capabilities.supportsAttachments || this.capabilities.surface === ChatSurface.General);
   }
 
   private isComposerExpanded(): boolean {

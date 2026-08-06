@@ -155,8 +155,8 @@ export struct RemoteHomeView {
           Column() {
             this.RemoteActionsLayer()
           }
-            .width(330)
-            .height(292)
+            .width(280)
+            .height(252)
             .margin({ top: 4, right: 4 })
             .transition(TransitionEffect.translate({ x: 18, y: -12 })
               .combine(TransitionEffect.opacity(0))
