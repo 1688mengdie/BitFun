@@ -899,8 +899,8 @@
     "unknownTool": "未知工具"
   },
   "transcriptExport": {
-    "copyFull": "拷贝完整过程",
-    "copyResult": "拷贝结果",
+    "copyFull": "复制完整过程",
+    "copyResult": "复制结果",
     "copyEmpty": "该对话没有可复制的内容",
     "exportEmpty": "该会话没有可导出的内容",
     "exportSuccess": "会话已导出：{{filePath}}",

@@ -727,7 +727,7 @@
     "openBot": "開啟機器人",
     "stateIdle": "就緒",
     "stateWaiting": "等待連接...",
-    "urlCopied": "已拷貝 URL",
+    "urlCopied": "已複製 URL",
     "copyUrl": "複製配對連結",
     "copyUrlFailed": "無法複製配對連結，請手動複製或檢查剪貼簿權限。",
     "weixinQrAlt": "微信登入二維碼",
