@@ -899,8 +899,8 @@
     "unknownTool": "未知工具"
   },
   "transcriptExport": {
-    "copyFull": "拷貝完整過程",
-    "copyResult": "拷貝結果",
+    "copyFull": "複製完整過程",
+    "copyResult": "複製結果",
     "copyEmpty": "該對話沒有可複製的內容",
     "exportEmpty": "該工作階段沒有可匯出的內容",
     "exportSuccess": "工作階段已匯出：{{filePath}}",
