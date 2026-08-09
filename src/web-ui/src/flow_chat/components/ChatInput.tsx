@@ -577,6 +577,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const { entries: acpPlanEntries } = useAcpPlan(acpSessionForInput?.sessionId ?? null);
   const threadGoalController = useThreadGoalController(effectiveTargetSession, {
     isBtwSession,
+    disabled: !caps.threadGoal,
   });
   const currentSessionTitle = currentSession?.title?.trim() || t('session.untitled');
   const activeBtwSession = activeBtwSessionId
