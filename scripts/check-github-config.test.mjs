@@ -275,3 +275,21 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     'cargo test --locked -p tool-runtime --lib search::',
   );
 });
+
+test('passes the verification key when signing the versioned Windows installer', () => {
+  const workflow = yaml.parse(
+    readFileSync(
+      path.join(repoRoot, '.github/workflows/desktop-package.yml'),
+      'utf8',
+    ),
+  );
+  const signingStep = workflow.jobs['upload-release-assets'].steps.find(
+    (step) => step.name === 'Sign versioned Windows installer',
+  );
+
+  assert.equal(
+    signingStep?.env?.BITFUN_SIGNING_PUBKEY,
+    '${{ secrets.TAURI_UPDATER_PUBKEY }}',
+    'release signatures must be self-verified with the configured public key',
+  );
+});
