@@ -275,3 +275,28 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     'cargo test --locked -p tool-runtime --lib search::',
   );
 });
+
+test('generates web API bindings before nightly web type-check', () => {
+  const workflow = yaml.parse(
+    readFileSync(path.join(repoRoot, '.github/workflows/nightly.yml'), 'utf8'),
+  );
+  const packageJob = workflow.jobs.package;
+  const steps = packageJob.steps;
+  const generationIndex = steps.findIndex(
+    (step) => step.name === 'Generate web API bindings',
+  );
+  const typeCheckIndex = steps.findIndex(
+    (step) => step.name === 'Type-check web UI',
+  );
+
+  assert.notEqual(generationIndex, -1);
+  assert.notEqual(typeCheckIndex, -1);
+  assert.equal(
+    steps[generationIndex].run,
+    'pnpm --dir src/web-ui run gen:types',
+  );
+  assert.ok(
+    generationIndex < typeCheckIndex,
+    'nightly must generate web API bindings before type-checking the web UI',
+  );
+});
