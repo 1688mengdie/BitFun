@@ -300,3 +300,21 @@ test('generates web API bindings before nightly web type-check', () => {
     'nightly must generate web API bindings before type-checking the web UI',
   );
 });
+
+test('passes the verification key when signing the versioned Windows installer', () => {
+  const workflow = yaml.parse(
+    readFileSync(
+      path.join(repoRoot, '.github/workflows/desktop-package.yml'),
+      'utf8',
+    ),
+  );
+  const signingStep = workflow.jobs['upload-release-assets'].steps.find(
+    (step) => step.name === 'Sign versioned Windows installer',
+  );
+
+  assert.equal(
+    signingStep?.env?.BITFUN_SIGNING_PUBKEY,
+    '${{ secrets.TAURI_UPDATER_PUBKEY }}',
+    'release signatures must be self-verified with the configured public key',
+  );
+});
