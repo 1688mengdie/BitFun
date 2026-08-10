@@ -265,8 +265,12 @@ const REQWEST_PACKAGE_PROFILES = new Map([
     optional: true,
     servicesOwners: true,
   }],
+  ['bitfun-ai-adapters', {
+    dependencyFeatures: [...REQWEST_TRANSPORT_FEATURES, 'rustls', 'socks'],
+    optional: false,
+    allowedPackageFeatureRefs: new Set(['reqwest/rustls']),
+  }],
   ...[
-    'bitfun-ai-adapters',
     'bitfun-cli',
     'bitfun-desktop',
     'bitfun-miniapp-market-service',
