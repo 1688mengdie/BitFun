@@ -118,4 +118,16 @@ mod tests {
 
         assert!(build_proxy(&config).is_ok());
     }
+
+    #[test]
+    fn accepts_explicit_socks5_proxy_configuration() {
+        let config = ProxyConfig {
+            enabled: true,
+            url: "socks5://127.0.0.1:1080".to_string(),
+            username: None,
+            password: None,
+        };
+
+        assert!(build_proxy(&config).is_ok());
+    }
 }

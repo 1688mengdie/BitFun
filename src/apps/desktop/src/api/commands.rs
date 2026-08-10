@@ -5274,10 +5274,14 @@ pub async fn start_subscription_login(
     request: SubscriptionLoginRequest,
 ) -> Result<bitfun_core::infrastructure::subscription_auth::LoginStartResult, String> {
     let proxy_config = configured_ai_proxy(&state).await?;
-    bitfun_core::infrastructure::subscription_auth::start_login_with_proxy(
+    let options = bitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        proxy_config,
+        false,
+    );
+    bitfun_core::infrastructure::subscription_auth::start_login_with_options(
         request.provider,
         request.session_id,
-        proxy_config,
+        options,
     )
     .await
     .map_err(|e| format!("Failed to start subscription login: {e:#}"))
@@ -5320,9 +5324,13 @@ pub async fn refresh_subscription_account(
     request: SubscriptionProviderRequest,
 ) -> Result<bitfun_core::infrastructure::subscription_auth::SubscriptionAccount, String> {
     let proxy_config = configured_ai_proxy(&state).await?;
-    bitfun_core::infrastructure::subscription_auth::refresh_account_with_proxy(
+    let options = bitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        proxy_config,
+        false,
+    );
+    bitfun_core::infrastructure::subscription_auth::refresh_account_with_options(
         request.provider,
-        proxy_config.as_ref(),
+        &options,
     )
     .await
     .map_err(|e| format!("Failed to refresh subscription account: {e:#}"))
