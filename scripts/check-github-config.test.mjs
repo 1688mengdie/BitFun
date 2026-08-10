@@ -318,3 +318,31 @@ test('passes the verification key when signing the versioned Windows installer',
     'release signatures must be self-verified with the configured public key',
   );
 });
+
+test('stages unique release asset names before publishing', () => {
+  const workflow = yaml.parse(
+    readFileSync(
+      path.join(repoRoot, '.github/workflows/desktop-package.yml'),
+      'utf8',
+    ),
+  );
+  const steps = workflow.jobs['upload-release-assets'].steps;
+  const stagingIndex = steps.findIndex(
+    (step) => step.name === 'Stage uniquely named release assets',
+  );
+  const uploadIndex = steps.findIndex((step) => step.name === 'Upload to release');
+
+  assert.notEqual(stagingIndex, -1);
+  assert.notEqual(uploadIndex, -1);
+  assert.ok(stagingIndex < uploadIndex);
+  assert.match(
+    steps[stagingIndex].run,
+    /node scripts\/stage-github-release-assets\.mjs/,
+  );
+  assert.doesNotMatch(
+    steps[stagingIndex].run,
+    /release-assets\/\*\*\/\*\.sig(?:\s|\\)/,
+    'raw updater signatures have colliding names across macOS architectures',
+  );
+  assert.equal(steps[uploadIndex].with.files, 'release-upload-assets/*');
+});
