@@ -1156,9 +1156,14 @@ pub async fn initialize_ai(state: State<'_, AppState>) -> Result<String, String>
 
     let ai_config = bitfun_core::util::types::AIConfig::try_from(model_config.clone())
         .map_err(|e| format!("Failed to convert AI configuration: {}", e))?;
+    let proxy_config = if global_config.ai.proxy.enabled {
+        Some(global_config.ai.proxy.clone())
+    } else {
+        None
+    };
     let ai_client = bitfun_core::infrastructure::ai::AIClient::new_with_runtime_options(
         ai_config,
-        None,
+        proxy_config,
         stream_options,
     );
 
@@ -1193,16 +1198,26 @@ async fn create_transient_ai_client_for_config(
     let mut ai_config: bitfun_core::util::types::AIConfig = model_config
         .try_into()
         .map_err(|e| format!("Failed to convert configuration: {}", e))?;
-
-    bitfun_core::infrastructure::ai::client_factory::apply_subscription_auth(&auth, &mut ai_config)
-        .await
-        .map_err(|e| format!("Failed to resolve subscription auth: {}", e))?;
+    let skip_ssl_verify = ai_config.skip_ssl_verify;
 
     let proxy_config = if global_config.ai.proxy.enabled {
         Some(global_config.ai.proxy.clone())
     } else {
         None
     };
+    let subscription_options =
+        bitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+            proxy_config.clone(),
+            skip_ssl_verify,
+        );
+
+    bitfun_core::infrastructure::ai::client_factory::apply_subscription_auth_with_options(
+        &auth,
+        &mut ai_config,
+        &subscription_options,
+    )
+    .await
+    .map_err(|e| format!("Failed to resolve subscription auth: {}", e))?;
 
     Ok(
         bitfun_core::infrastructure::ai::AIClient::new_with_runtime_options(
@@ -5231,6 +5246,22 @@ pub struct SubscriptionLoginRequest {
     pub session_id: String,
 }
 
+async fn configured_ai_proxy(
+    state: &State<'_, AppState>,
+) -> Result<Option<bitfun_core::service::config::types::ProxyConfig>, String> {
+    let global_config: bitfun_core::service::config::GlobalConfig = state
+        .config_service
+        .get_config(None)
+        .await
+        .map_err(|e| format!("Failed to get configuration: {}", e))?;
+
+    Ok(global_config
+        .ai
+        .proxy
+        .enabled
+        .then_some(global_config.ai.proxy))
+}
+
 #[tauri::command]
 pub async fn list_subscription_accounts(
 ) -> Result<Vec<bitfun_core::infrastructure::subscription_auth::SubscriptionAccount>, String> {
@@ -5239,11 +5270,14 @@ pub async fn list_subscription_accounts(
 
 #[tauri::command]
 pub async fn start_subscription_login(
+    state: State<'_, AppState>,
     request: SubscriptionLoginRequest,
 ) -> Result<bitfun_core::infrastructure::subscription_auth::LoginStartResult, String> {
-    bitfun_core::infrastructure::subscription_auth::start_login(
+    let proxy_config = configured_ai_proxy(&state).await?;
+    bitfun_core::infrastructure::subscription_auth::start_login_with_proxy(
         request.provider,
         request.session_id,
+        proxy_config,
     )
     .await
     .map_err(|e| format!("Failed to start subscription login: {e:#}"))
@@ -5282,9 +5316,14 @@ pub async fn logout_subscription_account(
 
 #[tauri::command]
 pub async fn refresh_subscription_account(
+    state: State<'_, AppState>,
     request: SubscriptionProviderRequest,
 ) -> Result<bitfun_core::infrastructure::subscription_auth::SubscriptionAccount, String> {
-    bitfun_core::infrastructure::subscription_auth::refresh_account(request.provider)
-        .await
-        .map_err(|e| format!("Failed to refresh subscription account: {e:#}"))
+    let proxy_config = configured_ai_proxy(&state).await?;
+    bitfun_core::infrastructure::subscription_auth::refresh_account_with_proxy(
+        request.provider,
+        proxy_config.as_ref(),
+    )
+    .await
+    .map_err(|e| format!("Failed to refresh subscription account: {e:#}"))
 }
