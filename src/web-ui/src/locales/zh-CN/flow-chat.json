@@ -413,6 +413,7 @@
       "interrupted": "已中断"
     },
     "menu": {
+      "switchPet": "切换宠物",
       "closePet": "关闭宠物",
       "closeBubble": "关闭该气泡"
     },
