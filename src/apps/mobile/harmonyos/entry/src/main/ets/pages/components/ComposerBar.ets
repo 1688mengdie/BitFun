@@ -1,5 +1,5 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { ChatComposerPolicy } from '../../services/ChatComposerPolicy';
+import { ChatComposerPolicy, ComposerPrimaryAction } from '../../services/ChatComposerPolicy';
 import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
 import { ChatSurface } from './ChatSurface';
 import {
@@ -362,26 +362,21 @@ export struct ComposerBar {
   PrimaryActionButton() {
     Button() {
       Stack({ alignContent: Alignment.Center }) {
-        if (this.isVoiceListening || this.canStop) {
+        if (this.primaryAction() === ComposerPrimaryAction.Stop) {
           Text('')
             .width(13)
             .height(13)
             .backgroundColor(CARD)
             .borderRadius(3)
-        } else if (this.hasComposedContent()) {
-          SymbolGlyph($r('sys.symbol.arrow_up'))
-            .fontSize(23)
-            .fontWeight(FontWeight.Medium)
-            .fontColor([INK])
-            .opacity(this.canSend() ? 1 : 0.38)
-        } else if (this.capabilities.showVoiceInput) {
+        } else if (this.primaryAction() === ComposerPrimaryAction.Voice ||
+          this.primaryAction() === ComposerPrimaryAction.VoiceBlocked) {
           this.MicrophoneGlyph()
         } else {
           SymbolGlyph($r('sys.symbol.arrow_up'))
             .fontSize(23)
             .fontWeight(FontWeight.Medium)
             .fontColor([INK])
-            .opacity(0.38)
+            .opacity(this.primaryAction() === ComposerPrimaryAction.Send ? 1 : 0.38)
         }
       }
       .width(40)
@@ -513,8 +508,18 @@ export struct ComposerBar {
       ChatComposerPolicy.canUseVoice(this.inputText, this.selectedImages.length, this.isBusy);
   }
 
-  private hasComposedContent(): boolean {
-    return this.inputText.trim().length > 0 || this.selectedImages.length > 0;
+  // Dictation runs inside this app rather than in a system dialog, so listening
+  // outranks the draft here the same way a running turn does on both clients.
+  private primaryAction(): ComposerPrimaryAction {
+    return ChatComposerPolicy.primaryAction(
+      this.inputText,
+      this.selectedImages.length,
+      this.isBusy,
+      this.isVoiceListening || this.canStop,
+      this.capabilities.requiresRemoteConnection,
+      this.connectionState,
+      this.capabilities.showVoiceInput
+    );
   }
 
   private shouldShowAddButton(): boolean {
@@ -523,8 +528,12 @@ export struct ComposerBar {
   }
 
   private isComposerExpanded(): boolean {
-    return this.inputFocused || this.showQuickActions || this.showModelSelectorSheet ||
-      this.showModelSelectorPopover || this.inputText.indexOf('\n') >= 0;
+    return ChatComposerPolicy.isExpanded(
+      this.inputText,
+      this.inputFocused,
+      this.showQuickActions,
+      this.isModelSelectorExpanded()
+    );
   }
 
   private isModelSelectorExpanded(): boolean {
