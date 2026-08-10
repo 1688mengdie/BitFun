@@ -251,6 +251,15 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
     assert.equal(cache?.with?.['cache-on-failure'], trustedMain);
   }
 
+  const rustCache = rustJob.steps.find((step) =>
+    step.uses?.startsWith('swatinem/rust-cache@'),
+  );
+  assert.equal(
+    rustCache?.with?.['cache-directories'],
+    'target/sherpa-onnx-prebuilt\n',
+    'Rust CI must restore sherpa native libraries with the Cargo fingerprints that reference them',
+  );
+
   const commandByStep = new Map(
     rustJob.steps.map((step) => [step.name, step.run]),
   );
