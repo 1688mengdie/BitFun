@@ -46,8 +46,8 @@ pub enum SubscriptionProvider {
 /// future while token refresh and credential resolution only borrow them.
 #[derive(Debug, Clone, Default)]
 pub struct SubscriptionHttpOptions {
-    pub proxy_config: Option<ProxyConfig>,
-    pub skip_ssl_verify: bool,
+    proxy_config: Option<ProxyConfig>,
+    skip_ssl_verify: bool,
 }
 
 impl SubscriptionHttpOptions {
@@ -490,37 +490,6 @@ pub async fn start_login(
     start_login_with_options(provider, session_id, SubscriptionHttpOptions::default()).await
 }
 
-/// Starts a subscription login while applying the host's explicit AI proxy to
-/// provider-side token exchange requests.
-pub async fn start_login_with_proxy(
-    provider: SubscriptionProvider,
-    session_id: String,
-    proxy_config: Option<ProxyConfig>,
-) -> Result<LoginStartResult> {
-    start_login_with_options(
-        provider,
-        session_id,
-        SubscriptionHttpOptions::new(proxy_config, false),
-    )
-    .await
-}
-
-/// Starts a subscription login while applying the host's explicit AI proxy
-/// and TLS verification policy to provider-side token exchange requests.
-pub async fn start_login_with_proxy_and_ssl(
-    provider: SubscriptionProvider,
-    session_id: String,
-    proxy_config: Option<ProxyConfig>,
-    skip_ssl_verify: bool,
-) -> Result<LoginStartResult> {
-    start_login_with_options(
-        provider,
-        session_id,
-        SubscriptionHttpOptions::new(proxy_config, skip_ssl_verify),
-    )
-    .await
-}
-
 /// Starts a subscription login with an explicit transport policy.
 pub async fn start_login_with_options(
     provider: SubscriptionProvider,
@@ -823,27 +792,6 @@ pub async fn resolve(provider: SubscriptionProvider) -> Result<ResolvedCredentia
     resolve_with_options(provider, &SubscriptionHttpOptions::default()).await
 }
 
-/// Resolves a subscription credential while applying the host's explicit AI
-/// proxy to provider-side refresh requests.
-pub async fn resolve_with_proxy(
-    provider: SubscriptionProvider,
-    proxy_config: Option<&ProxyConfig>,
-) -> Result<ResolvedCredential> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), false);
-    resolve_with_options(provider, &options).await
-}
-
-/// Resolves a subscription credential while applying the host's explicit AI
-/// proxy and TLS verification policy to provider-side refresh requests.
-pub async fn resolve_with_proxy_and_ssl(
-    provider: SubscriptionProvider,
-    proxy_config: Option<&ProxyConfig>,
-    skip_ssl_verify: bool,
-) -> Result<ResolvedCredential> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), skip_ssl_verify);
-    resolve_with_options(provider, &options).await
-}
-
 /// Resolves a subscription credential with an explicit transport policy.
 pub async fn resolve_with_options(
     provider: SubscriptionProvider,
@@ -863,30 +811,6 @@ pub async fn resolve_opencode(plan: OpenCodePlan, format: &str) -> Result<Resolv
     resolve_opencode_with_options(plan, format, &SubscriptionHttpOptions::default()).await
 }
 
-/// Resolves an OpenCode credential for a concrete plan while applying the
-/// host's explicit AI proxy to provider-side refresh requests.
-pub async fn resolve_opencode_with_proxy(
-    plan: OpenCodePlan,
-    format: &str,
-    proxy_config: Option<&ProxyConfig>,
-) -> Result<ResolvedCredential> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), false);
-    resolve_opencode_with_options(plan, format, &options).await
-}
-
-/// Resolves an OpenCode credential for a concrete plan while applying the
-/// host's explicit AI proxy and TLS verification policy to provider-side
-/// refresh requests.
-pub async fn resolve_opencode_with_proxy_and_ssl(
-    plan: OpenCodePlan,
-    format: &str,
-    proxy_config: Option<&ProxyConfig>,
-    skip_ssl_verify: bool,
-) -> Result<ResolvedCredential> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), skip_ssl_verify);
-    resolve_opencode_with_options(plan, format, &options).await
-}
-
 /// Resolves an OpenCode credential with an explicit transport policy.
 pub async fn resolve_opencode_with_options(
     plan: OpenCodePlan,
@@ -899,27 +823,6 @@ pub async fn resolve_opencode_with_options(
 /// Forces a resolve (which refreshes and saves), then returns the account entry.
 pub async fn refresh_account(provider: SubscriptionProvider) -> Result<SubscriptionAccount> {
     refresh_account_with_options(provider, &SubscriptionHttpOptions::default()).await
-}
-
-/// Refreshes a subscription account while applying the host's explicit AI
-/// proxy to provider-side token refresh requests.
-pub async fn refresh_account_with_proxy(
-    provider: SubscriptionProvider,
-    proxy_config: Option<&ProxyConfig>,
-) -> Result<SubscriptionAccount> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), false);
-    refresh_account_with_options(provider, &options).await
-}
-
-/// Refreshes a subscription account while applying the host's explicit AI
-/// proxy and TLS verification policy to provider-side requests.
-pub async fn refresh_account_with_proxy_and_ssl(
-    provider: SubscriptionProvider,
-    proxy_config: Option<&ProxyConfig>,
-    skip_ssl_verify: bool,
-) -> Result<SubscriptionAccount> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), skip_ssl_verify);
-    refresh_account_with_options(provider, &options).await
 }
 
 /// Refreshes a subscription account with an explicit transport policy.

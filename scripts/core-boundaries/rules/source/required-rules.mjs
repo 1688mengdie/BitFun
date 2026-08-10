@@ -16,7 +16,6 @@ export const requiredContentRules = [
   ...[
     'src/apps/cli/Cargo.toml',
     'src/apps/desktop/Cargo.toml',
-    'src/crates/adapters/ai-adapters/Cargo.toml',
     'src/crates/services/miniapp-market-service/Cargo.toml',
     'src/crates/services/skin-market-service/Cargo.toml',
   ].map((path) => ({
@@ -29,6 +28,17 @@ export const requiredContentRules = [
       },
     ],
   })),
+  {
+    path: 'src/crates/adapters/ai-adapters/Cargo.toml',
+    reason:
+      'the AI adapter owns Rustls HTTPS clients and the product-supported SOCKS proxy transport',
+    patterns: [
+      {
+        regex: /^reqwest\s*=\s*\{\s*workspace\s*=\s*true,\s*features\s*=\s*\[\s*"rustls"\s*,\s*"socks"\s*\]\s*\}/m,
+        message: 'AI adapter Reqwest dependency must explicitly enable rustls and socks',
+      },
+    ],
+  },
   {
     path: 'src/crates/services/services-core/src/lib.rs',
     reason:

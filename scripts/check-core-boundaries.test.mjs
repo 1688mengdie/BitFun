@@ -1313,6 +1313,34 @@ test('direct Reqwest clients reject extra decoded dependency and package feature
   assert.match(messages, /bitfun-cli:default.*unreviewed Reqwest feature reference reqwest\?\/http3/);
 });
 
+test('AI adapters Reqwest profile owns the supported SOCKS transport', () => {
+  const baseFeatures = ['http2', 'json', 'stream', 'multipart', 'query', 'form'];
+  const valid = packageAt('bitfun-ai-adapters', 'src/crates/adapters/ai-adapters/Cargo.toml', [{
+    name: 'reqwest',
+    kind: null,
+    optional: false,
+    uses_default_features: false,
+    features: [...baseFeatures, 'rustls', 'socks'],
+  }]);
+  const missingSocks = packageAt(
+    'bitfun-ai-adapters',
+    'src/crates/adapters/ai-adapters/Cargo.toml',
+    [{
+      name: 'reqwest',
+      kind: null,
+      optional: false,
+      uses_default_features: false,
+      features: [...baseFeatures, 'rustls'],
+    }],
+  );
+
+  assert.deepEqual(findReqwestDependencyFeatureViolations([valid]), []);
+  const messages = findReqwestDependencyFeatureViolations([missingSocks])
+    .map((violation) => violation.message)
+    .join('\n');
+  assert.match(messages, /bitfun-ai-adapters.*missing features: socks/);
+});
+
 test('Reqwest metadata policy covers URL-only and future dependency owners', () => {
   const baseFeatures = ['http2', 'json', 'stream', 'multipart', 'query', 'form'];
   const core = {

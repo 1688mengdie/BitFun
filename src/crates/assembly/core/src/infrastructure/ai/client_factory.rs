@@ -17,7 +17,7 @@ use crate::infrastructure::subscription_auth::{
     SubscriptionProvider as AdapterProvider,
 };
 use crate::service::config::types::{
-    model_runtime_binding_fingerprint, AuthConfig, OpenCodePlan, ProxyConfig, SubscriptionProvider,
+    model_runtime_binding_fingerprint, AuthConfig, OpenCodePlan, SubscriptionProvider,
 };
 use crate::service::config::{get_global_config_service, ConfigService};
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -449,27 +449,15 @@ fn to_adapter_opencode_plan(plan: OpenCodePlan) -> AdapterOpenCodePlan {
     }
 }
 
-/// Resolves subscription authentication while passing the global AI proxy to
-/// provider-side token refresh requests.
-pub async fn apply_subscription_auth_with_proxy(
+/// Resolve a subscription `AuthConfig` and overlay it onto the runtime
+/// `AIConfig`. No-op when `auth == AuthConfig::ApiKey`. Returns the resolved
+/// credential's expiry (Unix seconds) so callers can invalidate cached
+/// clients before the token goes stale.
+pub async fn apply_subscription_auth(
     auth: &AuthConfig,
     ai_config: &mut AIConfig,
-    proxy_config: Option<&ProxyConfig>,
 ) -> Result<Option<i64>> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), false);
-    apply_subscription_auth_with_options(auth, ai_config, &options).await
-}
-
-/// Resolves subscription authentication while passing the global AI proxy and
-/// model TLS verification policy to provider-side token refresh requests.
-pub async fn apply_subscription_auth_with_proxy_and_ssl(
-    auth: &AuthConfig,
-    ai_config: &mut AIConfig,
-    proxy_config: Option<&ProxyConfig>,
-    skip_ssl_verify: bool,
-) -> Result<Option<i64>> {
-    let options = SubscriptionHttpOptions::new(proxy_config.cloned(), skip_ssl_verify);
-    apply_subscription_auth_with_options(auth, ai_config, &options).await
+    apply_subscription_auth_with_options(auth, ai_config, &SubscriptionHttpOptions::default()).await
 }
 
 /// Resolves subscription authentication with an explicit transport policy.
