@@ -8,7 +8,7 @@
 //! workspaces/sessions and dispatch tasks, without requiring a direct WS
 //! connection or proxying through another desktop.
 
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
@@ -27,6 +27,15 @@ const RPC_TIMEOUT: Duration = Duration::from_millis(100);
 const MAX_DEVICE_ID_BYTES: usize = 128;
 const MAX_ENCRYPTED_PAYLOAD_BYTES: usize = 48 * 1024 * 1024;
 const MAX_NONCE_BYTES: usize = 256;
+
+/// Body ceiling for `/api/devices/:id/rpc`.
+///
+/// Without this the route inherits Axum's 2 MB default, which rejects the body
+/// before `is_valid_encrypted_payload` ever runs — so a mobile client sending a
+/// photo got a bare 413 while the payload validator above claimed to allow
+/// 48 MB. Derived from that constant so the two cannot drift apart again; the
+/// slack covers the JSON envelope and the base64 nonce.
+const RPC_BODY_LIMIT_BYTES: usize = MAX_ENCRYPTED_PAYLOAD_BYTES + 64 * 1024;
 
 fn is_valid_device_id(value: &str) -> bool {
     !value.is_empty()
@@ -67,7 +76,10 @@ async fn validate_user(state: &AppState, headers: &HeaderMap) -> Result<AuthToke
 pub fn device_router() -> Router<AppState> {
     Router::new()
         .route("/api/devices", get(list_devices))
-        .route("/api/devices/{target_device_id}/rpc", post(device_rpc))
+        .route(
+            "/api/devices/{target_device_id}/rpc",
+            post(device_rpc).layer(DefaultBodyLimit::max(RPC_BODY_LIMIT_BYTES)),
+        )
         .route("/api/devices/{target_device_id}", delete(delete_device))
 }
 
@@ -387,6 +399,59 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    async fn rpc(
+        app: &axum::Router,
+        token: &str,
+        device_id: &str,
+        payload_bytes: usize,
+    ) -> StatusCode {
+        let body = serde_json::json!({
+            "encrypted_data": "A".repeat(payload_bytes),
+            "nonce": "AAAA",
+        })
+        .to_string();
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/api/devices/{device_id}/rpc"))
+                    .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    #[tokio::test]
+    async fn device_rpc_accepts_payloads_above_the_default_body_limit() {
+        let ctx = setup_app().await;
+
+        // A phone sending a photo lands here: base64 of the image, encrypted and
+        // base64ed again, clears Axum's 2 MB default by itself. NOT_FOUND means
+        // the body was read and the offline target was the only complaint.
+        let status = rpc(&ctx.app, &ctx.owner_token, "target-device", 3 * 1024 * 1024).await;
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn device_rpc_still_rejects_payloads_past_the_route_limit() {
+        let ctx = setup_app().await;
+
+        let status = rpc(
+            &ctx.app,
+            &ctx.owner_token,
+            "target-device",
+            RPC_BODY_LIMIT_BYTES + 1,
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]
