@@ -8,7 +8,7 @@ import {
 } from '../../model/RemoteModels';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
-import { ChatTimelineState } from '../../services/ChatTimelineStore';
+import { ChatTimelineState, ChatTimelineStore } from '../../services/ChatTimelineStore';
 import { ClipboardService } from '../../services/ClipboardService';
 import { ConnectionErrorPolicy } from '../../services/ConnectionErrorPolicy';
 import { ImagePickerService } from '../../services/ImagePickerService';
@@ -260,12 +260,19 @@ export class ConversationController {
       !runtime.connection.ensureAvailable()) {
       return;
     }
+    // Sending into a turn that is still running is allowed, but the desktop
+    // queues it rather than interrupting, so say so once — otherwise the
+    // message just sits in the transcript with nothing appearing to happen.
+    const queuedBehindRunningTurn = this.hasRunningRemoteTurn();
     this.remote.clearComposer();
     const localMessage = RemoteUiState.localUserMessage(text, images);
     runtime.timeline.appendOptimisticMessage(localMessage);
     const pendingActiveId = runtime.timeline.setPendingActiveTurn(localMessage.id);
     this.syncRemoteTimeline();
-    RemoteLogger.info(`chat send queued session=${this.shortSessionId(sessionId)} pending=${pendingActiveId}`);
+    RemoteLogger.info(`chat send queued session=${this.shortSessionId(sessionId)} pending=${pendingActiveId} behindRunningTurn=${queuedBehindRunningTurn ? '1' : '0'}`);
+    if (queuedBehindRunningTurn) {
+      this.showHomeToast(RemoteI18n.t('chat.queuedAfterRunningTurn'));
+    }
     this.startRemotePolling();
     runtime.polling.nudge();
     const imageContexts: RemoteImageContext[] = images.length > 0 ?
@@ -434,11 +441,7 @@ export class ConversationController {
   }
 
   remoteActiveTurnId(): string {
-    const active = this.remote.activeTurnMessage;
-    if (active.turnId && active.turnId.length > 0) {
-      return active.turnId;
-    }
-    return active.id.indexOf('active-') === 0 ? active.id.slice('active-'.length) : '';
+    return ChatTimelineStore.cancelableTurnId(this.remote.activeTurnMessage);
   }
 
   projectedRemoteTimelineItems(): ChatTimelineItem[] {
@@ -1014,7 +1017,7 @@ export class ConversationController {
     const runtime = this.requireRemoteRuntime();
     runtime.filePreview.close();
     this.remote.setConversationDismissed(false);
-    if (runtime.appShell.isRoute(AppRoute.RemoteCreate)) {
+    if (runtime.appShell.isRoute(AppRoute.RemoteCreate) || runtime.appShell.isRoute(AppRoute.RemoteChat)) {
       runtime.appShell.replaceCurrentRoute(AppRoute.RemoteChat, sessionId);
       return;
     }

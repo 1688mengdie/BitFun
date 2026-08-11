@@ -132,9 +132,9 @@ export class RemoteSessionController {
     onCreated: (session: SessionSummary) => Promise<void>,
     instruction: string = '',
     modelId: string = ''
-  ): Promise<void> {
+  ): Promise<SessionSummary | undefined> {
     if (isBusy || !remoteAvailable) {
-      return;
+      return undefined;
     }
     try {
       this.callbacks.onBusy(true);
@@ -148,8 +148,10 @@ export class RemoteSessionController {
       this.callbacks.onActiveSession(session);
       this.callbacks.onStatusText(RemoteI18n.t('status.sessionCreated'));
       await onCreated(session);
+      return session;
     } catch (err) {
       this.callbacks.onStatusText(ConnectionErrorPolicy.errorText(err));
+      return undefined;
     } finally {
       this.callbacks.onBusy(false);
     }

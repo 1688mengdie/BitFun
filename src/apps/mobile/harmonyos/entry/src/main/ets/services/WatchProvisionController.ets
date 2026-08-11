@@ -16,9 +16,13 @@ const DATASYNC_PERMISSION: Permissions = 'ohos.permission.DISTRIBUTED_DATASYNC';
 /** What the controller needs from the remote stack, kept narrow for testing. */
 export interface WatchProvisionPort {
   /** True when a QR-paired desktop room is live; provisioning needs one. */
-  canProvision(): boolean;
-  provision(deviceId: string, deviceName: string, requestId: string): Promise<PeerDeviceProvisionOutcome>;
-  relayUrl(): string;
+  readonly canProvision: () => boolean;
+  readonly provision: (
+    deviceId: string,
+    deviceName: string,
+    requestId: string
+  ) => Promise<PeerDeviceProvisionOutcome>;
+  readonly relayUrl: () => string;
 }
 
 /**

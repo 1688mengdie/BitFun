@@ -81,7 +81,29 @@ export class RemoteSessionViewModel {
     onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat,
     modelId: string = ''
   ): Promise<void> {
-    await this.sessions.create(
+    if (this.hooks.isBusy() || !this.hooks.remoteAvailable()) {
+      return;
+    }
+    const previousSession: SessionSummary = this.copySession(this.pageState.activeSession);
+    this.beginSessionCreation(onRouteChat);
+    try {
+      const created = await this.performCreateSession(agentType, instruction, onRouteChat, modelId);
+      if (!created) {
+        this.restoreAfterFailedCreation(previousSession, onRouteChat);
+      }
+    } finally {
+      this.pageState.setConversationLoading(false);
+      this.pageState.setPendingSessionId('');
+    }
+  }
+
+  private async performCreateSession(
+    agentType: string,
+    instruction: string,
+    onRouteChat: (sessionId: string) => void,
+    modelId: string
+  ): Promise<SessionSummary | undefined> {
+    return await this.sessions.create(
       agentType,
       this.hooks.isBusy(),
       this.hooks.remoteAvailable(),
@@ -109,14 +131,69 @@ export class RemoteSessionViewModel {
     onRouteChat: (sessionId: string) => void = this.hooks.onRouteChat,
     modelId: string = ''
   ): Promise<void> {
-    if (path.length > 0 && path !== currentPath) {
-      await this.hooks.onSelectWorkspace(path);
-      await this.createSession(agentType, instruction, onRouteChat, modelId);
+    if (this.hooks.isBusy() || !this.hooks.remoteAvailable()) {
       return;
     }
-    if (path.length === 0 || path === currentPath) {
-      await this.createSession(agentType, instruction, onRouteChat, modelId);
+    const previousSession: SessionSummary = this.copySession(this.pageState.activeSession);
+    const previousWorkspacePath = currentPath;
+    this.beginSessionCreation(onRouteChat);
+    let created: SessionSummary | undefined;
+    try {
+      if (path.length > 0 && path !== currentPath) {
+        await this.hooks.onSelectWorkspace(path);
+        // Workspace selection clears page discovery state. Creation still owns
+        // the detail pane until the create command resolves.
+        this.pageState.setConversationLoading(true);
+      }
+      if (path.length === 0 || path === currentPath) {
+        created = await this.performCreateSession(agentType, instruction, onRouteChat, modelId);
+      } else if (this.pageState.workspacePath === path) {
+        created = await this.performCreateSession(agentType, instruction, onRouteChat, modelId);
+      }
+      if (!created) {
+        if (this.pageState.workspacePath === previousWorkspacePath) {
+          this.restoreAfterFailedCreation(previousSession, onRouteChat);
+        } else {
+          this.pageState.clearActiveSession();
+          this.hooks.onResetTimeline('');
+          this.hooks.onKnownStateReset();
+          this.hooks.onRouteHome();
+        }
+      }
+    } finally {
+      this.pageState.setConversationLoading(false);
+      this.pageState.setPendingSessionId('');
     }
+  }
+
+  private beginSessionCreation(onRouteChat: (sessionId: string) => void): void {
+    this.hooks.onStopPolling();
+    this.pageState.setPendingSessionId('');
+    this.pageState.setConversationLoading(true);
+    onRouteChat('');
+  }
+
+  private restoreAfterFailedCreation(
+    previousSession: SessionSummary,
+    onRouteChat: (sessionId: string) => void
+  ): void {
+    if (previousSession.sessionId.length === 0) {
+      this.hooks.onRouteHome();
+      return;
+    }
+    this.pageState.setActiveSession(previousSession);
+    onRouteChat(previousSession.sessionId);
+    this.hooks.onStartPolling();
+  }
+
+  private copySession(session: SessionSummary): SessionSummary {
+    return {
+      sessionId: session.sessionId,
+      title: session.title,
+      workspacePath: session.workspacePath,
+      agentType: session.agentType,
+      initialTurnId: session.initialTurnId
+    };
   }
 
   async openSession(

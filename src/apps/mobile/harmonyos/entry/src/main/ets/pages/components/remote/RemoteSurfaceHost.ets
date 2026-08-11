@@ -89,7 +89,7 @@ export struct RemoteSurfaceHost {
           showStatusMetadata: this.presentationState.showStatusMetadata,
           hasMoreSessions: this.remotePageState.hasMoreSessions,
           isBusy: this.remotePageState.conversation.isBusy || this.remotePageState.isLoadingSessions,
-          selectedSessionId: this.remotePageState.pendingSessionId.length > 0 ?
+          selectedSessionId: this.remotePageState.isLoadingConversation ?
             this.remotePageState.pendingSessionId :
             (this.showSelectedSession ? this.remotePageState.conversation.activeSession.sessionId : ''),
           onCreate: () => this.createSession('code'),

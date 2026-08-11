@@ -3,6 +3,7 @@ import { CloudAccountCrypto, CloudAccountKdfParams } from './CloudAccountCrypto'
 import { Encoding } from './Encoding';
 import { HarmonyRemoteCryptoCipher } from './RemoteCrypto';
 import { RemoteLogger } from './RemoteLogger';
+import { RemoteI18n } from '../i18n/RemoteI18n';
 import { CommandStatusResponse, EncryptedPayload, RemoteCommand } from '../model/RemoteModels';
 
 interface AccountChallenge {
@@ -199,6 +200,7 @@ export class CloudAccountClient {
       encrypted_data: Encoding.bytesToBase64(encrypted),
       nonce: Encoding.bytesToBase64(nonce)
     };
+    RemoteLogger.info(`device rpc cmd=${command.cmd || 'unknown'} bytes=${body.encrypted_data.length}`);
     const response = await this.request<EncryptedPayload>(
       relayUrl,
       `/api/devices/${encodeURIComponent(target)}/rpc`,
@@ -296,11 +298,20 @@ export class CloudAccountClient {
         connectTimeout: 15000,
         readTimeout: readTimeoutMs
       };
-      if (body !== undefined) requestOptions.extraData = JSON.stringify(body);
+      let bodyBytes = 0;
+      if (body !== undefined) {
+        const encoded = JSON.stringify(body);
+        bodyBytes = encoded.length;
+        requestOptions.extraData = encoded;
+      }
       const response = await request.request(`${base}${path}`, requestOptions);
       const text = typeof response.result === 'string' ? response.result : JSON.stringify(response.result);
       if (response.responseCode < 200 || response.responseCode >= 300) {
-        let message = `Relay login failed (HTTP ${response.responseCode}).`;
+        // The size belongs in the log: a body the relay refuses for being too
+        // big is otherwise indistinguishable from one it refuses for auth.
+        RemoteLogger.error(`relay request failed ${method} ${path} status=${response.responseCode} bytes=${bodyBytes}`);
+        let message = response.responseCode === 413 ? RemoteI18n.t('errors.payloadTooLarge') :
+          `Relay request failed (HTTP ${response.responseCode}).`;
         try {
           const error = JSON.parse(text) as RelayErrorResponse;
           if (error.error) message = error.error;
