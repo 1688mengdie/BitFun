@@ -351,6 +351,7 @@ export interface AIConfig {
   subagent_batch_execution_policy?: 'safe_only' | 'force_parallel' | 'serial';
   computer_use_enabled?: boolean;
   browser_control_preferred_browser?: string;
+  browser_control_auto_connect_on_startup?: boolean;
 }
 
 export interface StoredAgentProfileConfigItem {
