@@ -144,6 +144,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
   // ── Browser control state ───────────────────────────────────────────────
   const [browserCdpAvailable, setBrowserCdpAvailable] = useState(false);
   const [browserReady, setBrowserReady] = useState(false);
+  const [browserAutoConnectOnStartup, setBrowserAutoConnectOnStartup] = useState(false);
   const [browserDefaultCdpSupported, setBrowserDefaultCdpSupported] = useState(false);
   const [browserDefaultCdpEnabled, setBrowserDefaultCdpEnabled] = useState(false);
   const [browserKind, setBrowserKind] = useState('');
@@ -244,6 +245,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         debugConfigData,
         computerUseCfg,
         browserControlPreferredBrowser,
+        browserControlAutoConnect,
         loadedToolPermissionConfig,
         loadedPermissionModeControlVisibility,
         loadedCompanionPets,
@@ -256,6 +258,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
         configManager.getConfig<DebugModeConfig>('ai.debug_mode_config'),
         configManager.getConfig<boolean>('ai.computer_use_enabled'),
         configManager.getConfig<string>('ai.browser_control_preferred_browser'),
+        configManager.getConfig<boolean>('ai.browser_control_auto_connect_on_startup'),
         permissionConfigService.getConfig(),
         configManager.getOptionalConfig<boolean>(SHOW_PERMISSION_MODE_CONTROL_CONFIG_PATH),
         listAgentCompanionPets(),
@@ -271,6 +274,7 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       setSubagentBatchExecutionPolicy(normalizeSubagentBatchExecutionPolicy(loadedSubagentBatchExecutionPolicy));
       if (debugConfigData) setDebugConfig(debugConfigData);
       setPreferredBrowser(browserControlPreferredBrowser || DEFAULT_BROWSER_CONTROL_BROWSER);
+      setBrowserAutoConnectOnStartup(browserControlAutoConnect === true);
       setToolPermissionConfig(normalizeToolPermissionConfig(loadedToolPermissionConfig));
       setShowPermissionModeControl(loadedPermissionModeControlVisibility !== false);
 
@@ -646,6 +650,20 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
       );
     } finally {
       setBrowserControlBusy(false);
+    }
+  };
+
+  const handleBrowserAutoConnectChange = async (checked: boolean) => {
+    const previousValue = browserAutoConnectOnStartup;
+    setBrowserAutoConnectOnStartup(checked);
+    try {
+      await configManager.setConfig('ai.browser_control_auto_connect_on_startup', checked);
+    } catch (error) {
+      log.error('Failed to save browser_control_auto_connect_on_startup', error);
+      setBrowserAutoConnectOnStartup(previousValue);
+      notificationService.error(
+        `${tTools('messages.saveFailed')}: ` + (error instanceof Error ? error.message : String(error))
+      );
     }
   };
 
@@ -1527,6 +1545,22 @@ const SessionSettingsPanels: React.FC<SessionSettingsPanelsProps> = ({ variant }
                           : 'browserControl.enableDefaultCdp')}
                       </Button>
                     )}
+                  </div>
+                </ConfigPageRow>
+              )}
+              {browserDefaultCdpSupported && (
+                <ConfigPageRow
+                  label={t('browserControl.autoConnectOnStartup')}
+                  description={t('browserControl.autoConnectOnStartupDesc')}
+                  align="center"
+                  balanced
+                >
+                  <div className="bitfun-func-agent-config__row-control" data-bf-component="session-config" data-bf-part="control">
+                    <Switch
+                      checked={browserAutoConnectOnStartup}
+                      onChange={(e) => void handleBrowserAutoConnectChange(e.target.checked)}
+                      size="small"
+                    />
                   </div>
                 </ConfigPageRow>
               )}
