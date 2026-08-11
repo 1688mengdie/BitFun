@@ -7,6 +7,7 @@ import {
 } from '../model/RemoteModels';
 import { RemoteI18n } from '../i18n/RemoteI18n';
 import { ConnectionErrorPolicy } from './ConnectionErrorPolicy';
+import { RemoteLogger } from './RemoteLogger';
 
 export interface RemoteChatCommandClient {
   getSessionMessages(sessionId: string): Promise<SessionMessagesResult>;
@@ -34,6 +35,9 @@ export interface RemoteChatCommandCallbacks {
   onActiveSession: (session: SessionSummary) => void;
   onSessionTitleChanged: (sessionId: string, title: string) => void;
   onStatusText: (statusText: string) => void;
+  // The status line is only rendered while the link is down, so anything the
+  // user asked for and did not get has to be said out loud instead.
+  onToast: (message: string) => void;
   onBusy: (isBusy: boolean) => void;
   onPollRequested: () => void;
 }
@@ -45,6 +49,11 @@ export class RemoteChatCommandController {
   constructor(client: RemoteChatCommandClient, callbacks: RemoteChatCommandCallbacks) {
     this.client = client;
     this.callbacks = callbacks;
+  }
+
+  private static shortId(value: string): string {
+    if (value.length <= 10) return value;
+    return `${value.slice(0, 6)}...${value.slice(-4)}`;
   }
 
   async loadMessages(
@@ -129,20 +138,29 @@ export class RemoteChatCommandController {
     activeTurnId: string,
     remoteAvailable: boolean
   ): Promise<void> {
+    RemoteLogger.info(`stop task requested session=${RemoteChatCommandController.shortId(sessionId)} turn=${RemoteChatCommandController.shortId(activeTurnId)} active=${activeTurnMessageId.length > 0 ? '1' : '0'}`);
     if (sessionId.length === 0 || !remoteAvailable) {
       return;
     }
     if (activeTurnMessageId.length === 0) {
-      this.callbacks.onStatusText(RemoteI18n.t('status.noRunningTask'));
+      const nothingRunning = RemoteI18n.t('status.noRunningTask');
+      this.callbacks.onStatusText(nothingRunning);
+      this.callbacks.onToast(nothingRunning);
       return;
     }
     try {
       this.callbacks.onStatusText(RemoteI18n.t('status.stoppingTask'));
       await this.client.cancelTask(sessionId, activeTurnId);
+      RemoteLogger.info(`stop task accepted session=${RemoteChatCommandController.shortId(sessionId)} turn=${RemoteChatCommandController.shortId(activeTurnId)}`);
       this.callbacks.onStatusText(RemoteI18n.t('status.stopRequested'));
       this.callbacks.onPollRequested();
     } catch (err) {
-      this.callbacks.onStatusText(ConnectionErrorPolicy.errorText(err));
+      // A rejected cancel leaves the task running, so failing quietly here is
+      // indistinguishable from the stop having worked.
+      const errorText = ConnectionErrorPolicy.errorText(err);
+      RemoteLogger.info(`stop task failed session=${RemoteChatCommandController.shortId(sessionId)} turn=${RemoteChatCommandController.shortId(activeTurnId)}`);
+      this.callbacks.onStatusText(errorText);
+      this.callbacks.onToast(errorText);
     }
   }
 

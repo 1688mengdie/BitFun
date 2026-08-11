@@ -34,24 +34,35 @@ export class ChatComposerPolicy {
   // Which of the things the one round button on the right is offering. The
   // composer has a single primary slot rather than a row of buttons, so "which
   // action" is a decision, not a layout detail — and it is the same decision on
-  // both clients. `isStopping` folds in whatever locally outranks the draft: a
-  // running turn on both clients, plus dictation on this one.
+  // both clients. Dictation and a running turn used to arrive here folded into
+  // one flag, but they sit on opposite sides of the draft: dictation outranks
+  // it because the draft is still being spoken, whereas a running turn only
+  // outranks it where the draft has nowhere to go — on a surface that can hand
+  // the message over mid-run, keeping the button on Stop traps what was typed.
   static primaryAction(
     text: string,
     attachmentCount: number,
     isBusy: boolean,
-    isStopping: boolean,
+    isVoiceListening: boolean,
+    isTurnRunning: boolean,
+    supportsMidRunSend: boolean,
     requiresRemoteConnection: boolean,
     connectionState: string,
     showVoiceInput: boolean
   ): ComposerPrimaryAction {
-    if (isStopping) {
+    if (isVoiceListening) {
+      return ComposerPrimaryAction.Stop;
+    }
+    if (isTurnRunning && !supportsMidRunSend) {
       return ComposerPrimaryAction.Stop;
     }
     if (text.trim().length > 0 || attachmentCount > 0) {
       const sendable = ChatComposerPolicy.canSend(
         text, attachmentCount, isBusy, requiresRemoteConnection, connectionState);
       return sendable ? ComposerPrimaryAction.Send : ComposerPrimaryAction.SendBlocked;
+    }
+    if (isTurnRunning) {
+      return ComposerPrimaryAction.Stop;
     }
     if (!showVoiceInput) {
       return ComposerPrimaryAction.Idle;
@@ -67,9 +78,8 @@ export class ChatComposerPolicy {
   static isExpanded(
     text: string,
     inputFocused: boolean,
-    quickActionsOpen: boolean,
     modelSelectorOpen: boolean
   ): boolean {
-    return inputFocused || quickActionsOpen || modelSelectorOpen || text.indexOf('\n') >= 0;
+    return inputFocused || modelSelectorOpen || text.indexOf('\n') >= 0;
   }
 }

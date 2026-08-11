@@ -1239,7 +1239,7 @@ export default function remoteControllersUnitTest() {
         onStartHeartbeat: () => {}
       });
 
-      await controller.create('code', false, true, async (session: SessionSummary): Promise<void> => {
+      const created = await controller.create('code', false, true, async (session: SessionSummary): Promise<void> => {
         openedSessions.push(session);
       });
       await controller.open(remoteSession('opened-session', 'Opened Session'), '/workspace', false, true,
@@ -1248,11 +1248,33 @@ export default function remoteControllersUnitTest() {
         });
 
       expect(client.createRequests[0]).assertEqual('code::');
+      expect(created?.sessionId || '').assertEqual('created-session');
       expect(activeSessions.length).assertEqual(2);
       expect(activeSessions[0].sessionId).assertEqual('created-session');
       expect(activeSessions[1].sessionId).assertEqual('opened-session');
       expect(activeSessions[1].workspacePath).assertEqual('/workspace');
       expect(openedSessions.length).assertEqual(2);
+    });
+
+    it('returns no created session when the remote create command fails', 0, async () => {
+      const client = new FakeRemoteSessionClient();
+      client.shouldFailCreate = true;
+      const controller = new RemoteSessionController(client, 8, {
+        onSessions: (_sessions: RemoteSession[], _hasMore: boolean) => {},
+        onActiveSession: (_session: SessionSummary) => {},
+        onStatusText: (_statusText: string) => {},
+        onBusy: (_isBusy: boolean) => {},
+        onLoading: (_isLoading: boolean) => {},
+        onSessionError: (_errorText: string) => {},
+        onReconnecting: () => {},
+        onConnected: () => {},
+        onConnectionFailed: (_err: Object) => {},
+        onStartHeartbeat: () => {}
+      });
+
+      const created = await controller.create('code', false, true, async (_session: SessionSummary): Promise<void> => {});
+
+      expect(created === undefined).assertTrue();
     });
 
     it('deletes active sessions and backfills list when more pages exist', 0, async () => {
@@ -1338,6 +1360,7 @@ export default function remoteControllersUnitTest() {
         onStatusText: (statusText: string) => {
           statuses.push(statusText);
         },
+        onToast: (_message: string) => {},
         onBusy: (_isBusy: boolean) => {},
         onPollRequested: () => {}
       });
@@ -1386,6 +1409,7 @@ export default function remoteControllersUnitTest() {
         onActiveSession: (_session: SessionSummary) => {},
         onSessionTitleChanged: (_sessionId: string, _title: string) => {},
         onStatusText: (_statusText: string) => {},
+        onToast: (_message: string) => {},
         onBusy: (isBusy: boolean) => {
           busyEvents.push(isBusy);
         },
@@ -1425,6 +1449,7 @@ export default function remoteControllersUnitTest() {
         onActiveSession: (_session: SessionSummary) => {},
         onSessionTitleChanged: (_sessionId: string, _title: string) => {},
         onStatusText: (_statusText: string) => {},
+        onToast: (_message: string) => {},
         onBusy: (isBusy: boolean) => {
           busyEvents.push(isBusy);
         },
@@ -1474,6 +1499,7 @@ export default function remoteControllersUnitTest() {
     it('stops active tasks and reports guard states', 0, async () => {
       const client = new FakeRemoteChatCommandClient();
       const statuses: string[] = [];
+      const toasts: string[] = [];
       let pollCount = 0;
       const controller = new RemoteChatCommandController(client, {
         onMessagesLoaded: (_messages: ChatMessage[], _hasMoreMessages: boolean) => {},
@@ -1490,6 +1516,9 @@ export default function remoteControllersUnitTest() {
         onStatusText: (statusText: string) => {
           statuses.push(statusText);
         },
+        onToast: (message: string) => {
+          toasts.push(message);
+        },
         onBusy: (_isBusy: boolean) => {},
         onPollRequested: () => {
           pollCount += 1;
@@ -1504,6 +1533,44 @@ export default function remoteControllersUnitTest() {
       expect(statuses[1]).assertEqual(RemoteI18n.t('status.stoppingTask'));
       expect(statuses[2]).assertEqual(RemoteI18n.t('status.stopRequested'));
       expect(pollCount).assertEqual(1);
+      // The status line is hidden while connected, so a refused stop is only
+      // ever visible as a toast.
+      expect(toasts[0]).assertEqual(RemoteI18n.t('status.noRunningTask'));
+      expect(toasts.length).assertEqual(1);
+    });
+
+    it('surfaces a refused stop instead of leaving the task silently running', 0, async () => {
+      const client = new FakeRemoteChatCommandClient();
+      client.shouldFailCancel = true;
+      const statuses: string[] = [];
+      const toasts: string[] = [];
+      const controller = new RemoteChatCommandController(client, {
+        onMessagesLoaded: (_messages: ChatMessage[], _hasMoreMessages: boolean) => {},
+        onMessageCountKnown: (_pollVersion: number, _knownMessageCount: number) => {},
+        onSendSucceeded: (_turnId: string, _pendingActiveId: string) => {},
+        onSendFailed: (
+          _rawText: string,
+          _images: SelectedImageAttachment[],
+          _localMessageId: string,
+          _pendingActiveId: string
+        ) => {},
+        onActiveSession: (_session: SessionSummary) => {},
+        onSessionTitleChanged: (_sessionId: string, _title: string) => {},
+        onStatusText: (statusText: string) => {
+          statuses.push(statusText);
+        },
+        onToast: (message: string) => {
+          toasts.push(message);
+        },
+        onBusy: (_isBusy: boolean) => {},
+        onPollRequested: () => {}
+      });
+
+      await controller.stopTask('session-1', 'active-turn', 'turn-1', true);
+
+      expect(toasts.length).assertEqual(1);
+      expect(toasts[0]).assertEqual(statuses[statuses.length - 1]);
+      expect(toasts[0] === RemoteI18n.t('status.stopRequested')).assertFalse();
     });
 
     it('renames active sessions and updates active/list projections', 0, async () => {
@@ -1528,6 +1595,7 @@ export default function remoteControllersUnitTest() {
           titleUpdates.push(`${sessionId}:${title}`);
         },
         onStatusText: (_statusText: string) => {},
+        onToast: (_message: string) => {},
         onBusy: (isBusy: boolean) => {
           busyEvents.push(isBusy);
         },
@@ -1563,12 +1631,17 @@ export default function remoteControllersUnitTest() {
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.surface).assertEqual(ChatSurface.General);
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertFalse();
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.requiresRemoteConnection).assertFalse();
+      // Nothing queues a message on this surface, so a draft written mid-reply
+      // has nowhere to go until the reply finishes.
+      expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsMidRunSend).assertFalse();
     });
 
     it('keeps remote composer attachments behind the remote connection', 0, () => {
       expect(REMOTE_CHAT_COMPOSER_CAPABILITIES.surface).assertEqual(ChatSurface.Remote);
       expect(REMOTE_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertTrue();
       expect(REMOTE_CHAT_COMPOSER_CAPABILITIES.requiresRemoteConnection).assertTrue();
+      // The desktop queues a mid-run message and lets the current turn yield.
+      expect(REMOTE_CHAT_COMPOSER_CAPABILITIES.supportsMidRunSend).assertTrue();
     });
   });
 

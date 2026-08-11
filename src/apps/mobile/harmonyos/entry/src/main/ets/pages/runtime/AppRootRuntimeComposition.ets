@@ -70,7 +70,10 @@ import { GeneralChatPageState } from '../state/GeneralChatPageState';
 import { RemotePageState } from '../state/RemotePageState';
 import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { WatchProvisionState } from '../state/WatchProvisionState';
-import { WatchProvisionController } from '../../services/WatchProvisionController';
+import {
+  WatchProvisionController,
+  WatchProvisionPort
+} from '../../services/WatchProvisionController';
 import { PeerDeviceProvisionOutcome } from '../../services/RelayHttpClient';
 import { ConversationViewModel } from '../viewmodel/ConversationViewModel';
 import { FilePreviewState } from '../state/FilePreviewState';
@@ -151,17 +154,18 @@ export abstract class AppRootRuntimeComposition {
   readonly remotePageState: RemotePageState = new RemotePageState();
   readonly remoteCreateState: RemoteCreateSessionState = new RemoteCreateSessionState();
   readonly watchProvisionState: WatchProvisionState = new WatchProvisionState();
+  private readonly watchProvisionPort: WatchProvisionPort = {
+    // Provisioning only rides the QR-paired room channel: that is the one
+    // path where the desktop holds the pairing identity that authorizes it.
+    canProvision: (): boolean =>
+      (this.remotePageState.connectionState as ConnectionState) === ConnectionState.Connected &&
+        this.sessionManager.hasRoomChannel(),
+    provision: (deviceId: string, deviceName: string, requestId: string): Promise<PeerDeviceProvisionOutcome> =>
+      this.sessionManager.provisionPeerDevice(deviceId, deviceName, requestId),
+    relayUrl: (): string => this.sessionManager.roomRelayEndpoint()
+  };
   readonly watchProvisionController: WatchProvisionController =
-    new WatchProvisionController(this.watchProvisionState, {
-      // Provisioning only rides the QR-paired room channel: that is the one
-      // path where the desktop holds the pairing identity that authorizes it.
-      canProvision: (): boolean =>
-        (this.remotePageState.connectionState as ConnectionState) === ConnectionState.Connected &&
-          this.sessionManager.hasRoomChannel(),
-      provision: (deviceId: string, deviceName: string, requestId: string): Promise<PeerDeviceProvisionOutcome> =>
-        this.sessionManager.provisionPeerDevice(deviceId, deviceName, requestId),
-      relayUrl: (): string => this.sessionManager.roomRelayEndpoint()
-    });
+    new WatchProvisionController(this.watchProvisionState, this.watchProvisionPort);
   readonly generalChatConfigStore: GeneralChatConfigStore = new GeneralChatConfigStore();
   readonly generalChatController: GeneralChatController =
     GeneralChatController.createDefault(this.generalChatConfigStore);
@@ -404,11 +408,14 @@ export abstract class AppRootRuntimeComposition {
         onStatusText: (statusText: string) => {
           this.remotePageState.setStatusText(statusText);
         },
+        onToast: (message: string) => {
+          this.conversationController.showHomeToast(message);
+        },
         onBusy: (isBusy: boolean) => {
           this.remotePageState.setBusy(isBusy);
         },
         onPollRequested: () => {
-          this.remoteChatPollingLifecycleController.pollNow();
+          this.remoteChatPollingLifecycleController.nudge();
         }
       }
     );
@@ -452,7 +459,7 @@ export abstract class AppRootRuntimeComposition {
         this.remotePageState.setBusy(isBusy);
       },
       () => {
-        this.remoteChatPollingLifecycleController.pollNow();
+        this.remoteChatPollingLifecycleController.nudge();
       }
     );
   readonly remoteChatPollingLifecycleController: RemoteChatPollingLifecycleController =
@@ -815,4 +822,3 @@ export abstract class AppRootRuntimeComposition {
 
 
 }
-
