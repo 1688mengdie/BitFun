@@ -58,6 +58,10 @@ vi.mock('../../../infrastructure/config/components/VoiceInputConfig', () => ({
   default: () => <div data-testid="voice-input-config" />,
 }));
 
+vi.mock('../../../infrastructure/config/components/ThresholdsConfig', () => ({
+  default: () => <div data-testid="ai-thresholds-config" />,
+}));
+
 vi.mock('../../../infrastructure/config/components/SessionConfig', () => ({
   SessionPersonalizationConfig: () => <div data-testid="session-personalization-config" />,
   SessionPermissionsConfig: () => <div data-testid="session-permissions-config" />,
@@ -116,7 +120,7 @@ describe('SettingsScene lazy tab routing', () => {
   }
 
   async function renderActiveTab(
-    tab: 'mcp-tools' | 'acp-agents' | 'external-sources' | 'voice-input'
+    tab: 'mcp-tools' | 'acp-agents' | 'external-sources' | 'voice-input' | 'ai-thresholds'
   ) {
     useSettingsStore.setState({ activeTab: tab });
     await act(async () => {
@@ -164,6 +168,12 @@ describe('SettingsScene lazy tab routing', () => {
     await renderActiveTab('voice-input');
 
     expect(container.querySelector('[data-testid="voice-input-config"]')).not.toBeNull();
+  });
+
+  it('renders the lazy AI thresholds config tab', async () => {
+    await renderActiveTab('ai-thresholds');
+
+    expect(container.querySelector('[data-testid="ai-thresholds-config"]')).not.toBeNull();
   });
 
   it('switches settings pages immediately without retaining the outgoing panel', async () => {
