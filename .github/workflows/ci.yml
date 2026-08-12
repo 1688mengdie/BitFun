@@ -197,20 +197,44 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
         with:
-          shared-key: "ci-check-v4-${{ runner.os }}-no-cargo-bin-v1-sherpa-native-v1"
+          shared-key: "ci-check-v5-${{ runner.os }}-no-cargo-bin-v1"
           cache-bin: false
-          # sherpa-onnx-sys stores downloaded native archives beside Cargo's
-          # normal artifacts. Preserve that directory with the build-script
-          # fingerprints that reference it, or restored test builds cannot link.
-          cache-directories: |
-            target/sherpa-onnx-prebuilt
           # PR caches are scoped to merge refs; trusted main pushes own shared
           # refreshes and retain completed dependency builds after late test failures.
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           cache-on-failure: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
+      # rust-cache prunes the workspace target directory before saving it, so
+      # native libraries stored under target need an independent cache lifecycle.
+      - name: Restore Sherpa native libraries
+        id: sherpa-native-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-onnx-v1-${{ runner.os }}-${{ runner.arch }}-1.13.4-static
+
+      - name: Repair missing Sherpa native state
+        shell: bash
+        run: |
+          if ! find target/sherpa-onnx-prebuilt -type f \
+            \( -name 'sherpa-onnx-c-api.lib' -o -name 'libsherpa-onnx-c-api.a' \) \
+            -print -quit 2>/dev/null | grep -q .; then
+            rm -rf target/sherpa-onnx-prebuilt
+            cargo clean -p sherpa-onnx-sys
+          fi
+
       - name: Check compilation
         run: cargo check --locked --workspace
+
+      - name: Save Sherpa native libraries
+        if: >-
+          github.event_name == 'push' &&
+          github.ref == 'refs/heads/main' &&
+          steps.sherpa-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: target/sherpa-onnx-prebuilt
+          key: sherpa-onnx-v1-${{ runner.os }}-${{ runner.arch }}-1.13.4-static
 
       # The installer is intentionally excluded from the root Cargo workspace,
       # so the workspace check above cannot catch drift in its shared Rust APIs.
