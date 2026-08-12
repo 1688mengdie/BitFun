@@ -84,6 +84,10 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "acp_control" => Some(Arc::new(AcpControlTool::new())),
             "acp_message" => Some(Arc::new(AcpMessageTool::new())),
             "acp_history" => Some(Arc::new(AcpHistoryTool::new())),
+            "quant_backtest" => Some(Arc::new(QuantBacktestTool::new())),
+            "quote" => Some(Arc::new(QuoteTool::new())),
+            "strategy" => Some(Arc::new(StrategyTool::new())),
+            "order" => Some(Arc::new(OrderTool::new())),
             #[cfg(feature = "tools-agent-control")]
             "Cron" => Some(Arc::new(CronTool::new())),
             #[cfg(feature = "tools-browser-web")]

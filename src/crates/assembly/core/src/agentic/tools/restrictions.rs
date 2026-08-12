@@ -87,6 +87,12 @@ fn build_default_role_permissions() -> RolePermissionMap {
         allowed_tools.insert("acp_control".to_string());
         allowed_tools.insert("acp_message".to_string());
         allowed_tools.insert("acp_history".to_string());
+        // taiji-quant tool family (RAD06 Phase 1): quant_backtest goes through
+        // the real ACP bridge; quote/strategy/order call taiji-server JSON-RPC.
+        allowed_tools.insert("quant_backtest".to_string());
+        allowed_tools.insert("quote".to_string());
+        allowed_tools.insert("strategy".to_string());
+        allowed_tools.insert("order".to_string());
         // Deferred 工具链核心：GetToolSpec/CallDeferredTool 不在
         // subagent_default_tools()，但缺失会导致全部 deferred 工具
         // （SessionControl/SessionMessage/Git/Plan 等）无法解锁。

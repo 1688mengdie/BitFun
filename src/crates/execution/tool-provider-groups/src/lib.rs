@@ -114,8 +114,9 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         "Task" | "AgentWait" | "LaunchReviewAgent" | "Skill" | "AskUserQuestion" | "TodoWrite"
         | "get_goal" | "create_goal" | "update_goal" | "CreatePlan" | "PlanList" | "PlanRead"
         | "PlanUpdate" | "LegionControl" | "acp_control" | "acp_message" | "acp_history"
-        | "submit_code_review" | "GetToolSpec" | "CallDeferredTool" | "SessionControl"
-        | "SessionMessage" | "SessionHistory" | "Cron" => Some(ToolPackFeatureGroup::AgentControl),
+        | "quant_backtest" | "quote" | "strategy" | "order" | "submit_code_review"
+        | "GetToolSpec" | "CallDeferredTool" | "SessionControl" | "SessionMessage"
+        | "SessionHistory" | "Cron" => Some(ToolPackFeatureGroup::AgentControl),
         _ => None,
     }
 }
@@ -232,6 +233,10 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "acp_control",
             "acp_message",
             "acp_history",
+            "quant_backtest",
+            "quote",
+            "strategy",
+            "order",
             "Cron",
         ],
     },
@@ -528,6 +533,10 @@ mod tests {
                 "acp_control",
                 "acp_message",
                 "acp_history",
+                "quant_backtest",
+                "quote",
+                "strategy",
+                "order",
                 "Cron",
                 "WebSearch",
                 "WebFetch",

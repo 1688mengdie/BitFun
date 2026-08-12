@@ -1717,7 +1717,19 @@ impl AcpClientService {
     }
 
     async fn load_configs(&self) -> BitFunResult<HashMap<String, AcpClientConfig>> {
-        Ok(self.load_config_file().await?.acp_clients)
+        let mut configs = self.load_config_file().await?.acp_clients;
+        // Builtin ACP clients (e.g. `taiji-quant`, `omp`) are user-managed: no
+        // config entry is ever written for them. Inject the preset defaults so
+        // they are spawnable/visible without manual config, while a user entry
+        // always wins over the preset.
+        for id in builtin_client_ids() {
+            if !configs.contains_key(id) {
+                if let Some(default_config) = default_config_for_builtin_client(id) {
+                    configs.insert(id.to_string(), default_config);
+                }
+            }
+        }
+        Ok(configs)
     }
 
     async fn load_config_file(&self) -> BitFunResult<AcpClientConfigFile> {
