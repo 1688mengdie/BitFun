@@ -63,6 +63,14 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
+    min-height: 0;
+
+    // P2-13: the virtualized stream owns the scroll surface — the wrapper
+    // stops being the scroller and lets Virtuoso's viewport fill the pane.
+    &-virtuoso {
+      flex: 1;
+      min-height: 0;
+    }
   }
 
   &__message {

@@ -173,4 +173,39 @@ describe('groupChatStore', () => {
     useGroupChatStore.getState().setActiveRoom('room-5');
     expect(useGroupChatStore.getState().activeRoomId).toBe('room-5');
   });
+
+  it('loadMessages uses a numeric cursor and prepends older pages (P2-1/P2-6)', async () => {
+    const page1 = [
+      sampleMessage('room-1', 'msg-9'),
+      sampleMessage('room-1', 'msg-10'),
+    ];
+    mockedInvoke.mockResolvedValueOnce({ messages: page1, nextCursor: 4 });
+    await useGroupChatStore.getState().loadMessages('room-1');
+
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_messages', {
+      request: {
+        workspace_path: '',
+        room_id: 'room-1',
+        limit: 50,
+        cursor: undefined,
+      },
+    });
+    expect(useGroupChatStore.getState().messages.get('room-1')).toEqual(page1);
+
+    // Page 2 (older window) prepends instead of replacing.
+    const page2 = [sampleMessage('room-1', 'msg-7'), sampleMessage('room-1', 'msg-8')];
+    mockedInvoke.mockResolvedValueOnce({ messages: page2, nextCursor: 2 });
+    await useGroupChatStore.getState().loadMessages('room-1', 4);
+
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_messages', {
+      request: {
+        workspace_path: '',
+        room_id: 'room-1',
+        limit: undefined,
+        cursor: 4,
+      },
+    });
+    const merged = useGroupChatStore.getState().messages.get('room-1');
+    expect(merged?.map((m) => m.messageId)).toEqual(['msg-7', 'msg-8', 'msg-9', 'msg-10']);
+  });
 });

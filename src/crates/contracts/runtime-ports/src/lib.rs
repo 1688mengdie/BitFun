@@ -2211,14 +2211,19 @@ pub struct GroupChatDeliveryFailure {
 pub struct GroupChatMessagesRequest {
     pub room_id: String,
     pub limit: Option<usize>,
-    pub cursor: Option<String>,
+    /// P2-6: cursor semantics unified as the next message index (opaque to the
+    /// frontend, owned by the store). The contract exposes `usize` directly —
+    /// no string bridge — so the Tauri command, the store, and the frontend
+    /// all agree on the same cursor domain.
+    pub cursor: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GroupChatMessagesResponse {
     pub messages: Vec<GroupChatMessage>,
-    pub next_cursor: Option<String>,
+    /// P2-6: next page start index (same domain as the request cursor).
+    pub next_cursor: Option<usize>,
 }
 
 /// 回执写入请求（P1-5 修复：成员回复聚合回房间）

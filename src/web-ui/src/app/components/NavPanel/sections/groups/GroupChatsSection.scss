@@ -25,11 +25,12 @@
   }
 
   &__items {
-    display: flex;
-    flex-direction: column;
+    // P2-13: Virtuoso owns the scroll surface; give it a bounded height so
+    // the nav section can scroll the room list instead of growing unbounded.
+    flex: 1;
+    min-height: 0;
     min-width: 0;
     max-width: 100%;
-    gap: 0;
   }
 
   &__item {

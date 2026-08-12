@@ -900,9 +900,8 @@ use bitfun_core::agentic::tools::implementations::group_chat_tool::{
 use bitfun_core::service::session::GroupChatStore;
 use bitfun_core::util::errors::BitFunError;
 use bitfun_runtime_ports::{
-    GroupChatActor, GroupChatError, GroupChatErrorCode, GroupChatMember, GroupChatMessage,
-    GroupChatMessagesResponse, GroupChatMode, GroupChatRoom, GroupChatSendResult,
-    SessionStoragePathRequest, SessionStorePort,
+    GroupChatActor, GroupChatError, GroupChatErrorCode, GroupChatMember, GroupChatMessagesResponse,
+    GroupChatMode, GroupChatRoom, GroupChatSendResult, SessionStoragePathRequest, SessionStorePort,
 };
 use std::sync::Arc;
 
@@ -1257,9 +1256,11 @@ pub async fn group_chat_messages(
             code: group_chat_store_error_code(&error),
             message: error.to_string(),
         })?;
+    // P2-6: no string bridge — the contract and the store share the usize
+    // cursor domain (next page start index).
     Ok(GroupChatMessagesResponse {
         messages: window.messages,
-        next_cursor: window.next_cursor.map(|index| index.to_string()),
+        next_cursor: window.next_cursor,
     })
 }
 

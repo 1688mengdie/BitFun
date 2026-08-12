@@ -593,3 +593,145 @@ async fn group_chat_store_leave_semantics_excludes_removed_member() {
         "退出者 m-1 不再收消息（不在成员列表）"
     );
 }
+
+#[tokio::test]
+async fn group_chat_store_round_robin_cursor_update_is_conditional_and_scoped() {
+    // P2-5: cursor-only meta update — no full room rewrite, and an unchanged
+    // cursor is a no-op that leaves the meta file untouched.
+    let root = TestTempDir::new("cursor-conditional");
+    let store = GroupChatStore::new(root.path().join("group-chats"));
+
+    let mut room = sample_room("room-cursor", "Cursor");
+    room.mode = GroupChatMode::RoundRobin;
+    room.round_robin_cursor = 2;
+    store.save_room(&room).await.expect("save room");
+    let meta_path = store.group_chats_root().join("room-cursor").join("meta.json");
+    let original_meta = std::fs::read_to_string(&meta_path).expect("meta exists");
+
+    // Same cursor → no-op: the meta file must remain byte-identical (no write).
+    store
+        .update_round_robin_cursor("room-cursor", 2)
+        .await
+        .expect("no-op update");
+    assert_eq!(
+        std::fs::read_to_string(&meta_path).expect("meta re-read"),
+        original_meta,
+        "unchanged cursor must not rewrite meta.json"
+    );
+
+    // Same cursor again after a sleep → mtime unchanged (performance baseline:
+    // a repeated RoundRobin advance with an identical value never hits disk).
+    let mtime_before = std::fs::metadata(&meta_path)
+        .expect("meta stat")
+        .modified()
+        .expect("mtime");
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    store
+        .update_round_robin_cursor("room-cursor", 2)
+        .await
+        .expect("second no-op update");
+    let mtime_after = std::fs::metadata(&meta_path)
+        .expect("meta stat")
+        .modified()
+        .expect("mtime");
+    assert_eq!(
+        mtime_before, mtime_after,
+        "P2-5: unchanged cursor must not touch meta.json on disk"
+    );
+
+    // New cursor → persisted, and unrelated room fields survive the write.
+    store
+        .update_round_robin_cursor("room-cursor", 5)
+        .await
+        .expect("update cursor");
+    let reloaded = store.load_room("room-cursor").await.expect("reload");
+    assert_eq!(reloaded.round_robin_cursor, 5);
+    assert_eq!(reloaded.name, "Cursor");
+    assert_eq!(reloaded.mode, GroupChatMode::RoundRobin);
+    assert_eq!(reloaded.member_limit, 50);
+}
+
+#[tokio::test]
+async fn group_chat_store_message_status_update_writes_catalog_once() {
+    // P2-7: update_message_status converges on the single catalog write path
+    // (upsert) instead of re-reading + rewriting the whole catalog — status
+    // flips are reflected in the catalog with one atomic write.
+    let root = TestTempDir::new("catalog-single-write");
+    let store = GroupChatStore::new(root.path().join("group-chats"));
+    store
+        .save_room(&sample_room("room-cat", "Catalog"))
+        .await
+        .expect("save");
+
+    let message = sample_message("room-cat", "msg-cat", "question");
+    store
+        .append_message("room-cat", &message)
+        .await
+        .expect("append");
+
+    store
+        .update_message_status("room-cat", "msg-cat", GroupChatMessageStatus::Replied)
+        .await
+        .expect("update status");
+
+    // Catalog entry status follows the message file — single write source.
+    let catalog: StoredGroupChatMessageCatalog = serde_json::from_str(
+        &std::fs::read_to_string(
+            store
+                .group_chats_root()
+                .join("room-cat")
+                .join("message-catalog.json"),
+        )
+        .expect("catalog exists"),
+    )
+    .expect("catalog parses");
+    assert_eq!(catalog.entries.len(), 1);
+    assert_eq!(catalog.entries[0].status, GroupChatMessageStatus::Replied);
+    assert_eq!(catalog.entries[0].index, 0);
+
+    // The message file itself is updated too.
+    let window = store
+        .list_messages("room-cat", None, None)
+        .await
+        .expect("list");
+    assert_eq!(window.messages[0].status, GroupChatMessageStatus::Replied);
+}
+
+#[tokio::test]
+async fn group_chat_store_cursor_domain_is_shared_with_contract() {
+    // P2-6: the store cursor is the message index (usize) — the same domain
+    // exposed by the contract request/response. No string bridge exists; a
+    // paginated window's next_cursor feeds straight back into the next call.
+    let root = TestTempDir::new("cursor-domain");
+    let store = GroupChatStore::new(root.path().join("group-chats"));
+    store
+        .save_room(&sample_room("room-cursor2", "Cursor Domain"))
+        .await
+        .expect("save");
+    for i in 0..6 {
+        store
+            .append_message(
+                "room-cursor2",
+                &sample_message("room-cursor2", &format!("msg-{i}"), &format!("content-{i}")),
+            )
+            .await
+            .expect("append");
+    }
+
+    let page1 = store
+        .list_messages("room-cursor2", Some(2), None)
+        .await
+        .expect("page 1");
+    assert_eq!(page1.next_cursor, Some(4));
+    assert_eq!(page1.messages[0].message_id, "msg-4");
+    assert_eq!(page1.messages[1].message_id, "msg-5");
+    let page2 = store
+        .list_messages("room-cursor2", Some(2), page1.next_cursor)
+        .await
+        .expect("page 2");
+    assert_eq!(page2.next_cursor, Some(2));
+    assert_eq!(page2.messages[0].message_id, "msg-2");
+    assert_eq!(page2.messages[1].message_id, "msg-3");
+    // A usize cursor round-trips without any parse/string conversion.
+    let _: Option<usize> = page1.next_cursor;
+}

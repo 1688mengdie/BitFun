@@ -50,6 +50,22 @@ vi.mock('@/component-library/components/ConfirmDialog/confirmService', () => ({
   confirmWarning: vi.fn(() => Promise.resolve(false)),
 }));
 
+// P2-13: Virtuoso needs real layout measurement (ResizeObserver + clientHeight)
+// that jsdom cannot provide. Stub with a full render so the nav → pane wiring
+// assertions stay meaningful.
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; computeItemKey?: (index: number, item: unknown) => string | number }) => {
+    const items = (props.data ?? []) as { roomId: string; key: string }[];
+    return React.createElement('div', null, items.map((item, index) =>
+      React.createElement(
+        'div',
+        { key: props.computeItemKey ? props.computeItemKey(index, item) : (item as { roomId: string }).roomId },
+        props.itemContent ? props.itemContent(index, item) : null,
+      ),
+    ));
+  },
+}));
+
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 const mockedInvoke = vi.mocked(api.invoke);
 

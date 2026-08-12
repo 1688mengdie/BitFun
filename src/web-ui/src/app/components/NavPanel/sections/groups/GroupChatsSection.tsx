@@ -16,6 +16,7 @@ import { useI18n } from '@/infrastructure/i18n';
 import { confirmWarning } from '@/component-library/components/ConfirmDialog/confirmService';
 import { useGroupChatStore } from '../../../../../flow_chat/store/groupChatStore';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import { Virtuoso } from 'react-virtuoso';
 import './GroupChatsSection.scss';
 
 export interface GroupChatsSectionProps {
@@ -107,8 +108,15 @@ export const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
           {t('nav.groupChat.empty')}
         </div>
       ) : (
-        <div data-bf-component="group-chats-section" data-bf-part="items" className="group-chats-section__items">
-          {sortedRooms.map((room) => (
+        // P2-13: virtualized room list — only the viewport window (plus
+        // overscan) is rendered, so a large room count never materializes
+        // thousands of DOM rows.
+        <Virtuoso
+          className="group-chats-section__items"
+          data={sortedRooms}
+          overscan={8}
+          computeItemKey={(_, room) => room.roomId}
+          itemContent={(_, room) => (
             <div
               key={room.roomId}
               data-bf-component="group-chats-section"
@@ -144,8 +152,8 @@ export const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
                 </IconButton>
               </Tooltip>
             </div>
-          ))}
-        </div>
+          )}
+        />
       )}
     </div>
   );

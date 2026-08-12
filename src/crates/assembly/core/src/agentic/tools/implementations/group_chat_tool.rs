@@ -1408,13 +1408,15 @@ impl GroupChatPort for GroupChatPortImpl {
         req: GroupChatMessagesRequest,
     ) -> Result<GroupChatMessagesResponse, GroupChatError> {
         let store = self.store().await?;
+        // P2-6: cursor shares the usize index domain with the store — no parse
+        // round-trip through a string bridge.
         let window = store
-            .list_messages(&req.room_id, req.limit, req.cursor.map(|c| c.parse().unwrap_or(0)))
+            .list_messages(&req.room_id, req.limit, req.cursor)
             .await
             .map_err(|error| Self::error(error.to_string()))?;
         Ok(GroupChatMessagesResponse {
             messages: window.messages,
-            next_cursor: window.next_cursor.map(|c| c.to_string()),
+            next_cursor: window.next_cursor,
         })
     }
 

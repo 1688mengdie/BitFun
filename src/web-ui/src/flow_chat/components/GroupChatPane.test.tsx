@@ -17,12 +17,35 @@ vi.mock('@/infrastructure/api/service-api/ApiClient', () => ({
 // The shared ChatInput is a heavy composer; stub it here so the pane-level
 // tests stay focused on GroupChatPane wiring (Task A: full ChatInput reuse
 // is verified by the registration contract + buildGroupChatSubmission tests).
+// The stub records the registration object so tests can drive the exact
+// submission path ChatInput uses (E-3: slash text routes through onSubmit).
+let capturedRegistration: { onSubmit?: (submission: ChatInputSubmission) => void | Promise<void> } | undefined;
 vi.mock('./ChatInput', () => ({
-  ChatInput: (props: { registration?: { onSubmit?: unknown } }) =>
-    React.createElement('div', {
+  ChatInput: (props: { registration?: { onSubmit?: unknown } }) => {
+    capturedRegistration = props.registration as typeof capturedRegistration;
+    return React.createElement('div', {
       'data-testid': 'chat-input-textarea',
       'data-registration': props.registration ? 'present' : undefined,
-    }),
+    });
+  },
+}));
+
+// P2-13: the virtualized list measures the viewport via ResizeObserver —
+// jsdom has no layout engine, so Virtuoso renders zero rows. Stub it with a
+// plain full render for behavioral assertions; windowing itself is a
+// browser-layout concern covered by the shared react-virtuoso usage in
+// VirtualMessageList (which uses the same component).
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; computeItemKey?: (index: number, item: unknown) => string | number }) => {
+    const items = (props.data ?? []) as { key: string; node: React.ReactNode }[];
+    return React.createElement('div', null, items.map((item, index) =>
+      React.createElement(
+        'div',
+        { key: props.computeItemKey ? props.computeItemKey(index, item) : item.key },
+        props.itemContent ? props.itemContent(index, item) : null,
+      ),
+    ));
+  },
 }));
 
 vi.mock('@/infrastructure/contexts/WorkspaceContext', () => ({
@@ -107,7 +130,11 @@ function renderPane() {
 
 describe('GroupChatPane', () => {
   beforeEach(() => {
+    capturedRegistration = undefined;
     container = document.createElement('div');
+    // P2-13: the virtualized message list needs a measurable viewport height
+    // in jsdom, otherwise Virtuoso renders zero rows.
+    container.style.height = '600px';
     document.body.appendChild(container);
     root = createRoot(container);
     mockedInvoke.mockReset();
@@ -145,9 +172,7 @@ describe('GroupChatPane', () => {
     expect(messages[0].textContent).toContain('hello from master');
     expect(messages[1].textContent).toContain('Assistant One');
     expect(messages[1].textContent).toContain('reply from assistant');
-  });
-
-  it('renders the shared ChatInput in the input footer (Task A)', () => {
+  });  it('renders the shared ChatInput in the input footer (Task A)', () => {
     renderPane();
     // The full composer is reused instead of the legacy plain-text input.
     expect(container.querySelector('[data-bf-part="textInput"]')).toBeNull();
@@ -208,6 +233,75 @@ describe('GroupChatPane', () => {
     expect(sendCall).toBeTruthy();
     expect(sendCall?.[1]).toEqual(
       expect.objectContaining({ request: expect.objectContaining({ content: 'hi group' }) }),
+    );
+  });
+
+  it('routes slash text through the ChatInput registration into the group chat (E-3)', async () => {
+    // GroupChatPane renders the shared ChatInput with a registration; the
+    // registration.onSubmit is the transport ChatInput calls for every
+    // submission — including text that starts with "/" which must be sent to
+    // the group chat verbatim instead of executing a session-scoped command.
+    mockedInvoke.mockResolvedValue([]);
+    renderPane();
+
+    expect(capturedRegistration).toBeTruthy();
+    expect(capturedRegistration?.onSubmit).toBeTypeOf('function');
+
+    await act(async () => {
+      await capturedRegistration?.onSubmit?.({
+        text: '/compact please summarize',
+        displayText: '/compact please summarize',
+        contexts: [],
+        composerPresentation: null,
+      });
+    });
+
+    const sendCall = mockedInvoke.mock.calls.find(([command]) => command === 'group_chat_send');
+    expect(sendCall).toBeTruthy();
+    expect(sendCall?.[1]).toEqual(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          content: '/compact please summarize',
+          mention_targets: [],
+          urgent: false,
+        }),
+      }),
+    );
+  });
+
+  it('routes @@ member-mention submissions through the ChatInput registration (E-3)', async () => {
+    mockedInvoke.mockResolvedValue([]);
+    renderPane();
+
+    expect(capturedRegistration?.onSubmit).toBeTypeOf('function');
+
+    await act(async () => {
+      await capturedRegistration?.onSubmit?.({
+        text: 'Please review [session-ref:1] the draft',
+        displayText: 'Please review [Session reference: Assistant One] the draft',
+        contexts: [{
+          id: 'group-member-m-1',
+          timestamp: 1,
+          type: 'session-reference',
+          sessionId: 'm-1',
+          sessionName: 'Assistant One',
+          workspacePath: '/ws',
+          workspaceLabel: '@all',
+          metadata: { groupChatMention: { kind: 'claw', sessionId: 'm-1', agentType: 'Claw' } },
+        }],
+        composerPresentation: null,
+      });
+    });
+
+    const sendCall = mockedInvoke.mock.calls.find(([command]) => command === 'group_chat_send');
+    expect(sendCall).toBeTruthy();
+    expect(sendCall?.[1]).toEqual(
+      expect.objectContaining({
+        request: expect.objectContaining({
+          content: 'Please review @Assistant One the draft',
+          mention_targets: [{ kind: 'claw', sessionId: 'm-1', agentType: 'Claw' }],
+        }),
+      }),
     );
   });
 

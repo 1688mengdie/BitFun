@@ -14,6 +14,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { MessageSquare, Repeat, Settings2, Users } from 'lucide-react';
+import { Virtuoso } from 'react-virtuoso';
 import { useI18n } from '@/infrastructure/i18n';
 import { useOptionalWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useGroupChatStore } from '../store/groupChatStore';
@@ -246,7 +247,17 @@ export const GroupChatPane: React.FC<GroupChatPaneProps> = ({
         {messageRows.length === 0 ? (
           <div className="group-chat-pane__no-messages">{t('nav.groupChat.noMessages')}</div>
         ) : (
-          messageRows
+          // P2-13: virtualized message stream — renders only the viewport
+          // window (plus overscan) so a long room history never materializes
+          // thousands of message rows at once.
+          <Virtuoso
+            className="group-chat-pane__messages-virtuoso"
+            data={messageRows}
+            overscan={12}
+            computeItemKey={(_, row) => row.key}
+            itemContent={(_, row) => row.node}
+            followOutput="smooth"
+          />
         )}
       </div>
       <footer data-bf-component="group-chat-pane" data-bf-part="input" className="group-chat-pane__input">
@@ -277,12 +288,17 @@ function renderMessages(
 ) {
   return messages.map((message) => {
     const senderLabel = authorLabel(message.author, members, masterLabel, allLabel);
-    return (
-      <div key={message.messageId} data-bf-component="group-chat-pane" data-bf-part="message" className="group-chat-pane__message">
-        <span data-bf-component="group-chat-pane" data-bf-part="messageAuthor" className="group-chat-pane__message-author">{senderLabel}</span>
-        <span data-bf-component="group-chat-pane" data-bf-part="messageContent" className="group-chat-pane__message-content">{message.content}</span>
-      </div>
-    );
+    return {
+      key: message.messageId,
+      // P2-13: each row is a self-contained React element consumed by the
+      // virtualized list (Virtuoso renders the windowed subset only).
+      node: (
+        <div data-bf-component="group-chat-pane" data-bf-part="message" className="group-chat-pane__message">
+          <span data-bf-component="group-chat-pane" data-bf-part="messageAuthor" className="group-chat-pane__message-author">{senderLabel}</span>
+          <span data-bf-component="group-chat-pane" data-bf-part="messageContent" className="group-chat-pane__message-content">{message.content}</span>
+        </div>
+      ),
+    };
   });
 }
 

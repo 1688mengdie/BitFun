@@ -20,6 +20,22 @@ vi.mock('@/component-library/components/ConfirmDialog/confirmService', () => ({
   confirmWarning: vi.fn(),
 }));
 
+// P2-13: Virtuoso needs real layout measurement (ResizeObserver + clientHeight)
+// that jsdom cannot provide. Stub with a full render so behavior assertions
+// stay meaningful; windowing itself is a browser-layout concern.
+vi.mock('react-virtuoso', () => ({
+  Virtuoso: (props: { data?: unknown[]; itemContent?: (index: number, item: unknown) => React.ReactNode; computeItemKey?: (index: number, item: unknown) => string | number }) => {
+    const items = (props.data ?? []) as { roomId: string; key: string }[];
+    return React.createElement('div', null, items.map((item, index) =>
+      React.createElement(
+        'div',
+        { key: props.computeItemKey ? props.computeItemKey(index, item) : (item as { roomId: string }).roomId },
+        props.itemContent ? props.itemContent(index, item) : null,
+      ),
+    ));
+  },
+}));
+
 import { api } from '@/infrastructure/api/service-api/ApiClient';
 const mockedInvoke = vi.mocked(api.invoke);
 
@@ -63,6 +79,9 @@ function renderSection() {
 describe('GroupChatsSection', () => {
   beforeEach(() => {
     container = document.createElement('div');
+    // P2-13: the virtualized list needs a measurable viewport height — without
+    // it Virtuoso renders zero rows in jsdom.
+    container.style.height = '600px';
     document.body.appendChild(container);
     root = createRoot(container);
     mockedConfirm.mockReset();
@@ -104,6 +123,12 @@ describe('GroupChatsSection', () => {
       ]),
     });
     renderSection();
+
+    const section = container.querySelector('[data-bf-part="root"]') as HTMLElement;
+    section.style.height = '600px';
+    act(() => {
+      section.dispatchEvent(new Event('resize'));
+    });
 
     const items = Array.from(container.querySelectorAll('[data-bf-part="item"]'));
     expect(items.length).toBe(2);

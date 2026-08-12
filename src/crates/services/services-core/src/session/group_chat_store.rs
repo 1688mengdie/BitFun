@@ -367,6 +367,32 @@ impl GroupChatStore {
             .await
     }
 
+    /// P2-5: updates only `round_robin_cursor` in `meta.json` without rewriting
+    /// the whole room record. No-op (no write at all) when the cursor is
+    /// unchanged — RoundRobin dispatch advances the cursor once per message and
+    /// must not pay a full meta rewrite for an identical value.
+    pub async fn update_round_robin_cursor(
+        &self,
+        room_id: &str,
+        next_cursor: usize,
+    ) -> Result<(), GroupChatStoreError> {
+        validate_room_id(room_id).map_err(GroupChatStoreError::InvalidRoomId)?;
+        let room_lock = self.get_room_lock(room_id).await?;
+        let _guard = room_lock.lock().await;
+
+        let stored = self
+            .read_json_optional::<StoredGroupChatMetaFile>(&self.meta_path(room_id))
+            .await?
+            .ok_or_else(|| GroupChatStoreError::RoomNotFound(room_id.to_string()))?;
+        if stored.room.round_robin_cursor == next_cursor {
+            return Ok(());
+        }
+        let mut room = stored.room;
+        room.round_robin_cursor = next_cursor;
+        let file = StoredGroupChatMetaFile::new(room);
+        self.write_json_atomic(&self.meta_path(room_id), &file).await
+    }
+
     /// Atomically writes `members.json` (single source of truth, P1-11).
     pub async fn save_members(
         &self,
@@ -444,17 +470,10 @@ impl GroupChatStore {
         self.write_json_atomic(&self.message_path(room_id, index), &updated)
             .await?;
 
-        let mut catalog = catalog;
-        if let Some(entry) = catalog
-            .entries
-            .iter_mut()
-            .find(|entry| entry.message_id == message_id)
-        {
-            entry.status = status;
-        }
-        let updated_catalog =
-            StoredGroupChatMessageCatalog::new(current_unix_ms(), catalog.entries);
-        self.write_json_atomic(&self.message_catalog_path(room_id), &updated_catalog)
+        // P2-7: single-write catalog convergence — reuse the append path's
+        // locked upsert (read-modify-write once, one atomic write) instead of
+        // re-reading + rewriting the whole catalog a second time.
+        self.upsert_catalog_entry_locked(room_id, &updated, index)
             .await
     }
 

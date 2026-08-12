@@ -138,10 +138,13 @@ impl GroupChatRouter {
                     });
                 };
                 // Advance the cursor and persist it (P1-10: cursor 后端落盘).
+                // P2-5: conditional single-field write — no meta rewrite when
+                // the cursor is unchanged; otherwise only cursor is persisted.
                 let next_cursor = (room.round_robin_cursor + 1) % members.len();
-                let mut updated = room.clone();
-                updated.round_robin_cursor = next_cursor;
-                store.save_room(&updated).await.map_err(store_tool_error)?;
+                store
+                    .update_round_robin_cursor(&room.room_id, next_cursor)
+                    .await
+                    .map_err(store_tool_error)?;
                 Ok(GroupChatDispatchPlan {
                     targets: vec![picked],
                     mention_all: false,
@@ -472,6 +475,13 @@ mod tests {
         let root = TestTempDir::new("rr");
         let store = GroupChatStore::new(root.path().join("group-chats"));
         let room = room("room-rr", GroupChatMode::RoundRobin, 0);
+        // P2-5: cursor persistence is a conditional single-field meta write —
+        // the room's meta.json must exist first (same precondition as the
+        // original save_room path, now explicit).
+        store
+            .save_room(&room)
+            .await
+            .expect("save room");
         // Persist members so load_room can read them back (P1-11 single source).
         store
             .save_members("room-rr", &room.members)

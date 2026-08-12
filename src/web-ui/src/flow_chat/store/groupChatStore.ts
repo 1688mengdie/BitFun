@@ -214,16 +214,21 @@ export const useGroupChatStore = create<GroupChatStore>()(
     },
 
     loadMessages: async (roomId, cursor) => {
+      // P2-6: cursor is a plain message index (number) — same domain as the
+      // backend contract; no string bridge.
       const response = (await api.invoke('group_chat_messages', {
         request: {
           workspace_path: get().workspacePath,
           room_id: roomId,
-          limit: cursor ? undefined : 50,
+          limit: cursor === undefined ? 50 : undefined,
           cursor: cursor ?? undefined,
         },
-      })) as { messages: GroupChatMessage[]; nextCursor?: string };
+      })) as { messages: GroupChatMessage[]; nextCursor?: number };
       set((state) => {
-        state.messages.set(roomId, response.messages);
+        // P2-1: incremental pagination — page 1 replaces the list, later pages
+        // prepend older messages instead of dropping the previous window.
+        const existing = state.messages.get(roomId) ?? [];
+        state.messages.set(roomId, cursor === undefined ? response.messages : [...response.messages, ...existing]);
       });
     },
 
