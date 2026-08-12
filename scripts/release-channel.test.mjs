@@ -9,6 +9,10 @@ import {
   validateReleaseVersion,
 } from './release-channel.mjs';
 import { setBuildVersion } from './set-build-version.mjs';
+import { decodeMinisignPublicKey } from './write-minisign-public-key.mjs';
+
+const RAW_PUBLIC_KEY = `untrusted comment: minisign public key E3E0874CEC1C22C3
+RWTDIhzsTIfg41w2Gwiei0zNDKaLYm9dQVpEWNQ/Ulpyt2mbS2JE1U2M`;
 
 test('stable and beta channels resolve to isolated updater feeds', () => {
   const stable = resolveReleaseChannel('stable');
@@ -37,6 +41,16 @@ test('release versions must match their channel', () => {
     validateReleaseVersion('nightly', '0.2.18-nightly.20260811'),
     '0.2.18-nightly.20260811',
   );
+});
+
+test('release public key export accepts raw and legacy base64 values', () => {
+  const expected = `${RAW_PUBLIC_KEY}\n`;
+  assert.equal(decodeMinisignPublicKey(RAW_PUBLIC_KEY), expected);
+  assert.equal(
+    decodeMinisignPublicKey(Buffer.from(expected).toString('base64')),
+    expected,
+  );
+  assert.throws(() => decodeMinisignPublicKey('not-a-key'));
 });
 
 test('build version projection updates every release-owned version file', () => {

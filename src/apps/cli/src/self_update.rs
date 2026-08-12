@@ -899,26 +899,33 @@ fn release_pubkey() -> Option<&'static str> {
 }
 
 /// Verify a Tauri-format `.sig` (base64 of a minisign signature file) over the
-/// archive, using the base64-wrapped public key.
+/// archive. The public key accepts both current raw Tauri values and the legacy
+/// base64 wrapper.
 ///
 /// A checksum only proves the transfer was not corrupted: whoever serves the
 /// archive can serve a matching `.sha256`. A signature proves the bytes came
 /// from whoever holds the release key, which is what actually protects the
 /// third-party GitHub proxy and mirror paths.
-fn verify_signature(archive: &[u8], signature_b64: &str, pubkey_b64: &str) -> Result<()> {
+fn verify_signature(archive: &[u8], signature_b64: &str, pubkey: &str) -> Result<()> {
     use base64::Engine as _;
-    let decode = |value: &str, what: &str| -> Result<String> {
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(value.trim().as_bytes())
-            .with_context(|| format!("decode {what}"))?;
-        String::from_utf8(bytes).with_context(|| format!("decode {what} as UTF-8"))
-    };
 
-    let public_key = minisign_verify::PublicKey::decode(&decode(pubkey_b64, "release public key")?)
+    let public_key_text = if pubkey.trim().starts_with("untrusted comment:") {
+        pubkey.trim().to_owned()
+    } else {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(pubkey.trim().as_bytes())
+            .context("decode release public key")?;
+        String::from_utf8(bytes).context("decode release public key as UTF-8")?
+    };
+    let public_key = minisign_verify::PublicKey::decode(&public_key_text)
         .map_err(|error| anyhow!("invalid release public key: {error}"))?;
-    let signature =
-        minisign_verify::Signature::decode(&decode(signature_b64, "release signature")?)
-            .map_err(|error| anyhow!("invalid release signature: {error}"))?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(signature_b64.trim().as_bytes())
+        .context("decode release signature")?;
+    let signature_text =
+        String::from_utf8(signature_bytes).context("decode release signature as UTF-8")?;
+    let signature = minisign_verify::Signature::decode(&signature_text)
+        .map_err(|error| anyhow!("invalid release signature: {error}"))?;
     public_key
         .verify(archive, &signature, false)
         .map_err(|error| anyhow!("release signature does not match the archive: {error}"))
@@ -1198,6 +1205,7 @@ fn restart_managed_daemon() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine as _;
     use sha2::{Digest, Sha256};
     use std::sync::Arc;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1470,6 +1478,14 @@ mod tests {
     fn release_signature_accepts_the_tauri_wire_format() {
         verify_signature(FIXTURE_DATA, FIXTURE_SIGNATURE, FIXTURE_PUBKEY)
             .expect("minisign signature in Tauri's base64 wrapper must verify");
+        let raw_pubkey = String::from_utf8(
+            base64::engine::general_purpose::STANDARD
+                .decode(FIXTURE_PUBKEY)
+                .expect("decode fixture public key"),
+        )
+        .expect("fixture public key is UTF-8");
+        verify_signature(FIXTURE_DATA, FIXTURE_SIGNATURE, &raw_pubkey)
+            .expect("raw minisign public key must verify");
     }
 
     #[test]
