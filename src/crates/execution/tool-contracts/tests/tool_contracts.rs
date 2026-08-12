@@ -29,7 +29,7 @@ use bitfun_agent_tools::{
     resolve_tool_path_with_context_roots, resolve_workspace_tool_path,
     sort_tool_manifest_definitions, summarize_get_tool_spec_deferred_tools,
     tool_path_is_effectively_absolute, validate_deferred_tool_usage, validate_get_tool_spec_input,
-    validate_mcp_tool_bridge_input, validate_tool_allowed_by_list,
+    validate_tool_allowed_by_list,
     validate_tool_execution_admission, CallDeferredToolInputError, DeferredToolUsageError,
     DynamicMcpToolInfo, DynamicToolInfo, GetToolSpecDeferredToolSummary, GetToolSpecExecutionError,
     GetToolSpecExecutionPlan, GetToolSpecLoadObservation, GetToolSpecRuntime, InputValidator,
