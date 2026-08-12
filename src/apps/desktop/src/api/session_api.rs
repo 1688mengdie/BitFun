@@ -891,6 +891,7 @@ pub async fn delete_all_archived_sessions(
 // validation, back-index (S-38), dispatch routing, and error codes with the
 // tool path — no parallel implementation.
 
+use crate::api::remote_workspace_policy::GroupChatWorkspaceScope;
 use bitfun_core::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
 use bitfun_core::agentic::session::session_store_port::CoreSessionStorePort;
 use bitfun_core::agentic::tools::implementations::group_chat_tool::{
@@ -1009,11 +1010,15 @@ pub struct GroupChatScanTimeoutsRequest {
 }
 
 /// Resolves the group-chats root (sibling of the sessions root) for a workspace.
-async fn group_chats_root(workspace_path: &str) -> Result<std::path::PathBuf, String> {
+/// `scope` carries the real `remote_connection_id`/`remote_ssh_host` (F-3: the
+/// 12 group-chat commands declare `RemoteRouted`; a hardcoded `None` connection
+/// id made remote workspaces opened at the same path on different hosts
+/// resolve against the wrong — or `_unresolved` — mirror tree).
+async fn group_chats_root(scope: &GroupChatWorkspaceScope) -> Result<std::path::PathBuf, String> {
     let request = SessionStoragePathRequest {
-        workspace_path: std::path::PathBuf::from(workspace_path),
-        remote_connection_id: None,
-        remote_ssh_host: None,
+        workspace_path: std::path::PathBuf::from(&scope.workspace_path),
+        remote_connection_id: scope.remote_connection_id.clone(),
+        remote_ssh_host: scope.remote_ssh_host.clone(),
     };
     let resolution = CoreSessionStorePort::default()
         .resolve_session_storage_path(request)
@@ -1026,8 +1031,8 @@ async fn group_chats_root(workspace_path: &str) -> Result<std::path::PathBuf, St
     Ok(parent.join("group-chats"))
 }
 
-async fn group_chat_store(workspace_path: &str) -> Result<GroupChatStore, String> {
-    let root = group_chats_root(workspace_path).await?;
+async fn group_chat_store(scope: &GroupChatWorkspaceScope) -> Result<GroupChatStore, String> {
+    let root = group_chats_root(scope).await?;
     Ok(GroupChatStore::new(root))
 }
 
@@ -1053,7 +1058,10 @@ fn require_coordinator() -> Result<Arc<ConversationCoordinator>, GroupChatError>
 pub async fn group_chat_list(
     request: GroupChatListRequest,
 ) -> Result<Vec<GroupChatRoom>, GroupChatError> {
-    let store = group_chat_store(&request.workspace_path)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
@@ -1070,7 +1078,10 @@ pub async fn group_chat_list(
 pub async fn group_chat_load(
     request: GroupChatLoadRequest,
 ) -> Result<GroupChatRoom, GroupChatError> {
-    let store = group_chat_store(&request.workspace_path)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
@@ -1089,7 +1100,10 @@ pub async fn group_chat_load(
 pub async fn group_chat_members(
     request: GroupChatMembersRequest,
 ) -> Result<Vec<GroupChatMember>, GroupChatError> {
-    let store = group_chat_store(&request.workspace_path)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
@@ -1114,10 +1128,13 @@ pub async fn group_chat_create(
             message: "group_chat_create: workspace_path is empty".to_string(),
         });
     }
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
     let coordinator = require_coordinator()?;
     GroupChatTool::create_room_impl(
         &coordinator,
-        &request.workspace_path,
+        &scope.workspace_path,
         &request.name,
         request.owner,
         &request.members,
@@ -1131,10 +1148,13 @@ pub async fn group_chat_create(
 pub async fn group_chat_join(
     request: GroupChatJoinRequest,
 ) -> Result<GroupChatRoom, GroupChatError> {
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
     let coordinator = require_coordinator()?;
     GroupChatTool::join_room_impl(
         &coordinator,
-        &request.workspace_path,
+        &scope.workspace_path,
         &request.room_id,
         &request.session_id,
         request.actor,
@@ -1147,10 +1167,13 @@ pub async fn group_chat_join(
 pub async fn group_chat_leave(
     request: GroupChatLeaveRequest,
 ) -> Result<GroupChatRoom, GroupChatError> {
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
     let coordinator = require_coordinator()?;
     GroupChatTool::leave_room_impl(
         &coordinator,
-        &request.workspace_path,
+        &scope.workspace_path,
         &request.room_id,
         &request.session_id,
         request.actor,
@@ -1163,39 +1186,38 @@ pub async fn group_chat_leave(
 pub async fn group_chat_delete(
     request: GroupChatDeleteRequest,
 ) -> Result<(), GroupChatError> {
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
     let coordinator = require_coordinator()?;
-    GroupChatTool::delete_room_impl(
-        &coordinator,
-        &request.workspace_path,
-        &request.room_id,
-        request.actor,
-    )
-    .await
-    .map_err(group_chat_command_error)
+    GroupChatTool::delete_room_impl(&coordinator, &scope.workspace_path, &request.room_id, request.actor)
+        .await
+        .map_err(group_chat_command_error)
 }
 
 #[tauri::command]
 pub async fn group_chat_set_mode(
     request: GroupChatSetModeRequest,
 ) -> Result<GroupChatRoom, GroupChatError> {
-    GroupChatTool::set_mode_impl(
-        &request.workspace_path,
-        &request.room_id,
-        request.mode,
-        request.actor,
-    )
-    .await
-    .map_err(group_chat_command_error)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    GroupChatTool::set_mode_impl(&scope.workspace_path, &request.room_id, request.mode, request.actor)
+        .await
+        .map_err(group_chat_command_error)
 }
 
 #[tauri::command]
 pub async fn group_chat_send(
     request: GroupChatSendRequest,
 ) -> Result<GroupChatSendResult, GroupChatError> {
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
     let coordinator = require_coordinator()?;
     let (message_id, delivered_to, failed_to) = GroupChatTool::send_message_impl(
         &coordinator,
-        &request.workspace_path,
+        &scope.workspace_path,
         &request.room_id,
         &request.author,
         &request.content,
@@ -1219,7 +1241,10 @@ pub async fn group_chat_send(
 pub async fn group_chat_messages(
     request: GroupChatMessagesRequest,
 ) -> Result<GroupChatMessagesResponse, GroupChatError> {
-    let store = group_chat_store(&request.workspace_path)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
@@ -1245,7 +1270,10 @@ pub async fn group_chat_ingest_reply(
     // F-2 convergence: thin wrapper over the authority router core so the
     // command layer, the GroupChatPort adapter, and the reply router share
     // one behavior (P2-2 no-op on deleted message + deterministic reply id).
-    let store = group_chat_store(&request.workspace_path)
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
@@ -1288,7 +1316,10 @@ fn group_chat_store_error_code(
 pub async fn group_chat_scan_timeouts(
     request: GroupChatScanTimeoutsRequest,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let store = group_chat_store(&request.workspace_path).await?;
+    let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
+        .resolve()
+        .await;
+    let store = group_chat_store(&scope).await?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
