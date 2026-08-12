@@ -12834,7 +12834,7 @@ mod tests {
             loaded_at_resolved.is_some(),
         );
 
-        manager
+        let persist_result = manager
             .persist_session_lineage(
                 &session.session_id,
                 SessionRelationship {
@@ -12849,8 +12849,31 @@ mod tests {
                     ..Default::default()
                 },
             )
-            .await
-            .expect("lineage should persist");
+            .await;
+        if let Err(error) = persist_result {
+            // CI-only diagnostic: dump every state that could explain the
+            // NotFound so the disturbance becomes visible on the next run.
+            let should_persist = manager.should_persist_session_id(&session.session_id);
+            let resolved_now = manager
+                .effective_session_storage_path(&session.session_id)
+                .await;
+            let in_sessions_map = manager.sessions.contains_key(&session.session_id);
+            let at_resolved_now = match resolved_now.as_deref() {
+                Some(path) => persistence_manager
+                    .load_session_metadata(path, &session.session_id)
+                    .await
+                    .expect("metadata lookup at resolved path should succeed"),
+                None => None,
+            };
+            panic!(
+                "lineage should persist: {error}\n  session_id={}\n  in_sessions_map={}\n  should_persist_session_id={}\n  resolved_storage_path_now={:?}\n  metadata_at_resolved_now={}",
+                session.session_id,
+                in_sessions_map,
+                should_persist,
+                resolved_now,
+                at_resolved_now.is_some(),
+            );
+        }
 
         let metadata = persistence_manager
             .load_session_metadata(workspace.path(), &session.session_id)
