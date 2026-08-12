@@ -7592,6 +7592,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// first), all-or-nothing on the root. Returns the deleted session ids in
     /// deletion order (children before root).
     ///
+    /// Deleting a root that is already gone (transient root recycled after a
+    /// `persistent=false` task, or an unknown id) is idempotent: it returns an
+    /// empty list so the frontend can drop a residual shell without an error.
+    ///
     /// A transient root is released through the transient family cascade so
     /// the whole in-memory family is discarded together. For a durable root,
     /// the descendant set is discovered from persisted metadata (authoritative
@@ -7720,9 +7724,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .any(|member| member.session_id == session_id)
             && self.session_manager.get_session(session_id).is_none()
         {
-            return Err(BitFunError::NotFound(format!(
-                "Session not found: {session_id}"
-            )));
+            // Ghost-session fix (B, durable-root branch): a transient root
+            // that was already recycled (auto-recycle after a persistent=false
+            // task) leaves no persisted metadata and no in-memory Session, so
+            // it is indistinguishable from an unknown id. The frontend may
+            // still hold a residual shell when the SessionDeleted event was
+            // missed (e.g. tab offline); treat the delete as idempotent and
+            // return an empty list so the UI drops the shell locally instead of
+            // surfacing "Session not found".
+            return Ok(Vec::new());
         }
 
         // Release in-memory transient descendants first (children before
@@ -18520,16 +18530,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn coordinator_delete_session_tree_returns_not_found_for_unknown_session() {
+    async fn coordinator_delete_session_tree_is_idempotent_for_unknown_session() {
+        // Ghost-session fix (B, durable-root branch): a root with no persisted
+        // metadata and no in-memory Session (e.g. a transient session already
+        // recycled after a persistent=false task, whose SessionDeleted event was
+        // missed) must delete as an idempotent empty result so the frontend can
+        // drop its residual shell instead of surfacing "Session not found".
         let (coordinator, _session_manager) = test_persistent_coordinator();
         let workspace = tempfile::tempdir().expect("workspace");
-        let error = coordinator
+        let deleted = coordinator
             .delete_session_tree(workspace.path(), None, None, "missing-session")
             .await
-            .expect_err("unknown session must be rejected");
+            .expect("deleting an already-gone session must be idempotent");
         assert!(
-            error.to_string().contains("not found"),
-            "unexpected error: {error}"
+            deleted.is_empty(),
+            "no runtime session remains to delete for an unknown root"
         );
     }
 
@@ -20856,18 +20871,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_session_tree_after_recycled_transient_root_reports_current_behavior() {
-        // Ghost-session fix (B) added a `family.is_empty()` early return that
-        // turns a NotFound into an empty list, but that branch is unreachable
-        // in the normal recycle flow: `discard_one_transient_session` removes
-        // the session and the transient marker together, so an already-recycled
-        // root no longer satisfies `is_transient_session` and falls through to
-        // the durable branch, which returns NotFound (verified empirically).
-        //
-        // This test pins the CURRENT behavior and the idempotent discard so the
-        // gap is visible and documented. Fixing the residual-shell manual delete
-        // requires making the durable branch tolerant of an unknown root, which
-        // is outside this patch (already pushed).
+    async fn delete_session_tree_after_recycled_transient_root_is_idempotent() {
+        // Ghost-session fix (B): after auto-recycle the frontend may still hold
+        // a residual shell (e.g. the SessionDeleted event was missed). A manual
+        // delete of that shell must succeed with an empty list instead of
+        // NotFound so the UI drops the node locally. `discard_one_transient_session`
+        // removes the session and the transient marker together, so the
+        // already-recycled root falls through to the durable branch, which now
+        // treats an unknown root as an idempotent empty delete.
         let (coordinator, session_manager) = test_coordinator_with_config(100, true);
         let workspace_path = std::env::temp_dir().join(format!(
             "bitfun-ghost-session-tree-test-{}",
@@ -20917,17 +20928,15 @@ mod tests {
             .expect("repeat discard must stay idempotent"));
         assert!(session_manager.get_session(&child.session_id).is_none());
 
-        // KNOWN GAP (see comment above): the residual-shell manual delete still
-        // reports NotFound because the recycled root is no longer marked
-        // transient. Pinned here so the behavior cannot silently change.
-        let error = coordinator
+        // The frontend shell delete now resolves to an empty list, not NotFound.
+        let deleted = coordinator
             .delete_session_tree(&workspace_path, None, None, &root.session_id)
             .await
-            .expect_err("already-recycled transient root currently falls to the durable NotFound branch");
-        assert!(matches!(
-            error,
-            crate::util::errors::BitFunError::NotFound(_)
-        ));
+            .expect("deleting a residual shell of an already-recycled transient root must succeed");
+        assert!(
+            deleted.is_empty(),
+            "no runtime session remains to delete for an already-recycled transient root"
+        );
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }
