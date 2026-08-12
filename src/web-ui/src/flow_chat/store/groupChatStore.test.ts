@@ -78,7 +78,11 @@ describe('groupChatStore', () => {
 
     await useGroupChatStore.getState().loadRooms('/ws');
 
-    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', { workspacePath: '/ws' });
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', {
+      request: {
+        workspace_path: '/ws',
+      },
+    });
     const rooms = useGroupChatStore.getState().rooms;
     expect(rooms.size).toBe(2);
     expect(rooms.get('room-1')?.name).toBe('Alpha');
@@ -90,8 +94,10 @@ describe('groupChatStore', () => {
     const members = await useGroupChatStore.getState().loadMembers('room-1');
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_members', {
-      workspacePath: '',
-      roomId: 'room-1',
+      request: {
+        workspace_path: '',
+        room_id: 'room-1',
+      },
     });
     expect(members.length).toBe(2);
     expect(useGroupChatStore.getState().members.get('room-1')?.length).toBe(2);
@@ -106,11 +112,13 @@ describe('groupChatStore', () => {
       .createRoom('New Room', { kind: 'master' }, ['m-1'], 'round_robin');
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_create', {
-      workspacePath: '/ws',
-      name: 'New Room',
-      owner: { kind: 'master' },
-      members: ['m-1'],
-      mode: 'round_robin',
+      request: {
+        workspace_path: '/ws',
+        name: 'New Room',
+        owner: { kind: 'master' },
+        members: ['m-1'],
+        mode: 'round_robin',
+      },
     });
     expect(room.roomId).toBe('room-9');
     expect(useGroupChatStore.getState().rooms.has('room-9')).toBe(true);
@@ -128,9 +136,11 @@ describe('groupChatStore', () => {
     await useGroupChatStore.getState().deleteRoom('room-1', { kind: 'master' });
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_delete', {
-      workspacePath: '',
-      roomId: 'room-1',
-      actor: { kind: 'master' },
+      request: {
+        workspace_path: '',
+        room_id: 'room-1',
+        actor: { kind: 'master' },
+      },
     });
     const state = useGroupChatStore.getState();
     expect(state.rooms.has('room-1')).toBe(false);
@@ -148,12 +158,14 @@ describe('groupChatStore', () => {
       .sendMessage('room-1', { kind: 'master' }, 'hi', [mention], true);
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_send', {
-      workspacePath: '',
-      roomId: 'room-1',
-      author: { kind: 'master' },
-      content: 'hi',
-      mentionTargets: [mention],
-      urgent: true,
+      request: {
+        workspace_path: '',
+        room_id: 'room-1',
+        author: { kind: 'master' },
+        content: 'hi',
+        mention_targets: [mention],
+        urgent: true,
+      },
     });
   });
 
