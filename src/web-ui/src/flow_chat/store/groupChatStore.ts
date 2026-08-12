@@ -44,7 +44,7 @@ export interface GroupChatStore extends GroupChatState {
     mentionTargets: GroupChatActor[],
     urgent?: boolean,
   ) => Promise<void>;
-  loadMessages: (roomId: string, cursor?: string) => Promise<void>;
+  loadMessages: (roomId: string, cursor?: number) => Promise<void>;
   /** P1-1/P2-4 fix: timeout-reminder consumer — scan one room (or all when roomId is omitted). */
   scanTimeouts: (replyTimeoutSecs: number, roomId?: string) => Promise<Array<{ roomId: string; messageId: string; content: string }>>;
   /** P0-3 fix: ingest a member's reply — mark the message Replied and append the reply body to the room stream. */

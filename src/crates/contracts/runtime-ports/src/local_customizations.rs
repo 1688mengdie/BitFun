@@ -554,5 +554,11 @@ mod tests {
         };
         let response_value = serde_json::to_value(&response).expect("serialize response");
         assert_eq!(response_value["nextCursor"], json!(25));
+
+        // Full round-trip on the response side too — deserializing the serialized
+        // value must land back on the same usize cursor (P2-6 contract).
+        let response_back: GroupChatMessagesResponse =
+            serde_json::from_value(response_value).expect("deserialize response");
+        assert_eq!(response_back.next_cursor, Some(25));
     }
 }
