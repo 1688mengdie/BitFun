@@ -7619,9 +7619,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 session_id,
             )?;
             if family.is_empty() {
-                return Err(BitFunError::NotFound(format!(
-                    "Session not found: {session_id}"
-                )));
+                // Ghost-session fix (B): the transient root was already
+                // recycled (e.g. auto-recycle after a persistent=false task),
+                // so the frontend may still hold a residual shell. Return an
+                // empty list instead of NotFound so the UI delete succeeds and
+                // drops the shell locally.
+                return Ok(Vec::new());
             }
             for member_id in &family {
                 self.ensure_session_tree_deletable(workspace_path, member_id)
@@ -7807,6 +7810,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// coordination owner used by durable Session deletion. Coordination rows
     /// and live background outcomes are removed before runtime state so a
     /// failed cleanup can be retried without losing the family identity.
+    ///
+    /// On success, emits `SessionDeleted` for every discarded family member so
+    /// the frontend session tree removes the nodes immediately (ghost-session
+    /// fix: the transient recycle paths previously released memory without any
+    /// event, leaving residual shells that only disappeared on restart).
     pub(crate) async fn discard_transient_session(
         &self,
         workspace_path: &Path,
@@ -7832,14 +7840,26 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             // restrictions and Warden state cannot leak into recycled ids.
             self.session_end_cleanup(related_session_id).await;
         }
-        self.session_manager
+        let discarded = self
+            .session_manager
             .discard_transient_session(
                 workspace_path,
                 remote_connection_id,
                 remote_ssh_host,
                 session_id,
             )
-            .await
+            .await?;
+        if discarded {
+            // Ghost-session fix: notify the frontend so its session tree drops
+            // the transient shells immediately (children before root).
+            for related_session_id in &family {
+                self.emit_event(AgenticEvent::SessionDeleted {
+                    session_id: related_session_id.clone(),
+                })
+                .await;
+            }
+        }
+        Ok(discarded)
     }
 
     /// Recycle a temporary (`persistent=false`) subagent session once its task
