@@ -1145,46 +1145,31 @@ pub async fn group_chat_ingest_reply(
     author: GroupChatActor,
     timestamp: i64,
 ) -> Result<(), GroupChatError> {
-    // P0-3/P2-1: mark the original message Replied AND persist the reply body
-    // into the room stream so the group shows the reply text.
+    // F-2 convergence: thin wrapper over the authority router core so the
+    // command layer, the GroupChatPort adapter, and the reply router share
+    // one behavior (P2-2 no-op on deleted message + deterministic reply id).
     let store = group_chat_store(&workspace_path)
         .await
         .map_err(|message| GroupChatError {
             code: GroupChatErrorCode::NotFound,
             message,
         })?;
-    store
-        .update_message_status(
-            &room_id,
-            &message_id,
-            bitfun_runtime_ports::GroupChatMessageStatus::Replied,
-        )
-        .await
-        .map_err(|error| GroupChatError {
-            code: group_chat_store_error_code(&error),
-            message: error.to_string(),
-        })?;
-    if !reply_content.trim().is_empty() {
-        let reply = GroupChatMessage {
-            message_id: format!("msg-reply-{message_id}-{timestamp}"),
-            room_id: room_id.clone(),
-            author,
-            kind: bitfun_runtime_ports::GroupChatMessageKind::Agent,
-            content: reply_content,
-            mention_targets: Vec::new(),
-            reply_to_message_id: Some(message_id),
-            timestamp,
-            status: bitfun_runtime_ports::GroupChatMessageStatus::Delivered,
-        };
-        store
-            .append_message(&room_id, &reply)
-            .await
-            .map_err(|error| GroupChatError {
-                code: group_chat_store_error_code(&error),
-                message: error.to_string(),
-            })?;
-    }
-    Ok(())
+    bitfun_core::agentic::tools::implementations::group_chat_router::ingest_reply_core(
+        &store,
+        &room_id,
+        &message_id,
+        &reply_content,
+        &author,
+        timestamp,
+    )
+    .await
+    .map_err(|error| {
+        let text = error.to_string();
+        GroupChatError {
+            code: parse_group_chat_error_code(&text).unwrap_or(GroupChatErrorCode::NotFound),
+            message: text,
+        }
+    })
 }
 
 /// Maps a store error to the closest contract error code (P1-5).

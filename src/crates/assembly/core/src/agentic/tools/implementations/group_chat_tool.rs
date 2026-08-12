@@ -1420,34 +1420,19 @@ impl GroupChatPort for GroupChatPortImpl {
 
     async fn ingest_reply(&self, req: GroupChatIngestReplyRequest) -> Result<(), GroupChatError> {
         let store = self.store().await?;
-        // Mirror the router ingest pipeline (group_chat_router::ingest_reply):
-        // mark the original message Replied, then append the reply body into
-        // the room stream when non-empty.
-        store
-            .update_message_status(&req.room_id, &req.message_id, GroupChatMessageStatus::Replied)
-            .await
-            .map_err(|error| Self::error(error.to_string()))?;
-        if !req.reply_content.trim().is_empty() {
-            let reply = GroupChatMessage {
-                message_id: format!("msg-reply-{}", uuid_v4_deterministic(&format!(
-                    "{}-{}-{}",
-                    req.room_id, req.message_id, req.timestamp
-                ))),
-                room_id: req.room_id.clone(),
-                author: req.author.clone(),
-                kind: GroupChatMessageKind::Agent,
-                content: req.reply_content.clone(),
-                mention_targets: Vec::new(),
-                reply_to_message_id: Some(req.message_id.clone()),
-                timestamp: req.timestamp,
-                status: GroupChatMessageStatus::Delivered,
-            };
-            store
-                .append_message(&req.room_id, &reply)
-                .await
-                .map_err(|error| Self::error(error.to_string()))?;
-        }
-        Ok(())
+        // F-2 convergence: delegate to the authority router core so the port
+        // adapter, the Tauri command layer, and the reply router share one
+        // behavior (P2-2 no-op on deleted message + deterministic reply id).
+        super::group_chat_router::ingest_reply_core(
+            &store,
+            &req.room_id,
+            &req.message_id,
+            &req.reply_content,
+            &req.author,
+            req.timestamp,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))
     }
 }
 

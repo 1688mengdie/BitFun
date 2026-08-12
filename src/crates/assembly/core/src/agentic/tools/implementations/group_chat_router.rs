@@ -172,44 +172,15 @@ impl GroupChatRouter {
         let Some(message_id) = metadata.get("groupMessageId").and_then(Value::as_str) else {
             return Ok(());
         };
-        // P2-2: a late reply to an already-deleted message (or room) is not an
-        // error — the room/message is gone, so the ingest is a no-op instead of
-        // bubbling MessageNotFound back into the reply forwarding path.
-        match store
-            .update_message_status(room_id, message_id, GroupChatMessageStatus::Replied)
-            .await
-        {
-            Ok(()) => {}
-            Err(error) if matches!(error, GroupChatStoreError::MessageNotFound(_)) => {
-                return Ok(());
-            }
-            Err(error) => return Err(store_tool_error(error)),
-        }
-        // P2-1: persist the reply body into the group stream so the room shows
-        // the reply text, not just the Replied badge.
-        if !reply_content.trim().is_empty() {
-            let reply = bitfun_runtime_ports::GroupChatMessage {
-                message_id: format!(
-                    "msg-reply-{}",
-                    uuid_v4_deterministic(&format!(
-                        "{room_id}-{message_id}-{timestamp}-{reply_content}"
-                    ))
-                ),
-                room_id: room_id.to_string(),
-                author: reply_author.clone(),
-                kind: bitfun_runtime_ports::GroupChatMessageKind::Agent,
-                content: reply_content.to_string(),
-                mention_targets: Vec::new(),
-                reply_to_message_id: Some(message_id.to_string()),
-                timestamp,
-                status: GroupChatMessageStatus::Delivered,
-            };
-            store
-                .append_message(room_id, &reply)
-                .await
-                .map_err(store_tool_error)?;
-        }
-        Ok(())
+        ingest_reply_core(
+            store,
+            room_id,
+            message_id,
+            reply_content,
+            reply_author,
+            timestamp,
+        )
+        .await
     }
 
     /// Constructs one per-member dialog-turn request carrying the group
@@ -346,6 +317,69 @@ impl GroupChatRouter {
         }
         (delivered, failed)
     }
+}
+
+/// Authority ingest-reply core (F-2 convergence): marks the original message
+/// `Replied` and appends the reply body into the room stream.
+///
+/// This is the single behavioral source of truth shared by the reply router
+/// ([`GroupChatRouter::ingest_reply`] via metadata), the Tauri command layer
+/// (`group_chat_ingest_reply`), and the `GroupChatPort` adapter
+/// (`GroupChatPortImpl::ingest_reply`).
+///
+/// Behavior contract:
+/// - P2-2: a reply to an already-deleted message/room is a **no-op** (not an
+///   error) — a late reply must not bubble MessageNotFound into the forwarding
+///   path.
+/// - P2-1: the reply body is persisted as a deterministic
+///   `msg-reply-{uuid(room-message-timestamp-content)}` Agent message when
+///   non-empty.
+pub async fn ingest_reply_core(
+    store: &GroupChatStore,
+    room_id: &str,
+    message_id: &str,
+    reply_content: &str,
+    reply_author: &GroupChatActor,
+    timestamp: i64,
+) -> BitFunResult<()> {
+    // P2-2: a late reply to an already-deleted message (or room) is not an
+    // error — the room/message is gone, so the ingest is a no-op instead of
+    // bubbling MessageNotFound back into the reply forwarding path.
+    match store
+        .update_message_status(room_id, message_id, GroupChatMessageStatus::Replied)
+        .await
+    {
+        Ok(()) => {}
+        Err(error) if matches!(error, GroupChatStoreError::MessageNotFound(_)) => {
+            return Ok(());
+        }
+        Err(error) => return Err(store_tool_error(error)),
+    }
+    // P2-1: persist the reply body into the group stream so the room shows
+    // the reply text, not just the Replied badge.
+    if !reply_content.trim().is_empty() {
+        let reply = bitfun_runtime_ports::GroupChatMessage {
+            message_id: format!(
+                "msg-reply-{}",
+                uuid_v4_deterministic(&format!(
+                    "{room_id}-{message_id}-{timestamp}-{reply_content}"
+                ))
+            ),
+            room_id: room_id.to_string(),
+            author: reply_author.clone(),
+            kind: bitfun_runtime_ports::GroupChatMessageKind::Agent,
+            content: reply_content.to_string(),
+            mention_targets: Vec::new(),
+            reply_to_message_id: Some(message_id.to_string()),
+            timestamp,
+            status: GroupChatMessageStatus::Delivered,
+        };
+        store
+            .append_message(room_id, &reply)
+            .await
+            .map_err(store_tool_error)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -665,5 +699,171 @@ mod tests {
             .await
             .expect("plan");
         assert_eq!(plan.targets, vec!["only-m"], "单成员广播 = 仅该成员");
+    }
+
+    // ── F-2: ingest_reply convergence contract ─────────────────────────
+    // All three call sites (router via metadata, ingest_reply_core directly,
+    // GroupChatPortImpl via the port) must produce identical behavior for the
+    // same input: mark Replied, append deterministic reply body, no-op on
+    // deleted message (P2-2).
+
+    fn seed_ingest_room(store: &GroupChatStore, room_id: &str, message_id: &str) {
+        let room = bitfun_runtime_ports::GroupChatRoom {
+            schema_version: 1,
+            room_id: room_id.to_string(),
+            name: format!("room {room_id}"),
+            owner: GroupChatActor::Master,
+            mode: GroupChatMode::Free,
+            round_robin_cursor: 0,
+            created_at: 1,
+            last_active_at: 1,
+            status: bitfun_runtime_ports::GroupChatStatus::Active,
+            member_limit: 50,
+            members: Vec::new(),
+        };
+        futures::executor::block_on(store.save_room(&room)).expect("save room");
+        let message = GroupChatMessage {
+            message_id: message_id.to_string(),
+            room_id: room_id.to_string(),
+            author: GroupChatActor::Master,
+            kind: bitfun_runtime_ports::GroupChatMessageKind::User,
+            content: "question".to_string(),
+            mention_targets: Vec::new(),
+            reply_to_message_id: None,
+            timestamp: 1,
+            status: GroupChatMessageStatus::Pending,
+        };
+        futures::executor::block_on(store.append_message(room_id, &message)).expect("append");
+    }
+
+    async fn ingest_via_router(store: &GroupChatStore, room_id: &str, message_id: &str) {
+        let mut metadata = JsonMap::new();
+        metadata.insert("groupId".to_string(), json!(room_id));
+        metadata.insert("groupMessageId".to_string(), json!(message_id));
+        GroupChatRouter::ingest_reply(
+            store,
+            &metadata,
+            "answer",
+            &GroupChatActor::Claw {
+                session_id: "m-1".to_string(),
+                agent_type: "Claw".to_string(),
+            },
+            42,
+        )
+        .await
+        .expect("router ingest");
+    }
+
+    async fn ingest_via_core(store: &GroupChatStore, room_id: &str, message_id: &str) {
+        ingest_reply_core(
+            store,
+            room_id,
+            message_id,
+            "answer",
+            &GroupChatActor::Claw {
+                session_id: "m-1".to_string(),
+                agent_type: "Claw".to_string(),
+            },
+            42,
+        )
+        .await
+        .expect("core ingest");
+    }
+
+    async fn ingest_via_port(store: &GroupChatStore, room_id: &str, message_id: &str) {
+        use super::super::group_chat_tool::GroupChatPortImpl;
+        use bitfun_runtime_ports::{GroupChatIngestReplyRequest, GroupChatPort};
+        let port = GroupChatPortImpl::with_store("/ws", store.clone());
+        port.ingest_reply(GroupChatIngestReplyRequest {
+            room_id: room_id.to_string(),
+            message_id: message_id.to_string(),
+            reply_content: "answer".to_string(),
+            author: GroupChatActor::Claw {
+                session_id: "m-1".to_string(),
+                agent_type: "Claw".to_string(),
+            },
+            timestamp: 42,
+        })
+        .await
+        .expect("port ingest");
+    }
+
+    async fn assert_ingest_result(store: &GroupChatStore, room_id: &str, message_id: &str) {
+        let window = store
+            .list_messages(room_id, None, None)
+            .await
+            .expect("list");
+        assert_eq!(window.messages.len(), 2, "original + reply body");
+        assert_eq!(window.messages[0].message_id, message_id);
+        assert_eq!(window.messages[0].status, GroupChatMessageStatus::Replied);
+        assert_eq!(window.messages[1].content, "answer");
+        assert_eq!(
+            window.messages[1].reply_to_message_id.as_deref(),
+            Some(message_id)
+        );
+        // Deterministic message id — the same input always yields the same id.
+        assert_eq!(
+            window.messages[1].message_id,
+            format!(
+                "msg-reply-{}",
+                uuid_v4_deterministic(&format!("{room_id}-{message_id}-42-answer"))
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn f2_router_core_port_produce_identical_ingest_behavior() {
+        // Same input through all three entry points → identical persisted state.
+        let root = TestTempDir::new("f2-converge");
+        let store = GroupChatStore::new(root.path().join("group-chats"));
+        seed_ingest_room(&store, "room-f2", "msg-1");
+        ingest_via_router(&store, "room-f2", "msg-1").await;
+        assert_ingest_result(&store, "room-f2", "msg-1");
+
+        let root = TestTempDir::new("f2-converge-core");
+        let store = GroupChatStore::new(root.path().join("group-chats"));
+        seed_ingest_room(&store, "room-f2", "msg-1");
+        ingest_via_core(&store, "room-f2", "msg-1").await;
+        assert_ingest_result(&store, "room-f2", "msg-1");
+
+        let root = TestTempDir::new("f2-converge-port");
+        let store = GroupChatStore::new(root.path().join("group-chats"));
+        seed_ingest_room(&store, "room-f2", "msg-1");
+        ingest_via_port(&store, "room-f2", "msg-1").await;
+        assert_ingest_result(&store, "room-f2", "msg-1");
+    }
+
+    #[tokio::test]
+    async fn f2_deleted_message_is_noop_across_all_entries() {
+        // P2-2: a reply to a deleted message must be a no-op (not an error)
+        // through every entry point.
+        let root = TestTempDir::new("f2-deleted");
+        let store = GroupChatStore::new(root.path().join("group-chats"));
+        store
+            .save_room(&bitfun_runtime_ports::GroupChatRoom {
+                schema_version: 1,
+                room_id: "room-d".to_string(),
+                name: "deleted room".to_string(),
+                owner: GroupChatActor::Master,
+                mode: GroupChatMode::Free,
+                round_robin_cursor: 0,
+                created_at: 1,
+                last_active_at: 1,
+                status: bitfun_runtime_ports::GroupChatStatus::Active,
+                member_limit: 50,
+                members: Vec::new(),
+            })
+            .await
+            .expect("save room");
+
+        // No message "msg-gone" exists → ingest must be Ok(()) no-op.
+        ingest_via_router(&store, "room-d", "msg-gone").await;
+        let window = store.list_messages("room-d", None, None).await.expect("list");
+        assert_eq!(window.messages.len(), 0, "no-op appends nothing");
+
+        ingest_via_core(&store, "room-d", "msg-gone").await;
+        ingest_via_port(&store, "room-d", "msg-gone").await;
+        let window = store.list_messages("room-d", None, None).await.expect("list");
+        assert_eq!(window.messages.len(), 0, "no-op across all entries");
     }
 }
