@@ -506,6 +506,8 @@ async fn process_mailboxes(
                 content: request.content.clone(),
                 display_content: request.display_content.clone(),
                 prepended_reminders: Vec::new(),
+                attachments: runtime_attachments(&request.attachments),
+                metadata: serde_json::Map::new(),
             })
             .await
             .map_err(|error| anyhow!(error.into_message()))

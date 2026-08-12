@@ -1433,6 +1433,8 @@ impl TuiAgentClient {
                 content,
                 display_content,
                 prepended_reminders: Vec::new(),
+                attachments: Vec::new(),
+                metadata: serde_json::Map::new(),
             }))
             .await?
             .steering_id)

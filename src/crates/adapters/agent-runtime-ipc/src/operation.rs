@@ -462,6 +462,8 @@ mod tests {
                 content: "check tests".to_string(),
                 display_content: None,
                 prepended_reminders: Vec::new(),
+                attachments: Vec::new(),
+                metadata: serde_json::Map::new(),
             },
         };
         let rules = operation.rules();

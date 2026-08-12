@@ -737,10 +737,16 @@ impl DialogScheduler {
         content: String,
         display_content: Option<String>,
         prepended_reminders: Vec<AgentDialogPrependedReminder>,
+        attachments: Vec<AgentInputAttachment>,
+        metadata: serde_json::Map<String, serde_json::Value>,
     ) -> Result<DialogSteerOutcome, String> {
-        if content.trim().is_empty() {
+        if content.trim().is_empty() && attachments.is_empty() {
             return Err("Steering content cannot be empty".to_string());
         }
+        // Reject a malformed attachment here rather than at the round boundary:
+        // the caller is still holding the user's message and can surface the
+        // failure, whereas the injection consumer would have to drop it.
+        agent_dialog_turn_image_contexts(&attachments).map_err(|error| error.to_string())?;
         let _operation_guard = self.lock_session_operation(&session_id).await;
         let active_turn_id = match self
             .session_manager
@@ -765,6 +771,8 @@ impl DialogScheduler {
             &turn_id,
             content,
             display_content,
+            attachments,
+            metadata,
             steering_id,
             SystemTime::now(),
             prepended_reminders,
@@ -3411,7 +3419,7 @@ fn image_context_metadata(attachment: &AgentInputAttachment) -> Option<serde_jso
     }
 }
 
-fn agent_dialog_turn_image_contexts(
+pub(crate) fn agent_dialog_turn_image_contexts(
     attachments: &[AgentInputAttachment],
 ) -> PortResult<Option<Vec<ImageContextData>>> {
     if attachments.is_empty() {
@@ -3592,7 +3600,11 @@ impl AgentDialogTurnPort for DialogScheduler {
         &self,
         request: AgentDialogSteerRequest,
     ) -> PortResult<DialogSteerOutcome> {
-        let empty_content = request.content.trim().is_empty();
+        // An empty-but-attachment-free message and a malformed attachment are
+        // both bad requests; only a live-turn mismatch means "session in use".
+        let invalid_request =
+            request.content.trim().is_empty() && request.attachments.is_empty()
+                || agent_dialog_turn_image_contexts(&request.attachments).is_err();
         DialogScheduler::buffer_steering(
             self,
             request.session_id,
@@ -3600,11 +3612,13 @@ impl AgentDialogTurnPort for DialogScheduler {
             request.content,
             request.display_content,
             request.prepended_reminders,
+            request.attachments,
+            request.metadata,
         )
         .await
         .map_err(|error| {
             PortError::new(
-                if empty_content {
+                if invalid_request {
                     PortErrorKind::InvalidRequest
                 } else {
                     PortErrorKind::SessionInUse
@@ -5115,6 +5129,8 @@ mod tests {
                 "check tests".to_string(),
                 None,
                 Vec::new(),
+                Vec::new(),
+                serde_json::Map::new(),
             )
             .await
             .expect_err("stale processing state must not accept steering");
@@ -5138,6 +5154,8 @@ mod tests {
                 content: "  ".to_string(),
                 display_content: None,
                 prepended_reminders: Vec::new(),
+                attachments: Vec::new(),
+                metadata: serde_json::Map::new(),
             },
         )
         .await
@@ -5166,6 +5184,8 @@ mod tests {
                     "check tests".to_string(),
                     None,
                     Vec::new(),
+                    Vec::new(),
+                    serde_json::Map::new(),
                 )
                 .await
         });

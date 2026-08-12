@@ -3398,6 +3398,8 @@ mod tests {
                 content: "check tests".to_string(),
                 display_content: None,
                 prepended_reminders: Vec::new(),
+                attachments: Vec::new(),
+                metadata: serde_json::Map::new(),
             })
             .await
             .expect_err("steering without a dialog-turn provider must fail");
@@ -3449,6 +3451,8 @@ mod tests {
             content: "check tests".to_string(),
             display_content: Some("Check tests".to_string()),
             prepended_reminders: Vec::new(),
+            attachments: Vec::new(),
+            metadata: serde_json::Map::new(),
         };
 
         let result = runtime
@@ -3509,6 +3513,8 @@ mod tests {
                 content: "check tests".to_string(),
                 display_content: None,
                 prepended_reminders: Vec::new(),
+                attachments: Vec::new(),
+                metadata: serde_json::Map::new(),
             })
             .await
             .expect_err("provider turn mismatch must fail closed");

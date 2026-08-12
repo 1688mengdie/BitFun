@@ -13,6 +13,7 @@ use crate::agentic::agents::{
     UserContextPolicy, UserContextSection,
 };
 use crate::agentic::context_profile::{ContextProfilePolicy, ModelCapabilityProfile};
+use crate::agentic::coordination::scheduler::agent_dialog_turn_image_contexts;
 use crate::agentic::core::{
     render_system_reminder, InternalReminderKind, Message, MessageContent, MessageHelper,
     MessageRole, MessageSemanticKind, RequestReasoningTokenPolicy, Session,
@@ -4979,6 +4980,13 @@ impl ExecutionEngine {
                         let injection_kind = injection.kind;
                         let wrapped = match injection.kind {
                             RoundInjectionKind::UserSteering => {
+                                let steering_text = if injection.content.trim().is_empty()
+                                    && !injection.attachments.is_empty()
+                                {
+                                    "(image attached)".to_string()
+                                } else {
+                                    injection.content.clone()
+                                };
                                 let prepended_text = injection
                                     .prepended_reminders
                                     .iter()
@@ -4988,19 +4996,19 @@ impl ExecutionEngine {
                                 if prepended_text.is_empty() {
                                     format!(
                                         "<system_reminder>\nThe user sent a new message while this turn was running. You have just finished the previous atomic action; handle this new user message now as the current direction, while preserving the existing conversation and task context. Do not ignore it or wait for a separate future turn.\n\nNew user message:\n{}\n</system_reminder>",
-                                        injection.content
+                                        steering_text
                                     )
                                 } else {
                                     format!(
                                         "<system_reminder>\n{}\n\nAn agent sent a new message while this turn was running. You have just finished the previous atomic action; handle this new message now as the current direction, while preserving the existing conversation and task context. Do not ignore it or wait for a separate future turn.\n\nNew message:\n{}\n</system_reminder>",
-                                        prepended_text, injection.content
+                                        prepended_text, steering_text
                                     )
                                 }
                             }
-                            RoundInjectionKind::BackgroundResult => {
-                                "<system_reminder>\nA background task has finished. The background subagent has replied. Use SessionHistory / SessionMessage to view the message content.\n</system_reminder>"
-                                    .to_string()
-                            }
+                            RoundInjectionKind::BackgroundResult => format!(
+                                "<system_reminder>\nA background task has finished and returned new information while this turn was running. Incorporate it into your current work immediately when relevant. Do not wait for a separate future turn.\n\nBackground result:\n{}\n</system_reminder>",
+                                injection.content
+                            ),
                             RoundInjectionKind::ThreadGoalObjectiveUpdated => {
                                 injection.content.clone()
                             }
@@ -5014,9 +5022,28 @@ impl ExecutionEngine {
                                 InternalReminderKind::GoalObjectiveUpdated
                             }
                         };
-                        let user_msg = Message::internal_reminder(reminder_kind, wrapped)
-                            .with_turn_id(context.dialog_turn_id.clone())
-                            .with_steering_id(injection.id.clone());
+                        // Attachments rebuild into the same multimodal user
+                        // message a turn-boundary submission would have
+                        // produced; a bad payload degrades to text rather than
+                        // dropping the user's steering message entirely.
+                        let images = match agent_dialog_turn_image_contexts(&injection.attachments)
+                        {
+                            Ok(images) => images.unwrap_or_default(),
+                            Err(error) => {
+                                warn!(
+                                    "Dropping unusable steering attachments, injecting text only: session_id={}, steering_id={}, error={}",
+                                    context.session_id, injection_id, error
+                                );
+                                Vec::new()
+                            }
+                        };
+                        let user_msg = if images.is_empty() {
+                            Message::internal_reminder(reminder_kind, wrapped)
+                        } else {
+                            Message::internal_reminder_multimodal(reminder_kind, wrapped, images)
+                        }
+                        .with_turn_id(context.dialog_turn_id.clone())
+                        .with_steering_id(injection.id.clone());
                         messages.push(user_msg.clone());
                         if let Err(e) = self
                             .session_manager
@@ -7073,6 +7100,8 @@ mod tests {
             target: RoundInjectionTarget::CurrentRunningTurn,
             content: content.to_string(),
             display_content: content.to_string(),
+            attachments: Vec::new(),
+            metadata: serde_json::Map::new(),
             created_at: std::time::SystemTime::now(),
             prepended_reminders: Vec::new(),
         }

@@ -2607,6 +2607,8 @@ impl SessionMessageTool {
                             content: forwarded_message.clone(),
                             display_content: Some(message.clone()),
                             prepended_reminders: prepended_messages.clone(),
+                            attachments: Vec::new(),
+                            metadata: serde_json::Map::new(),
                         })
                         .await
                     {

@@ -1570,6 +1570,9 @@ impl ExecAgentRuntimeClient {
             content,
             display_content,
             prepended_reminders: Vec::new(),
+            // The CLI steer prompt is text; attachments ride turn submissions.
+            attachments: Vec::new(),
+            metadata: serde_json::Map::new(),
         };
 
         match &self.backend {
