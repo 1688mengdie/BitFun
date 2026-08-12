@@ -434,6 +434,7 @@ export function runManifestParserSelfTest({
       [
         'dep:bitfun-core-types',
         'dep:bitfun-events',
+        'dep:bitfun-runtime-ports',
         'dep:chrono',
         'dep:fs2',
         'dep:libc',
