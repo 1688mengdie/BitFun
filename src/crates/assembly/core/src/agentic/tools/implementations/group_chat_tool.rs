@@ -18,9 +18,12 @@ use crate::service::config::{
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_runtime_ports::{
-    GroupChatActor, GroupChatMember, GroupChatMemberRole, GroupChatMessage, GroupChatMessageKind,
-    GroupChatMessageStatus, GroupChatMode, GroupChatRoom, SessionStoragePathRequest,
-    SessionStorePort,
+    GroupChatActor, GroupChatError, GroupChatErrorCode, GroupChatMember, GroupChatMemberRole,
+    GroupChatMessage, GroupChatMessageKind, GroupChatMessageStatus, GroupChatMode, GroupChatPort,
+    GroupChatRoom, GroupChatSendResult, SessionStoragePathRequest, SessionStorePort,
+    GroupChatCreateRequest, GroupChatDeleteRequest, GroupChatIngestReplyRequest,
+    GroupChatJoinRequest, GroupChatLeaveRequest, GroupChatMessagesRequest,
+    GroupChatMessagesResponse, GroupChatModeRequest, GroupChatSendRequest,
 };
 use bitfun_services_core::session::{
     add_room_to_group_chats, remove_room_from_group_chats, GroupChatStore,
@@ -1211,6 +1214,243 @@ Arguments:
     }
 }
 
+/// Contract adapter (F-1): implements [`GroupChatPort`] on top of the shared
+/// group-chat pipeline (`GroupChatTool` + `GroupChatStore`).
+///
+/// The trait requests (`GroupChatCreateRequest` etc.) do not carry a workspace
+/// path, so the adapter owns the `workspace_path` it was constructed with.
+/// Methods route through the exact same validation + persistence + dispatch
+/// chain as the Tauri command layer (`session_api.rs`) and the agent tool.
+#[derive(Debug, Clone)]
+pub struct GroupChatPortImpl {
+    workspace_path: String,
+    #[cfg(test)]
+    test_store: Option<GroupChatStore>,
+}
+
+impl GroupChatPortImpl {
+    pub fn new(workspace_path: impl Into<String>) -> Self {
+        Self {
+            workspace_path: workspace_path.into(),
+            #[cfg(test)]
+            test_store: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_store(
+        workspace_path: impl Into<String>,
+        store: GroupChatStore,
+    ) -> Self {
+        Self {
+            workspace_path: workspace_path.into(),
+            test_store: Some(store),
+        }
+    }
+
+    fn error(message: impl Into<String>) -> GroupChatError {
+        let text = message.into();
+        GroupChatError {
+            code: parse_group_chat_error_code(&text).unwrap_or(GroupChatErrorCode::NotFound),
+            message: text,
+        }
+    }
+
+    /// Resolves the store for `self.workspace_path` through the shared
+    /// group-chat storage chain (CoreSessionStorePort → sessions root → group-chats).
+    /// Tests may inject a store backed by a temp dir via [`Self::with_store`].
+    async fn store(&self) -> Result<GroupChatStore, GroupChatError> {
+        #[cfg(test)]
+        if let Some(store) = &self.test_store {
+            return Ok(store.clone());
+        }
+        GroupChatTool::store(&self.workspace_path)
+            .await
+            .map_err(|error| Self::error(error.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl GroupChatPort for GroupChatPortImpl {
+    async fn create_room(
+        &self,
+        req: GroupChatCreateRequest,
+    ) -> Result<GroupChatRoom, GroupChatError> {
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        GroupChatTool::create_room_impl(
+            &coordinator,
+            &self.workspace_path,
+            &req.name,
+            req.owner,
+            &req.initial_members,
+            req.mode,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn list_rooms(&self, workspace_path: &str) -> Result<Vec<GroupChatRoom>, GroupChatError> {
+        // Prefer the injected test store; otherwise resolve through the given
+        // workspace path (contract semantics: the caller may pass a different
+        // workspace than the one this adapter was constructed with).
+        #[cfg(test)]
+        if let Some(store) = &self.test_store {
+            return store
+                .list_rooms()
+                .await
+                .map(|(rooms, _)| rooms)
+                .map_err(|error| Self::error(error.to_string()));
+        }
+        let store = GroupChatTool::store(workspace_path)
+            .await
+            .map_err(|error| Self::error(error.to_string()))?;
+        store
+            .list_rooms()
+            .await
+            .map(|(rooms, _)| rooms)
+            .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn load_room(&self, room_id: &str) -> Result<GroupChatRoom, GroupChatError> {
+        let store = self.store().await?;
+        store
+            .load_room(room_id)
+            .await
+            .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn list_members(&self, room_id: &str) -> Result<Vec<GroupChatMember>, GroupChatError> {
+        let store = self.store().await?;
+        store
+            .list_members(room_id)
+            .await
+            .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn join_room(&self, req: GroupChatJoinRequest) -> Result<GroupChatRoom, GroupChatError> {
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        GroupChatTool::join_room_impl(
+            &coordinator,
+            &self.workspace_path,
+            &req.room_id,
+            &req.session_id,
+            req.actor,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn leave_room(&self, req: GroupChatLeaveRequest) -> Result<GroupChatRoom, GroupChatError> {
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        GroupChatTool::leave_room_impl(
+            &coordinator,
+            &self.workspace_path,
+            &req.room_id,
+            &req.session_id,
+            req.actor,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn delete_room(&self, req: GroupChatDeleteRequest) -> Result<(), GroupChatError> {
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        GroupChatTool::delete_room_impl(
+            &coordinator,
+            &self.workspace_path,
+            &req.room_id,
+            req.actor,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn set_mode(&self, req: GroupChatModeRequest) -> Result<GroupChatRoom, GroupChatError> {
+        GroupChatTool::set_mode_impl(&self.workspace_path, &req.room_id, req.mode, req.actor)
+            .await
+            .map_err(|error| Self::error(error.to_string()))
+    }
+
+    async fn send_message(
+        &self,
+        req: GroupChatSendRequest,
+    ) -> Result<GroupChatSendResult, GroupChatError> {
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        let (message_id, delivered_to, failed_to) = GroupChatTool::send_message_impl(
+            &coordinator,
+            &self.workspace_path,
+            &req.room_id,
+            &req.author,
+            &req.content,
+            &req.mention_targets,
+            req.urgent,
+        )
+        .await
+        .map_err(|error| Self::error(error.to_string()))?;
+        let failed_to = failed_to
+            .into_iter()
+            .filter_map(|value| serde_json::from_value(value).ok())
+            .collect();
+        Ok(GroupChatSendResult {
+            message_id,
+            delivered_to,
+            failed_to,
+        })
+    }
+
+    async fn list_messages(
+        &self,
+        req: GroupChatMessagesRequest,
+    ) -> Result<GroupChatMessagesResponse, GroupChatError> {
+        let store = self.store().await?;
+        let window = store
+            .list_messages(&req.room_id, req.limit, req.cursor.map(|c| c.parse().unwrap_or(0)))
+            .await
+            .map_err(|error| Self::error(error.to_string()))?;
+        Ok(GroupChatMessagesResponse {
+            messages: window.messages,
+            next_cursor: window.next_cursor.map(|c| c.to_string()),
+        })
+    }
+
+    async fn ingest_reply(&self, req: GroupChatIngestReplyRequest) -> Result<(), GroupChatError> {
+        let store = self.store().await?;
+        // Mirror the router ingest pipeline (group_chat_router::ingest_reply):
+        // mark the original message Replied, then append the reply body into
+        // the room stream when non-empty.
+        store
+            .update_message_status(&req.room_id, &req.message_id, GroupChatMessageStatus::Replied)
+            .await
+            .map_err(|error| Self::error(error.to_string()))?;
+        if !req.reply_content.trim().is_empty() {
+            let reply = GroupChatMessage {
+                message_id: format!("msg-reply-{}", uuid_v4_deterministic(&format!(
+                    "{}-{}-{}",
+                    req.room_id, req.message_id, req.timestamp
+                ))),
+                room_id: req.room_id.clone(),
+                author: req.author.clone(),
+                kind: GroupChatMessageKind::Agent,
+                content: req.reply_content.clone(),
+                mention_targets: Vec::new(),
+                reply_to_message_id: Some(req.message_id.clone()),
+                timestamp: req.timestamp,
+                status: GroupChatMessageStatus::Delivered,
+            };
+            store
+                .append_message(&req.room_id, &reply)
+                .await
+                .map_err(|error| Self::error(error.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,5 +1646,243 @@ mod tests {
         assert_eq!(code_name(Code::InvalidTarget), "InvalidTarget");
         assert_eq!(code_name(Code::AlreadyMember), "AlreadyMember");
         assert_eq!(code_name(Code::NotFound), "NotFound");
+    }
+
+    // ── F-1: GroupChatPort contract tests ──────────────────────────────
+    // Storage-backed methods run the real store chain (temp dir); coordinator
+    // methods assert the explicit error when the coordinator is not up.
+
+    fn sample_room(room_id: &str, name: &str) -> GroupChatRoom {
+        GroupChatRoom {
+            schema_version: 1,
+            room_id: room_id.to_string(),
+            name: name.to_string(),
+            owner: GroupChatActor::Master,
+            mode: GroupChatMode::Free,
+            round_robin_cursor: 0,
+            created_at: 1,
+            last_active_at: 1,
+            status: bitfun_runtime_ports::GroupChatStatus::Active,
+            member_limit: 50,
+            members: Vec::new(),
+        }
+    }
+
+    fn sample_member(session_id: &str, role: GroupChatMemberRole) -> GroupChatMember {
+        GroupChatMember {
+            session_id: session_id.to_string(),
+            role,
+            joined_at: 1,
+            agent_type: "Claw".to_string(),
+            display_name: Some(format!("Assistant {session_id}")),
+        }
+    }
+
+    fn temp_store() -> (tempfile::TempDir, GroupChatStore) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = GroupChatStore::new(dir.path().join("group-chats"));
+        (dir, store)
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_list_rooms_returns_seeded_rooms() {
+        let (_dir, store) = temp_store();
+        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store.save_room(&sample_room("room-2", "Beta")).await.expect("save room");
+        let port = GroupChatPortImpl::with_store("/ws", store);
+
+        let rooms = port.list_rooms("/ws").await.expect("list rooms");
+        assert_eq!(rooms.len(), 2);
+        assert!(rooms.iter().any(|r| r.name == "Alpha"));
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_load_room_reads_seeded_room_with_members() {
+        let (_dir, store) = temp_store();
+        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store.save_members("room-1", &[sample_member("m-1", GroupChatMemberRole::Member)])
+            .await
+            .expect("save members");
+        let port = GroupChatPortImpl::with_store("/ws", store);
+
+        let room = port.load_room("room-1").await.expect("load room");
+        assert_eq!(room.name, "Alpha");
+        assert_eq!(room.members.len(), 1);
+        assert_eq!(room.members[0].session_id, "m-1");
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_list_members_reads_seeded_members() {
+        let (_dir, store) = temp_store();
+        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store
+            .save_members(
+                "room-1",
+                &[
+                    sample_member("m-1", GroupChatMemberRole::Owner),
+                    sample_member("m-2", GroupChatMemberRole::Member),
+                ],
+            )
+            .await
+            .expect("save members");
+        let port = GroupChatPortImpl::with_store("/ws", store);
+
+        let members = port.list_members("room-1").await.expect("list members");
+        assert_eq!(members.len(), 2);
+        assert!(members.iter().any(|m| m.role == GroupChatMemberRole::Owner));
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_list_messages_returns_window_with_cursor() {
+        let (_dir, store) = temp_store();
+        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        let msg = GroupChatMessage {
+            message_id: "msg-1".to_string(),
+            room_id: "room-1".to_string(),
+            author: GroupChatActor::Master,
+            kind: GroupChatMessageKind::User,
+            content: "hello".to_string(),
+            mention_targets: Vec::new(),
+            reply_to_message_id: None,
+            timestamp: 1,
+            status: GroupChatMessageStatus::Delivered,
+        };
+        store.append_message("room-1", &msg).await.expect("append message");
+        let port = GroupChatPortImpl::with_store("/ws", store);
+
+        let res = port
+            .list_messages(GroupChatMessagesRequest {
+                room_id: "room-1".to_string(),
+                limit: Some(50),
+                cursor: None,
+            })
+            .await
+            .expect("list messages");
+        assert_eq!(res.messages.len(), 1);
+        assert_eq!(res.messages[0].content, "hello");
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_ingest_reply_marks_replied_and_appends_body() {
+        let (_dir, store) = temp_store();
+        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        let msg = GroupChatMessage {
+            message_id: "msg-1".to_string(),
+            room_id: "room-1".to_string(),
+            author: GroupChatActor::Master,
+            kind: GroupChatMessageKind::User,
+            content: "question".to_string(),
+            mention_targets: Vec::new(),
+            reply_to_message_id: None,
+            timestamp: 1,
+            status: GroupChatMessageStatus::Delivered,
+        };
+        store.append_message("room-1", &msg).await.expect("append message");
+        let port = GroupChatPortImpl::with_store("/ws", store);
+
+        port
+            .ingest_reply(GroupChatIngestReplyRequest {
+                room_id: "room-1".to_string(),
+                message_id: "msg-1".to_string(),
+                reply_content: "answer".to_string(),
+                author: GroupChatActor::Claw {
+                    session_id: "m-1".to_string(),
+                    agent_type: "Claw".to_string(),
+                },
+                timestamp: 2,
+            })
+            .await
+            .expect("ingest reply");
+
+        let room = port.load_room("room-1").await.expect("load room");
+        let res = port
+            .list_messages(GroupChatMessagesRequest {
+                room_id: "room-1".to_string(),
+                limit: Some(50),
+                cursor: None,
+            })
+            .await
+            .expect("list messages");
+        // Original message now Replied; reply body appended.
+        assert_eq!(res.messages.len(), 2);
+        assert_eq!(res.messages[0].status, GroupChatMessageStatus::Replied);
+        assert!(res.messages.iter().any(|m| m.content == "answer"));
+        assert!(room.members.is_empty());
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_create_room_without_coordinator_returns_clear_error() {
+        // Coordinator-dependent methods must fail with a clear error when the
+        // global coordinator is not initialized (contract boundary).
+        let port = GroupChatPortImpl::new("/ws");
+        let err = port
+            .create_room(GroupChatCreateRequest {
+                name: "Room".to_string(),
+                owner: GroupChatActor::Master,
+                initial_members: Vec::new(),
+                mode: GroupChatMode::Free,
+            })
+            .await
+            .expect_err("create must fail without coordinator");
+        assert!(!err.message.is_empty());
+    }
+
+    #[tokio::test]
+    async fn group_chat_port_join_leave_delete_set_mode_send_require_coordinator() {
+        let port = GroupChatPortImpl::new("/ws");
+
+        let join = port
+            .join_room(GroupChatJoinRequest {
+                room_id: "room-1".to_string(),
+                session_id: "m-1".to_string(),
+                actor: GroupChatActor::Master,
+            })
+            .await
+            .expect_err("join must fail without coordinator");
+        assert!(!join.message.is_empty());
+
+        let leave = port
+            .leave_room(GroupChatLeaveRequest {
+                room_id: "room-1".to_string(),
+                session_id: "m-1".to_string(),
+                actor: GroupChatActor::Master,
+            })
+            .await
+            .expect_err("leave must fail without coordinator");
+        assert!(!leave.message.is_empty());
+
+        let delete = port
+            .delete_room(GroupChatDeleteRequest {
+                room_id: "room-1".to_string(),
+                actor: GroupChatActor::Master,
+            })
+            .await
+            .expect_err("delete must fail without coordinator");
+        assert!(!delete.message.is_empty());
+
+        let send = port
+            .send_message(GroupChatSendRequest {
+                room_id: "room-1".to_string(),
+                author: GroupChatActor::Master,
+                content: "hi".to_string(),
+                mention_targets: Vec::new(),
+                urgent: false,
+            })
+            .await
+            .expect_err("send must fail without coordinator");
+        assert!(!send.message.is_empty());
+
+        // set_mode does not need the coordinator (store-only path): with a
+        // fresh store the room does not exist → NotFound, which is still a
+        // clear contract error proving the call reached the store chain.
+        let mode = port
+            .set_mode(GroupChatModeRequest {
+                room_id: "missing-room".to_string(),
+                mode: GroupChatMode::Free,
+                actor: GroupChatActor::Master,
+            })
+            .await
+            .expect_err("set_mode on missing room must fail");
+        assert!(!mode.message.is_empty());
     }
 }
