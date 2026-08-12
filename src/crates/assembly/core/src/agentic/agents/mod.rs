@@ -174,8 +174,8 @@ pub fn shared_coding_mode_tools() -> Vec<String> {
 /// Includes shared_coding_mode_tools() + SessionControl (fission core).
 ///
 /// SessionHistory 刻意不在共享工具集内（UX-P0-1 收窄）：跨会话 transcript
-/// 读取是高敏感操作（含 tool_inputs/thinking），仅 Warden 模板显式授予，
-/// 且工具本身有读取授权门（resolve_session_read_authorization）。
+/// 读取是高敏感操作（含 tool_inputs/thinking），且工具本身有读取授权门
+/// （resolve_session_read_authorization）。
 pub fn subagent_default_tools() -> Vec<String> {
     let mut tools = shared_coding_mode_tools();
     if !tools.contains(&"SessionControl".to_string()) {
@@ -382,8 +382,8 @@ mod tests {
 
     #[test]
     fn shared_coding_mode_tools_exclude_session_history() {
-        // UX-P0-1 收窄：SessionHistory 移出共享工具集，跨会话读取仅
-        // Warden 模板显式授予 + 工具内授权门兜底。防回退回归断言。
+        // UX-P0-1 收窄：SessionHistory 移出共享工具集，跨会话读取由工具内
+        // 授权门兜底。防回退回归断言。
         let tools = shared_coding_mode_tools();
         assert!(
             !tools.contains(&"SessionHistory".to_string()),

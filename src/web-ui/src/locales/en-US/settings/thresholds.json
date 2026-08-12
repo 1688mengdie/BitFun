@@ -89,12 +89,6 @@
       "direct_secs": "Direct delivery window (s)",
       "task_secs": "Task delegation window (s)"
     },
-    "warden": {
-      "__title": "Warden",
-      "max_defer_count": "Max consecutive defers",
-      "max_rate": "Max poke rate",
-      "judgement_timeout_secs": "Judgement timeout (s)"
-    },
     "deep_review": {
       "__title": "Deep review",
       "diff_max_chars_per_turn": "Diff chars per turn",

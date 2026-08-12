@@ -89,12 +89,6 @@
       "direct_secs": "直通投遞視窗（秒）",
       "task_secs": "任務委派視窗（秒）"
     },
-    "warden": {
-      "__title": "Warden 催辦",
-      "max_defer_count": "連續延遲上限",
-      "max_rate": "催辦頻率上限",
-      "judgement_timeout_secs": "判定逾時（秒）"
-    },
     "deep_review": {
       "__title": "深度審查",
       "diff_max_chars_per_turn": "每輪 Diff 字元預算",

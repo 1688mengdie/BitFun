@@ -16,8 +16,8 @@ impl GeneralPurposeAgent {
         // 执行者工具模板改 agentic 全工具：执行者工具太少一用就卡，
         // 改用 subagent_default_tools()（shared_coding_mode_tools + SessionControl）
         // 的 agentic 全工具清单——TodoWrite/Plan 系列/SessionMessage/Git 等
-        // 全部纳入。SessionHistory 已按 UX-P0-1 收窄移出共享工具集（仅
-        // Warden 模板保留，跨会话读取需授权门）。
+        // 全部纳入。SessionHistory 已按 UX-P0-1 收窄移出共享工具集
+        // （跨会话读取需授权门）。
         Self {
             default_tools: subagent_default_tools(),
         }
@@ -120,8 +120,7 @@ mod tests {
     fn general_purpose_agent_gets_agentic_full_tool_suite() {
         // 执行者改 agentic 全工具（subagent_default_tools）。
         // 必须包含 TodoWrite/Plan 系列/会话系列/Git 等，不再是最小贫瘠集合。
-        // SessionHistory 已按 UX-P0-1 收窄移出共享工具集（仅 Warden 模板
-        // 保留），此处断言其缺席。
+        // SessionHistory 已按 UX-P0-1 收窄移出共享工具集，此处断言其缺席。
         let agent = GeneralPurposeAgent::new();
         let tools = agent.default_tools();
         for tool in [

@@ -141,7 +141,7 @@ The two modes are mutually exclusive: do not provide `subagent_type` when `fork_
 - For a configured model, call ListModels first and use its returned `model_id`.
 
 `role` usage (action='spawn', R-14 B3 security parameter):
-- Optional explicit RBAC role for the child session: "commander", "executor", "reviewer", "warden", or "punishment_executor". Defaults to "executor" when omitted.
+- Optional explicit RBAC role for the child session: "commander", "executor", or "reviewer". Defaults to "executor" when omitted.
 - A caller may only delegate to its own role (or, as commander, to any role); delegation to a different role is rejected with an error at the spawn entry point. Unknown role keys are ignored and fall back to the default.
 - Only set this when the target subagent genuinely needs a different role baseline; prefer omitting it for ordinary delegation.
 

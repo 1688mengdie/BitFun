@@ -311,7 +311,7 @@ pub struct SessionMetadata {
     )]
     pub runtime_state: Option<serde_json::Value>,
 
-    /// Warden daemon session marker.
+    /// Daemon session marker.
     /// Daemon sessions are invisible to SessionControl(list) and cannot be
     /// deleted via SessionControl(delete).
     #[serde(default)]

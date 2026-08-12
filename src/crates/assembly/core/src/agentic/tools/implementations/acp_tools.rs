@@ -106,7 +106,7 @@ fn workspace_or_context(
 }
 
 /// 授权门（PR #2139 R4）：触碰外部 ACP port 前，acp_control delete/cancel 复用
-/// SessionControl 的共享授权决策链（daemon/warden 拦截 + owner/created_by +
+/// SessionControl 的共享授权决策链（daemon 拦截 + owner/created_by +
 /// 幽灵 ACP 流会话 + 祖先遍历）。无全局 coordinator 或无 caller session 时
 /// 保守拒绝。
 async fn authorize_acp_session_mutation(

@@ -353,9 +353,9 @@ export interface AIConfig {
   computer_use_enabled?: boolean;
   browser_control_preferred_browser?: string;
   /**
-   * User-controllable master switch for the RBAC/Warden mechanism (R-26).
-   * When false, RBAC tool-restriction checks and the Warden runtime are
-   * fully bypassed. Defaults to true.
+   * User-controllable master switch for the RBAC mechanism (R-26).
+   * When false, RBAC tool-restriction checks are fully bypassed.
+   * Defaults to true.
    */
   rbac_enabled?: boolean;
   /**

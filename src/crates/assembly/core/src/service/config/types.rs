@@ -829,10 +829,8 @@ pub struct AIConfig {
     #[serde(default = "default_max_rounds")]
     pub max_rounds: usize,
 
-    /// User-controllable master switch for the RBAC/Warden mechanism (R-26).
-    ///
-    /// When `false`, the RBAC tool-restriction checks and the Warden runtime
-    /// (turn/tool failure tracking, violation records, reminders) are fully
+    /// User-controllable master switch for the RBAC tool-restriction checks
+    /// (R-26). When `false`, the RBAC tool-restriction checks are fully
     /// bypassed. Defaults to `true` (mechanism on). Users can turn it off in
     /// the settings document under `ai.rbac_enabled`.
     #[serde(default = "default_true")]
@@ -907,7 +905,7 @@ pub struct AIConfig {
     /// Tunable AI behavior thresholds (阈值参数配置化统一入口).
     ///
     /// Every hard-coded user-visible threshold (compression budgets, retry
-    /// backoffs, tool output caps, timeouts, ACP windows, Warden poke pacing,
+    /// backoffs, tool output caps, timeouts, ACP windows,
     /// deep-review budgets, memory token limits, output-token tiers and goal
     /// continuations) is surfaced here under `ai.thresholds.<domain>.*`.
     /// Defaults reproduce the legacy hard-coded values exactly, so an
@@ -947,9 +945,6 @@ pub struct AiThresholdsConfig {
     /// External ACP client timeouts.
     #[serde(default)]
     pub acp_timeout: AcpTimeoutThresholds,
-    /// Warden challenge-poke pacing and judgement timeouts.
-    #[serde(default)]
-    pub warden: WardenThresholds,
     /// Deep-review execution budgets.
     #[serde(default)]
     pub deep_review: DeepReviewThresholds,
@@ -974,7 +969,6 @@ impl Default for AiThresholdsConfig {
             tool_timeout: ToolTimeoutThresholds::default(),
             knowledge_search: KnowledgeSearchThresholds::default(),
             acp_timeout: AcpTimeoutThresholds::default(),
-            warden: WardenThresholds::default(),
             deep_review: DeepReviewThresholds::default(),
             memories: MemoryThresholds::default(),
             output_tokens: OutputTokensThresholds::default(),
@@ -1532,44 +1526,6 @@ fn default_acp_direct_secs() -> u64 {
 
 fn default_acp_task_secs() -> u64 {
     600
-}
-
-/// Warden challenge-poke pacing and judgement timeouts
-/// (`ai.thresholds.warden.*`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct WardenThresholds {
-    /// Max consecutive deferrals before a forced work turn. Legacy `MAX_DEFER_COUNT = 3`.
-    #[serde(default = "default_warden_max_defer_count")]
-    pub max_defer_count: u32,
-    /// Max accepted average inter-poke interval rate. Legacy `MAX_RATE = 1000.0`.
-    #[serde(default = "default_warden_max_rate")]
-    pub max_rate: f64,
-    /// Warden model-judgement timeout (secs). Legacy `WARDEN_JUDGEMENT_TIMEOUT = 8`.
-    #[serde(default = "default_warden_judgement_timeout_secs")]
-    pub judgement_timeout_secs: u64,
-}
-
-impl Default for WardenThresholds {
-    fn default() -> Self {
-        Self {
-            max_defer_count: default_warden_max_defer_count(),
-            max_rate: default_warden_max_rate(),
-            judgement_timeout_secs: default_warden_judgement_timeout_secs(),
-        }
-    }
-}
-
-fn default_warden_max_defer_count() -> u32 {
-    3
-}
-
-fn default_warden_max_rate() -> f64 {
-    1000.0
-}
-
-fn default_warden_judgement_timeout_secs() -> u64 {
-    8
 }
 
 /// Deep-review execution budgets (`ai.thresholds.deep_review.*`).

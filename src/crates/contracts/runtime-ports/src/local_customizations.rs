@@ -4,12 +4,10 @@
 //!
 //! These types are local-only (BitFun fork customizations). Upstream split the
 //! monolithic `lib.rs` into owner-scoped feature modules; the GroupChat /
-//! AgentType / Warden / steering additions below are not part of upstream and
-//! must be preserved for the fork's 群聊契约 / RBAC / steering.
+//! AgentType / steering additions below are not part of upstream and
+//! must be preserved for the fork's 群聊契约 / steering.
 
 use serde::{Deserialize, Serialize};
-
-use super::{PortError, PortErrorKind, PortResult};
 
 /// Shared agent type used by SessionControl and SessionMessage tools.
 ///
@@ -88,22 +86,6 @@ impl std::fmt::Display for AgentType {
         f.write_str(self.as_str())
     }
 }
-
-// ---------------------------------------------------------------------------
-// prepended_reminders kind constants (Warden bootstrap/penalty injection kinds)
-// ---------------------------------------------------------------------------
-
-/// `prepended_reminders` kind value for penalty/violation record injection.
-///
-/// Injected into a violating session's context at every turn until cleared.
-pub const POKE_PENALTY_KIND: &str = "PokePenalty";
-
-/// `prepended_reminders` kind value for self-boot check (iron-rule summary +
-/// Warden protocol declaration).
-pub const SELF_BOOT_CHECK_KIND: &str = "SelfBootCheck";
-
-/// `prepended_reminders` kind value for RBAC role-reminder injection.
-pub const RBAC_ROLE_REMINDER_KIND: &str = "RbacRoleReminder";
 
 // ---------------------------------------------------------------------------
 // GroupChat contract (local fork customization, 常开)
@@ -363,76 +345,6 @@ pub enum GroupChatErrorCode {
     DuplicateName, // 群名重复
     InvalidTarget, // @ 目标无效
     NotClaw,       // 非 Claw 助理（P1-7 强制校验）
-}
-
-// ---------------------------------------------------------------------------
-// Warden contract (local fork customization, 常开 — 阶段 1 保留，阶段 2 移除)
-// ---------------------------------------------------------------------------
-
-/// Request for a model-backed Warden audit judgement.
-///
-/// The judgement provider decides whether a finished tool call or failed turn
-/// deserves a poke, which candidate rules apply, and what evidence should be
-/// attached. When the port is unavailable or the judgement times out, the
-/// caller falls back to the mechanical rule ladder.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WardenAuditJudgementRequest {
-    /// Session whose tool call / turn is being judged.
-    pub session_id: String,
-    /// Effective tool name of the finished tool call.
-    pub tool_name: String,
-    /// Effective arguments of the finished tool call (scene fingerprint).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_args: Option<serde_json::Value>,
-    /// Candidate rule ids the mechanical ladder would apply.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rule_ids: Vec<String>,
-    /// Evidence summary available to the judgement (failure counts, error
-    /// text, phase/target facts the caller can provide).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub evidence: Option<serde_json::Value>,
-}
-
-/// Judgement result produced by a model-backed Warden provider.
-///
-/// A provider must not fail the audit loop: `should_poke = false` with empty
-/// rule ids is a valid "no poke" verdict.
-///
-/// WARDEN-07: `shouldPoke` is intentionally *not* `#[serde(default)]`. A
-/// verdict missing the field (or an empty object) fails to deserialize, so a
-/// malformed model response falls back to the mechanical rule ladder instead
-/// of silently defaulting to `false` and suppressing a poke.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WardenAuditJudgementResponse {
-    pub should_poke: bool,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub rule_ids: Vec<String>,
-    /// Evidence items the model wants to see before poking (follow-ups).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence_requested: Vec<String>,
-}
-
-/// Model-backed judgement for Warden audit decisions.
-///
-/// Providers construct a judgement prompt from the request, parse the model
-/// response as [`WardenAuditJudgementResponse`], and return an error when the
-/// response cannot be parsed or the judgement times out; the caller then
-/// falls back to the mechanical rule ladder. Providers that do not support
-/// model judgement keep the default typed unsupported response.
-#[async_trait::async_trait]
-pub trait WardenModelJudgementPort: Send + Sync {
-    async fn judge_audit(
-        &self,
-        request: WardenAuditJudgementRequest,
-    ) -> PortResult<WardenAuditJudgementResponse> {
-        let _ = request;
-        Err(PortError::new(
-            PortErrorKind::NotAvailable,
-            "model-backed warden judgement is not supported by this provider",
-        ))
-    }
 }
 
 // ---------------------------------------------------------------------------

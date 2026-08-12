@@ -98,7 +98,6 @@ interface ThresholdsShape {
     direct_secs: number;
     task_secs: number;
   };
-  warden: { max_defer_count: number; max_rate: number; judgement_timeout_secs: number };
   deep_review: {
     diff_max_chars_per_turn: number;
     diff_max_acquisitions_per_turn: number;
@@ -189,9 +188,7 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     direct_secs: 1800,
     task_secs: 600,
   },
-  warden: { max_defer_count: 3, max_rate: 1000, judgement_timeout_secs: 8 },
-  deep_review: {
-    diff_max_chars_per_turn: 240_000,
+  deep_review: {    diff_max_chars_per_turn: 240_000,
     diff_max_acquisitions_per_turn: 128,
     max_parallel_instances: 4,
     max_queue_wait_secs: 1200,
@@ -387,11 +384,6 @@ export default function ThresholdsConfig() {
       renderField('acp_timeout', 'cli_install_secs', 1),
       renderField('acp_timeout', 'direct_secs', 1),
       renderField('acp_timeout', 'task_secs', 1),
-    ]);
-    add('warden', [
-      renderField('warden', 'max_defer_count', 0),
-      renderField('warden', 'max_rate', 0, 1, 1),
-      renderField('warden', 'judgement_timeout_secs', 1),
     ]);
     add('deep_review', [
       renderField('deep_review', 'diff_max_chars_per_turn', 1, 100),
