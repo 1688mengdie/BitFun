@@ -43,7 +43,9 @@ describe('ConfigCollectionItem', () => {
     act(() => {
       control?.click();
     });
-    expect(container.textContent).not.toContain('Configuration location');
+    const details = container.querySelector<HTMLElement>('.bitfun-collection-item__details-collapse');
+    expect(details?.dataset.open).toBe('false');
+    expect(details?.getAttribute('aria-hidden')).toBe('true');
 
     act(() => {
       toggle?.click();
@@ -51,6 +53,8 @@ describe('ConfigCollectionItem', () => {
 
     expect(toggle?.getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('Configuration location');
+    expect(details?.dataset.open).toBe('true');
+    expect(details?.getAttribute('aria-hidden')).toBe('false');
   });
 
   it('does not expose disabled details as an interactive control', () => {
@@ -74,6 +78,6 @@ describe('ConfigCollectionItem', () => {
     });
 
     expect(toggle?.getAttribute('aria-expanded')).toBe('false');
-    expect(container.textContent).not.toContain('Configuration location');
+    expect(container.querySelector('.bitfun-collection-item__details-collapse')?.getAttribute('aria-hidden')).toBe('true');
   });
 });

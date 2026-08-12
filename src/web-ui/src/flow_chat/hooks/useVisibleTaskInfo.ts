@@ -11,6 +11,7 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import type { VirtualItem } from '../store/modernFlowChatStore';
 import type { FlowToolItem } from '../types/flow-chat';
+import { getMotionAwareScrollBehavior } from '../utils/motionPreference';
 import { getEffectiveToolName, projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 
 const VIEWPORT_TOP_OFFSET_PX = 57; // Keep in sync with PINNED_TURN_VIEWPORT_OFFSET_PX.
@@ -176,7 +177,10 @@ export function useVisibleTaskInfo(options: UseVisibleTaskInfoOptions): UseVisib
     const elementRect = element.getBoundingClientRect();
     const offset = elementRect.top - scrollerRect.top - VIEWPORT_TOP_OFFSET_PX + scroller.scrollTop;
 
-    scroller.scrollTo({ top: offset, behavior: 'smooth' });
+    scroller.scrollTo({
+      top: offset,
+      behavior: getMotionAwareScrollBehavior('smooth'),
+    });
   }, [visibleTaskInfo, scrollerRef]);
 
   return {

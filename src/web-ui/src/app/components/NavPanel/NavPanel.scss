@@ -2066,7 +2066,12 @@ $_section-header-height: 24px;
   padding: 7px 16px;
   font-size: var(--bf-appearance-token-font-size-xs);
   cursor: pointer;
-  transition: all $motion-fast $easing-standard;
+  transition:
+    background-color $motion-fast $easing-standard,
+    border-color $motion-fast $easing-standard,
+    color $motion-fast $easing-standard,
+    opacity $motion-fast $easing-standard,
+    transform $motion-fast $easing-standard;
 }
 
 .bitfun-nav-panel__remote-disclaimer-btn--secondary {
@@ -2469,7 +2474,10 @@ $_section-header-height: 24px;
     }
   }
 
-  &__collapsible,
+  &__collapsible {
+    transition: grid-template-rows 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
   &__item-slot {
     transition: none;
 

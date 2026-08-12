@@ -13,6 +13,8 @@ import {
   HISTORY_SESSION_OPEN_INTENT_EVENT,
 } from '../../services/sessionOpenIntent';
 import { FLOWCHAT_TURN_RAIL_ROW_HEIGHT_PX } from './flowChatTurnRailWindow';
+import type { PermissionRequest } from '@/infrastructure/api/service-api/AgentAPI';
+import type { PermissionRequestBatch } from './permissionRequestRouting';
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -20,6 +22,15 @@ const stateMocks = vi.hoisted(() => ({
   activeSession: null as Session | null,
   virtualItems: [] as unknown[],
   visibleTurnInfo: null as unknown,
+}));
+const permissionRequestMocks = vi.hoisted(() => ({
+  requests: [] as PermissionRequest[],
+  activeBatch: undefined as PermissionRequestBatch | undefined,
+  respond: vi.fn(),
+  respondBatch: vi.fn(),
+}));
+const permissionPanelPropsMock = vi.hoisted(() => ({
+  latest: null as Record<string, unknown> | null,
 }));
 
 const switchChatSessionMock = vi.hoisted(() => vi.fn());
@@ -137,6 +148,24 @@ vi.mock('../../store/modernFlowChatStore', () => ({
   useVirtualItems: () => stateMocks.virtualItems,
   useActiveSession: () => stateMocks.activeSession,
   useVisibleTurnInfo: () => stateMocks.visibleTurnInfo,
+}));
+
+vi.mock('./usePermissionRequests', () => ({
+  usePermissionRequests: () => permissionRequestMocks,
+}));
+
+vi.mock('./PermissionRequestPanel', () => ({
+  PermissionRequestPanel: (props: Record<string, unknown>) => {
+    permissionPanelPropsMock.latest = props;
+    const requests = props.requests as PermissionRequest[];
+    return (
+      <div
+        data-testid="permission-request-panel"
+        data-request-id={requests[0]?.requestId}
+        data-visible={String(props.visible)}
+      />
+    );
+  },
 }));
 
 vi.mock('./VirtualMessageList', () => ({
@@ -345,6 +374,11 @@ describe('ModernFlowChatContainer historical empty state', () => {
     headerPropsMock.latest = null;
     virtualListPropsMock.latest = null;
     navigationOptionsMock.latest = null;
+    permissionRequestMocks.requests = [];
+    permissionRequestMocks.activeBatch = undefined;
+    permissionRequestMocks.respond = vi.fn();
+    permissionRequestMocks.respondBatch = vi.fn();
+    permissionPanelPropsMock.latest = null;
     clearHistorySessionOpenTransition();
   });
 
@@ -370,6 +404,62 @@ describe('ModernFlowChatContainer historical empty state', () => {
 
     expect(container.textContent).toContain('Loading saved session');
     expect(container.querySelector('[data-testid="welcome-panel"]')).toBeNull();
+  });
+
+  it('retains a permission exit only within its owner session and keeps the owner callbacks', () => {
+    vi.useFakeTimers();
+    const ownerRespond = vi.fn();
+    const ownerRespondBatch = vi.fn();
+    const nextRespond = vi.fn();
+    const nextRespondBatch = vi.fn();
+    const request: PermissionRequest = {
+      requestId: 'request-a',
+      roundId: 'round-a',
+      order: 0,
+      sessionId: 'session-a',
+      projectId: 'project-a',
+      agentId: 'agentic',
+      action: 'edit',
+      resources: ['src/a.ts'],
+      source: { kind: 'tool_call', identity: 'Write' },
+    };
+    stateMocks.activeSession = createSession({ sessionId: 'session-a' });
+    permissionRequestMocks.requests = [request];
+    permissionRequestMocks.activeBatch = {
+      sessionId: 'session-a',
+      roundId: 'round-a',
+      requests: [request],
+    };
+    permissionRequestMocks.respond = ownerRespond;
+    permissionRequestMocks.respondBatch = ownerRespondBatch;
+
+    act(() => {
+      root.render(<ModernFlowChatContainer permissionPanelAboveChatInput />);
+    });
+    expect(container.querySelector('[data-request-id="request-a"]')).not.toBeNull();
+
+    permissionRequestMocks.requests = [];
+    permissionRequestMocks.activeBatch = undefined;
+    permissionRequestMocks.respond = nextRespond;
+    permissionRequestMocks.respondBatch = nextRespondBatch;
+    act(() => {
+      root.render(<ModernFlowChatContainer permissionPanelAboveChatInput={false} />);
+    });
+
+    expect(container.querySelector('[data-request-id="request-a"]')?.getAttribute('data-visible')).toBe('false');
+    expect(permissionPanelPropsMock.latest).toMatchObject({
+      totalPendingCount: 1,
+      aboveChatInput: true,
+      onRespond: ownerRespond,
+      onRespondBatch: ownerRespondBatch,
+    });
+
+    stateMocks.activeSession = createSession({ sessionId: 'session-b' });
+    act(() => {
+      root.render(<ModernFlowChatContainer />);
+    });
+
+    expect(container.querySelector('[data-testid="permission-request-panel"]')).toBeNull();
   });
 
   it('defers viewport anchoring while the host scene is inactive', () => {

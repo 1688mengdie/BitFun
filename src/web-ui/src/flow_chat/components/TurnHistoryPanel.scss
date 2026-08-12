@@ -43,7 +43,10 @@
     padding: 12px;
     border: 1px solid var(--bf-appearance-token-border-base);
     border-radius: 6px;
-    transition: all 0.2s ease;
+    transition:
+      background-color 160ms ease,
+      border-color 160ms ease,
+      box-shadow 180ms ease;
 
     &:hover {
       border-color: var(--bf-appearance-token-color-accent-600);
