@@ -1,5 +1,4 @@
 use crate::agentic::agents::subagent_default_tools;
-use crate::agentic::warden::{SHAME_WALL_FILENAME, WARDEN_AUDIT_WRITE_ROOT};
 use crate::util::errors::{BitFunError, BitFunResult};
 pub use bitfun_agent_tools::{
     classify_tool_call, is_miniapp_headless_agent_run, is_miniapp_market_strict_agent_run,
@@ -24,19 +23,6 @@ pub enum AgentRole {
     Executor,
     /// Reviewer: ReadOnly + WriteFile + ExecuteCode
     Reviewer,
-    /// Guardian: ReadOnly + WriteFile + Communicate + ExecuteCode + SessionHistory
-    Warden,
-    /// Punishment executor: Write (shame-wall) + SessionControl
-    ///
-    /// P2-S1: under R-25 (reminder-only discipline) the SessionControl
-    /// allowlist entry is effectively list/inspect-only:
-    /// - `list` needs no target scope (summary-only, no content).
-    /// - `create` registers a new session under the caller tree (delegation
-    ///   validated, inherited role).
-    /// - `cancel`/`delete` still pass `resolve_session_mutation_authorization`
-    ///   (owner/created-by/ancestor gate) before touching any target session.
-    /// There is deliberately no freeze/role-change surface (R-25 removed it).
-    PunishmentExecutor,
 }
 
 impl AgentRole {
@@ -49,8 +35,6 @@ impl AgentRole {
             AgentRole::Commander => "commander",
             AgentRole::Executor => "executor",
             AgentRole::Reviewer => "reviewer",
-            AgentRole::Warden => "warden",
-            AgentRole::PunishmentExecutor => "punishment_executor",
         }
     }
 
@@ -61,8 +45,6 @@ impl AgentRole {
             "commander" => Some(AgentRole::Commander),
             "executor" => Some(AgentRole::Executor),
             "reviewer" => Some(AgentRole::Reviewer),
-            "warden" => Some(AgentRole::Warden),
-            "punishment_executor" => Some(AgentRole::PunishmentExecutor),
             _ => None,
         }
     }
@@ -70,7 +52,7 @@ impl AgentRole {
 
 /// Role→Permission template mapping table.
 ///
-/// Loaded at first access; Warden may trigger role switches at runtime.
+/// Loaded at first access.
 pub type RolePermissionMap = HashMap<AgentRole, ToolRuntimeRestrictions>;
 
 static DEFAULT_ROLE_PERMISSIONS: OnceLock<RolePermissionMap> = OnceLock::new();
@@ -221,73 +203,6 @@ fn build_default_role_permissions() -> RolePermissionMap {
         };
         restrictions.merge(&subagent_tool_restrictions());
         map.insert(AgentRole::Reviewer, restrictions);
-    }
-
-    // ── Warden ─────────────────────────────────────────────────────
-    // Allowed operation classes: ReadOnly + WriteFile + Communicate + ExecuteCode
-    // （守卫审计也需读/落盘：Read/Write/Edit/ExecCommand 三件套配齐）
-    // Allowed tool names: SessionHistory (extra, for cross-session inspection),
-    //                     ExecCommand (for gbrain search/query across full knowledge base),
-    //                     Write/Edit (audit report landing)
-    // P2-S2 纵深收敛：Write/Edit 落盘收敛到审计目录（.bitfun/warden/ 写根，
-    // 与 SHAME_WALL_FILENAME 同族；相对路径经 workspace runtime root 解析，
-    // 绝对路径经 resolve_tool_path 解析后仍须落在写根内）——提示注入即使
-    // 拿到 Write/Edit 也只能写审计目录，不能写任意文件。ExecCommand 保留
-    // （gbrain 知识库查询是 Warden 审计能力的一部分），其 ExecuteCode 面由
-    // 写根收敛 + Warden 会话为 daemon 白名单形态双重约束。
-    {
-        let mut allowed_ops = BTreeSet::new();
-        allowed_ops.insert(OperationClass::ReadOnly);
-        allowed_ops.insert(OperationClass::WriteFile);
-        allowed_ops.insert(OperationClass::Communicate);
-        allowed_ops.insert(OperationClass::ExecuteCode);
-        let mut allowed_tools = BTreeSet::new();
-        allowed_tools.insert("SessionHistory".to_string());
-        allowed_tools.insert("ExecCommand".to_string());
-        allowed_tools.insert("Write".to_string());
-        allowed_tools.insert("Edit".to_string());
-        let path_policy = ToolPathPolicy {
-            write_roots: vec![WARDEN_AUDIT_WRITE_ROOT.to_string()],
-            edit_roots: vec![WARDEN_AUDIT_WRITE_ROOT.to_string()],
-            ..Default::default()
-        };
-        map.insert(
-            AgentRole::Warden,
-            ToolRuntimeRestrictions {
-                allowed_operation_classes: allowed_ops,
-                allowed_tool_names: allowed_tools,
-                path_policy,
-                ..Default::default()
-            },
-        );
-    }
-
-    // ── PunishmentExecutor ─────────────────────────────────────────
-    // Allowed tool names: Write (path-policy restricted to
-    //                     ~/.bitfun/warden/violation-registry.json via SHAME_WALL_FILENAME),
-    //                     SessionControl (list/inspect scope, P2-S1)
-    // P2-S1 范围约束文档（R-25 reminder-only 纪律下实际仅 list/inspect）：
-    //   - list：无需目标会话范围（仅摘要，不含内容）；
-    //   - create：在调用者树内注册新会话（委托校验 + 继承角色）；
-    //   - cancel/delete：仍过 resolve_session_mutation_authorization
-    //     （owner/created-by/祖先授权门）才可触碰目标会话；
-    //   - 无 freeze/role-change 面（R-25 已移除）。
-    {
-        let mut allowed_tools = BTreeSet::new();
-        allowed_tools.insert("Write".to_string());
-        allowed_tools.insert("SessionControl".to_string());
-        let path_policy = ToolPathPolicy {
-            write_roots: vec![SHAME_WALL_FILENAME.to_string()],
-            ..Default::default()
-        };
-        map.insert(
-            AgentRole::PunishmentExecutor,
-            ToolRuntimeRestrictions {
-                allowed_tool_names: allowed_tools,
-                path_policy,
-                ..Default::default()
-            },
-        );
     }
 
     map
@@ -450,8 +365,8 @@ pub fn get_session_role(session_id: &str) -> Option<AgentRole> {
 /// worktree 参数时）。worktree 创建 = git 文件系统操作（git worktree add），
 /// 是服务层调用不走工具权限门，因此独立判定：仅 Commander owner（或 RBAC
 /// 关闭）允许——对齐 `resolve_session_mutation_authorization` 的 owner 语义
-/// （Commander 角色或 RBAC-off 豁免）。非 owner 调用者（Executor/Reviewer/
-/// Warden 等）携带 worktree 参数一律拒绝，防止子代理以会话创建为名执行
+/// （Commander 角色或 RBAC-off 豁免）。非 owner 调用者（Executor/Reviewer
+/// 等）携带 worktree 参数一律拒绝，防止子代理以会话创建为名执行
 /// git 文件系统变更。
 pub fn worktree_creation_authorized(caller_session_id: &str) -> bool {
     matches!(
@@ -481,18 +396,6 @@ pub fn clear_session_role(session_id: &str) {
 /// treated as the permissive commander baseline so sessions outside the RBAC
 /// registry are never blocked. Fails fast with a tool error — no retry, no
 /// waiting, no human round-trip (R-15 hook rule).
-///
-/// # Warden / PunishmentExecutor (d1-P2-7)
-///
-/// These two roles can **never** delegate: the match arm `Some(creator) =>`
-/// rejects every target role for them. This asymmetry with Commander is
-/// deliberate — Warden and PunishmentExecutor are system roles owned by the
-/// warden runtime (see [`WARDEN_RUNTIME_SESSION`]) and must not spawn
-/// delegated subagent work; allowing them to create sessions would give a
-/// discipline/sanctions surface a second way to materialize sessions. The
-/// warden runtime requests penalties through the internal trusted marker, not
-/// through a role-based delegation call, so no legitimate path is blocked by
-/// this rejection.
 pub fn validate_delegation(
     creator_role: Option<AgentRole>,
     target_role: AgentRole,
@@ -717,9 +620,8 @@ mod tests {
             "Commander should allow SessionMessage tool"
         );
         // UX-P0-1 收窄：SessionHistory 移出共享工具集（Commander 模板派生自
-        // subagent_default_tools()），跨会话 transcript 读取仅 Warden 模板
-        // 显式授予 + 工具内授权门兜底。Commander 主会话经 UI/前端历史视图
-        // 读取，不走该工具。
+        // subagent_default_tools()），跨会话 transcript 读取由工具内授权门
+        // 兜底。Commander 主会话经 UI/前端历史视图读取，不走该工具。
         assert!(
             !permissions.allowed_tool_names.contains("SessionHistory"),
             "Commander should NOT allow SessionHistory tool (UX-P0-1 narrow)"
@@ -1173,8 +1075,6 @@ mod tests {
             AgentRole::Commander,
             AgentRole::Executor,
             AgentRole::Reviewer,
-            AgentRole::Warden,
-            AgentRole::PunishmentExecutor,
         ] {
             assert!(
                 validate_delegation(Some(AgentRole::Commander), role).is_ok(),
@@ -1187,35 +1087,11 @@ mod tests {
     }
 
     #[test]
-    fn delegation_validation_rejects_warden_and_punishment_executor_creators() {
-        // Warden/PunishmentExecutor are system roles and must never delegate
-        // (d1-P2-7): no target role is accepted from these creators, unlike
-        // the commander's permissive baseline. This locks the deliberate
-        // asymmetry into the contract.
-        for creator in [AgentRole::Warden, AgentRole::PunishmentExecutor] {
-            for target in [
-                AgentRole::Commander,
-                AgentRole::Executor,
-                AgentRole::Reviewer,
-                AgentRole::Warden,
-                AgentRole::PunishmentExecutor,
-            ] {
-                assert!(
-                    validate_delegation(Some(creator.clone()), target.clone()).is_err(),
-                    "{creator:?} must never delegate to {target:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
     fn agent_role_str_key_roundtrips() {
         for role in [
             AgentRole::Commander,
             AgentRole::Executor,
             AgentRole::Reviewer,
-            AgentRole::Warden,
-            AgentRole::PunishmentExecutor,
         ] {
             let key = role.as_str();
             let parsed = AgentRole::from_str_key(key);
@@ -1229,90 +1105,6 @@ mod tests {
         // never to an error or a mis-mapped role.
         assert_eq!(AgentRole::from_str_key("commander-v2"), None);
         assert_eq!(AgentRole::from_str_key(""), None);
-    }
-
-    #[test]
-    fn warden_gets_readonly_communicate_exec_and_session_history() {
-        let permissions = get_default_permissions(AgentRole::Warden);
-        assert!(
-            permissions
-                .allowed_operation_classes
-                .contains(&OperationClass::ReadOnly),
-            "Warden should allow ReadOnly"
-        );
-        assert!(
-            permissions
-                .allowed_operation_classes
-                .contains(&OperationClass::Communicate),
-            "Warden should allow Communicate"
-        );
-        assert!(
-            permissions
-                .allowed_operation_classes
-                .contains(&OperationClass::ExecuteCode),
-            "Warden should allow ExecuteCode for gbrain search"
-        );
-        assert!(
-            permissions.allowed_tool_names.contains("SessionHistory"),
-            "Warden should allow SessionHistory tool"
-        );
-        assert!(
-            permissions.allowed_tool_names.contains("ExecCommand"),
-            "Warden should allow ExecCommand for gbrain search/query"
-        );
-        assert!(
-            permissions
-                .allowed_operation_classes
-                .contains(&OperationClass::WriteFile),
-            "Warden should allow WriteFile for audit report landing"
-        );
-        assert!(
-            permissions.allowed_tool_names.contains("Write"),
-            "Warden should allow Write tool for audit report landing"
-        );
-        assert!(
-            permissions.allowed_tool_names.contains("Edit"),
-            "Warden should allow Edit tool for audit report landing"
-        );
-        // P2-S2: Write/Edit path_policy restricted to the warden audit write root.
-        assert!(
-            permissions
-                .path_policy
-                .write_roots
-                .contains(&WARDEN_AUDIT_WRITE_ROOT.to_string()),
-            "Warden write_roots should contain {}",
-            WARDEN_AUDIT_WRITE_ROOT
-        );
-        assert!(
-            permissions
-                .path_policy
-                .edit_roots
-                .contains(&WARDEN_AUDIT_WRITE_ROOT.to_string()),
-            "Warden edit_roots should contain {}",
-            WARDEN_AUDIT_WRITE_ROOT
-        );
-    }
-
-    #[test]
-    fn punishment_executor_gets_write_and_session_control() {
-        let permissions = get_default_permissions(AgentRole::PunishmentExecutor);
-        assert!(
-            permissions.allowed_tool_names.contains("Write"),
-            "PunishmentExecutor should allow Write tool"
-        );
-        assert!(
-            permissions.allowed_tool_names.contains("SessionControl"),
-            "PunishmentExecutor should allow SessionControl tool"
-        );
-        // path_policy should restrict Write to shame-wall-registry.json under .master-framework
-        assert!(
-            permissions
-                .path_policy
-                .write_roots
-                .contains(&SHAME_WALL_FILENAME.to_string()),
-            "PunishmentExecutor write_roots should contain {}",
-            SHAME_WALL_FILENAME
-        );
     }
 
     #[test]

@@ -259,8 +259,7 @@ Examples:
         // - 同 workspace 归属校验：caller 与 target 必须属于同一 workspace；
         // - owner（Commander 角色或 RBAC 关闭）/ created_by / 树内祖先-后代
         //   判定，限定仅本会话树祖先/后代可导出；
-        // - Warden/daemon 会话豁免（R-A.04 同源：Warden 模板刻意保留
-        //   SessionHistory 作跨会话审计读取）。
+        // - daemon 会话豁免（R-A.04 同源）。
         // 调用者会话（当前正在运行）必然可解析其 workspace binding；解析
         // 失败按 fail-closed 拒绝（不回退逻辑 workspace 根，避免与 target
         // storage dir 错层比较造成误判）。

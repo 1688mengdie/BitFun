@@ -1123,7 +1123,6 @@ dependencies = [
  "log",
  "md5",
  "notify",
- "rand 0.8.7",
  "regex",
  "reqwest",
  "rusqlite",

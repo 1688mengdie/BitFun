@@ -105,7 +105,6 @@ fluent-bundle = { workspace = true, optional = true }
 unic-langid = { workspace = true, optional = true }
 
 sha2 = { workspace = true }
-rand = { workspace = true, optional = true }
 
 # QR code generation
 
@@ -190,15 +189,7 @@ product-full = [
     "product-capabilities",
     "runtime-services",
     "tool-packs",
-    "warden-poke",
 ]
-# Warden Challenge-Poke scheduling (Poisson scheduler) is part of the
-# agentic runtime core: the Warden runtime is embedded in the scheduler
-# and tool pipeline and compiles unconditionally under agent-runtime, so
-# rand is owned by the agent-runtime feature (like md5/similar/rusqlite).
-# warden-poke remains as a stable empty alias for product assemblies that
-# reference it; it has no functional effect.
-warden-poke = []
 # Core compatibility facade and concrete product Agent Runtime assembly. This
 # owns the existing agent/session/tool lifecycle, not app presentation or
 # external ecosystem discovery.
@@ -231,10 +222,6 @@ agent-runtime = [
     "dep:indexmap",
     "dep:image",
     "dep:md5",
-    # Warden Challenge-Poke Poisson scheduling compiles unconditionally under
-    # agent-runtime and needs rand (customization: upstream moved rand to
-    # services-integrations, but core warden keeps it owned by agent-runtime).
-    "dep:rand",
     "dep:rusqlite",
     "dep:regex",
     "dep:similar",
@@ -456,14 +443,6 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 [[test]]
 name = "git_contracts"
 required-features = ["git"]
-
-[[test]]
-name = "rbac_poke_integration"
-required-features = ["agent-runtime"]
-
-[[test]]
-name = "rbac_master_switch"
-required-features = ["agent-runtime"]
 
 [build-dependencies]
 sha2 = { workspace = true }

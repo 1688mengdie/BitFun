@@ -262,7 +262,7 @@ impl LegionControlTool {
 
     /// Validate a legion topology and resolve a deterministic deployment order.
     ///
-    /// Rejects: empty topologies, empty node ids/agents, daemon/warden agents,
+    /// Rejects: empty topologies, empty node ids/agents, daemon agents,
     /// duplicate ids, edges referencing unknown nodes, self-loops, nodes with
     /// more than one parent, and cycles.
     ///
@@ -297,9 +297,9 @@ impl LegionControlTool {
             if node.agent.trim().is_empty() {
                 return Err(format!("Legion node '{}' has an empty agent type", node.id));
             }
-            if node.agent == "daemon" || node.agent.starts_with("warden-") {
+            if node.agent == "daemon" {
                 return Err(format!(
-                    "Legion node '{}' uses protected agent '{}' (daemon/warden agents cannot be controlled)",
+                    "Legion node '{}' uses protected agent '{}' (daemon agents cannot be controlled)",
                     node.id, node.agent
                 ));
             }
@@ -619,7 +619,7 @@ Arguments:
 
 Notes:
 - Agent types are validated against the available agent registry (same as SessionControl).
-- daemon/warden agents cannot be deployed through LegionControl.
+- daemon agents cannot be deployed through LegionControl.
 - Nodes are sorted topologically (deterministic order) and deployed root-first.
 - node.role, node.prompt, node.gate, and edge.condition are reserved fields: they are persisted into the created session metadata (legionRole / legionNodePrompt / legionNodeGate) and echoed in the result for observability, but do not yet change runtime behavior. In particular node.role is metadata only — the deployed session's RBAC role is always determined by the standard subagent role resolution (Executor for subagent-marked sessions), never by legionRole (d2-P2-2).
 - Saving a preset via "save" persists the same reserved fields into the preset JSON file.
@@ -1593,14 +1593,6 @@ mod tests {
 
     #[test]
     fn resolve_topology_rejects_protected_agents() {
-        let mut warden = node("warden-node");
-        warden.agent = "warden-auditor".to_string();
-        let nodes = vec![warden];
-
-        let err = LegionControlTool::resolve_legion_topology(nodes, Vec::new(), MAX_LEGION_NODES)
-            .expect_err("warden agent must be rejected");
-        assert!(err.contains("protected agent"), "unexpected error: {err}");
-
         let mut daemon = node("daemon-node");
         daemon.agent = "daemon".to_string();
         let nodes = vec![daemon];

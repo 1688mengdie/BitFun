@@ -26,9 +26,6 @@ pub mod deep_review_policy;
 pub mod harness;
 pub(crate) mod subagent_runtime;
 
-// Warden protocol module (RBAC+Poke)
-pub mod warden;
-
 // Shared-context fork-agent execution module
 pub mod fork_agent;
 
@@ -84,5 +81,4 @@ pub use system::{
     init_agentic_system_for_profile, init_agentic_system_for_profile_with_runtime_ownership,
     AgenticSystem,
 };
-pub use warden::*;
 pub use workspace::{WorkspaceBackend, WorkspaceBinding};

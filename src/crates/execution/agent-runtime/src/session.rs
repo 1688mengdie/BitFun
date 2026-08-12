@@ -212,7 +212,7 @@ pub struct SessionConfig {
     /// Mutable sessions leave this unset and continue to resolve selectors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_binding_fingerprint: Option<String>,
-    /// Warden daemon session marker.
+    /// Daemon session marker.
     /// Daemon sessions are invisible to SessionControl(list) and cannot be
     /// deleted via SessionControl(delete).
     #[serde(default)]
@@ -298,7 +298,7 @@ pub struct SessionSummary {
     /// Optional parent session ID for tree-structured display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
-    /// Warden daemon session marker.
+    /// Daemon session marker.
     #[serde(default)]
     pub is_daemon: bool,
 }

@@ -5002,7 +5002,7 @@ impl SessionManager {
     ///   parent is no longer loaded).
     ///
     /// Disposal is deliberately conservative:
-    /// - daemon/warden sessions are never recycled;
+    /// - daemon sessions are never recycled;
     /// - Processing sessions are skipped until they finish;
     /// - sessions without a `session-{parent}` creator marker (top-level and
     ///   Commander-owner sessions) are never recycled;
@@ -5040,7 +5040,7 @@ impl SessionManager {
             let Some(session) = self.get_session(&candidate.session_id) else {
                 continue;
             };
-            if session.config.is_daemon || session.agent_type.starts_with("warden-") {
+            if session.config.is_daemon {
                 continue;
             }
             let Some(workspace_path) = session.config.workspace_path.clone() else {
@@ -5120,14 +5120,14 @@ impl SessionManager {
     }
 
     /// Guard gate for one orphan candidate. Returns true when the candidate
-    /// must not be recycled: daemon/warden sessions, Processing sessions, and
+    /// must not be recycled: daemon sessions, Processing sessions, and
     /// sessions without a `session-{parent}` creator marker (top-level and
     /// Commander-owner sessions are structurally exempt from orphan
     /// classification, so this is a defensive second gate).
     async fn orphan_recycle_guard_blocks(&self, workspace_path: &Path, session_id: &str) -> bool {
         let loaded = self.get_session(session_id);
         if let Some(session) = loaded.as_ref() {
-            if session.config.is_daemon || session.agent_type.starts_with("warden-") {
+            if session.config.is_daemon {
                 return true;
             }
             if matches!(session.state, SessionState::Processing { .. }) {
@@ -5140,7 +5140,7 @@ impl SessionManager {
             .ok()
             .flatten();
         if let Some(metadata) = metadata.as_ref() {
-            if metadata.is_daemon || metadata.agent_type.starts_with("warden-") {
+            if metadata.is_daemon {
                 return true;
             }
         }

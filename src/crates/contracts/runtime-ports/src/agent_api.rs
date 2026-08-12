@@ -103,7 +103,7 @@ pub struct AgentSessionSummary {
     /// Optional session runtime status (e.g. "idle", "active", "error").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
-    /// Warden daemon session marker.
+    /// Daemon session marker.
     #[serde(default)]
     pub is_daemon: bool,
 }
@@ -902,8 +902,7 @@ pub struct RoundInjection {
     /// a turn submission's `metadata`).
     pub metadata: serde_json::Map<String, serde_json::Value>,
     pub created_at: std::time::SystemTime,
-    /// Prepended reminders carried with the injected message (Warden
-    /// bootstrap/penalty injection kinds ride on steering injections).
+    /// Prepended reminders carried with the injected message.
     pub prepended_reminders: Vec<AgentDialogPrependedReminder>,
 }
 
@@ -1014,9 +1013,7 @@ pub struct ThreadGoal {
     #[serde(default)]
     pub auto_continuation_count: u32,
     /// Files the goal references as authoritative context (workspace-relative
-    /// paths the agent should keep in sync while pursuing the goal). Attached
-    /// to model-backed Warden audit judgements so the LLM can decide pokes
-    /// against the actual goal context.
+    /// paths the agent should keep in sync while pursuing the goal).
     #[serde(default)]
     pub reference_files: Vec<String>,
 }

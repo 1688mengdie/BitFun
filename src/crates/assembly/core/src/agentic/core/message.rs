@@ -99,8 +99,8 @@ pub enum MessageSemanticKind {
     ComputerUsePostActionSnapshot,
 }
 
-// Serialization is hand-written so the three private variants below
-// (PokePenalty / ChallengePoke / LifecycleContext) are persisted as the
+// Serialization is hand-written so the two private variants below
+// (LifecycleContext) are persisted as the
 // stable "generic" name: upstream builds do not know these variants and
 // would otherwise fail to deserialize snapshot JSON. Deserialization keeps
 // the derived snake_case mapping so legacy snapshots written by this build
@@ -139,12 +139,6 @@ pub enum InternalReminderKind {
     HookContext,
     /// Instructions activated after a successful read of a matching file.
     ConditionalInstructions,
-    /// Warden penalty outcome injected after a violating turn (kept through
-    /// compaction so the agent sees the consequence).
-    PokePenalty,
-    /// Warden challenge poke injected when the poke-first protocol fires
-    /// (kept through compaction so the agent sees the challenge).
-    ChallengePoke,
     /// Legion role / hierarchy context injected at SessionStart and
     /// SubagentStart custom points (outside hook gating, so the lifecycle
     /// context is not controlled by `app.hooks.enabled`).
@@ -190,9 +184,7 @@ impl Serialize for InternalReminderKind {
             // Private variants and the unknown fallback serialize as the stable
             // "generic" name so upstream builds (which lack these variants)
             // can still deserialize snapshot JSON.
-            Self::PokePenalty | Self::ChallengePoke | Self::LifecycleContext | Self::Unknown => {
-                "generic"
-            }
+            Self::LifecycleContext | Self::Unknown => "generic",
         };
         serializer.serialize_str(name)
     }
@@ -882,8 +874,6 @@ mod tests {
         use super::InternalReminderKind;
 
         let cases = [
-            (InternalReminderKind::PokePenalty, "generic"),
-            (InternalReminderKind::ChallengePoke, "generic"),
             (InternalReminderKind::LifecycleContext, "generic"),
             (InternalReminderKind::Unknown, "generic"),
             (InternalReminderKind::Generic, "generic"),
@@ -909,14 +899,6 @@ mod tests {
     fn private_reminder_kinds_deserialize_from_legacy_snapshots() {
         use super::InternalReminderKind;
 
-        assert_eq!(
-            serde_json::from_str::<InternalReminderKind>("\"poke_penalty\"").unwrap(),
-            InternalReminderKind::PokePenalty
-        );
-        assert_eq!(
-            serde_json::from_str::<InternalReminderKind>("\"challenge_poke\"").unwrap(),
-            InternalReminderKind::ChallengePoke
-        );
         assert_eq!(
             serde_json::from_str::<InternalReminderKind>("\"lifecycle_context\"").unwrap(),
             InternalReminderKind::LifecycleContext

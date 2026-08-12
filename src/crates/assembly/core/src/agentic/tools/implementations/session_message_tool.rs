@@ -2550,7 +2550,7 @@ impl SessionMessageTool {
         // above returned after registry verification); only local delivery is
         // handled here (steer_dialog_turn / submit_dialog_turn). Shares the R4
         // authorization verdict with SessionControl delete/cancel:
-        // daemon/warden session interception (R-A.04), owner (Commander role
+        // daemon session interception (R-A.04), owner (Commander role
         // or RBAC off) exemption, created_by matching
         // (`session-<caller>` marker, written by creator_session_marker when
         // creating a new session), ancestor authorization (in-memory tree fast
@@ -4847,7 +4847,7 @@ mod tests {
 
     // PR #2139 #5: delivery authorization gate (dispatch_single local delivery
     // to an existing session). Reuses the R4 shared verdict
-    // resolve_session_mutation_authorization (daemon/warden interception ->
+    // resolve_session_mutation_authorization (daemon interception ->
     // owner exemption -> created_by match -> ancestor traversal), with option
     // deliver(): owner exemption + no ghost ACP allowance.
     // ---------------------------------------------------------------------
@@ -4911,48 +4911,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("cannot deliver to daemon/warden"),
-            "{error}"
-        );
-    }
-
-    #[tokio::test]
-    async fn delivery_authz_rejects_warden_prefixed_session() {
-        // R-A.04: delivery to a session whose agent_type starts with warden-
-        // is rejected (matches the in-memory session registry).
-        let session_manager = delivery_authz_session_manager();
-        let tree = bitfun_services_core::session::tree::SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-delivery-authz-warden");
-        let workspace_string = workspace.as_string();
-        let workspace_path = std::path::Path::new(&workspace_string);
-        session_manager
-            .create_session_with_id(
-                Some("warden-session".to_string()),
-                "Warden".to_string(),
-                "warden-review".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace.as_string()),
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("create warden session");
-
-        let error = resolve_session_mutation_authorization(
-            &session_manager,
-            &tree,
-            "caller-1",
-            "warden-session",
-            workspace_path,
-            "deliver to",
-            SessionMutationAuthOptions::deliver(),
-        )
-        .await
-        .expect_err("warden session delivery must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("cannot deliver to daemon/warden"),
+                .contains("cannot deliver to daemon"),
             "{error}"
         );
     }

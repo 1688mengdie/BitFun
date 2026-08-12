@@ -664,7 +664,7 @@ fn ghost_acp_delete_authorized(created_by_is_none: bool, acp_flow_session: bool)
 ///   拒绝（防止任意会话越权删无主孤儿）。
 /// - ACP 流会话走 `ghost_acp_delete_authorized`（其 created_by 空是设计形态），不
 ///   落入本判定。
-/// - daemon/warden 与「当前会话不可删」守卫在门禁之外保持独立，不受本豁免影响。
+/// - daemon 与「当前会话不可删」守卫在门禁之外保持独立，不受本豁免影响。
 fn orphan_session_delete_authorized(
     caller_is_owner: bool,
     target_metadata: Option<&crate::service::session::SessionMetadata>,
@@ -725,7 +725,7 @@ impl SessionMutationAuthOptions {
 /// 复用（PR #2139 R4）。
 ///
 /// 决策链（每步与既有 SessionControl delete/cancel 语义等价）：
-/// 1. daemon/warden 会话拦截（R-A.04）；
+/// 1. daemon 会话拦截（R-A.04）；
 /// 2. owner 豁免（仅 delete；Commander 角色或 RBAC 关闭）；本地侧额外并入
 ///    R-26 幽灵孤儿删除豁免（orphan_session_delete_authorized，本质是 owner
 ///    兜底放行无主孤儿，含 metadata 缺失场景）；
@@ -744,10 +744,10 @@ pub(crate) async fn resolve_session_mutation_authorization(
     action_label: &str,
     options: SessionMutationAuthOptions,
 ) -> BitFunResult<()> {
-    // R-A.04: Reject daemon/warden sessions (delete and cancel share this guard).
+    // R-A.04: Reject daemon sessions (delete and cancel share this guard).
     {
         let is_daemon = if let Some(session) = session_manager.get_session(target_session_id) {
-            session.config.is_daemon || session.agent_type.starts_with("warden-")
+            session.config.is_daemon
         } else {
             // Fall back to persisted metadata
             session_manager
@@ -755,12 +755,12 @@ pub(crate) async fn resolve_session_mutation_authorization(
                 .await
                 .ok()
                 .flatten()
-                .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+                .map(|m| m.is_daemon)
                 .unwrap_or(false)
         };
         if is_daemon {
             return Err(BitFunError::tool(format!(
-                "cannot {action_label} daemon/warden session '{target_session_id}'"
+                "cannot {action_label} daemon session '{target_session_id}'"
             )));
         }
     }
@@ -887,13 +887,12 @@ impl SessionHistoryAuthOptions {
 ///    （storage dir 一致），跨 workspace 一律拒绝；
 /// 2. 树内双向授权：caller 是 target 的祖先（可导出后代），或 target 是
 ///    caller 的祖先（后代可导出祖先）——限定仅本会话树祖先/后代可导出；
-/// 3. Warden/daemon 会话豁免（R-A.04 同源校验）：Warden 模板刻意保留
-///    SessionHistory 作跨会话审计读取（SKILL.md §工具权限），其 daemon
-///    会话形态即授权依据，豁免树内/created_by 判定。
+/// 3. daemon 会话豁免（R-A.04 同源校验）：daemon 会话形态即授权依据，
+///    豁免树内/created_by 判定。
 ///
 /// 决策链：
 /// 1. 同 workspace 归属校验（新增，读取专属）；
-/// 2. Warden/daemon 会话豁免（R-A.04）；
+/// 2. daemon 会话豁免（R-A.04）；
 /// 3. owner 豁免（Commander 角色或 RBAC 关闭）；
 /// 4. created_by 匹配（`session-<caller>` 标记）；
 /// 5. 树内双向祖先授权（内存树快路径 + 持久化 metadata 链回退，空树
@@ -918,9 +917,8 @@ pub(crate) async fn resolve_session_read_authorization(
         )));
     }
 
-    // R-A.04 同源：Warden/daemon 会话是可信审计角色，豁免读取授权
-    // （SessionHistory 是 Warden 模板刻意保留的跨会话审计工具）。
-    if caller_is_warden_or_daemon(session_manager, caller_workspace_path, caller_session_id).await {
+    // R-A.04 同源：daemon 会话是可信审计角色，豁免读取授权。
+    if caller_is_daemon(session_manager, caller_workspace_path, caller_session_id).await {
         return Ok(());
     }
 
@@ -975,21 +973,21 @@ fn same_session_storage_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
     canonical(a) == canonical(b)
 }
 
-/// caller 是否为 Warden/daemon 会话（R-A.04 同源校验，含持久化回退）。
-async fn caller_is_warden_or_daemon(
+/// caller 是否为 daemon 会话（R-A.04 同源校验，含持久化回退）。
+async fn caller_is_daemon(
     session_manager: &crate::agentic::session::session_manager::SessionManager,
     caller_workspace_path: &std::path::Path,
     caller_session_id: &str,
 ) -> bool {
     if let Some(session) = session_manager.get_session(caller_session_id) {
-        return session.config.is_daemon || session.agent_type.starts_with("warden-");
+        return session.config.is_daemon;
     }
     session_manager
         .load_session_metadata(caller_workspace_path, caller_session_id)
         .await
         .ok()
         .flatten()
-        .map(|m| m.is_daemon || m.agent_type.starts_with("warden-"))
+        .map(|m| m.is_daemon)
         .unwrap_or(false)
 }
 
@@ -1077,7 +1075,7 @@ pub(crate) fn build_session_tree_json_impl(
 
     // R-19: resolve the effective parent of a session - the nearest ancestor
     // present in this (possibly filtered) list. When the direct parent is
-    // filtered out (e.g. daemon/warden sessions), the child is re-hung onto the
+    // filtered out (e.g. daemon sessions), the child is re-hung onto the
     // nearest surviving ancestor instead of being promoted to a fake root,
     // which would break the lineage. The in-memory tree is used to walk past
     // filtered sessions.
@@ -1903,7 +1901,7 @@ Arguments:
                 // R-2: Authorization (shared gate with acp_control; PR #2139 R4):
                 // a caller may cancel a session it created (created_by marker
                 // matches) OR any session in its descendant subtree. The
-                // "cannot cancel the current session" and daemon/warden guards
+                // "cannot cancel the current session" and daemon guards
                 // above are preserved. Cancel keeps the historical stricter
                 // gate: no owner bypass and no ghost-ACP release.
                 let current_session_id = context.session_id.as_ref().ok_or_else(|| {
@@ -2012,8 +2010,8 @@ Arguments:
                 // matches) OR any session in its descendant subtree, with the
                 // user-owner (Commander / RBAC-off) bypass, the R-26 orphan
                 // delete exemption, and the P-06 ghost-ACP release. The
-                // "cannot delete the current session" and daemon/warden guards
-                // above are preserved. Deletion of a daemon/warden session is
+                // "cannot delete the current session" and daemon guards
+                // above are preserved. Deletion of a daemon session is
                 // rejected here and the tree path enforces the same guard for
                 // every member.
                 let current_session_id = context.session_id.as_ref().ok_or_else(|| {
@@ -2036,14 +2034,14 @@ Arguments:
                 // R-012: Cascade-delete the full descendant subtree through
                 // `coordinator.delete_session_tree`, the same all-or-nothing
                 // path used by the frontend UI delete. It pre-checks every
-                // member (a processing or daemon/warden session anywhere in
+                // member (a processing or daemon session anywhere in
                 // the tree rejects the whole cascade) and deletes children
                 // before the parent. The previous per-child failure-tolerant
                 // loop could return success while a running child session
                 // stayed on disk, which then resurrected as a ghost child
                 // session on the next restart (ghost-session root cause R2);
                 // the tree path aborts instead and reports which member is
-                // not deletable. Deletion of a daemon/warden session was
+                // not deletable. Deletion of a daemon session was
                 // already rejected above; the tree path enforces the same
                 // guard for every member.
                 let delete_request = AgentSessionDeleteRequest {
@@ -2090,7 +2088,7 @@ Arguments:
                 // caller may list the workspace it currently belongs to; an
                 // explicit `workspace` argument pointing elsewhere is only
                 // allowed for the owner (Commander / RBAC-off) or a
-                // Warden/daemon audit session. This prevents a delegated
+                // daemon audit session. This prevents a delegated
                 // subagent from silently enumerating other workspaces'
                 // session summaries.
                 if let Some(caller_session_id) = context.session_id.as_deref() {
@@ -2103,7 +2101,7 @@ Arguments:
                         .is_none_or(|current| *current != explicit_workspace);
                     if is_cross_workspace
                         && !caller_is_owner_session(caller_session_id)
-                        && !caller_is_warden_or_daemon(
+                        && !caller_is_daemon(
                             coordinator.get_session_manager(),
                             std::path::Path::new(&workspace.project_workspace),
                             caller_session_id,
@@ -2122,7 +2120,7 @@ Arguments:
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
                         // R-2: Full conversation management — include hidden
-                        // Subagent/Ephemeral sessions; daemon/warden sessions
+                        // Subagent/Ephemeral sessions; daemon sessions
                         // are filtered below.
                         include_hidden: true,
                     })
@@ -2131,10 +2129,10 @@ Arguments:
                         BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
                     })?;
 
-                // Filter out daemon sessions (is_daemon=true or agent_type starts with "warden-")
+                // Filter out daemon sessions
                 let sessions: Vec<_> = sessions
                     .into_iter()
-                    .filter(|s| !s.is_daemon && !s.agent_type.starts_with("warden-"))
+                    .filter(|s| !s.is_daemon)
                     .collect();
 
                 // Resolve compact short names from persisted session metadata
@@ -2162,7 +2160,7 @@ Arguments:
                     // .ok().flatten() 的最佳努力语义一致，不中断 list 输出）。
                     .unwrap_or_default();
                 for metadata in metadata_list {
-                    // 仅保留已过滤会话（daemon/warden 已在上方剔除）的
+                    // 仅保留已过滤会话（daemon 已在上方剔除）的
                     // shortName，保持输出契约不变。
                     if !surfaced_session_ids.contains(metadata.session_id.as_str()) {
                         continue;
@@ -3122,7 +3120,7 @@ mod tests {
         let failures = vec![
             (
                 "child_1".to_string(),
-                "skipped: daemon/warden child session".to_string(),
+                "skipped: daemon child session".to_string(),
             ),
             ("child_2".to_string(), "storage write failed".to_string()),
         ];
@@ -3138,7 +3136,7 @@ mod tests {
         assert_eq!(surfaced[0]["session_id"], "child_1");
         assert_eq!(
             surfaced[0]["reason"],
-            "skipped: daemon/warden child session"
+            "skipped: daemon child session"
         );
         assert_eq!(surfaced[1]["session_id"], "child_2");
         assert_eq!(surfaced[1]["reason"], "storage write failed");
@@ -3332,7 +3330,7 @@ mod tests {
             session_id: id.to_string(),
             session_name: format!("Session {id}"),
             agent_type: if is_daemon {
-                "warden-daemon".to_string()
+                "daemon".to_string()
             } else {
                 "agentic".to_string()
             },
@@ -3727,7 +3725,7 @@ mod tests {
     // ---------------------------------------------------------------------
     // UX-P0-1: SessionHistory 读取授权门（resolve_session_read_authorization）
     // 攻击者矩阵：unrelated 拒绝 / owner 豁免 / created_by 放行 /
-    // 祖先-后代双向放行 / 后代可导出祖先 / daemon+warden 豁免 /
+    // 祖先-后代双向放行 / 后代可导出祖先 / daemon 豁免 /
     // 跨 workspace 拒绝 / 缺 metadata 拒绝。
     // ---------------------------------------------------------------------
 
@@ -3944,20 +3942,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_authz_warden_daemon_caller_bypasses_tree_gate() {
-        // 攻击者矩阵 H：Warden/daemon 会话豁免（R-A.04 同源）——Warden
-        // 模板刻意保留 SessionHistory 作跨会话审计读取。内存会话
+    async fn read_authz_daemon_caller_bypasses_tree_gate() {
+        // 攻击者矩阵 H：daemon 会话豁免（R-A.04 同源）。内存会话
         // is_daemon=true 即豁免。
         let session_manager = read_authz_session_manager();
         let tree = SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-read-authz-warden");
+        let workspace = TestTempDir::new("bitfun-read-authz-daemon");
         let workspace_string = workspace.as_string();
         let workspace_path = std::path::Path::new(&workspace_string);
         session_manager
             .create_session_with_id(
-                Some("warden-session".to_string()),
-                "Warden".to_string(),
-                "warden-review".to_string(),
+                Some("daemon-session".to_string()),
+                "Daemon".to_string(),
+                "agentic".to_string(),
                 crate::agentic::core::SessionConfig {
                     workspace_path: Some(workspace.as_string()),
                     is_daemon: true,
@@ -3965,12 +3962,12 @@ mod tests {
                 },
             )
             .await
-            .expect("create warden daemon session");
+            .expect("create daemon session");
 
         resolve_session_read_authorization(
             &session_manager,
             &tree,
-            "warden-session",
+            "daemon-session",
             workspace_path,
             "any-target-1",
             workspace_path,
@@ -3978,6 +3975,6 @@ mod tests {
             SessionHistoryAuthOptions::read(),
         )
         .await
-        .expect("warden daemon caller should bypass the read tree gate");
+        .expect("daemon caller should bypass the read tree gate");
     }
 }

@@ -18,7 +18,6 @@ pub mod input_validator;
 #[cfg(feature = "mcp-bridge")]
 pub mod mcp_tool_bridge;
 pub mod permission_intent;
-pub mod poke;
 pub mod tool_execution_presentation;
 pub mod tool_result_storage;
 pub mod tool_snapshot;
@@ -110,10 +109,6 @@ pub use mcp_tool_bridge::{
     MCP_TOOL_DELIMITER, MCP_TOOL_PREFIX,
 };
 pub use permission_intent::PermissionIntent;
-pub use poke::{
-    AppealStatement, PokeMessage, PokeResponse, PokeStatus, PokeType, PokeValidator,
-    SelfCheckStatement,
-};
 pub use tool_execution_presentation::{
     build_invalid_tool_call_error_message, build_normal_tool_json_repair_notice,
     build_permission_denied_tool_presentation, build_tool_call_truncation_recovery_notice,

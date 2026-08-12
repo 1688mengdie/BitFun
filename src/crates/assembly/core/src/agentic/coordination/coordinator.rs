@@ -2532,12 +2532,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Arc::clone(&self.thread_goal_runtime)
     }
 
-    /// Accessor for the shared tool pipeline (used by the scheduler to inject
-    /// the Warden runtime for tool-level audit).
-    pub(crate) fn tool_pipeline(&self) -> Arc<ToolPipeline> {
-        Arc::clone(&self.tool_pipeline)
-    }
-
     pub fn set_terminal_port(&self, terminal_port: Arc<dyn TerminalPort>) {
         if self.terminal_port.set(terminal_port).is_err() {
             log::warn!("Terminal port is already configured; ignoring duplicate injection");
@@ -3225,7 +3219,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Custom SessionEnd cleanup (outside hook gating): unregister the RBAC
-    /// role and tool restrictions, drop the Warden per-session state, and
+    /// role and tool restrictions, and
     /// clear coordinator-owned per-session in-memory registries.
     ///
     /// Called from durable deletion and from transient-family discard, so a
@@ -3304,8 +3298,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             AgentRole::Commander => "orchestrates and dispatches; never executes",
             AgentRole::Executor => "executes atomic steps end-to-end",
             AgentRole::Reviewer => "reviews and audits; never executes",
-            AgentRole::Warden => "monitors and challenges violations",
-            AgentRole::PunishmentExecutor => "executes penalties",
         }
     }
 
@@ -7516,7 +7508,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             sleep(Duration::from_millis(50)).await;
         }
         // Reject deletion while the session is still running a turn (or is a
-        // daemon/warden session), mirroring the tree-path pre-check so the
+        // daemon session), mirroring the tree-path pre-check so the
         // single-session path enforces the same lifecycle guard. The tree path
         // (`delete_session_tree`) pre-checks every member before calling this
         // method, so the duplicate check there is harmless.
@@ -7578,7 +7570,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         }
         // Custom session-end cleanup (outside hook gating): RBAC role and
-        // tool-restriction unregistration plus Warden state cleanup, so a
+        // tool-restriction unregistration, so a
         // recycled session id cannot inherit stale lifecycle state.
         self.session_end_cleanup(session_id).await;
         self.emit_event(AgenticEvent::SessionDeleted {
@@ -7601,7 +7593,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// the descendant set is discovered from persisted metadata (authoritative
     /// source) plus in-memory transient descendants. Every member is
     /// pre-checked by `ensure_session_tree_deletable`; deleting a session that
-    /// is currently processing or is a daemon/warden session anywhere in the
+    /// is currently processing or is a daemon session anywhere in the
     /// tree is rejected up-front with an explicit error. Any child failure
     /// aborts the cascade before the root is touched, so persisted storage and
     /// the in-memory session tree stay consistent.
@@ -7756,7 +7748,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
 
         // Pre-check every member before deleting anything: a processing or
-        // daemon/warden session anywhere in the tree rejects the whole cascade.
+        // daemon session anywhere in the tree rejects the whole cascade.
         for member_id in &postorder {
             self.ensure_session_tree_deletable(&session_storage_path, member_id)
                 .await?;
@@ -7786,9 +7778,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         session_id: &str,
     ) -> BitFunResult<()> {
         if let Some(session) = self.session_manager.get_session(session_id) {
-            if session.config.is_daemon || session.agent_type.starts_with("warden-") {
+            if session.config.is_daemon {
                 return Err(BitFunError::Validation(format!(
-                    "Cannot delete daemon/warden session: {session_id}"
+                    "Cannot delete daemon session: {session_id}"
                 )));
             }
             if let SessionState::Processing {
@@ -7807,9 +7799,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .load_session_metadata(session_storage_path, session_id)
             .await?
         {
-            if metadata.is_daemon || metadata.agent_type.starts_with("warden-") {
+            if metadata.is_daemon {
                 return Err(BitFunError::Validation(format!(
-                    "Cannot delete daemon/warden session: {session_id}"
+                    "Cannot delete daemon session: {session_id}"
                 )));
             }
         }
@@ -7846,8 +7838,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .delete_session_references(related_session_id)
                 .await?;
             // Transient sessions are discarded without a SessionEnd hook
-            // dispatch; run the custom cleanup so RBAC roles, tool
-            // restrictions and Warden state cannot leak into recycled ids.
+            // dispatch; run the custom cleanup so RBAC roles and tool
+            // restrictions cannot leak into recycled ids.
             self.session_end_cleanup(related_session_id).await;
         }
         let discarded = self
