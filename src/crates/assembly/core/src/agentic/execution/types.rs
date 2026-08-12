@@ -9,8 +9,8 @@ use crate::agentic::WorkspaceBinding;
 pub use bitfun_agent_runtime::events::FinishReason;
 use bitfun_agent_tools::LoadedDeferredToolSpec;
 use bitfun_runtime_ports::{
-    DelegationPolicy, PermissionConstraintLayer, PermissionDelegationContext,
-    PermissionRuntimeCeiling, RemoteExecPort, TerminalPort,
+    DelegationPolicy, DialogTriggerSource, PermissionConstraintLayer,
+    PermissionDelegationContext, PermissionRuntimeCeiling, RemoteExecPort, TerminalPort,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -50,6 +50,12 @@ pub struct ExecutionContext {
     /// When true, stream cancellation may be converted into a partial assistant
     /// result if text/tool output has already been produced.
     pub recover_partial_on_cancel: bool,
+    /// F-5：本轮 dialog turn 的提交来源（用户面 vs Agent 面）。真实用户轮
+    /// （DesktopUi/DesktopApi/Cli/Bot/RemoteRelay/SdkHost）才允许注入/计数
+    /// User Context；Agent 间轮（AgentSession/ScheduledJob 等）不注入也不锁
+    /// 世代，避免群聊/SessionMessage/后台通知轮重复或误触发 User Context。
+    /// `None`（子代理内部轮/测试构造）视为非真实用户轮，同样不注入。
+    pub trigger_source: Option<DialogTriggerSource>,
 }
 
 /// Round context

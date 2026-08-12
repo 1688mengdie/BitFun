@@ -5851,6 +5851,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             round_injection: None,
             emit_lifecycle_events: true,
             recover_partial_on_cancel: false,
+            trigger_source: None,
         };
         let session_max_tokens = session.config.max_context_tokens;
 
@@ -6726,6 +6727,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             round_injection: self.round_injection_source.get().cloned(),
             emit_lifecycle_events: true,
             recover_partial_on_cancel: false,
+            trigger_source: Some(submission_policy.trigger_source),
         };
 
         // Auto-generate session title on first message
@@ -9951,6 +9953,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             round_injection: self.round_injection_source.get().cloned(),
             emit_lifecycle_events,
             recover_partial_on_cancel: true,
+            // F-5：子代理内部轮一律视为非真实用户轮（None）——其 initial_messages
+            // 里的裸 Message::user 不得触发 User Context 注入/计数。
+            trigger_source: None,
         };
 
         let execution_engine = self.execution_engine.clone();

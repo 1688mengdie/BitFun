@@ -206,7 +206,9 @@ describe('GroupChatPane', () => {
 
     const sendCall = mockedInvoke.mock.calls.find(([command]) => command === 'group_chat_send');
     expect(sendCall).toBeTruthy();
-    expect(sendCall?.[1]).toEqual(expect.objectContaining({ content: 'hi group' }));
+    expect(sendCall?.[1]).toEqual(
+      expect.objectContaining({ request: expect.objectContaining({ content: 'hi group' }) }),
+    );
   });
 
   it('toggles mode via setMode', async () => {
@@ -220,6 +222,8 @@ describe('GroupChatPane', () => {
 
     const setModeCall = mockedInvoke.mock.calls.find(([command]) => command === 'group_chat_set_mode');
     expect(setModeCall).toBeTruthy();
-    expect(setModeCall?.[1]).toEqual(expect.objectContaining({ mode: 'round_robin' }));
+    expect(setModeCall?.[1]).toEqual(
+      expect.objectContaining({ request: expect.objectContaining({ mode: 'round_robin' }) }),
+    );
   });
 });

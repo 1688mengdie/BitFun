@@ -98,7 +98,9 @@ describe('GroupChatCreateDialog', () => {
     const createCall = mockedInvoke.mock.calls.find(([command]) => command === 'group_chat_create');
     expect(createCall).toBeTruthy();
     expect(createCall?.[1]).toEqual(
-      expect.objectContaining({ name: 'My Group', mode: 'free' }),
+      expect.objectContaining({
+        request: expect.objectContaining({ name: 'My Group', mode: 'free' }),
+      }),
     );
     expect(onClose).toHaveBeenCalled();
   });

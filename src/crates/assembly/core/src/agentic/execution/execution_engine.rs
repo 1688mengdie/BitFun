@@ -1921,41 +1921,67 @@ impl ExecutionEngine {
         scaffold.prepended_prompt_reminders.runtime_facts = Some(refreshed);
     }
 
-    /// P-18：按会话级 User Context 注入规则构建本轮动态后置提醒。
-    /// - Runtime Facts：沿用 scaffold（refresh_runtime_facts_for_round 已按回合标记
-    ///   置空或刷新：用户首轮/恢复后首轮 = Some，工具轮 = None）。
-    /// - User Context：整个会话生命周期只注入一次（新建会话首次用户输入注入）。
-    ///   注入世代 == 当前世代 → 已注入过，后续所有回合（含后续用户回合与工具轮）
-    ///   均不重复注入；上下文压缩/恢复使缓存世代递增 → 恢复后首轮重新注入一次。
+    /// P-18/F-5/RT：按「真实用户轮」规则构建本轮动态后置提醒。
+    /// - User Context + Runtime Facts：都只在真实用户轮注入——与用户消息
+    ///   拼接发送（动态提醒追加在最新用户消息后 = 用户消息轮内），不再
+    ///   每轮独立发送「时间 + 上下文占比」提示（主人实测：独立消息每条
+    ///   增加 token 消耗）。F-5 起改为「真实用户消息轮才注入/计数」——
+    ///   只有 trigger_source 属于用户面（DesktopUi/DesktopApi/Cli/Bot/
+    ///   RemoteRelay/SdkHost）的轮才参与世代比较并注入；Agent 间轮
+    ///   （AgentSession/ScheduledJob 等）与子代理内部轮（trigger_source=None）
+    ///   既不注入也不记录注入世代（不锁世代 → 后续真实用户轮仍可注入，
+    ///   防回归重复注入问题的同时避免 Agent 轮误触发）。世代语义保留：
+    ///   同一世代内已注入过 → 不重复；上下文压缩/恢复使缓存世代递增 →
+    ///   恢复后首个真实用户轮重新注入一次。
     ///   原实现（每回合首轮注入）在 execute_dialog_turn_impl 每次 turn 开始清除
     ///   注入标记，导致同一会话每个用户回合都重复注入工作区指令全文。
     async fn round_dynamic_reminders<'a>(
         &self,
         session_id: &str,
+        context: &ExecutionContext,
         reminders: &'a PrependedPromptReminders,
     ) -> Vec<&'a str> {
         let mut dynamic = Vec::new();
-        if let Some(runtime_facts) = reminders.runtime_facts.as_deref() {
-            dynamic.push(runtime_facts);
-        }
-        let generation = self
-            .session_manager
-            .user_context_cache_generation(session_id)
-            .await;
-        let injected_generation = self
-            .session_manager
-            .user_context_injected_generation(session_id)
-            .await;
-        // P-18（d5-P1-1）：只在真正注入了 User Context 时才记录注入世代。
-        // `user_context` 为 None（无 workspace / 指令文件构建失败 / 无内容可注入）时
-        // 不记录——否则同一世代内后续轮被抑制注入，而模型实际从未看到 User Context，
-        // 当缓存恢复可用时（如远端重连）也必须能重新注入。
-        if injected_generation != Some(generation) {
-            if let Some(user_context) = reminders.user_context.as_deref() {
-                dynamic.push(user_context);
-                self.session_manager
-                    .remember_user_context_injected_generation(session_id, generation)
-                    .await;
+        // F-5/RT：真实用户轮判定——只有用户面 trigger_source 才注入/计数
+        // User Context 与 Runtime Facts；Agent 注入轮与子代理内部轮（None）
+        // 直接跳过（不锁世代），不再每轮独立发送时间+占比提示。
+        let user_submission_source = context.trigger_source.is_some_and(|source| {
+            matches!(
+                source,
+                bitfun_runtime_ports::DialogTriggerSource::DesktopUi
+                    | bitfun_runtime_ports::DialogTriggerSource::DesktopApi
+                    | bitfun_runtime_ports::DialogTriggerSource::Cli
+                    | bitfun_runtime_ports::DialogTriggerSource::Bot
+                    | bitfun_runtime_ports::DialogTriggerSource::RemoteRelay
+                    | bitfun_runtime_ports::DialogTriggerSource::SdkHost
+            )
+        });
+        if user_submission_source {
+            // RT：Runtime Facts（时间 + 上下文占比）随真实用户消息轮拼接发送，
+            // 不再每轮独立消息注入。refresh_runtime_facts_for_round 已保证
+            // 工具轮置空（None），此处再以真实用户轮为闸，Agent 轮同样不带。
+            if let Some(runtime_facts) = reminders.runtime_facts.as_deref() {
+                dynamic.push(runtime_facts);
+            }
+            let generation = self
+                .session_manager
+                .user_context_cache_generation(session_id)
+                .await;
+            let injected_generation = self
+                .session_manager
+                .user_context_injected_generation(session_id)
+                .await;
+            // P-18（d5-P1-1）：只在真正注入了 User Context 时才记录注入世代。
+            // `user_context` 为 None（无 workspace / 指令文件构建失败 / 无内容可注入）时
+            // 不记录——否则同一世代内后续轮被抑制注入，而模型实际从未看到 User Context，
+            // 当缓存恢复可用时（如远端重连）也必须能重新注入。
+            if injected_generation != Some(generation) {
+                if let Some(user_context) = reminders.user_context.as_deref() {
+                    dynamic.push(user_context);
+                    self.session_manager
+                        .remember_user_context_injected_generation(session_id, generation)
+                        .await;
+                }
             }
         }
         dynamic
@@ -4463,6 +4489,7 @@ impl ExecutionEngine {
             let send_dynamic_prepended_reminders = self
                 .round_dynamic_reminders(
                     &context.session_id,
+                    &context,
                     &turn_prompt_scaffold.prepended_prompt_reminders,
                 )
                 .await;
@@ -5340,6 +5367,7 @@ impl ExecutionEngine {
                 let finalize_dynamic_prepended_reminders = self
                     .round_dynamic_reminders(
                         &context.session_id,
+                        &context,
                         &turn_prompt_scaffold.prepended_prompt_reminders,
                     )
                     .await;
@@ -6199,6 +6227,7 @@ mod tests {
             round_injection: None,
             emit_lifecycle_events: false,
             recover_partial_on_cancel: false,
+            trigger_source: None,
         };
         let mut messages = vec![
             Message::system("system".to_string()),
@@ -6832,9 +6861,37 @@ mod tests {
             user_context: Some("[User Context] workspace instructions".to_string()),
             ..Default::default()
         };
+        // F-5：真实用户轮（DesktopUi 等用户面 trigger_source）才参与注入/计数。
+        let user_context = crate::agentic::execution::types::ExecutionContext {
+            session_id: session_id.to_string(),
+            dialog_turn_id: "turn".to_string(),
+            turn_index: 0,
+            agent_type: "agentic".to_string(),
+            workspace: None,
+            context: HashMap::new(),
+            subagent_parent_info: None,
+            permission_delegation: None,
+            permission_runtime_ceiling: None,
+            delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
+            runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
+            workspace_services: None,
+            terminal_port: None,
+            remote_exec_port: None,
+            round_injection: None,
+            emit_lifecycle_events: false,
+            recover_partial_on_cancel: false,
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::DesktopUi),
+        };
+        // F-5：Agent 轮（AgentSession）不得注入 User Context，也不锁世代。
+        let agent_context = crate::agentic::execution::types::ExecutionContext {
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::AgentSession),
+            ..user_context.clone()
+        };
 
         // Turn 1, first round: runtime facts + user context both inject.
-        let turn1_first = engine.round_dynamic_reminders(session_id, &reminders).await;
+        let turn1_first = engine
+            .round_dynamic_reminders(session_id, &user_context, &reminders)
+            .await;
         assert!(turn1_first.iter().any(|r| r.contains("[Runtime Facts]")));
         assert!(turn1_first.iter().any(|r| r.contains("[User Context]")));
 
@@ -6863,7 +6920,11 @@ mod tests {
             false,
         );
         let turn1_tool_round = engine
-            .round_dynamic_reminders(session_id, &tool_round_scaffold.prepended_prompt_reminders)
+            .round_dynamic_reminders(
+                session_id,
+                &user_context,
+                &tool_round_scaffold.prepended_prompt_reminders,
+            )
             .await;
         assert!(
             !turn1_tool_round
@@ -6877,11 +6938,28 @@ mod tests {
 
         // Turn 2: session-scoped semantics — no turn-start marker reset, so the
         // first round of the next user turn must NOT re-inject user context.
-        let turn2_first = engine.round_dynamic_reminders(session_id, &reminders).await;
+        let turn2_first = engine
+            .round_dynamic_reminders(session_id, &user_context, &reminders)
+            .await;
         assert!(turn2_first.iter().any(|r| r.contains("[Runtime Facts]")));
         assert!(
             !turn2_first.iter().any(|r| r.contains("[User Context]")),
             "session-scoped injection: second user turn must not re-inject user context"
+        );
+
+        // F-5/RT：Agent 轮（AgentSession）不得注入 User Context，也不得记录
+        // 注入世代；且不再携带 Runtime Facts（时间+占比提示随用户轮拼接，
+        // Agent 轮零动态提醒）。
+        let agent_round = engine
+            .round_dynamic_reminders(session_id, &agent_context, &reminders)
+            .await;
+        assert!(
+            !agent_round.iter().any(|r| r.contains("[User Context]")),
+            "agent round must not inject user context"
+        );
+        assert!(
+            !agent_round.iter().any(|r| r.contains("[Runtime Facts]")),
+            "agent round must not carry runtime facts (拼接进用户消息轮，非独立每轮提示)"
         );
 
         // Context compaction bumps the generation: first round re-injects even
@@ -6889,7 +6967,9 @@ mod tests {
         session_manager
             .invalidate_prompt_cache(session_id, PromptCacheScope::UserContext, "test")
             .await;
-        let recovery_first = engine.round_dynamic_reminders(session_id, &reminders).await;
+        let recovery_first = engine
+            .round_dynamic_reminders(session_id, &user_context, &reminders)
+            .await;
         assert!(recovery_first.iter().any(|r| r.contains("[Runtime Facts]")));
         assert!(recovery_first.iter().any(|r| r.contains("[User Context]")));
     }
@@ -6937,6 +7017,27 @@ mod tests {
         );
 
         let session_id = "p18-none-context-session";
+        // F-5：真实用户轮（DesktopUi）上下文。
+        let user_context = crate::agentic::execution::types::ExecutionContext {
+            session_id: session_id.to_string(),
+            dialog_turn_id: "turn".to_string(),
+            turn_index: 0,
+            agent_type: "agentic".to_string(),
+            workspace: None,
+            context: HashMap::new(),
+            subagent_parent_info: None,
+            permission_delegation: None,
+            permission_runtime_ceiling: None,
+            delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
+            runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
+            workspace_services: None,
+            terminal_port: None,
+            remote_exec_port: None,
+            round_injection: None,
+            emit_lifecycle_events: false,
+            recover_partial_on_cancel: false,
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::DesktopUi),
+        };
         // No User Context in the scaffold: the first round must not record a
         // generation and must not inject anything from the user-context slot.
         let reminders = PrependedPromptReminders {
@@ -6945,7 +7046,9 @@ mod tests {
             ..Default::default()
         };
 
-        let first = engine.round_dynamic_reminders(session_id, &reminders).await;
+        let first = engine
+            .round_dynamic_reminders(session_id, &user_context, &reminders)
+            .await;
         assert!(first.iter().any(|r| r.contains("[Runtime Facts]")));
         assert!(
             session_manager
@@ -6963,7 +7066,7 @@ mod tests {
             ..Default::default()
         };
         let later = engine
-            .round_dynamic_reminders(session_id, &reminders_with_context)
+            .round_dynamic_reminders(session_id, &user_context, &reminders_with_context)
             .await;
         assert!(
             later.iter().any(|r| r.contains("[User Context]")),
@@ -6975,6 +7078,150 @@ mod tests {
                 .await
                 .is_some(),
             "a real injection must record the generation"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_dynamic_reminders_agent_round_does_not_inject_or_lock_generation() {
+        // F-5：Agent 间轮（AgentSession / ScheduledJob）不得注入 User Context，
+        // 也不得记录注入世代——后续真实用户轮在同一世代内仍可注入（防「Agent
+        // 轮先跑导致真实用户轮被世代抑制」的回归）。
+        let temp = tempfile::tempdir().expect("tempdir");
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(
+                PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+                    temp.path().join("user-root"),
+                )))
+                .expect("persistence manager"),
+            ),
+            SessionManagerConfig {
+                max_active_sessions: 4,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: false,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(TokioRwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let engine = ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        );
+
+        let session_id = "f5-agent-round-session";
+        let reminders = PrependedPromptReminders {
+            runtime_facts: Some("[Runtime Facts] 当前上下文占比: 35%".to_string()),
+            user_context: Some("[User Context] workspace instructions".to_string()),
+            ..Default::default()
+        };
+        let base_context = crate::agentic::execution::types::ExecutionContext {
+            session_id: session_id.to_string(),
+            dialog_turn_id: "turn".to_string(),
+            turn_index: 0,
+            agent_type: "agentic".to_string(),
+            workspace: None,
+            context: HashMap::new(),
+            subagent_parent_info: None,
+            permission_delegation: None,
+            permission_runtime_ceiling: None,
+            delegation_policy: bitfun_runtime_ports::DelegationPolicy::top_level(),
+            runtime_tool_restrictions: ToolRuntimeRestrictions::default(),
+            workspace_services: None,
+            terminal_port: None,
+            remote_exec_port: None,
+            round_injection: None,
+            emit_lifecycle_events: false,
+            recover_partial_on_cancel: false,
+            trigger_source: None,
+        };
+        let agent_context = crate::agentic::execution::types::ExecutionContext {
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::AgentSession),
+            ..base_context.clone()
+        };
+        let scheduled_context = crate::agentic::execution::types::ExecutionContext {
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::ScheduledJob),
+            ..base_context.clone()
+        };
+        // Subagent 内部轮（trigger_source = None）同 Agent 轮语义。
+        let subagent_context = base_context;
+        let user_context = crate::agentic::execution::types::ExecutionContext {
+            trigger_source: Some(bitfun_runtime_ports::DialogTriggerSource::DesktopUi),
+            ..subagent_context.clone()
+        };
+
+        // Agent 轮（AgentSession/ScheduledJob/子代理 None）：不注入，也不携带
+        // Runtime Facts（时间+占比提示随真实用户消息轮拼接，非独立每轮提示）。
+        for context in [&agent_context, &scheduled_context, &subagent_context] {
+            let round = engine
+                .round_dynamic_reminders(session_id, context, &reminders)
+                .await;
+            assert!(
+                !round.iter().any(|r| r.contains("[User Context]")),
+                "non-user round must not inject user context"
+            );
+            assert!(
+                !round.iter().any(|r| r.contains("[Runtime Facts]")),
+                "non-user round must not carry runtime facts"
+            );
+            assert!(
+                session_manager
+                    .user_context_injected_generation(session_id)
+                    .await
+                    .is_none(),
+                "non-user round must not lock the injected generation"
+            );
+        }
+
+        // 后续真实用户轮：同一世代内仍可注入（未被 Agent 轮锁世代），且
+        // Runtime Facts 随用户轮一起拼接发送。
+        let user_round = engine
+            .round_dynamic_reminders(session_id, &user_context, &reminders)
+            .await;
+        assert!(
+            user_round.iter().any(|r| r.contains("[User Context]")),
+            "the first real user round must still inject after agent rounds"
+        );
+        assert!(
+            user_round.iter().any(|r| r.contains("[Runtime Facts]")),
+            "real user round carries runtime facts (拼接进用户消息轮)"
+        );
+        assert!(
+            session_manager
+                .user_context_injected_generation(session_id)
+                .await
+                .is_some(),
+            "the real user round must record the generation"
+        );
+
+        // 再次 Agent 轮：仍不注入（世代已锁定，但 Agent 轮本身也绝不注入，
+        // Runtime Facts 同样不带）。
+        let agent_after_user = engine
+            .round_dynamic_reminders(session_id, &agent_context, &reminders)
+            .await;
+        assert!(
+            !agent_after_user
+                .iter()
+                .any(|r| r.contains("[User Context]")),
+            "agent round after a user round must still not inject"
+        );
+        assert!(
+            !agent_after_user
+                .iter()
+                .any(|r| r.contains("[Runtime Facts]")),
+            "agent round after a user round must still not carry runtime facts"
         );
     }
 
@@ -7061,6 +7308,7 @@ mod tests {
             round_injection: None,
             emit_lifecycle_events: true,
             recover_partial_on_cancel: false,
+            trigger_source: None,
         };
 
         let restrictions = ExecutionEngine::finalize_runtime_tool_restrictions(

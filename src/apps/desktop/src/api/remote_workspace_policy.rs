@@ -36,6 +36,94 @@
 //!   been audited yet. Auditing one means reading the handler, fixing or
 //!   gating remote behavior if needed, and moving it to a real policy.
 
+/// Resolved SSH scope for a group-chat command invoked against a workspace
+/// path. The desktop group-chat commands declare `RemoteRouted` and resolve
+/// their session-storage root through `SessionStoragePathRequest`; the request
+/// must carry the real `remote_connection_id`/`remote_ssh_host` of the active
+/// workspace instead of a hardcoded `None`, otherwise two remote workspaces
+/// opened at the same path (e.g. `/`) on different hosts can be resolved
+/// against the wrong (or the `_unresolved`) mirror tree.
+///
+/// Resolution order (mirrors `search_referenceable_sessions`):
+/// 1. the global workspace registry's `remote_ssh_connection_id()` +
+///    `metadata["sshHost"]` for the exact workspace path;
+/// 2. the `set_active_connection_hint` of the remote workspace state manager
+///    (the current frontend panel), matching the workspace path when unique;
+/// 3. explicit `(connection_id, ssh_host)` override from the caller (used by
+///    the desktop panel which owns the active connection);
+/// 4. `None` (local workspace path).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupChatWorkspaceScope {
+    pub workspace_path: String,
+    pub remote_connection_id: Option<String>,
+    pub remote_ssh_host: Option<String>,
+}
+
+impl GroupChatWorkspaceScope {
+    pub fn new(workspace_path: String) -> Self {
+        Self {
+            workspace_path,
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        }
+    }
+
+    /// Resolves the scope from the real remote connection context, preferring
+    /// the exact opened workspace (persisted `connectionId`/`sshHost`
+    /// metadata), then the active connection hint, then the explicit override.
+    pub async fn resolve(self) -> Self {
+        let workspace_path = self.workspace_path.clone();
+        if let Some(workspace_service) =
+            bitfun_core::service::workspace::get_global_workspace_service()
+        {
+            if let Some(workspace) = workspace_service
+                .get_workspace_by_path(std::path::Path::new(&workspace_path))
+                .await
+            {
+                if let Some(connection_id) = workspace.remote_ssh_connection_id() {
+                    let remote_ssh_host = workspace
+                        .metadata
+                        .get("sshHost")
+                        .and_then(|value| value.as_str())
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_string);
+                    return Self {
+                        workspace_path,
+                        remote_connection_id: Some(connection_id.to_string()),
+                        remote_ssh_host,
+                    };
+                }
+            }
+        }
+        if let Some(connection) =
+            bitfun_core::service::remote_ssh::lookup_remote_connection(&workspace_path).await
+        {
+            return Self {
+                workspace_path,
+                remote_connection_id: Some(connection.connection_id),
+                remote_ssh_host: Some(connection.ssh_host),
+            };
+        }
+        // Explicit `(connection_id, ssh_host)` override from the caller (the
+        // desktop panel owns the active connection); preserved verbatim.
+        if let Some(connection_id) = self.remote_connection_id.clone() {
+            if !connection_id.trim().is_empty() {
+                return Self {
+                    workspace_path,
+                    remote_connection_id: Some(connection_id),
+                    remote_ssh_host: self.remote_ssh_host.clone(),
+                };
+            }
+        }
+        Self {
+            workspace_path,
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        }
+    }
+}
+
 /// How a Tauri command behaves for remote SSH workspaces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteWorkspacePolicy {
@@ -2605,4 +2693,122 @@ mod tests {
         "webdriver_bridge_result",
         "write_file_content",
     ];
+
+    // -------------------------------------------------------------------
+    // F-3: 12 group-chat commands are RemoteRouted and must resolve the real
+    // remote_connection_id from the workspace context (no hardcoded None).
+    // The resolution itself is `GroupChatWorkspaceScope::resolve`: it reads
+    // the opened workspace's persisted `connectionId`/`sshHost` metadata,
+    // falls back to the registered remote workspace lookup, then the explicit
+    // caller override, and only then `None` (local workspace path).
+    // -------------------------------------------------------------------
+
+    const GROUP_CHAT_REMOTE_ROUTED_COMMANDS: &[&str] = &[
+        "group_chat_create",
+        "group_chat_delete",
+        "group_chat_ingest_reply",
+        "group_chat_join",
+        "group_chat_leave",
+        "group_chat_list",
+        "group_chat_load",
+        "group_chat_members",
+        "group_chat_messages",
+        "group_chat_scan_timeouts",
+        "group_chat_send",
+        "group_chat_set_mode",
+    ];
+
+    #[test]
+    fn group_chat_commands_are_remote_routed() {
+        for command in GROUP_CHAT_REMOTE_ROUTED_COMMANDS {
+            assert_eq!(
+                remote_workspace_policy(command),
+                Some(RemoteWorkspacePolicy::RemoteRouted),
+                "{command} must be RemoteRouted: group chats live beside the workspace sessions tree"
+            );
+        }
+    }
+
+    /// Group-chat session roots resolve through `SessionStoragePathRequest` —
+    /// never with a hardcoded `None` connection id.
+    #[test]
+    fn group_chat_scope_resolution_never_hardcodes_none_connection() {
+        let source = include_str!("session_api.rs");
+        for command in GROUP_CHAT_REMOTE_ROUTED_COMMANDS {
+            let call = format!("pub async fn {command}(");
+            assert!(
+                source.contains(&call),
+                "{command} must be implemented in session_api.rs"
+            );
+        }
+        // The store resolution entry point must thread the scope's connection
+        // id through; any `None` literal inside it would defeat F-3.
+        let root_impl = source
+            .split("async fn group_chats_root")
+            .nth(1)
+            .expect("session_api.rs must define group_chats_root");
+        assert!(
+            root_impl.contains("remote_connection_id: scope.remote_connection_id.clone()"),
+            "group_chats_root must forward the resolved remote_connection_id (F-3)"
+        );
+        assert!(
+            root_impl.contains("remote_ssh_host: scope.remote_ssh_host.clone()"),
+            "group_chats_root must forward the resolved remote_ssh_host (F-3)"
+        );
+    }
+
+    /// Remote connection resolution contract: two connections registered at
+    /// the same root must NOT fall back to `None` — the registered lookup
+    /// returns the entry (with its host), proving the `RemoteRouted` path is
+    /// exercised with a non-`None` connection id.
+    #[tokio::test]
+    async fn group_chat_scope_resolves_registered_remote_connection() {
+        let manager = bitfun_core::service::remote_ssh::init_remote_workspace_manager();
+        manager
+            .register_remote_workspace(
+                "/workspace".to_string(),
+                "conn-a".to_string(),
+                "Server A".to_string(),
+                "host-a".to_string(),
+            )
+            .await;
+        manager
+            .set_active_connection_hint(Some("conn-a".to_string()))
+            .await;
+
+        let scope = GroupChatWorkspaceScope::new("/workspace".to_string())
+            .resolve()
+            .await;
+
+        assert_eq!(scope.workspace_path, "/workspace");
+        assert_eq!(scope.remote_connection_id.as_deref(), Some("conn-a"));
+        assert_eq!(scope.remote_ssh_host.as_deref(), Some("host-a"));
+    }
+
+    /// An explicit caller-provided connection must win over the (absent)
+    /// registry lookups and never be dropped to `None`.
+    #[tokio::test]
+    async fn group_chat_scope_preserves_explicit_connection_override() {
+        let scope = GroupChatWorkspaceScope {
+            workspace_path: "/unregistered-remote".to_string(),
+            remote_connection_id: Some("conn-explicit".to_string()),
+            remote_ssh_host: Some("host-explicit".to_string()),
+        }
+        .resolve()
+        .await;
+
+        assert_eq!(scope.remote_connection_id.as_deref(), Some("conn-explicit"));
+        assert_eq!(scope.remote_ssh_host.as_deref(), Some("host-explicit"));
+    }
+
+    /// A plain local path with no registrations resolves to a local scope
+    /// (`None` connection) — the expected behavior for local workspaces.
+    #[tokio::test]
+    async fn group_chat_scope_local_path_resolves_none() {
+        let scope = GroupChatWorkspaceScope::new("/local/project".to_string())
+            .resolve()
+            .await;
+        assert_eq!(scope.remote_connection_id, None);
+        assert_eq!(scope.remote_ssh_host, None);
+    }
 }

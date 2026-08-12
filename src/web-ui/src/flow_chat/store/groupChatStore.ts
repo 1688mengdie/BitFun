@@ -93,7 +93,9 @@ export const useGroupChatStore = create<GroupChatStore>()(
     loadRooms: async (workspacePath?: string) => {
       const effectivePath = workspacePath ?? get().workspacePath;
       const rooms = (await api.invoke('group_chat_list', {
-        workspacePath: effectivePath,
+        request: {
+          workspace_path: effectivePath,
+        },
       })) as GroupChatRoom[];
       set((state) => {
         state.rooms = new Map(rooms.map((room) => [room.roomId, room]));
@@ -105,8 +107,10 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     loadMembers: async (roomId: string) => {
       const members = (await api.invoke('group_chat_members', {
-        workspacePath: get().workspacePath,
-        roomId,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+        },
       })) as GroupChatMember[];
       set((state) => {
         state.members.set(roomId, members);
@@ -120,11 +124,13 @@ export const useGroupChatStore = create<GroupChatStore>()(
         throw new Error('Cannot create group chat: no workspace selected (workspacePath is empty)');
       }
       const room = (await api.invoke('group_chat_create', {
-        workspacePath,
-        name,
-        owner,
-        members,
-        mode: mode ?? 'free',
+        request: {
+          workspace_path: workspacePath,
+          name,
+          owner,
+          members,
+          mode: mode ?? 'free',
+        },
       })) as GroupChatRoom;
       set((state) => {
         state.rooms.set(room.roomId, room);
@@ -134,10 +140,12 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     joinRoom: async (roomId, sessionId, actor) => {
       const room = (await api.invoke('group_chat_join', {
-        workspacePath: get().workspacePath,
-        roomId,
-        sessionId,
-        actor,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          session_id: sessionId,
+          actor,
+        },
       })) as GroupChatRoom;
       set((state) => {
         state.rooms.set(roomId, room);
@@ -146,10 +154,12 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     leaveRoom: async (roomId, sessionId, actor) => {
       const room = (await api.invoke('group_chat_leave', {
-        workspacePath: get().workspacePath,
-        roomId,
-        sessionId,
-        actor,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          session_id: sessionId,
+          actor,
+        },
       })) as GroupChatRoom;
       set((state) => {
         state.rooms.set(roomId, room);
@@ -158,9 +168,11 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     deleteRoom: async (roomId, actor) => {
       await api.invoke('group_chat_delete', {
-        workspacePath: get().workspacePath,
-        roomId,
-        actor,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          actor,
+        },
       });
       set((state) => {
         state.rooms.delete(roomId);
@@ -174,10 +186,12 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     setMode: async (roomId, mode, actor) => {
       const room = (await api.invoke('group_chat_set_mode', {
-        workspacePath: get().workspacePath,
-        roomId,
-        mode,
-        actor,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          mode,
+          actor,
+        },
       })) as GroupChatRoom;
       set((state) => {
         state.rooms.set(roomId, room);
@@ -188,21 +202,25 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     sendMessage: async (roomId, author, content, mentionTargets, urgent = false) => {
       await api.invoke('group_chat_send', {
-        workspacePath: get().workspacePath,
-        roomId,
-        author,
-        content,
-        mentionTargets,
-        urgent,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          author,
+          content,
+          mention_targets: mentionTargets,
+          urgent,
+        },
       });
     },
 
     loadMessages: async (roomId, cursor) => {
       const response = (await api.invoke('group_chat_messages', {
-        workspacePath: get().workspacePath,
-        roomId,
-        limit: cursor ? undefined : 50,
-        cursor: cursor ?? undefined,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          limit: cursor ? undefined : 50,
+          cursor: cursor ?? undefined,
+        },
       })) as { messages: GroupChatMessage[]; nextCursor?: string };
       set((state) => {
         state.messages.set(roomId, response.messages);
@@ -211,8 +229,11 @@ export const useGroupChatStore = create<GroupChatStore>()(
 
     scanTimeouts: async (replyTimeoutSecs: number) => {
       const reminders = (await api.invoke('group_chat_scan_timeouts', {
-        workspacePath: get().workspacePath,
-        replyTimeoutSecs,
+        request: {
+          workspace_path: get().workspacePath,
+          reply_timeout_secs: replyTimeoutSecs,
+          room_id: undefined,
+        },
       })) as Array<{ roomId: string; messageId: string; content: string }>;
       return reminders;
     },
@@ -222,12 +243,14 @@ export const useGroupChatStore = create<GroupChatStore>()(
     // shows the reply text and the Replied status.
     ingestReply: async (roomId, messageId, replyContent, author, timestamp) => {
       await api.invoke('group_chat_ingest_reply', {
-        workspacePath: get().workspacePath,
-        roomId,
-        messageId,
-        replyContent,
-        author,
-        timestamp,
+        request: {
+          workspace_path: get().workspacePath,
+          room_id: roomId,
+          message_id: messageId,
+          reply_content: replyContent,
+          author,
+          timestamp,
+        },
       });
       await get().loadMessages(roomId);
     },

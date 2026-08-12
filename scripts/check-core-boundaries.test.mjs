@@ -2878,6 +2878,7 @@ test('services-core capability profiles keep heavy owners out of the empty profi
   assert.deepEqual(profiles.get('local-storage'), [
     'dep:bitfun-core-types',
     'dep:bitfun-events',
+    'dep:bitfun-runtime-ports',
     'dep:chrono',
     'dep:fs2',
     'dep:libc',

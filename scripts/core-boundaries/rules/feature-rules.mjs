@@ -26,7 +26,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'base64', ownerFeatures: ['filesystem'] },
       { depName: 'bitfun-core-types', ownerFeatures: ['local-storage', 'lsp'] },
       { depName: 'bitfun-events', ownerFeatures: ['local-storage'] },
-      { depName: 'bitfun-runtime-ports', ownerFeatures: ['permission', 'workspace-runtime'] },
+      { depName: 'bitfun-runtime-ports', ownerFeatures: ['local-storage', 'permission', 'workspace-runtime'] },
       { depName: 'chrono', ownerFeatures: ['filesystem', 'local-storage'] },
       { depName: 'dunce', ownerFeatures: ['runtime-ownership', 'workspace-identity', 'workspace-runtime'] },
       { depName: 'fs2', ownerFeatures: ['json-io', 'local-storage', 'runtime-ownership'] },
@@ -914,6 +914,7 @@ export const coreClosedFeatureProfileRules = [
     requiredFeatureRefs: [
       'dep:bitfun-core-types',
       'dep:bitfun-events',
+      'dep:bitfun-runtime-ports',
       'dep:chrono',
       'dep:fs2',
       'dep:libc',
