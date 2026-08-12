@@ -83,6 +83,7 @@ test('portable contract crates expose only capability-local feature slices', asy
     new Set([
       'default',
       'agent-api',
+      'acp-client',
       'git-port',
       'permission',
       'plugin-runtime',
@@ -105,6 +106,7 @@ test('portable contract crates expose only capability-local feature slices', asy
   assert.deepEqual(
     new Set(runtimePortFeatures['tool-runtime-handles']),
     new Set([
+      'acp-client',
       'workspace-ports',
       'terminal-port',
       'remote-exec-port',
@@ -164,7 +166,7 @@ test('runtime-ports async dependencies stay behind their exact port owners', () 
   );
   assert.deepEqual(
     ownersByDependency.get('tokio'),
-    new Set(['remote-exec-port', 'terminal-port']),
+    new Set(['acp-client', 'remote-exec-port', 'terminal-port']),
   );
 });
 
@@ -297,6 +299,7 @@ function pathDependency(repoCratePath, options = {}) {
 const RUNTIME_PORT_FEATURE_PROFILES = {
   default: [],
   'agent-api': ['dep:bitfun-core-types'],
+  'acp-client': ['dep:tokio'],
   'git-port': [],
   permission: ['dep:bitfun-product-domains'],
   'plugin-runtime': [],
@@ -305,7 +308,7 @@ const RUNTIME_PORT_FEATURE_PROFILES = {
   'runtime-event-port': [],
   'script-tool-runtime': [],
   'terminal-port': ['dep:tokio'],
-  'tool-runtime-handles': ['workspace-ports', 'terminal-port', 'remote-exec-port'],
+  'tool-runtime-handles': ['acp-client', 'workspace-ports', 'terminal-port', 'remote-exec-port'],
   ts: [
     'dep:ts-rs',
     'agent-api',
