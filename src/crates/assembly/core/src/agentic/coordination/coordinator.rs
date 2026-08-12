@@ -20747,6 +20747,191 @@ mod tests {
         assert!(error.message.starts_with("Validation error:"));
     }
 
+    #[tokio::test]
+    async fn discard_transient_session_emits_session_deleted_for_every_family_member() {
+        // Ghost-session regression: recycle paths previously released the
+        // transient family without emitting SessionDeleted, leaving residual
+        // shells in the frontend session tree until restart. This test drives
+        // the real coordinator discard path and asserts one SessionDeleted per
+        // family member (children before root).
+        let (coordinator, session_manager) = test_coordinator_with_config(100, true);
+        let workspace_path = std::env::temp_dir().join(format!(
+            "bitfun-ghost-session-emit-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
+        let workspace = workspace_path.to_string_lossy().into_owned();
+
+        let root = session_manager
+            .create_transient_session_with_id_and_details(
+                Some("ghost-root".to_string()),
+                "Ghost root".to_string(),
+                "Explore".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                None,
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient root Session should be created");
+        let child = session_manager
+            .create_transient_session_with_id_and_details(
+                Some("ghost-child".to_string()),
+                "Ghost child".to_string(),
+                "Explore".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                Some(format!("session-{}", root.session_id)),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient child Session should be created");
+        let grandchild = session_manager
+            .create_transient_session_with_id_and_details(
+                Some("ghost-grandchild".to_string()),
+                "Ghost grandchild".to_string(),
+                "Explore".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                Some(format!("session-{}", child.session_id)),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient grandchild Session should be created");
+
+        let mut events = coordinator.event_queue.subscribe();
+
+        let discarded = coordinator
+            .discard_transient_session(
+                &workspace_path,
+                None,
+                None,
+                &root.session_id,
+            )
+            .await
+            .expect("transient family discard should succeed");
+        assert!(discarded, "a live transient family must be discarded");
+
+        // Children before root, exactly one SessionDeleted per member.
+        let mut deleted_ids = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while deleted_ids.len() < 3 && tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout_at(
+                deadline,
+                events.recv(),
+            )
+            .await
+            {
+                Ok(Ok(envelope)) => {
+                    if let AgenticEvent::SessionDeleted { session_id } = envelope.event {
+                        deleted_ids.push(session_id);
+                    }
+                }
+                Ok(Err(_)) => break,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(
+            deleted_ids,
+            vec![
+                grandchild.session_id.clone(),
+                child.session_id.clone(),
+                root.session_id.clone(),
+            ],
+            "SessionDeleted must be emitted for every family member, children before root"
+        );
+
+        // In-memory state is gone: no residual shell on the runtime side.
+        assert!(session_manager.get_session(&root.session_id).is_none());
+        assert!(session_manager.get_session(&child.session_id).is_none());
+        assert!(session_manager.get_session(&grandchild.session_id).is_none());
+
+        let _ = std::fs::remove_dir_all(workspace_path);
+    }
+
+    #[tokio::test]
+    async fn delete_session_tree_after_recycled_transient_root_reports_current_behavior() {
+        // Ghost-session fix (B) added a `family.is_empty()` early return that
+        // turns a NotFound into an empty list, but that branch is unreachable
+        // in the normal recycle flow: `discard_one_transient_session` removes
+        // the session and the transient marker together, so an already-recycled
+        // root no longer satisfies `is_transient_session` and falls through to
+        // the durable branch, which returns NotFound (verified empirically).
+        //
+        // This test pins the CURRENT behavior and the idempotent discard so the
+        // gap is visible and documented. Fixing the residual-shell manual delete
+        // requires making the durable branch tolerant of an unknown root, which
+        // is outside this patch (already pushed).
+        let (coordinator, session_manager) = test_coordinator_with_config(100, true);
+        let workspace_path = std::env::temp_dir().join(format!(
+            "bitfun-ghost-session-tree-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
+        let workspace = workspace_path.to_string_lossy().into_owned();
+
+        let root = session_manager
+            .create_transient_session_with_id_and_details(
+                Some("ghost-tree-root".to_string()),
+                "Ghost tree root".to_string(),
+                "Explore".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                None,
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient root Session should be created");
+        let child = session_manager
+            .create_transient_session_with_id_and_details(
+                Some("ghost-tree-child".to_string()),
+                "Ghost tree child".to_string(),
+                "Explore".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                Some(format!("session-{}", root.session_id)),
+                SessionKind::Subagent,
+            )
+            .await
+            .expect("transient child Session should be created");
+
+        // Auto-recycle already released the family (e.g. persistent=false task
+        // completion path). A second discard is idempotent.
+        assert!(coordinator
+            .discard_transient_session(&workspace_path, None, None, &root.session_id)
+            .await
+            .expect("first discard should succeed"));
+        assert!(!coordinator
+            .discard_transient_session(&workspace_path, None, None, &root.session_id)
+            .await
+            .expect("repeat discard must stay idempotent"));
+        assert!(session_manager.get_session(&child.session_id).is_none());
+
+        // KNOWN GAP (see comment above): the residual-shell manual delete still
+        // reports NotFound because the recycled root is no longer marked
+        // transient. Pinned here so the behavior cannot silently change.
+        let error = coordinator
+            .delete_session_tree(&workspace_path, None, None, &root.session_id)
+            .await
+            .expect_err("already-recycled transient root currently falls to the durable NotFound branch");
+        assert!(matches!(
+            error,
+            crate::util::errors::BitFunError::NotFound(_)
+        ));
+
+        let _ = std::fs::remove_dir_all(workspace_path);
+    }
+
     #[cfg(feature = "remote-workspace")]
     #[tokio::test]
     async fn subagent_session_config_preserves_registered_remote_workspace_identity() {
