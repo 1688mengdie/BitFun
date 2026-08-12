@@ -9494,9 +9494,21 @@ mod tests {
     use serde_json::json;
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, SystemTime};
     use uuid::Uuid;
+
+    /// Serializes tests that exercise on-disk persisted session metadata.
+    ///
+    /// These tests share process-global persistence registries (e.g.
+    /// `SESSION_PERSISTENCE_LOCKS` in PersistenceManager) and the host
+    /// `temp_dir()`. Although each test uses a unique workspace directory,
+    /// CI has intermittently observed `NotFound` in
+    /// `persist_session_lineage_updates_structured_relationship_and_clears_legacy_projection`
+    /// (RAD08, upstream flaky) when persisted-session tests run concurrently.
+    /// Holding this lock makes the persisted-session family mutually exclusive
+    /// so no concurrent registry/temp-dir interference can surface.
+    static PERSISTED_SESSION_TESTS_LOCK: Mutex<()> = Mutex::new(());
 
     struct TestWorkspace {
         path: PathBuf,
@@ -12746,6 +12758,13 @@ mod tests {
     #[tokio::test]
     async fn persist_session_lineage_updates_structured_relationship_and_clears_legacy_projection()
     {
+        // This test exercises on-disk persisted session metadata through the
+        // process-global persistence lock registry; run it exclusively against
+        // the rest of the persisted-session test family (see
+        // PERSISTED_SESSION_TESTS_LOCK).
+        let _serialized = PERSISTED_SESSION_TESTS_LOCK
+            .lock()
+            .expect("persisted session tests lock poisoned");
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
@@ -12754,7 +12773,10 @@ mod tests {
 
         let session = manager
             .create_session_with_id_and_details(
-                Some(Uuid::new_v4().to_string()),
+                Some(format!(
+                    "lineage-persist-test-{}",
+                    Uuid::new_v4()
+                )),
                 "Review child".to_string(),
                 "CodeReview".to_string(),
                 SessionConfig {
