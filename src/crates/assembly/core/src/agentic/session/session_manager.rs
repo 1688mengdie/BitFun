@@ -12806,6 +12806,28 @@ mod tests {
             .await
             .expect("legacy compatibility metadata should seed");
 
+        // Diagnostic for the CI-only flake: after merge succeeded, verify the
+        // on-disk metadata is actually visible through the same persistence
+        // manager before persist_session_lineage runs. If this assertion fires
+        // on CI (Linux) but not locally, it proves the storage path or the
+        // metadata file is being disturbed between the two update calls.
+        {
+            let resolved = manager
+                .effective_session_storage_path(&session.session_id)
+                .await;
+            let loaded = persistence_manager
+                .load_session_metadata(workspace.path(), &session.session_id)
+                .await
+                .expect("metadata lookup after merge should succeed");
+            assert!(
+                loaded.is_some(),
+                "metadata missing after merge: session_id={}, workspace={}, resolved_storage_path={:?}",
+                session.session_id,
+                workspace.path().display(),
+                resolved
+            );
+        }
+
         manager
             .persist_session_lineage(
                 &session.session_id,
