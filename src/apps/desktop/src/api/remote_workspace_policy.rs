@@ -1861,6 +1861,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
+        "set_external_mcp_servers_enabled_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
         "set_external_source_conflict_choice_command",
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
@@ -1881,7 +1885,15 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
+        "set_external_tool_targets_enabled_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
         "set_external_subagent_activation_command",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
+        "set_external_subagents_enabled_command",
         RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (

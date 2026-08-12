@@ -508,6 +508,8 @@ export function runManifestParserSelfTest({
         'dep:anyhow',
         'dep:async-trait',
         'dep:bitfun-runtime-ports',
+        'bitfun-runtime-ports/runtime-event-port',
+        'bitfun-runtime-ports/workspace-ports',
         'dep:dunce',
         'process-runtime',
         'tokio/fs',
@@ -600,6 +602,7 @@ export function runManifestParserSelfTest({
     [
       'client',
       [
+        'bitfun-agent-tools/acp-bridge',
         'dep:futures',
         'dep:serde',
         'dep:bitfun-core',
@@ -610,6 +613,7 @@ export function runManifestParserSelfTest({
     [
       'server',
       [
+        'dep:bitfun-agent-tools',
         'dep:bitfun-agent-runtime',
         'dep:bitfun-core-types',
         'dep:bitfun-core',
@@ -2466,7 +2470,7 @@ export function runManifestParserSelfTest({
 
   const requiredContentContracts = [
     {
-      path: 'src/crates/contracts/runtime-ports/src/lib.rs',
+      path: 'src/crates/contracts/runtime-ports/src/agent_api.rs',
       contracts: [
         'AgentDialogTurnRequest',
         'AgentDialogPrependedReminder',

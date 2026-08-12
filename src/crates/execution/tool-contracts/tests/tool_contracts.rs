@@ -1,3 +1,6 @@
+#[cfg(feature = "mcp-bridge")]
+use bitfun_agent_tools::validate_mcp_tool_bridge_input;
+#[cfg(feature = "acp-bridge")]
 use bitfun_agent_tools::{
     acp_external_agent_tool_input_schema, build_acp_external_agent_tool_definition,
     build_acp_external_agent_tool_name, build_acp_external_agent_tool_result,
@@ -30,9 +33,8 @@ use bitfun_agent_tools::{
     validate_tool_execution_admission, CallDeferredToolInputError, DeferredToolUsageError,
     DynamicMcpToolInfo, DynamicToolInfo, GetToolSpecDeferredToolSummary, GetToolSpecExecutionError,
     GetToolSpecExecutionPlan, GetToolSpecLoadObservation, GetToolSpecRuntime, InputValidator,
-    LoadedDeferredToolSpec, McpToolBridgeBehaviorHints, McpToolBridgeDefinitionInput,
-    PromptVisibleToolManifestItem, ResolvedToolInvocation, ToolContextFacts,
-    ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest, ToolExposure,
+    LoadedDeferredToolSpec, PromptVisibleToolManifestItem, ResolvedToolInvocation,
+    ToolContextFacts, ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest, ToolExposure,
     ToolImageAttachment, ToolManifestDefinition, ToolManifestPolicyTool, ToolPathBackend,
     ToolPathOperation, ToolPathResolution, ToolRenderOptions, ToolResult, ToolRuntimeRestrictions,
     ToolWorkspaceKind, ValidationResult, CALL_DEFERRED_TOOL_NAME, GET_TOOL_SPEC_TOOL_NAME,
@@ -46,11 +48,13 @@ use bitfun_agent_tools::{
     TOOL_ERROR_ARGUMENTS_PREVIEW_BYTES, USER_REJECTED_TOOL_MESSAGE,
     USER_STEERING_INTERRUPTED_MESSAGE,
 };
+#[cfg(feature = "mcp-bridge")]
 use bitfun_agent_tools::{
     build_mcp_tool_bridge_definition, build_mcp_tool_bridge_name, build_mcp_tool_bridge_result,
     mcp_tool_bridge_dynamic_tool_info, mcp_tool_bridge_short_description, normalize_name_for_mcp,
     render_mcp_tool_bridge_rejected_message, render_mcp_tool_bridge_result_message,
-    render_mcp_tool_bridge_use_message, MCP_TOOL_DELIMITER, MCP_TOOL_PREFIX,
+    render_mcp_tool_bridge_use_message, McpToolBridgeBehaviorHints, McpToolBridgeDefinitionInput,
+    MCP_TOOL_DELIMITER, MCP_TOOL_PREFIX,
 };
 use bitfun_agent_tools::{
     build_persisted_tool_output_message, count_tool_result_lines, file_tool_guidance_message,
@@ -185,6 +189,7 @@ fn resolved_tool_invocation_updates_effective_arguments_without_losing_wire_iden
 }
 
 #[test]
+#[cfg(feature = "mcp-bridge")]
 fn mcp_tool_bridge_preserves_prompt_visible_name_and_descriptor_contract() {
     assert_eq!(MCP_TOOL_PREFIX, "mcp__");
     assert_eq!(MCP_TOOL_DELIMITER, "__");
@@ -239,6 +244,7 @@ fn mcp_tool_bridge_preserves_prompt_visible_name_and_descriptor_contract() {
 }
 
 #[test]
+#[cfg(feature = "mcp-bridge")]
 fn mcp_tool_bridge_preserves_dynamic_info_validation_and_rendering_contract() {
     let definition = build_mcp_tool_bridge_definition(McpToolBridgeDefinitionInput {
         server_id: "github",
@@ -309,6 +315,7 @@ fn mcp_tool_bridge_preserves_dynamic_info_validation_and_rendering_contract() {
 }
 
 #[test]
+#[cfg(feature = "acp-bridge")]
 fn acp_external_agent_bridge_preserves_tool_contract() {
     assert_eq!(ACP_TOOL_PREFIX, "acp__");
     assert_eq!(ACP_TOOL_SUFFIX, "__prompt");
