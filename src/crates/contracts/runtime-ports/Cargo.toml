@@ -44,6 +44,11 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 default = []
+# Local fork: acp_client_port.rs (ACP client contract) is unconditionally
+# needed by coordinator/tool implementations; upstream split tokio behind
+# feature gates, so this feature keeps the local module compiled by default
+# consumers (enabled via workspace feature composition).
+acp-client = ["dep:tokio"]
 agent-api = ["dep:bitfun-core-types"]
 plugin-runtime = []
 script-tool-runtime = []

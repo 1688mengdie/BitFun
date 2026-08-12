@@ -72,6 +72,10 @@ pub struct AgentSessionListRequest {
     pub remote_connection_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_ssh_host: Option<String>,
+    /// When true, hidden Subagent/Ephemeral sessions are included in the
+    /// listing (full conversation management).
+    #[serde(default)]
+    pub include_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +97,15 @@ pub struct AgentSessionSummary {
     pub turn_count: usize,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
+    /// Optional parent session ID for tree-structured display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Optional session runtime status (e.g. "idle", "active", "error").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Warden daemon session marker.
+    #[serde(default)]
+    pub is_daemon: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -595,6 +608,8 @@ pub struct AgentDialogSteerRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_content: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prepended_reminders: Vec<AgentDialogPrependedReminder>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AgentInputAttachment>,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub metadata: serde_json::Map<String, serde_json::Value>,
@@ -887,6 +902,23 @@ pub struct RoundInjection {
     /// a turn submission's `metadata`).
     pub metadata: serde_json::Map<String, serde_json::Value>,
     pub created_at: std::time::SystemTime,
+    /// Prepended reminders carried with the injected message (Warden
+    /// bootstrap/penalty injection kinds ride on steering injections).
+    pub prepended_reminders: Vec<AgentDialogPrependedReminder>,
+}
+
+impl RoundInjection {
+    /// TOKEN-01 dedup marker: the caller-supplied steering id that uniquely
+    /// identifies this user-steering event end to end (the scheduler generates
+    /// it in `buffer_steering` as `Uuid::new_v4()`). `UserSteering` injections
+    /// always carry it; the other kinds return `None`.
+    pub fn dedup_key(&self) -> Option<&str> {
+        match self.kind {
+            RoundInjectionKind::UserSteering => Some(self.id.as_str()),
+            RoundInjectionKind::BackgroundResult
+            | RoundInjectionKind::ThreadGoalObjectiveUpdated => None,
+        }
+    }
 }
 
 /// Observes round-boundary injections for a given running turn.
@@ -920,7 +952,9 @@ pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
 pub const MAX_CONTEXT_SUMMARY_CHARS: usize = 12_000;
 
 /// Max automatic goal continuation dialog turns per objective (legacy goal_mode parity).
-pub const MAX_THREAD_GOAL_AUTO_CONTINUATIONS: u32 = 100;
+///
+/// 本地安全限定（fork）：上游为 100，本地收窄为 10。
+pub const MAX_THREAD_GOAL_AUTO_CONTINUATIONS: u32 = 10;
 
 /// Alias retained for migration from legacy `goal_mode` metadata and docs.
 pub const MAX_GOAL_CONTINUATIONS: u32 = MAX_THREAD_GOAL_AUTO_CONTINUATIONS;
@@ -979,6 +1013,12 @@ pub struct ThreadGoal {
     /// Auto-continuation dialog turns scheduled toward this goal (resets on new objective).
     #[serde(default)]
     pub auto_continuation_count: u32,
+    /// Files the goal references as authoritative context (workspace-relative
+    /// paths the agent should keep in sync while pursuing the goal). Attached
+    /// to model-backed Warden audit judgements so the LLM can decide pokes
+    /// against the actual goal context.
+    #[serde(default)]
+    pub reference_files: Vec<String>,
 }
 
 impl ThreadGoal {
@@ -1038,6 +1078,10 @@ pub struct AgentThreadGoalCreateRequest {
     pub objective: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<i64>,
+    /// Workspace-relative reference files the goal tracks as authoritative
+    /// context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_files: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2498,6 +2542,7 @@ mod tests {
                 attachments: Vec::new(),
                 metadata: serde_json::Map::new(),
                 created_at: std::time::SystemTime::UNIX_EPOCH,
+                prepended_reminders: Vec::new(),
             },
         };
 
@@ -2526,6 +2571,7 @@ mod tests {
             created_at: 1,
             updated_at: 2,
             auto_continuation_count: 0,
+            reference_files: Vec::new(),
         };
         assert!(active.is_active());
         assert_eq!(active.remaining_tokens(), Some(9_900));
@@ -2782,6 +2828,7 @@ mod tests {
                 created_at: 1,
                 updated_at: 2,
                 auto_continuation_count: 0,
+                reference_files: Vec::new(),
             },
         };
 
@@ -2809,6 +2856,7 @@ mod tests {
             workspace_path: "/workspace/project".to_string(),
             objective: "Ship the refactor".to_string(),
             token_budget: Some(1000),
+            reference_files: None,
         };
         let update_request = AgentThreadGoalUpdateStatusRequest {
             session_id: "session_1".to_string(),
@@ -2967,6 +3015,7 @@ mod tests {
             workspace_path: "/workspace/project".to_string(),
             remote_connection_id: Some("conn-1".to_string()),
             remote_ssh_host: Some("host-1".to_string()),
+            include_hidden: false,
         };
         let summary = AgentSessionSummary {
             session_id: "session_1".to_string(),

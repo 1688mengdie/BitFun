@@ -2797,7 +2797,7 @@ impl ToolResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitfun_runtime_ports::MAX_FISSION_DEPTH;
+    use bitfun_core_types::session_tree::MAX_FISSION_DEPTH;
     use serde_json::json;
 
     struct TestTool {

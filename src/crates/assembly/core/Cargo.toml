@@ -115,7 +115,7 @@ tokio-tungstenite = { workspace = true, optional = true }
 # Event layer dependency (lowest layer)
 bitfun-core-types = { path = "../../contracts/core-types" }
 bitfun-events = { path = "../../contracts/events" }
-bitfun-runtime-ports = { path = "../../contracts/runtime-ports", default-features = false, features = ["permission", "workspace-ports"] }
+bitfun-runtime-ports = { path = "../../contracts/runtime-ports", default-features = false, features = ["permission", "workspace-ports", "acp-client"] }
 bitfun-runtime-services = { path = "../../execution/runtime-services", optional = true }
 
 # Reviewed product-full plugin composition root.
@@ -209,6 +209,9 @@ agent-runtime = [
     "dep:bitfun-agent-stream",
     "dep:bitfun-agent-tools",
     "bitfun-agent-tools/computer-use-contract",
+    # Local fork: acp_agent.rs (definitions/subagents) needs the ACP tool
+    # bridge names, which upstream gates behind `acp-bridge`.
+    "bitfun-agent-tools/acp-bridge",
     "bitfun-runtime-ports/agent-api",
     "bitfun-runtime-ports/git-port",
     "bitfun-runtime-ports/remote-exec-port",
