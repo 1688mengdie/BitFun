@@ -508,6 +508,15 @@ test('nightly and beta use the shared build-version projection', () => {
   );
   assert.match(patch.run, /node scripts\/set-build-version\.mjs/);
   assert.equal(nightly.jobs.package.env.BITFUN_RELEASE_CHANNEL, 'nightly');
+  assert.equal(
+    nightly.jobs.package.env.TAURI_UPDATER_ENDPOINT,
+    'https://github.com/GCWing/BitFun/releases/latest/download/latest.json',
+  );
+  assert.equal(
+    nightly.jobs.package.env.TAURI_UPDATER_FALLBACK_ENDPOINT,
+    'https://openbitfun.com/release/latest.json',
+  );
+  assert.equal(nightly.jobs.package.env.BITFUN_ENABLE_UPDATER_ARTIFACTS, undefined);
   const signingStep = nightly.jobs['publish-nightly'].steps.find(
     (step) => step.name === 'Sign installer packages',
   );
