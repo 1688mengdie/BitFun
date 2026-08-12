@@ -1921,17 +1921,18 @@ impl ExecutionEngine {
         scaffold.prepended_prompt_reminders.runtime_facts = Some(refreshed);
     }
 
-    /// P-18/F-5：按「真实用户轮」规则构建本轮动态后置提醒。
-    /// - Runtime Facts：沿用 scaffold（refresh_runtime_facts_for_round 已按回合标记
-    ///   置空或刷新：用户首轮/恢复后首轮 = Some，工具轮 = None）。
-    /// - User Context：F-5 起改为「真实用户消息轮才注入/计数」——只有
-    ///   trigger_source 属于用户面（DesktopUi/DesktopApi/Cli/Bot/RemoteRelay/
-    ///   SdkHost）的轮才参与世代比较并注入；Agent 间轮（AgentSession/
-    ///   ScheduledJob 等）与子代理内部轮（trigger_source=None）既不注入也
-    ///   不记录注入世代（不锁世代 → 后续真实用户轮仍可注入，防回归重复
-    ///   注入问题的同时避免 Agent 轮误触发）。世代语义保留：同一世代内
-    ///   已注入过 → 不重复；上下文压缩/恢复使缓存世代递增 → 恢复后首个
-    ///   真实用户轮重新注入一次。
+    /// P-18/F-5/RT：按「真实用户轮」规则构建本轮动态后置提醒。
+    /// - User Context + Runtime Facts：都只在真实用户轮注入——与用户消息
+    ///   拼接发送（动态提醒追加在最新用户消息后 = 用户消息轮内），不再
+    ///   每轮独立发送「时间 + 上下文占比」提示（主人实测：独立消息每条
+    ///   增加 token 消耗）。F-5 起改为「真实用户消息轮才注入/计数」——
+    ///   只有 trigger_source 属于用户面（DesktopUi/DesktopApi/Cli/Bot/
+    ///   RemoteRelay/SdkHost）的轮才参与世代比较并注入；Agent 间轮
+    ///   （AgentSession/ScheduledJob 等）与子代理内部轮（trigger_source=None）
+    ///   既不注入也不记录注入世代（不锁世代 → 后续真实用户轮仍可注入，
+    ///   防回归重复注入问题的同时避免 Agent 轮误触发）。世代语义保留：
+    ///   同一世代内已注入过 → 不重复；上下文压缩/恢复使缓存世代递增 →
+    ///   恢复后首个真实用户轮重新注入一次。
     ///   原实现（每回合首轮注入）在 execute_dialog_turn_impl 每次 turn 开始清除
     ///   注入标记，导致同一会话每个用户回合都重复注入工作区指令全文。
     async fn round_dynamic_reminders<'a>(
@@ -1941,11 +1942,9 @@ impl ExecutionEngine {
         reminders: &'a PrependedPromptReminders,
     ) -> Vec<&'a str> {
         let mut dynamic = Vec::new();
-        if let Some(runtime_facts) = reminders.runtime_facts.as_deref() {
-            dynamic.push(runtime_facts);
-        }
-        // F-5：真实用户轮判定——只有用户面 trigger_source 才注入/计数 User
-        // Context；Agent 注入轮与子代理内部轮（None）直接跳过（不锁世代）。
+        // F-5/RT：真实用户轮判定——只有用户面 trigger_source 才注入/计数
+        // User Context 与 Runtime Facts；Agent 注入轮与子代理内部轮（None）
+        // 直接跳过（不锁世代），不再每轮独立发送时间+占比提示。
         let user_submission_source = context.trigger_source.is_some_and(|source| {
             matches!(
                 source,
@@ -1958,6 +1957,12 @@ impl ExecutionEngine {
             )
         });
         if user_submission_source {
+            // RT：Runtime Facts（时间 + 上下文占比）随真实用户消息轮拼接发送，
+            // 不再每轮独立消息注入。refresh_runtime_facts_for_round 已保证
+            // 工具轮置空（None），此处再以真实用户轮为闸，Agent 轮同样不带。
+            if let Some(runtime_facts) = reminders.runtime_facts.as_deref() {
+                dynamic.push(runtime_facts);
+            }
             let generation = self
                 .session_manager
                 .user_context_cache_generation(session_id)
@@ -6942,13 +6947,19 @@ mod tests {
             "session-scoped injection: second user turn must not re-inject user context"
         );
 
-        // F-5：Agent 轮（AgentSession）不得注入 User Context，也不得记录注入世代。
+        // F-5/RT：Agent 轮（AgentSession）不得注入 User Context，也不得记录
+        // 注入世代；且不再携带 Runtime Facts（时间+占比提示随用户轮拼接，
+        // Agent 轮零动态提醒）。
         let agent_round = engine
             .round_dynamic_reminders(session_id, &agent_context, &reminders)
             .await;
         assert!(
             !agent_round.iter().any(|r| r.contains("[User Context]")),
             "agent round must not inject user context"
+        );
+        assert!(
+            !agent_round.iter().any(|r| r.contains("[Runtime Facts]")),
+            "agent round must not carry runtime facts (拼接进用户消息轮，非独立每轮提示)"
         );
 
         // Context compaction bumps the generation: first round re-injects even
@@ -7151,7 +7162,8 @@ mod tests {
             ..subagent_context.clone()
         };
 
-        // Agent 轮（AgentSession/ScheduledJob/子代理 None）：不注入。
+        // Agent 轮（AgentSession/ScheduledJob/子代理 None）：不注入，也不携带
+        // Runtime Facts（时间+占比提示随真实用户消息轮拼接，非独立每轮提示）。
         for context in [&agent_context, &scheduled_context, &subagent_context] {
             let round = engine
                 .round_dynamic_reminders(session_id, context, &reminders)
@@ -7159,6 +7171,10 @@ mod tests {
             assert!(
                 !round.iter().any(|r| r.contains("[User Context]")),
                 "non-user round must not inject user context"
+            );
+            assert!(
+                !round.iter().any(|r| r.contains("[Runtime Facts]")),
+                "non-user round must not carry runtime facts"
             );
             assert!(
                 session_manager
@@ -7169,13 +7185,18 @@ mod tests {
             );
         }
 
-        // 后续真实用户轮：同一世代内仍可注入（未被 Agent 轮锁世代）。
+        // 后续真实用户轮：同一世代内仍可注入（未被 Agent 轮锁世代），且
+        // Runtime Facts 随用户轮一起拼接发送。
         let user_round = engine
             .round_dynamic_reminders(session_id, &user_context, &reminders)
             .await;
         assert!(
             user_round.iter().any(|r| r.contains("[User Context]")),
             "the first real user round must still inject after agent rounds"
+        );
+        assert!(
+            user_round.iter().any(|r| r.contains("[Runtime Facts]")),
+            "real user round carries runtime facts (拼接进用户消息轮)"
         );
         assert!(
             session_manager
@@ -7185,7 +7206,8 @@ mod tests {
             "the real user round must record the generation"
         );
 
-        // 再次 Agent 轮：仍不注入（世代已锁定，但 Agent 轮本身也绝不注入）。
+        // 再次 Agent 轮：仍不注入（世代已锁定，但 Agent 轮本身也绝不注入，
+        // Runtime Facts 同样不带）。
         let agent_after_user = engine
             .round_dynamic_reminders(session_id, &agent_context, &reminders)
             .await;
@@ -7194,6 +7216,12 @@ mod tests {
                 .iter()
                 .any(|r| r.contains("[User Context]")),
             "agent round after a user round must still not inject"
+        );
+        assert!(
+            !agent_after_user
+                .iter()
+                .any(|r| r.contains("[Runtime Facts]")),
+            "agent round after a user round must still not carry runtime facts"
         );
     }
 
