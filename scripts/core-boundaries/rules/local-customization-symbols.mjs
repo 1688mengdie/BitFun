@@ -70,3 +70,37 @@ export const retiredLocalCustomizationSymbols = [
 // added to localCustomizationSymbols — a review checkpoint for 防漂移.
 export const registrationCheckpoint =
   'local-customization-symbols registration checkpoint (R-AD-04)';
+
+// Boundary check for the registered manifest. Lives next to the data so the
+// checker stays a thin orchestrator (kept under the 1200-line module budget).
+export function checkLocalCustomizationSymbols(symbols, { failures, repoPathToFsPath, existsSync, readText }) {
+  const seen = new Map();
+  for (const entry of symbols) {
+    const key = `${entry.path}|${entry.anchor.source}`;
+    if (seen.has(key)) {
+      failures.push({
+        path: repoPathToFsPath(entry.path),
+        line: 1,
+        message: `duplicate local customization symbol anchor: ${entry.note ?? ''}`,
+      });
+      continue;
+    }
+    seen.set(key, entry);
+    const path = repoPathToFsPath(entry.path);
+    if (!existsSync(path)) {
+      failures.push({
+        path,
+        line: 1,
+        message: `missing local customization symbol owner file: ${entry.path}`,
+      });
+      continue;
+    }
+    if (!entry.anchor.test(readText(path))) {
+      failures.push({
+        path,
+        line: 1,
+        message: `missing local customization symbol (${entry.note ?? entry.anchor.source}): ${entry.anchor.source}`,
+      });
+    }
+  }
+}

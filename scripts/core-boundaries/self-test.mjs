@@ -1,6 +1,11 @@
 // Self-tests for the core boundary checker configuration and parsers.
 
 import { crateLayoutRules } from './rules/crate-layout.mjs';
+import {
+  collectPluginRootReexports,
+  collectTopLevelRustPublicSymbols,
+  hasPluginWildcardReexport,
+} from './rules/source/public-api-check.mjs';
 
 export function runManifestParserSelfTest({
   isManifestDependencyDeclaration,
@@ -26,9 +31,6 @@ export function runManifestParserSelfTest({
   facadeOnlyFiles,
   forbiddenRuleTextForPath,
   regexSourceContainsContract,
-  collectTopLevelRustPublicSymbols,
-  collectPluginRootReexports,
-  hasPluginWildcardReexport,
   createFacadeLineChecker,
   escapeRegex,
   validateExplicitIntegrationTestTopology,

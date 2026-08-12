@@ -179,10 +179,6 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'include_dir', ownerFeatures: ['agent-runtime'] },
       { depName: 'indexmap', ownerFeatures: ['agent-runtime'] },
       { depName: 'md5', ownerFeatures: ['agent-runtime'] },
-      // rand stays owned by agent-runtime: core warden Challenge-Poke Poisson
-      // scheduling compiles unconditionally under agent-runtime (customization
-      // over upstream, which moved rand to services-integrations).
-      { depName: 'rand', ownerFeatures: ['agent-runtime'] },
       { depName: 'reqwest', ownerFeatures: ['mcp-runtime', 'tools-miniapp'] },
       { depName: 'regex', ownerFeatures: ['agent-runtime'] },
       { depName: 'rusqlite', ownerFeatures: ['agent-runtime'] },
@@ -648,9 +644,6 @@ export const coreClosedFeatureProfileRules = [
       'dep:indexmap',
       'dep:image',
       'dep:md5',
-      // rand stays required: core warden Poisson scheduler compiles
-      // unconditionally under agent-runtime (customization over upstream).
-      'dep:rand',
       'dep:rusqlite',
       'dep:regex',
       'dep:similar',
