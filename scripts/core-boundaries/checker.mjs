@@ -26,6 +26,7 @@ import {
   facadeOnlyFiles,
   forbiddenContentRules,
   forbiddenContentUnderRules,
+  localCustomizationSymbols,
   publicApiAllowlistRules,
   publicApiContractSlices,
   requiredContentRules,
@@ -860,6 +861,38 @@ function checkFacadeOnlyFile(repoPath, importPrefix, reason) {
   }
 }
 
+function checkLocalCustomizationSymbols(symbols) {
+  const seen = new Map();
+  for (const entry of symbols) {
+    const key = `${entry.path}|${entry.anchor.source}`;
+    if (seen.has(key)) {
+      failures.push({
+        path: repoPathToFsPath(entry.path),
+        line: 1,
+        message: `duplicate local customization symbol anchor: ${entry.note ?? ''}`,
+      });
+      continue;
+    }
+    seen.set(key, entry);
+    const path = repoPathToFsPath(entry.path);
+    if (!existsSync(path)) {
+      failures.push({
+        path,
+        line: 1,
+        message: `missing local customization symbol owner file: ${entry.path}`,
+      });
+      continue;
+    }
+    if (!entry.anchor.test(readText(path))) {
+      failures.push({
+        path,
+        line: 1,
+        message: `missing local customization symbol (${entry.note ?? entry.anchor.source}): ${entry.anchor.source}`,
+      });
+    }
+  }
+}
+
 function checkForbiddenContent(repoPath, patterns) {
   const path = repoPathToFsPath(repoPath);
   const lines = readText(path).split(/\r?\n/);
@@ -1102,6 +1135,7 @@ export function runCoreBoundaryCheck() {
       requiredContentRules,
       forbiddenContentRules,
       forbiddenContentUnderRules,
+      localCustomizationSymbols,
       publicApiAllowlistRules,
       publicApiContractSlices,
       facadeOnlyFiles,
@@ -1183,6 +1217,7 @@ export function runCoreBoundaryCheck() {
   for (const rule of requiredContentRules) {
     checkRequiredContent(rule.path, rule.patterns, rule.reason);
   }
+  checkLocalCustomizationSymbols(localCustomizationSymbols);
   for (const rule of publicApiAllowlistRules) {
     checkPublicApiAllowlist(rule);
   }
