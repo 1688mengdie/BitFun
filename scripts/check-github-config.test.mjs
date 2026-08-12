@@ -460,6 +460,25 @@ test('Desktop packaging keeps beta identity explicit and stable-safe', () => {
     uploadSteps.find((step) => step.name === 'Generate updater manifest').run,
     /github\.repository/,
   );
+  const signingStep = uploadSteps.find(
+    (step) => step.name === 'Sign installer packages',
+  );
+  assert.match(signingStep.run, /write-minisign-public-key\.mjs/);
+  assert.doesNotMatch(signingStep.run, /BITFUN_SIGNING_PUBKEY.*base64 -d/);
+  const promotionStep = uploadSteps.find(
+    (step) => step.name === 'Resolve beta channel promotion',
+  );
+  assert.doesNotMatch(promotionStep.run, /current\.beta\.json \|\| true/);
+  assert.match(promotionStep.run, /case "\$\{channel_status\}" in/);
+  assert.match(promotionStep.run, /404\)/);
+  assert.match(promotionStep.run, /GitHub API returned/);
+  const publishStep = uploadSteps.find(
+    (step) => step.name === 'Publish beta channel manifest',
+  );
+  assert.equal(
+    publishStep.env.CHANNEL_EXISTS,
+    '${{ steps.beta-channel.outputs.channel_exists }}',
+  );
 });
 
 test('beta publishing cannot advance the Relay latest image tag', () => {
@@ -489,4 +508,8 @@ test('nightly and beta use the shared build-version projection', () => {
   );
   assert.match(patch.run, /node scripts\/set-build-version\.mjs/);
   assert.equal(nightly.jobs.package.env.BITFUN_RELEASE_CHANNEL, 'nightly');
+  const signingStep = nightly.jobs['publish-nightly'].steps.find(
+    (step) => step.name === 'Sign installer packages',
+  );
+  assert.match(signingStep.run, /write-minisign-public-key\.mjs/);
 });

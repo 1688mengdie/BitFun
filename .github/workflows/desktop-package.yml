@@ -648,7 +648,8 @@ jobs:
 
           # Publish the public key alongside the signatures: a signature nobody
           # can fetch a key for is not verifiable.
-          printf '%s' "${BITFUN_SIGNING_PUBKEY}" | base64 -d >release-assets/minisign.pub
+          node scripts/write-minisign-public-key.mjs \
+            --out release-assets/minisign.pub
 
       - name: Stage stable release assets
         if: needs.prepare.outputs.release_channel == 'stable'
@@ -757,17 +758,33 @@ jobs:
           RELEASE_CHANNEL: ${{ needs.prepare.outputs.release_channel }}
         run: |
           set -euo pipefail
-          if ! gh release view channel-beta --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            if [[ "${RELEASE_CHANNEL}" == "stable" ]]; then
-              echo "promote=false" >>"$GITHUB_OUTPUT"
-              echo "No beta channel exists; stable release does not need to create one."
-              exit 0
-            fi
-          else
-            curl -fsSL --retry 5 --retry-delay 3 \
-              "https://github.com/${GITHUB_REPOSITORY}/releases/download/channel-beta/latest.json" \
-              -o current.beta.json || true
-          fi
+          channel_status="$(curl -sS --retry 5 --retry-delay 3 \
+            --output channel.release.json \
+            --write-out '%{http_code}' \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/channel-beta")"
+          case "${channel_status}" in
+            200)
+              echo "channel_exists=true" >>"$GITHUB_OUTPUT"
+              curl -fsSL --retry 5 --retry-delay 3 \
+                "https://github.com/${GITHUB_REPOSITORY}/releases/download/channel-beta/latest.json" \
+                -o current.beta.json
+              ;;
+            404)
+              echo "channel_exists=false" >>"$GITHUB_OUTPUT"
+              if [[ "${RELEASE_CHANNEL}" == "stable" ]]; then
+                echo "promote=false" >>"$GITHUB_OUTPUT"
+                echo "No beta channel exists; stable release does not need to create one."
+                exit 0
+              fi
+              ;;
+            *)
+              echo "Could not inspect channel-beta release (GitHub API returned ${channel_status})." >&2
+              exit 1
+              ;;
+          esac
           args=(--candidate latest.published.json --github-output "$GITHUB_OUTPUT")
           if [[ -s current.beta.json ]]; then
             args+=(--current current.beta.json)
@@ -780,9 +797,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHECKOUT_REF: ${{ needs.prepare.outputs.checkout_ref }}
+          CHANNEL_EXISTS: ${{ steps.beta-channel.outputs.channel_exists }}
         run: |
           set -euo pipefail
-          if ! gh release view channel-beta --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          if [[ "${CHANNEL_EXISTS}" != "true" ]]; then
             gh release create channel-beta \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${CHECKOUT_REF}" \
