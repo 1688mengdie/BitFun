@@ -4172,6 +4172,37 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   );
   
   const handleSendOrCancel = useCallback(async (messageOverride?: string) => {
+    // A registered host (group chat pane / quick input) owns the transport and
+    // has no session state machine; the derived send/cancel state does not
+    // apply, and every submission — including slash text — is delivered to the
+    // host verbatim. Local commands stay local-only so an unregistered plain
+    // composer never changes behavior.
+    const registeredHost = Boolean(registration?.onSubmit);
+    if (registeredHost) {
+      if (caps.transferInFlight) return;
+      const registeredDraft = (messageOverride ?? inputState.value).trim();
+      if (!registeredDraft) return;
+      await submitThroughChatInputRegistration(
+        registration,
+        {
+          text: registeredDraft,
+          displayText: registeredDraft,
+          contexts: [...contexts],
+          composerPresentation: null,
+          sessionId: undefined,
+          workspacePath: workspacePath || undefined,
+        },
+        () => Promise.resolve(),
+      );
+      if (contexts.length > 0) {
+        clearContexts();
+      }
+      clearPendingLargePastes();
+      dispatchInput({ type: 'CLEAR_VALUE' });
+      dispatchInput({ type: 'DEACTIVATE' });
+      return;
+    }
+
     if (!derivedState) return;
     if (caps.transferInFlight) return;
     
@@ -5050,6 +5081,13 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       
       e.preventDefault();
 
+      // Registered hosts deliver slash text verbatim instead of executing
+      // session-scoped commands (no session exists in that context).
+      if (registration?.onSubmit) {
+        void handleSendOrCancel();
+        return;
+      }
+
       const promptSlashCommandsEnabled = !isAcpInputSession;
       const isBtwCommand =
         promptSlashCommandsEnabled &&
@@ -5083,7 +5121,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       e.preventDefault();
       void handleCancelCurrentTask();
     }
-  }, [handleSendOrCancel, submitBtwFromInput, submitGoalFromInput, derivedState, dispatchInput, handleCancelCurrentTask, slashCommandState, getFilteredSelectableModes, getActiveSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, selectSlashExternalPromptCommand, selectSlashPromptCommand, selectSlashAcpCommand, selectSlashSkill, canSwitchModes, getRichTextInlineTriggerController, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, removeContext, isAcpInputSession, caps.ops, t]);
+  }, [handleSendOrCancel, submitBtwFromInput, submitGoalFromInput, derivedState, dispatchInput, handleCancelCurrentTask, slashCommandState, getFilteredSelectableModes, getActiveSlashPickerItems, selectSlashCommandMode, selectSlashCommandAction, selectSlashExternalPromptCommand, selectSlashPromptCommand, selectSlashAcpCommand, selectSlashSkill, canSwitchModes, getRichTextInlineTriggerController, historyIndex, inputHistory, savedDraft, inputState.value, currentSessionId, isBtwSession, showTargetSwitcher, setInputTarget, removeContext, isAcpInputSession, caps.ops, registration?.onSubmit, t]);
 
   const handleImeCompositionStart = useCallback(() => {
     isImeComposingRef.current = true;
@@ -5225,6 +5263,26 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   });
 
   const renderActionButton = () => {
+    // Registered hosts have no session state machine; the send control is
+    // always the plain submit button and is enabled whenever there is text.
+    const registeredHost = Boolean(registration?.onSubmit);
+    if (registeredHost) {
+      return (
+        <span className="bitfun-chat-input__send-action" data-bf-component="chat-input" data-bf-part="sendButton" data-bf-action="send" data-bf-state={!inputState.value.trim() ? 'disabled' : undefined}>
+          <IconButton
+            className="bitfun-chat-input__send-button"
+            onClick={() => void handleSendOrCancel()}
+            disabled={!inputState.value.trim()}
+            data-testid="chat-input-send-btn"
+            tooltip={t('input.sendShortcut')}
+            size="small"
+          >
+            <ArrowUp size={11} />
+          </IconButton>
+        </span>
+      );
+    }
+
     if (!derivedState) return <span className="bitfun-chat-input__send-action" data-bf-component="chat-input" data-bf-part="sendButton" data-bf-action="send" data-bf-state="disabled"><IconButton className="bitfun-chat-input__send-button" disabled size="small"><ArrowUp size={11} /></IconButton></span>;
 
     const { sendButtonMode, hasQueuedInput } = derivedState;
