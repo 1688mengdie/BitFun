@@ -2738,6 +2738,7 @@ mod tests {
             turn_id: "turn_1".to_string(),
             content: "Please also check the tests".to_string(),
             display_content: Some("Also check tests".to_string()),
+            prepended_reminders: Vec::new(),
             attachments: vec![AgentInputAttachment::remote_image(
                 "image-1",
                 "shot.png",
@@ -3028,6 +3029,9 @@ mod tests {
             turn_count: 3,
             created_at_ms: 1000,
             last_active_at_ms: 2000,
+            parent_session_id: None,
+            status: None,
+            is_daemon: false,
         };
         let delete_request = AgentSessionDeleteRequest {
             workspace_path: "/workspace/project".to_string(),

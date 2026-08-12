@@ -392,11 +392,21 @@ mod tests {
         assert!(top_level.allow_subagent_spawn);
         assert_eq!(top_level.nesting_depth, 0);
 
+        // 本地语义（fork）：深度 < MAX_FISSION_DEPTH 时子级仍允许递归委派；
+        // 上游为 spawn 后永远禁用。本地 task 契约测试依赖深度递归。
         let child = top_level.spawn_child();
 
-        assert!(!child.allow_subagent_spawn);
+        assert!(child.allow_subagent_spawn);
         assert_eq!(child.nesting_depth, 1);
-        assert_eq!(child.spawn_child().nesting_depth, 2);
+
+        // 到达 MAX_FISSION_DEPTH 后禁止继续递归。
+        let mut deep = DelegationPolicy::top_level();
+        for _ in 0..MAX_FISSION_DEPTH {
+            deep = deep.spawn_child();
+        }
+        assert!(!deep.allow_subagent_spawn);
+        assert_eq!(deep.nesting_depth, MAX_FISSION_DEPTH);
+        assert_eq!(deep.spawn_child().nesting_depth, MAX_FISSION_DEPTH + 1);
     }
 
     #[test]
