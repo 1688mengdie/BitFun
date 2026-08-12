@@ -3837,3 +3837,58 @@ test('capability contract consumers cannot remove reviewed dependency edges', as
   assert.ok(messages.some((message) => /bitfun-plugin-runtime-client.*missing reviewed.*normal.*edge/.test(message)));
   assert.ok(messages.some((message) => /bitfun-opencode-adapter.*missing reviewed.*dev.*edge/.test(message)));
 });
+
+test('local customization symbol manifest covers the 34 kept symbols', async () => {
+  const { localCustomizationSymbols } = await import(
+    './core-boundaries/rules/local-customization-symbols.mjs'
+  );
+  assert.ok(Array.isArray(localCustomizationSymbols));
+  assert.ok(localCustomizationSymbols.length >= 34);
+  const seen = new Set();
+  for (const entry of localCustomizationSymbols) {
+    assert.ok(entry.path, 'each entry must declare an owner file path');
+    assert.ok(entry.anchor instanceof RegExp, 'each entry must declare an anchor regex');
+    assert.ok(entry.note, 'each entry must carry a R-AD-01 note');
+    const key = `${entry.path}|${entry.anchor.source}`;
+    assert.ok(!seen.has(key), `duplicate anchor: ${entry.note}`);
+    seen.add(key);
+  }
+});
+
+test('removing a local customization symbol fails the boundary check', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { readFile, writeFile, access } = await import('node:fs/promises');
+  const { fileURLToPath } = await import('node:url');
+
+  const target = new URL(
+    '../src/crates/contracts/runtime-ports/src/local_customizations.rs',
+    import.meta.url,
+  );
+  const original = await readFile(target, 'utf8');
+  const marker = 'pub const GROUP_MASTER_ACTOR: &str = "__master__";';
+  assert.ok(
+    original.includes(marker),
+    'test requires the GROUP_MASTER_ACTOR declaration to still be present',
+  );
+
+  try {
+    await writeFile(target, original.replace(marker, '// R-AD-04 test: symbol removed'), 'utf8');
+    const check = spawnSync(process.execPath, [fileURLToPath(ENTRYPOINT)], {
+      encoding: 'utf8',
+      env: { ...process.env, BITFUN_BOUNDARY_CHECK_SELF_TEST: undefined },
+    });
+    assert.notEqual(
+      check.status,
+      0,
+      'boundary check must fail when a registered local customization symbol is removed',
+    );
+    assert.match(
+      check.stderr,
+      /GROUP_MASTER_ACTOR/,
+      'failure output must name the removed local customization symbol',
+    );
+  } finally {
+    await writeFile(target, original, 'utf8');
+    await access(target);
+  }
+});

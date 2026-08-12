@@ -20,6 +20,7 @@ export function runManifestParserSelfTest({
   requiredContentRules,
   forbiddenContentRules,
   forbiddenContentUnderRules,
+  localCustomizationSymbols,
   publicApiAllowlistRules,
   publicApiContractSlices,
   facadeOnlyFiles,
@@ -5668,5 +5669,26 @@ async fn release_baseline_claim(release: BaselineClaimRelease) -> Result<(), Dis
     throw new Error(
       'agent-runtime-ipc local-only guard must cover network transports in new private modules',
     );
+  }
+  runLocalCustomizationSymbolSelfTest({ localCustomizationSymbols });
+}
+
+export function runLocalCustomizationSymbolSelfTest({ localCustomizationSymbols }) {
+  const seen = new Set();
+  for (const entry of localCustomizationSymbols) {
+    if (!entry.path || !(entry.anchor instanceof RegExp)) {
+      throw new Error(`local customization symbol entry must declare path + anchor regex: ${entry.note ?? ''}`);
+    }
+    const key = `${entry.path}|${entry.anchor.source}`;
+    if (seen.has(key)) {
+      throw new Error(`duplicate local customization symbol anchor: ${entry.note ?? ''}`);
+    }
+    seen.add(key);
+    if (!entry.note) {
+      throw new Error(`local customization symbol entry must carry a R-AD-01 note: ${entry.path}`);
+    }
+  }
+  if (localCustomizationSymbols.length < 34) {
+    throw new Error(`local customization symbol manifest must cover the 34 kept symbols, got ${localCustomizationSymbols.length}`);
   }
 }
