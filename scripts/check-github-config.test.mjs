@@ -256,8 +256,49 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   );
   assert.equal(
     rustCache?.with?.['cache-directories'],
-    'target/sherpa-onnx-prebuilt\n',
-    'Rust CI must restore sherpa native libraries with the Cargo fingerprints that reference them',
+    undefined,
+    'Rust cache cleanup must not own native libraries stored under target',
+  );
+
+  const restoreSherpaCache = rustJob.steps.find(
+    (step) => step.name === 'Restore Sherpa native libraries',
+  );
+  const repairSherpaState = rustJob.steps.find(
+    (step) => step.name === 'Repair missing Sherpa native state',
+  );
+  const checkCompilation = rustJob.steps.find(
+    (step) => step.name === 'Check compilation',
+  );
+  const saveSherpaCache = rustJob.steps.find(
+    (step) => step.name === 'Save Sherpa native libraries',
+  );
+  const sherpaCacheKey =
+    'sherpa-onnx-v1-${{ runner.os }}-${{ runner.arch }}-1.13.4-static';
+
+  assert.equal(restoreSherpaCache?.uses, 'actions/cache/restore@v5');
+  assert.equal(restoreSherpaCache?.with?.path, 'target/sherpa-onnx-prebuilt');
+  assert.equal(restoreSherpaCache?.with?.key, sherpaCacheKey);
+  assert.match(
+    repairSherpaState?.run ?? '',
+    /rm -rf target\/sherpa-onnx-prebuilt/,
+  );
+  assert.match(repairSherpaState?.run ?? '', /cargo clean -p sherpa-onnx-sys/);
+  assert.equal(saveSherpaCache?.uses, 'actions/cache/save@v5');
+  assert.equal(saveSherpaCache?.with?.path, 'target/sherpa-onnx-prebuilt');
+  assert.equal(saveSherpaCache?.with?.key, sherpaCacheKey);
+  assert.equal(
+    saveSherpaCache?.if,
+    "github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.sherpa-native-cache.outputs.cache-hit != 'true'",
+  );
+  assert.ok(
+    rustJob.steps.indexOf(restoreSherpaCache) <
+      rustJob.steps.indexOf(checkCompilation),
+    'Sherpa native libraries must be restored before cargo check',
+  );
+  assert.ok(
+    rustJob.steps.indexOf(checkCompilation) <
+      rustJob.steps.indexOf(saveSherpaCache),
+    'Sherpa native libraries must be saved before rust-cache post cleanup',
   );
 
   const commandByStep = new Map(
