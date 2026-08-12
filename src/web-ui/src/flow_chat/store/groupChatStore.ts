@@ -117,7 +117,7 @@ export const useGroupChatStore = create<GroupChatStore>()(
     createRoom: async (name, owner, members, mode) => {
       const workspacePath = get().workspacePath;
       if (!workspacePath) {
-        throw new Error('无法创建群聊：未选择工作区（workspacePath 为空）');
+        throw new Error('Cannot create group chat: no workspace selected (workspacePath is empty)');
       }
       const room = (await api.invoke('group_chat_create', {
         workspacePath,
