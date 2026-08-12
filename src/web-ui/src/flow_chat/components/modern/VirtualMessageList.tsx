@@ -42,6 +42,7 @@ import {
   findDialogTurn,
   shouldUseStickyLatestPin,
 } from '../../utils/flowChatTurnScrollPolicy';
+import { getMotionAwareScrollBehavior } from '../../utils/motionPreference';
 import { flowChatStore } from '../../store/FlowChatStore';
 import { startupTrace } from '@/shared/utils/startupTrace';
 import { createLogger } from '@/shared/utils/logger';
@@ -3531,6 +3532,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         sessionId: activeSessionIdRef.current,
         mounted: true,
       };
+      if (!el.hasAttribute('tabindex')) {
+        el.tabIndex = -1;
+      }
       scrollerElementRef.current = el;
       setScrollerElement(el);
       return;
@@ -6480,11 +6484,14 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     retargetHistoryProjectionHandoff(targetItem.item.turnId);
 
     if (targetItem.index === 0) {
-      virtuosoRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      virtuosoRef.current.scrollTo({
+        top: 0,
+        behavior: getMotionAwareScrollBehavior('smooth'),
+      });
     } else {
       virtuosoRef.current.scrollToIndex({
         index: targetItem.index,
-        behavior: 'smooth',
+        behavior: getMotionAwareScrollBehavior('smooth'),
         align: 'center',
       });
     }
@@ -6782,7 +6789,10 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const handleJumpToCurrentTurn = useCallback(() => {
     const currentTurnId = visibleTurnInfo?.turnId;
     if (!currentTurnId) return;
-    pinTurnToTop(currentTurnId, { behavior: 'smooth', pinMode: 'transient' });
+    pinTurnToTop(currentTurnId, {
+      behavior: getMotionAwareScrollBehavior('smooth'),
+      pinMode: 'transient',
+    });
   }, [visibleTurnInfo?.turnId, pinTurnToTop]);
 
   const { shouldShowButton: shouldShowTurnHeaderButton, handleClick: handleTurnHeaderClick } = useScrollToTurnHeader({
@@ -7460,6 +7470,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
       <ScrollToLatestBar
         visible={(viewportMode === 'history-reading' || !isAtBottom) && virtualItems.length > 0}
         onClick={handleScrollToLatestRequest}
+        focusReturnRef={scrollerElementRef}
         isInputActive={isInputActive}
         isInputExpanded={isInputExpanded}
         inputHeight={inputHeight}

@@ -8,6 +8,7 @@ export * from './IconButton';
 export * from './WindowControls';
 
 export * from './Modal';
+export * from './PresenceBoundary';
 export * from './InputDialog';
 export * from './ConfirmDialog';
 

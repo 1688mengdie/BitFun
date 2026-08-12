@@ -90,9 +90,17 @@ export const ConfigCollectionItem: React.FC<ConfigCollectionItemProps> = ({
         </div>
       </div>
 
-      {isExpanded && details && (
-        <div id={detailsId} className="bitfun-collection-item__details" data-bf-component="config" data-bf-part="collectionDetails">{details}</div>
-      )}
+      {details ? (
+        <div
+          id={detailsId}
+          className="bitfun-collection-item__details-collapse"
+          data-open={isExpanded ? 'true' : 'false'}
+          aria-hidden={!isExpanded}
+          {...(!isExpanded ? { inert: '' } : {})}
+        >
+          <div className="bitfun-collection-item__details" data-bf-component="config" data-bf-part="collectionDetails">{details}</div>
+        </div>
+      ) : null}
     </div>
   );
 };
