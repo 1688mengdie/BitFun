@@ -12806,27 +12806,33 @@ mod tests {
             .await
             .expect("legacy compatibility metadata should seed");
 
-        // Diagnostic for the CI-only flake: after merge succeeded, verify the
-        // on-disk metadata is actually visible through the same persistence
-        // manager before persist_session_lineage runs. If this assertion fires
-        // on CI (Linux) but not locally, it proves the storage path or the
-        // metadata file is being disturbed between the two update calls.
-        {
-            let resolved = manager
-                .effective_session_storage_path(&session.session_id)
-                .await;
-            let loaded = persistence_manager
-                .load_session_metadata(workspace.path(), &session.session_id)
+        // Diagnostic: capture the exact storage path that persist_session_lineage
+        // will resolve, and verify metadata is present at BOTH the workspace
+        // path and the resolved path. If persist fails with NotFound while this
+        // assertion holds, the disturbance happens inside the update call.
+        let resolved_storage_path = manager
+            .effective_session_storage_path(&session.session_id)
+            .await;
+        let loaded_at_workspace = persistence_manager
+            .load_session_metadata(workspace.path(), &session.session_id)
+            .await
+            .expect("metadata lookup at workspace should succeed");
+        let loaded_at_resolved = match resolved_storage_path.as_deref() {
+            Some(path) => persistence_manager
+                .load_session_metadata(path, &session.session_id)
                 .await
-                .expect("metadata lookup after merge should succeed");
-            assert!(
-                loaded.is_some(),
-                "metadata missing after merge: session_id={}, workspace={}, resolved_storage_path={:?}",
-                session.session_id,
-                workspace.path().display(),
-                resolved
-            );
-        }
+                .expect("metadata lookup at resolved path should succeed"),
+            None => None,
+        };
+        assert!(
+            loaded_at_workspace.is_some() && loaded_at_resolved.is_some(),
+            "metadata missing before persist: session_id={}, workspace={}, resolved_storage_path={:?}, at_workspace={}, at_resolved={}",
+            session.session_id,
+            workspace.path().display(),
+            resolved_storage_path,
+            loaded_at_workspace.is_some(),
+            loaded_at_resolved.is_some(),
+        );
 
         manager
             .persist_session_lineage(
