@@ -1009,6 +1009,12 @@ pub async fn group_chat_create(
     members: Vec<String>,
     mode: Option<GroupChatMode>,
 ) -> Result<GroupChatRoom, GroupChatError> {
+    if workspace_path.trim().is_empty() {
+        return Err(GroupChatError {
+            code: GroupChatErrorCode::NotFound,
+            message: "group_chat_create: workspace_path is empty".to_string(),
+        });
+    }
     let coordinator = require_coordinator()?;
     GroupChatTool::create_room_impl(
         &coordinator,

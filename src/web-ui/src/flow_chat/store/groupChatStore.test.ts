@@ -78,7 +78,7 @@ describe('groupChatStore', () => {
 
     await useGroupChatStore.getState().loadRooms('/ws');
 
-    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', { workspace_path: '/ws' });
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', { workspacePath: '/ws' });
     const rooms = useGroupChatStore.getState().rooms;
     expect(rooms.size).toBe(2);
     expect(rooms.get('room-1')?.name).toBe('Alpha');
@@ -90,14 +90,15 @@ describe('groupChatStore', () => {
     const members = await useGroupChatStore.getState().loadMembers('room-1');
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_members', {
-      workspace_path: '',
-      room_id: 'room-1',
+      workspacePath: '',
+      roomId: 'room-1',
     });
     expect(members.length).toBe(2);
     expect(useGroupChatStore.getState().members.get('room-1')?.length).toBe(2);
   });
 
   it('createRoom adds the room via group_chat_create', async () => {
+    useGroupChatStore.setState({ workspacePath: '/ws' });
     mockedInvoke.mockResolvedValueOnce(sampleRoom('room-9', 'New Room'));
 
     const room = await useGroupChatStore
@@ -105,7 +106,7 @@ describe('groupChatStore', () => {
       .createRoom('New Room', { kind: 'master' }, ['m-1'], 'round_robin');
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_create', {
-      workspace_path: '',
+      workspacePath: '/ws',
       name: 'New Room',
       owner: { kind: 'master' },
       members: ['m-1'],
@@ -127,8 +128,8 @@ describe('groupChatStore', () => {
     await useGroupChatStore.getState().deleteRoom('room-1', { kind: 'master' });
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_delete', {
-      workspace_path: '',
-      room_id: 'room-1',
+      workspacePath: '',
+      roomId: 'room-1',
       actor: { kind: 'master' },
     });
     const state = useGroupChatStore.getState();
@@ -147,11 +148,11 @@ describe('groupChatStore', () => {
       .sendMessage('room-1', { kind: 'master' }, 'hi', [mention], true);
 
     expect(mockedInvoke).toHaveBeenCalledWith('group_chat_send', {
-      workspace_path: '',
-      room_id: 'room-1',
+      workspacePath: '',
+      roomId: 'room-1',
       author: { kind: 'master' },
       content: 'hi',
-      mention_targets: [mention],
+      mentionTargets: [mention],
       urgent: true,
     });
   });

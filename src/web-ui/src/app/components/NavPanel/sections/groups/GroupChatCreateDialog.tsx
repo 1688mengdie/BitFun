@@ -6,7 +6,7 @@
  * assistantWorkspacesList (Claw assistant workspaces).
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { X, Users } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
 import { useGroupChatStore } from '../../../../../flow_chat/store/groupChatStore';
@@ -26,14 +26,19 @@ export const GroupChatCreateDialog: React.FC<GroupChatCreateDialogProps> = ({
 }) => {
   const { t } = useI18n('common');
   const createRoom = useGroupChatStore((state) => state.createRoom);
+  const setWorkspacePath = useGroupChatStore((state) => state.setWorkspacePath);
   const [name, setName] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // loadMembers legacy handling (Wave 5 registration): in the desktop
-  // single-workspace scenario the store's internal workspace stays '';
-  // pass workspace_path per contract when multi-workspace lands (R-GC-14/17/18).
-  void workspacePath;
+  // Sync the dialog's workspace into the store so group_chat_* commands
+  // receive a non-empty workspacePath (P1-2). Desktop single-workspace kept
+  // the store at '' before; createRoom now rejects empty paths.
+  useEffect(() => {
+    if (workspacePath) {
+      setWorkspacePath(workspacePath);
+    }
+  }, [workspacePath, setWorkspacePath]);
 
   const toggleMember = (sessionId: string) => {
     setSelected((prev) => {

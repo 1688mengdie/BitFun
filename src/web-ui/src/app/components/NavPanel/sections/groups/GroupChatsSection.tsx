@@ -16,6 +16,7 @@ import { useI18n } from '@/infrastructure/i18n';
 import { confirmWarning } from '@/component-library/components/ConfirmDialog/confirmService';
 import { useGroupChatStore } from '../../../../../flow_chat/store/groupChatStore';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
+import './GroupChatsSection.scss';
 
 export interface GroupChatsSectionProps {
   workspacePath?: string;
