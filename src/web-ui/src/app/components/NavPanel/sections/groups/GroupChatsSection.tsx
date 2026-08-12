@@ -112,6 +112,8 @@ export const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
         // overscan) is rendered, so a large room count never materializes
         // thousands of DOM rows.
         <Virtuoso
+          data-bf-component="group-chats-section"
+          data-bf-part="items"
           className="group-chats-section__items"
           data={sortedRooms}
           overscan={8}

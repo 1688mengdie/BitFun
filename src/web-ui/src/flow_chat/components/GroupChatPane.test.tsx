@@ -4,7 +4,8 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GroupChatPane, buildGroupChatSubmission } from './GroupChatPane';
+import { GroupChatPane } from './GroupChatPane';
+import { buildGroupChatSubmission } from './buildGroupChatSubmission';
 import { useGroupChatStore } from '../store/groupChatStore';
 import type { GroupChatMember, GroupChatMessage, GroupChatRoom } from '../types/flow-chat';
 import type { ChatInputSubmission } from './chatInputRegistration';
