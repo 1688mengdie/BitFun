@@ -41,10 +41,16 @@ const RPC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct QuantBacktestInput {
-    /// Strategy YAML (taiji backtest pipeline config).
+    /// BacktestConfig YAML (instruments/date_range/initial_capital/...).
     pub config: String,
     /// CSV data (OHLC rows) to backtest against.
     pub csv_data: String,
+    /// Optional PipelineConfig YAML (name/version/bar_gen/data_source/nodes).
+    /// Passed to the engine as a real `pipeline_template` file so the full
+    /// double-layer contract (BacktestConfig → pipeline_template → PipelineConfig)
+    /// is exercised. When omitted, `config` is used as the pipeline content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pipeline: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -282,8 +288,9 @@ impl Tool for QuantBacktestTool {
 This tool spawns the external `taiji acp` process (standard Agent Client Protocol over stdio) and forwards a `run_backtest` method call to the taiji-lvpa quant engine. The result comes from the real engine, never a local simulation.
 
 Arguments:
-- "config": Required. Strategy pipeline YAML (taiji BacktestConfig, e.g. ma_cross template).
+- "config": Required. BacktestConfig YAML (instruments / date_range / initial_capital / commission_per_lot / slippage_ticks / pipeline_template).
 - "csv_data": Required. CSV data (OHLC rows) to backtest against.
+- "pipeline": Optional. PipelineConfig YAML (name/version/bar_gen/data_source/nodes). Written to a temp file and referenced by pipeline_template, so the double-layer contract is exercised end to end.
 - "workspace_path": Optional absolute workspace path; defaults to the current workspace.
 - "timeout_seconds": Optional timeout for the external ACP turn."#
                 .to_string(),
@@ -304,11 +311,15 @@ Arguments:
             "properties": {
                 "config": {
                     "type": "string",
-                    "description": "Strategy pipeline YAML (taiji BacktestConfig)."
+                    "description": "BacktestConfig YAML (instruments/date_range/initial_capital/...)."
                 },
                 "csv_data": {
                     "type": "string",
                     "description": "CSV data (OHLC rows) to backtest against."
+                },
+                "pipeline": {
+                    "type": "string",
+                    "description": "Optional PipelineConfig YAML (name/version/bar_gen/data_source/nodes)."
                 },
                 "workspace_path": {
                     "type": "string",
@@ -375,15 +386,24 @@ Arguments:
             .map_err(|error| BitFunError::tool(format!("Invalid input: {}", error)))?;
         let workspace_path = workspace_or_context(params.workspace_path.as_deref(), context)?;
 
-        // `run_backtest {"config": "...", "csv_data": "..."}` — the custom RPC
-        // shape the taiji acp adapter layer parses (parse_custom_rpc).
-        let message = format!(
-            "run_backtest {}",
-            json!({
-                "config": params.config,
-                "csv_data": params.csv_data,
-            })
-        );
+        // Double-layer contract (W1-P0-a, taiji-lvpa acp.rs handle_run_backtest):
+        // - `config`   = BacktestConfig YAML (instruments/date_range/... +
+        //   pipeline_template 指向 PipelineConfig 文件路径)
+        // - `pipeline` = PipelineConfig YAML 内容字符串（可选）；lvpa 侧写临时
+        //   文件并覆盖 config 内的 pipeline_template，runner.rs 再读文件穿透
+        //   (read_to_string → PipelineConfig::from_yaml)。缺省时 lvpa 保持
+        //   config 内 pipeline_template 路径（P0-c 回归兼容）。
+        let mut message_body = json!({
+            "config": params.config,
+            "csv_data": params.csv_data,
+        });
+        if let Some(pipeline) = params.pipeline {
+            message_body["pipeline"] = json!(pipeline);
+        }
+
+        // `run_backtest {"config": "<BacktestConfig YAML>", "csv_data": "...", "pipeline": "<PipelineConfig YAML>"}`
+        // — the shape the taiji acp adapter layer parses (parse_custom_rpc).
+        let message = format!("run_backtest {}", message_body);
         let response = acp_quant_prompt(
             &message,
             &workspace_path,
@@ -961,5 +981,24 @@ mod tests {
             .validate_input(&json!({ "config": "yaml", "csv_data": "date,open\n" }), None)
             .await;
         assert!(ok.result);
+    }
+
+    #[test]
+    fn quant_backtest_input_accepts_optional_pipeline() {
+        let input: QuantBacktestInput = serde_json::from_value(json!({
+            "config": "instruments:\n  - rb9999\n",
+            "csv_data": "instrument,price\n",
+            "pipeline": "name: x\nversion: \"1.0\"\n"
+        }))
+        .expect("pipeline field should deserialize");
+        assert!(input.pipeline.is_some());
+        assert_eq!(input.config.contains("rb9999"), true);
+
+        let legacy: QuantBacktestInput = serde_json::from_value(json!({
+            "config": "yaml",
+            "csv_data": "csv"
+        }))
+        .expect("legacy shape without pipeline should deserialize");
+        assert!(legacy.pipeline.is_none());
     }
 }
