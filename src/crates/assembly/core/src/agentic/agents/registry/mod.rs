@@ -75,17 +75,31 @@ impl Default for AgentRegistry {
 /// with a bounded yield spin. Only exceeding the spin cap still panics,
 /// which preserves detection of a guard held across an await point (a real
 /// bug). Guards must never be held across an await point.
-const SPIN_RETRY_CAP: usize = 10_000;
+///
+/// The cap and backoff are tuned for heavy parallel contention: with many
+/// threads spinning for the same write lock (tokio multi-worker test
+/// runtimes sharing the process-global AgentRegistry), a small cap panics
+/// spuriously even though no guard is held across an await. The exponential
+/// backoff parks the calling thread briefly so the lock owner gets
+/// scheduler time to release the guard.
+const SPIN_RETRY_CAP: usize = 200_000;
+const SPIN_BASE_PARK_US: u64 = 16;
 
 fn spin_read<'a, T>(
     lock: &'a tokio::sync::RwLock<T>,
     what: &'a str,
 ) -> tokio::sync::RwLockReadGuard<'a, T> {
-    for _ in 0..SPIN_RETRY_CAP {
+    let mut park_us = SPIN_BASE_PARK_US;
+    for spin in 0..SPIN_RETRY_CAP {
         if let Ok(guard) = lock.try_read() {
             return guard;
         }
-        std::thread::yield_now();
+        if spin & 0x3F == 0x3F {
+            std::thread::sleep(std::time::Duration::from_micros(park_us));
+            park_us = park_us.saturating_mul(2).min(1_000);
+        } else {
+            std::thread::yield_now();
+        }
     }
     panic!("{what} lock should not be contended (spin cap exceeded)")
 }
@@ -94,11 +108,17 @@ fn spin_write<'a, T>(
     lock: &'a tokio::sync::RwLock<T>,
     what: &'a str,
 ) -> tokio::sync::RwLockWriteGuard<'a, T> {
-    for _ in 0..SPIN_RETRY_CAP {
+    let mut park_us = SPIN_BASE_PARK_US;
+    for spin in 0..SPIN_RETRY_CAP {
         if let Ok(guard) = lock.try_write() {
             return guard;
         }
-        std::thread::yield_now();
+        if spin & 0x3F == 0x3F {
+            std::thread::sleep(std::time::Duration::from_micros(park_us));
+            park_us = park_us.saturating_mul(2).min(1_000);
+        } else {
+            std::thread::yield_now();
+        }
     }
     panic!("{what} lock should not be contended (spin cap exceeded)")
 }
