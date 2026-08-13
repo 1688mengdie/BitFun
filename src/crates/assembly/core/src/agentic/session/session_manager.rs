@@ -9508,18 +9508,70 @@ mod tests {
     /// (RAD08, upstream flaky) when persisted-session tests run concurrently.
     /// Holding this lock makes the persisted-session family mutually exclusive
     /// so no concurrent registry/temp-dir interference can surface.
+    ///
+    /// The guard is re-entrant within one thread: the same test may create
+    /// several `TestWorkspace`s (e.g. parent/child or migrate scenarios), so
+    /// each new() increments a thread-local depth counter instead of re-locking
+    /// the std Mutex (which is not re-entrant).
     static PERSISTED_SESSION_TESTS_LOCK: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        static PERSISTED_SESSION_GUARD_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// RAII guard that serializes on-disk persisted-session tests against each
+    /// other. Acquired by `TestWorkspace::new()` so the whole persisted-session
+    /// family (not just the lineage test) runs mutually exclusively against the
+    /// shared process-global registries and the host `temp_dir()`. Pure
+    /// in-memory tests never touch the disk and stay parallel. Re-entrant per
+    /// thread (a test may build several workspaces).
+    struct PersistedSessionTestGuard(Option<std::sync::MutexGuard<'static, ()>>);
+
+    impl PersistedSessionTestGuard {
+        fn acquire() -> Self {
+            let depth = PERSISTED_SESSION_GUARD_DEPTH.with(|cell| {
+                let depth = cell.get();
+                cell.set(depth + 1);
+                depth
+            });
+            if depth == 0 {
+                Self(Some(
+                    PERSISTED_SESSION_TESTS_LOCK
+                        .lock()
+                        .expect("persisted session tests lock poisoned"),
+                ))
+            } else {
+                Self(None)
+            }
+        }
+    }
+
+    impl Drop for PersistedSessionTestGuard {
+        fn drop(&mut self) {
+            PERSISTED_SESSION_GUARD_DEPTH.with(|cell| {
+                let depth = cell.get();
+                debug_assert!(depth > 0, "persisted session guard depth underflow");
+                cell.set(depth.saturating_sub(1));
+            });
+        }
+    }
 
     struct TestWorkspace {
         path: PathBuf,
+        _serialized: PersistedSessionTestGuard,
     }
 
     impl TestWorkspace {
         fn new() -> Self {
+            // Every on-disk persisted-session test goes through this
+            // constructor; holding the family-wide guard here hardens the
+            // whole family against concurrent registry/temp-dir interference
+            // (see PERSISTED_SESSION_TESTS_LOCK).
+            let _serialized = PersistedSessionTestGuard::acquire();
             let path = std::env::temp_dir()
                 .join(format!("bitfun-session-restore-test-{}", Uuid::new_v4()));
             std::fs::create_dir_all(&path).expect("test workspace should be created");
-            Self { path }
+            Self { path, _serialized }
         }
 
         fn path(&self) -> &Path {
@@ -12759,12 +12811,9 @@ mod tests {
     async fn persist_session_lineage_updates_structured_relationship_and_clears_legacy_projection()
     {
         // This test exercises on-disk persisted session metadata through the
-        // process-global persistence lock registry; run it exclusively against
-        // the rest of the persisted-session test family (see
-        // PERSISTED_SESSION_TESTS_LOCK).
-        let _serialized = PERSISTED_SESSION_TESTS_LOCK
-            .lock()
-            .expect("persisted session tests lock poisoned");
+        // process-global persistence lock registry. `TestWorkspace::new()`
+        // already holds PERSISTED_SESSION_TESTS_LOCK for the whole persisted
+        // session family, so it runs exclusively against sibling on-disk tests.
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
