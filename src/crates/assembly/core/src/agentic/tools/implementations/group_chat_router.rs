@@ -478,10 +478,7 @@ mod tests {
         // P2-5: cursor persistence is a conditional single-field meta write —
         // the room's meta.json must exist first (same precondition as the
         // original save_room path, now explicit).
-        store
-            .save_room(&room)
-            .await
-            .expect("save room");
+        store.save_room(&room).await.expect("save room");
         // Persist members so load_room can read them back (P1-11 single source).
         store
             .save_members("room-rr", &room.members)
@@ -868,12 +865,88 @@ mod tests {
 
         // No message "msg-gone" exists → ingest must be Ok(()) no-op.
         ingest_via_router(&store, "room-d", "msg-gone").await;
-        let window = store.list_messages("room-d", None, None).await.expect("list");
+        let window = store
+            .list_messages("room-d", None, None)
+            .await
+            .expect("list");
         assert_eq!(window.messages.len(), 0, "no-op appends nothing");
 
         ingest_via_core(&store, "room-d", "msg-gone").await;
         ingest_via_port(&store, "room-d", "msg-gone").await;
-        let window = store.list_messages("room-d", None, None).await.expect("list");
+        let window = store
+            .list_messages("room-d", None, None)
+            .await
+            .expect("list");
         assert_eq!(window.messages.len(), 0, "no-op across all entries");
+    }
+
+    // ── W5 跨 workspace 回执可达性（2026-08-13，方案 v1.1 §七.3）────────
+    // 群主 A 与成员 B 的会话在不同 workspace，但群聊数据存全局根（W1 收敛）。
+    // 派发（A 视角写房间）→ 成员 B 回执（B 视角 ingest）→ 状态 Replied
+    // 全链路可达——验证「房间在全局根，回执也解析全局根」消除了跨 workspace
+    // 双轨。
+    #[tokio::test]
+    async fn ingest_reply_reaches_room_across_workspaces_via_global_root() {
+        let root = TestTempDir::new("cross-ws");
+        // 群主 A workspace 与成员 B workspace 各自有 sessions sibling —— 但
+        // W1 后两者都收敛到同一全局 group-chats 根（模拟 resolve_group_chat_store
+        // 返回 PathManager::group_chats_root 的语义）。
+        let global_root = root.path().join("group-chats");
+        let store_a = GroupChatStore::new(global_root.clone());
+        let store_b = GroupChatStore::new(global_root.clone());
+        assert_eq!(store_a.group_chats_root(), store_b.group_chats_root());
+
+        // A 视角建群 + 派发消息（Pending）。
+        store_a
+            .save_room(&room("room-x", GroupChatMode::Free, 0))
+            .await
+            .expect("save room");
+        let message = GroupChatMessage {
+            message_id: "msg-x".to_string(),
+            room_id: "room-x".to_string(),
+            author: GroupChatActor::Master,
+            kind: bitfun_runtime_ports::GroupChatMessageKind::User,
+            content: "question across workspaces".to_string(),
+            mention_targets: Vec::new(),
+            reply_to_message_id: None,
+            timestamp: 1,
+            status: GroupChatMessageStatus::Pending,
+        };
+        store_a
+            .append_message("room-x", &message)
+            .await
+            .expect("append");
+
+        // B 视角（成员会话在 B workspace）回执 ingest —— 用 B 的 store 解析
+        // 到同一全局根 → 必须可达。
+        let mut metadata = JsonMap::new();
+        metadata.insert("groupId".to_string(), json!("room-x"));
+        metadata.insert("groupMessageId".to_string(), json!("msg-x"));
+        metadata.insert("groupAuthor".to_string(), json!("m-b"));
+        GroupChatRouter::ingest_reply(
+            &store_b,
+            &metadata,
+            "reply from workspace B",
+            &GroupChatActor::Claw {
+                session_id: "m-b".to_string(),
+                agent_type: "Claw".to_string(),
+            },
+            42,
+        )
+        .await
+        .expect("cross-workspace ingest must reach the global room");
+
+        // A 视角读回：原消息 Replied + 回复正文落盘（全链路闭环）。
+        let window = store_a
+            .list_messages("room-x", None, None)
+            .await
+            .expect("list from A");
+        assert_eq!(window.messages.len(), 2, "reply body persisted");
+        assert_eq!(window.messages[0].status, GroupChatMessageStatus::Replied);
+        assert_eq!(window.messages[1].content, "reply from workspace B");
+        assert_eq!(
+            window.messages[1].reply_to_message_id.as_deref(),
+            Some("msg-x")
+        );
     }
 }

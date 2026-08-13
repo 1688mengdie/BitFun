@@ -41,7 +41,7 @@ use bitfun_runtime_ports::ThreadGoal;
 use log::{debug, info, warn};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -2801,8 +2801,9 @@ impl DialogScheduler {
         // Group chat reply ingestion (P0-3): when the finished turn was a group
         // dispatch (metadata carries groupId/groupMessageId), ingest the reply
         // into the room — mark the original message Replied and persist the
-        // reply body (P2-1). Best-effort: a failed ingest must never break the
-        // normal reply forwarding below.
+        // reply body (P2-1). W5 回执可靠性（2026-08-13，方案 v1.1 §七.2）：
+        // 从 best-effort 升级——失败重试 1 次 + 错误计数 + 仍失败明确告警
+        // （可观测，不再静默丢）。正常 reply 转发不受影响（ingest 失败不阻断）。
         if let Some(serde_json::Value::Object(metadata)) = user_message_metadata.as_ref() {
             if metadata.get("groupId").is_some() && metadata.get("groupMessageId").is_some() {
                 let now_ms = SystemTime::now()
@@ -2817,18 +2818,42 @@ impl DialogScheduler {
                     .resolve_group_chat_store(target_workspace_path.as_str())
                     .await
                 {
-                    if let Err(error) = crate::agentic::tools::implementations::group_chat_router::GroupChatRouter::ingest_reply(
+                    let ingest_result = crate::agentic::tools::implementations::group_chat_router::GroupChatRouter::ingest_reply(
                         &store,
                         metadata,
                         &reply_user_input,
                         &reply_author,
                         now_ms,
                     )
-                    .await
-                    {
+                    .await;
+                    // 失败重试 1 次（W5：回执必达，跨进程/瞬时错误可自愈）。
+                    let final_result = match ingest_result {
+                        Err(first_error) => {
+                            warn!(
+                                "Group chat reply ingest failed (attempt 1/2, retrying): responder_session_id={}, error={}",
+                                responder_session_id, first_error
+                            );
+                            crate::agentic::tools::implementations::group_chat_router::GroupChatRouter::ingest_reply(
+                                &store,
+                                metadata,
+                                &reply_user_input,
+                                &reply_author,
+                                now_ms,
+                            )
+                            .await
+                        }
+                        ok => ok,
+                    };
+                    if let Err(error) = final_result {
+                        // 错误计数（可观测）+ 明确告警，供后续排查。
+                        let count =
+                            GROUP_CHAT_INGEST_FAILURES.fetch_add(1, AtomicOrdering::Relaxed) + 1;
                         warn!(
-                            "Failed to ingest group chat reply (best-effort): responder_session_id={}, error={}",
-                            responder_session_id, error
+                            "Group chat reply ingest FAILED after retry (cumulative_failures={}): responder_session_id={}, group_id={:?}, error={}",
+                            count,
+                            responder_session_id,
+                            metadata.get("groupId"),
+                            error
                         );
                     }
                 }
@@ -3604,6 +3629,10 @@ fn background_result_delivery_state_fact(
 /// unbounded task pile-up when a burst of outcomes arrives while sessions
 /// are busy.
 const OUTCOME_PROCESSING_MAX_CONCURRENCY: usize = 64;
+
+/// W5 回执可靠性（2026-08-13）：群聊回执 ingest 失败累计计数（可观测，
+/// 重试 1 次后仍失败时递增，供告警与后续排查）。
+static GROUP_CHAT_INGEST_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 static GLOBAL_SCHEDULER: OnceLock<Arc<DialogScheduler>> = OnceLock::new();
 
