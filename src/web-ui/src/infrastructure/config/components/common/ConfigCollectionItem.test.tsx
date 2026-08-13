@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import React, { act } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
 import ConfigCollectionItem from './ConfigCollectionItem';
 
@@ -18,9 +18,11 @@ describe('ConfigCollectionItem', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    vi.useRealTimers();
   });
 
   it('uses an independent native button for expandable details', () => {
+    vi.useFakeTimers();
     act(() => {
       root.render(
         <ConfigCollectionItem
@@ -43,18 +45,29 @@ describe('ConfigCollectionItem', () => {
     act(() => {
       control?.click();
     });
-    const details = container.querySelector<HTMLElement>('.bitfun-collection-item__details-collapse');
-    expect(details?.dataset.open).toBe('false');
-    expect(details?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.querySelector('.bitfun-collection-item__details-collapse')).toBeNull();
 
     act(() => {
       toggle?.click();
     });
 
+    const details = container.querySelector<HTMLElement>('.bitfun-collection-item__details-collapse');
     expect(toggle?.getAttribute('aria-expanded')).toBe('true');
     expect(container.textContent).toContain('Configuration location');
     expect(details?.dataset.open).toBe('true');
     expect(details?.getAttribute('aria-hidden')).toBe('false');
+
+    act(() => {
+      toggle?.click();
+    });
+    expect(details?.dataset.open).toBe('false');
+    expect(details?.getAttribute('aria-hidden')).toBe('true');
+    expect(details?.hasAttribute('inert')).toBe(true);
+
+    act(() => {
+      vi.advanceTimersByTime(180);
+    });
+    expect(container.querySelector('.bitfun-collection-item__details-collapse')).toBeNull();
   });
 
   it('does not expose disabled details as an interactive control', () => {
@@ -78,6 +91,6 @@ describe('ConfigCollectionItem', () => {
     });
 
     expect(toggle?.getAttribute('aria-expanded')).toBe('false');
-    expect(container.querySelector('.bitfun-collection-item__details-collapse')?.getAttribute('aria-hidden')).toBe('true');
+    expect(container.querySelector('.bitfun-collection-item__details-collapse')).toBeNull();
   });
 });
