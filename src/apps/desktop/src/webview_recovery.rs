@@ -5,14 +5,21 @@
 //! builds nothing outside `#[cfg(test)]` references it, so the dead-code lint
 //! would otherwise fire. All of it is intentional: the recovery decision rules
 //! stay platform-neutral and unit-testable on every host.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
+// The decision engine below is platform-neutral: the Windows install path
+// (`mod windows`) and the unit tests in `mod tests` are its only consumers.
+// On non-Windows builds nothing outside `#[cfg(test)]` references it, so the
+// dead-code lint would otherwise fire. The engine stays unit-testable on every
+// host; the cfg mirrors exactly where it is used.
+#[cfg(any(target_os = "windows", test))]
 const RENDERER_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
+
+#[cfg(any(target_os = "windows", test))]
 const RESTART_FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FailureKind {
     BrowserExited,
@@ -22,6 +29,7 @@ enum FailureKind {
     Other,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryAction {
     Reload,
@@ -30,6 +38,7 @@ enum RecoveryAction {
     Observe,
 }
 
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct RecoveryHistory {
@@ -37,6 +46,7 @@ struct RecoveryHistory {
     restart_attempts_ms: Vec<u64>,
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn decide_recovery(
     history: &mut RecoveryHistory,
     failure: FailureKind,
@@ -59,6 +69,7 @@ fn decide_recovery(
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn restart_or_block(history: &mut RecoveryHistory, now_ms: u64) -> RecoveryAction {
     let window_ms = RESTART_FAILURE_WINDOW.as_millis() as u64;
     history
@@ -72,6 +83,7 @@ fn restart_or_block(history: &mut RecoveryHistory, now_ms: u64) -> RecoveryActio
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn restart_after_failed_reload(history: &mut RecoveryHistory, now_ms: u64) -> RecoveryAction {
     restart_or_block(history, now_ms)
 }
