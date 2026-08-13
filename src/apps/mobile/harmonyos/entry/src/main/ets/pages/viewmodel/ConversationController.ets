@@ -19,6 +19,7 @@ import {
   GeneralChatServiceState,
   GeneralChatServiceStatus
 } from '../../services/general-chat/GeneralChatServiceState';
+import { RemoteChatCache } from '../../services/RemoteChatCache';
 import { RemoteChatCommandController } from '../../services/RemoteChatCommandController';
 import {
   RemoteChatPollingCursor,
@@ -62,6 +63,7 @@ export interface RemoteConversationHooks {
 export interface RemoteConversationDependencies {
   readonly timeline: ConversationViewModel;
   readonly chat: RemoteChatCommandController;
+  readonly chatCache: RemoteChatCache;
   readonly polling: RemoteChatPollingLifecycleController;
   readonly models: RemoteModelController;
   readonly files: RemoteFileDownloadController;
@@ -92,6 +94,7 @@ export class ConversationController {
   private knownModelCatalogVersion: number = 0;
   private knownRemoteMessageCount: number = 0;
   private isSyncingAfterTurn: boolean = false;
+  private isRebuildingRemoteTranscript: boolean = false;
   private remoteCreateWorkspaceLoadVersion: number = 0;
 
   constructor(
@@ -213,15 +216,6 @@ export class ConversationController {
     const runtime = this.requireRemoteRuntime();
     await runtime.chat.loadMessages(
       this.remote.activeSession.sessionId || '',
-      runtime.hooks.isConversationContext
-    );
-  }
-
-  async loadRemoteModelCatalog(sessionId: string): Promise<void> {
-    const runtime = this.requireRemoteRuntime();
-    await runtime.models.loadCatalog(
-      sessionId,
-      runtime.connection.ensureAvailable(),
       runtime.hooks.isConversationContext
     );
   }
@@ -411,8 +405,15 @@ export class ConversationController {
     if (!runtime.hooks.isConversationContext(snapshot.sessionId)) {
       return;
     }
+    if (snapshot.historyRewritten) {
+      this.rebuildRemoteTranscript(snapshot.sessionId);
+      return;
+    }
     runtime.timeline.applySnapshot(snapshot);
     this.syncRemoteTimeline();
+    if (snapshot.newMessages.length > 0) {
+      this.cacheRemoteTranscript(snapshot.sessionId);
+    }
     this.knownPollVersionValue = snapshot.cursor.pollVersion;
     this.knownModelCatalogVersion = snapshot.cursor.knownModelCatalogVersion;
     this.knownRemoteMessageCount = snapshot.cursor.knownMessageCount;
@@ -433,6 +434,44 @@ export class ConversationController {
     if (snapshot.shouldSyncAfterTurnEnded) {
       this.syncAfterRemoteTurnEnded();
     }
+  }
+
+  /**
+   * Writes the transcript now on screen back to disk.
+   *
+   * Fire-and-forget on purpose: the snapshot is already rendered, and a cache
+   * that cannot be written only costs the next open a fetch it used to pay for
+   * anyway.
+   */
+  private cacheRemoteTranscript(sessionId: string): void {
+    const runtime = this.requireRemoteRuntime();
+    const state: ChatTimelineState = runtime.timeline.snapshotState();
+    runtime.chatCache.sync(sessionId, state.persistedMessages);
+  }
+
+  /**
+   * Refetches a transcript the desktop no longer agrees with.
+   *
+   * Tails are handed out by index, so once the desktop reports fewer messages
+   * than this session had counted there is no offset left that means the same
+   * thing on both ends. Everything stored for the session goes, including the
+   * poll cursor, which `reloadMessages` resets by way of `onMessageCountKnown`.
+   */
+  private rebuildRemoteTranscript(sessionId: string): void {
+    const runtime = this.requireRemoteRuntime();
+    if (this.isRebuildingRemoteTranscript) {
+      return;
+    }
+    this.isRebuildingRemoteTranscript = true;
+    RemoteLogger.info(`remote transcript rewritten upstream session=${this.shortSessionId(sessionId)}`);
+    runtime.chatCache.forget(sessionId)
+      .then((): Promise<void> => runtime.chat.reloadMessages(sessionId, runtime.hooks.isConversationContext))
+      .then((): void => {
+        this.isRebuildingRemoteTranscript = false;
+      })
+      .catch((): void => {
+        this.isRebuildingRemoteTranscript = false;
+      });
   }
 
   hasRunningRemoteTurn(): boolean {
@@ -1002,7 +1041,14 @@ export class ConversationController {
     }
     this.isSyncingAfterTurn = true;
     try {
-      await this.loadRemoteMessages();
+      // Deliberately not the cached path: this exists to pick up whatever the
+      // desktop settled on after the turn finished, which is exactly what the
+      // cache does not know yet.
+      const runtime = this.requireRemoteRuntime();
+      await runtime.chat.reloadMessages(
+        this.remote.activeSession.sessionId || '',
+        runtime.hooks.isConversationContext
+      );
     } finally {
       this.isSyncingAfterTurn = false;
     }
@@ -1017,7 +1063,13 @@ export class ConversationController {
     const runtime = this.requireRemoteRuntime();
     runtime.filePreview.close();
     this.remote.setConversationDismissed(false);
-    if (runtime.appShell.isRoute(AppRoute.RemoteCreate) || runtime.appShell.isRoute(AppRoute.RemoteChat)) {
+    if (runtime.appShell.isRoute(AppRoute.RemoteChat)) {
+      // Already on the screen this session belongs on. Swapping the path entry
+      // would rebuild the destination — and with it the sidebar — for a change
+      // that only page state describes. See replaceRouteWithoutAnimation.
+      return;
+    }
+    if (runtime.appShell.isRoute(AppRoute.RemoteCreate)) {
       runtime.appShell.replaceCurrentRoute(AppRoute.RemoteChat, sessionId);
       return;
     }

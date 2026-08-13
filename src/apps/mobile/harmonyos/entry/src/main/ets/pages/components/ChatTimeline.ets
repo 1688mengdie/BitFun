@@ -1,6 +1,6 @@
 import { ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, toConversationUiMessage } from './ConversationUiModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
+import { ChatTimelineItem, ChatTimelineRevisionTracker } from '../../services/ChatTimelineProjector';
 import { ChatSurface } from './ChatSurface';
 import { CARD, INK, LINE, MUTED, RED } from './Theme';
 import { ChatMessageBubble } from './ChatMessageBubble';
@@ -39,6 +39,17 @@ export struct ChatTimeline {
   @Event onOpenFilePreview: (path: string, label: string) => void = (_path: string, _label: string) => {};
   @Event onDownloadFile: (path: string) => void = (_path: string) => {};
 
+  // Says whether an open reuses this subtree or rebuilds it. A rebuild means
+  // every bubble is constructed from nothing, and the cost of that is the
+  // difference between the two readings.
+  aboutToAppear(): void {
+    RemoteLogger.info(`chat timeline mounted surface=${this.surface} items=${this.timelineItems.length}`);
+  }
+
+  aboutToDisappear(): void {
+    RemoteLogger.info(`chat timeline disposed items=${this.timelineItems.length}`);
+  }
+
   // `stackFromEnd` covers content that grows inside the last item, but a whole
   // new bubble arriving is a layout change the list does not chase on its own.
   @Monitor('timelineRevision')
@@ -67,7 +78,7 @@ export struct ChatTimeline {
         }
         ForEach(this.timelineItems, (item: ChatTimelineItem) => {
           this.TimelineItem(item)
-        }, (item: ChatTimelineItem) => `${this.timelineRevision}-${item.id}`)
+        }, (item: ChatTimelineItem) => ChatTimelineRevisionTracker.itemSignature(item))
       }
       .width('100%')
       .height('100%')

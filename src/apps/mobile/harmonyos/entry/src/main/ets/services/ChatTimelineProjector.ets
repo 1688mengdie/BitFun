@@ -21,14 +21,28 @@ export class ChatTimelineRevisionTracker {
   private signature: string = '';
   private revision: number = 0;
 
+  /**
+   * Identity of a single rendered item: its own id, plus everything about it
+   * the bubble draws.
+   *
+   * Doubles as the timeline's `ForEach` key, which is the point of it being
+   * per-item. Keying on the revision instead made every bubble in the
+   * transcript a new node whenever any one of them changed — during a run that
+   * is a full rebuild per poll tick, to show one message growing.
+   */
+  static itemSignature(item: ChatTimelineItem): string {
+    const message = item.message;
+    return `${item.type}:${item.id}:${item.isStreaming}:${item.isFinalizing}:` +
+      `${message ? message.status : ''}:${message ? message.renderVersion || 0 : 0}:` +
+      `${message ? ChatTimelineRevisionTracker.textSignature(message.text) : ''}:` +
+      `${message && message.thinking ? ChatTimelineRevisionTracker.textSignature(message.thinking) : ''}:` +
+      `${message && message.items ? message.items.length : 0}:${message && message.tools ? message.tools.length : 0}`;
+  }
+
   update(items: ChatTimelineItem[]): number {
-    const nextSignature = items.map((item: ChatTimelineItem) => {
-      const message = item.message;
-      return `${item.type}:${item.id}:${item.isStreaming}:${item.isFinalizing}:` +
-        `${message ? message.status : ''}:${message ? message.renderVersion || 0 : 0}:` +
-        `${message ? this.textSignature(message.text) : ''}:${message && message.thinking ? this.textSignature(message.thinking) : ''}:` +
-        `${message && message.items ? message.items.length : 0}:${message && message.tools ? message.tools.length : 0}`;
-    }).join('|');
+    const nextSignature = items
+      .map((item: ChatTimelineItem) => ChatTimelineRevisionTracker.itemSignature(item))
+      .join('|');
     if (nextSignature !== this.signature) {
       this.signature = nextSignature;
       this.revision += 1;
@@ -36,7 +50,7 @@ export class ChatTimelineRevisionTracker {
     return this.revision;
   }
 
-  private textSignature(value: string): string {
+  private static textSignature(value: string): string {
     let hash = 0;
     for (let index = 0; index < value.length; index++) {
       hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;

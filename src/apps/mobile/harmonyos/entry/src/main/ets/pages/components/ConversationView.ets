@@ -2,6 +2,7 @@ import { KeyboardAvoidMode } from '@kit.ArkUI';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
 import { ConnectionStatusPresenter } from '../../services/ConnectionStatusPresenter';
+import { RemoteLogger } from '../../services/RemoteLogger';
 import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
 import { ChatSurface } from './ChatSurface';
 import { ChatStatusBar } from './ChatStatusBar';
@@ -94,11 +95,13 @@ export struct ConversationView {
   private previousKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
 
   aboutToAppear(): void {
+    RemoteLogger.info(`conversation view mounted surface=${this.surface}`);
     this.previousKeyboardAvoidMode = this.getUIContext().getKeyboardAvoidMode();
     this.getUIContext().setKeyboardAvoidMode(KeyboardAvoidMode.RESIZE);
   }
 
   aboutToDisappear(): void {
+    RemoteLogger.info('conversation view disposed');
     this.getUIContext().setKeyboardAvoidMode(this.previousKeyboardAvoidMode);
   }
 
