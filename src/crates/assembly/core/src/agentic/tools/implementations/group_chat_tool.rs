@@ -9,6 +9,7 @@
 //! `GROUP_MASTER_ACTOR` is forbidden in this module.
 
 use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
+use crate::agentic::core::SessionConfig;
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::tools::framework::{Tool, ToolExposure, ToolResult, ToolUseContext};
 use crate::service::config::{
@@ -18,12 +19,12 @@ use crate::service::config::{
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_runtime_ports::{
-    GroupChatActor, GroupChatError, GroupChatErrorCode, GroupChatMember, GroupChatMemberRole,
-    GroupChatMessage, GroupChatMessageKind, GroupChatMessageStatus, GroupChatMode, GroupChatPort,
-    GroupChatRoom, GroupChatSendResult, SessionStoragePathRequest, SessionStorePort,
-    GroupChatCreateRequest, GroupChatDeleteRequest, GroupChatIngestReplyRequest,
-    GroupChatJoinRequest, GroupChatLeaveRequest, GroupChatMessagesRequest,
-    GroupChatMessagesResponse, GroupChatModeRequest, GroupChatSendRequest,
+    GroupChatActor, GroupChatCreateRequest, GroupChatDeleteRequest, GroupChatError,
+    GroupChatErrorCode, GroupChatIngestReplyRequest, GroupChatJoinRequest, GroupChatLeaveRequest,
+    GroupChatMember, GroupChatMemberRole, GroupChatMessage, GroupChatMessageKind,
+    GroupChatMessageStatus, GroupChatMessagesRequest, GroupChatMessagesResponse, GroupChatMode,
+    GroupChatModeRequest, GroupChatPort, GroupChatRoom, GroupChatSendRequest, GroupChatSendResult,
+    SessionStoragePathRequest, SessionStorePort,
 };
 use bitfun_services_core::session::{
     add_room_to_group_chats, remove_room_from_group_chats, GroupChatStore,
@@ -233,27 +234,87 @@ impl GroupChatTool {
         }
     }
 
-    /// Validates initial members: each must exist and be a Claw assistant
-    /// (P1-7 NotClaw).
-    async fn validate_initial_members(
+    /// Ensures every member session exists as a Claw assistant session (P1-7).
+    ///
+    /// 主人定标 2026-08-13（P0 bug）：创建群聊不是硬编码对话 ID，应该根据
+    /// Claw 预设类型新建对话。群聊成员来自 assistant workspace 枚举
+    /// （`assistantId`，如 `bd56fce3`），该 ID 不一定是已注册会话 ——
+    /// 当会话不存在时，按 `agent_type="Claw"` 自动新建一个绑定到该
+    /// assistant workspace 的会话，而不是报 "does not exist"。
+    ///
+    /// 幂等：先查内存会话（get_session）→ 再查磁盘会话
+    /// （load_session_metadata under the assistant workspace）→ 都不存在才新建。
+    /// 新建指定 `session_id = assistantId`（deterministic），重复调用不会重复建。
+    async fn ensure_claw_member_sessions(
         coordinator: &ConversationCoordinator,
-        initial_members: &[String],
+        member_ids: &[String],
     ) -> Result<(), String> {
-        for session_id in initial_members {
-            let agent_type = Self::session_agent_type(coordinator, session_id).await;
-            match agent_type.as_deref() {
-                Some("Claw") => {}
-                Some(other) => {
+        for session_id in member_ids {
+            // 1) In-memory session: fast path.
+            if let Some(agent_type) = Self::session_agent_type(coordinator, session_id).await {
+                if agent_type == "Claw" {
+                    continue;
+                }
+                return Err(format!(
+                    "group chat member '{session_id}' is not a Claw assistant (agent_type '{agent_type}')"
+                ));
+            }
+
+            let manager = coordinator.get_session_manager();
+            let assistant_dir = manager
+                .path_manager()
+                .assistant_workspace_dir(session_id, None);
+
+            // 2) Persisted session under the assistant workspace (restart-safe).
+            let persisted = manager
+                .load_session_metadata(&assistant_dir, session_id)
+                .await;
+            match persisted {
+                Ok(Some(metadata)) => {
+                    if metadata.agent_type == "Claw" {
+                        continue;
+                    }
                     return Err(format!(
-                        "group chat member '{session_id}' is not a Claw assistant (agent_type '{other}')"
+                        "group chat member '{session_id}' is not a Claw assistant (agent_type '{}')",
+                        metadata.agent_type
                     ));
                 }
-                None => {
+                Ok(None) => {}
+                Err(error) => {
                     return Err(format!(
-                        "group chat member session '{session_id}' does not exist"
+                        "failed to inspect group chat member session '{session_id}': {error}"
                     ));
                 }
             }
+
+            // 3) No session anywhere: create a Claw session bound to the
+            //    assistant workspace (主人定标：按 Claw 预设类型新建对话).
+            if !assistant_dir.exists() {
+                return Err(format!(
+                    "assistant workspace '{}' not found for group chat member '{session_id}'",
+                    assistant_dir.display()
+                ));
+            }
+            let assistant_dir_str = assistant_dir.to_string_lossy().to_string();
+            let config = SessionConfig {
+                workspace_path: Some(assistant_dir_str.clone()),
+                project_workspace_path: Some(assistant_dir_str.clone()),
+                ..Default::default()
+            };
+            coordinator
+                .create_session_with_workspace(
+                    Some(session_id.to_string()),
+                    format!("Assistant {session_id}"),
+                    "Claw".to_string(),
+                    config,
+                    assistant_dir_str,
+                )
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to create Claw session for group chat member '{session_id}': {error}"
+                    )
+                })?;
         }
         Ok(())
     }
@@ -627,7 +688,7 @@ impl GroupChatTool {
             ));
         }
         Self::validate_owner(&owner).map_err(BitFunError::tool)?;
-        Self::validate_initial_members(coordinator, initial_members)
+        Self::ensure_claw_member_sessions(coordinator, initial_members)
             .await
             .map_err(BitFunError::tool)?;
 
@@ -746,22 +807,19 @@ impl GroupChatTool {
             )));
         }
 
-        let agent_type = Self::session_agent_type(coordinator, session_id).await;
-        match agent_type.as_deref() {
-            Some("Claw") => {}
-            Some(other) => {
-                return Err(BitFunError::tool(group_chat_error_message(
-                    bitfun_runtime_ports::GroupChatErrorCode::NotClaw,
-                    format!("member '{session_id}' is not a Claw assistant (agent_type '{other}')"),
-                )));
-            }
-            None => {
-                return Err(BitFunError::tool(group_chat_error_message(
-                    bitfun_runtime_ports::GroupChatErrorCode::NotClaw,
-                    format!("member session '{session_id}' does not exist"),
-                )));
-            }
-        }
+        // P1-7 Claw check: a member must be a Claw assistant session; a missing
+        // session is auto-created as a Claw session (主人定标 2026-08-13).
+        Self::ensure_claw_member_sessions(
+            coordinator,
+            std::slice::from_ref(&session_id.to_string()),
+        )
+        .await
+        .map_err(|message| {
+            BitFunError::tool(group_chat_error_message(
+                bitfun_runtime_ports::GroupChatErrorCode::NotClaw,
+                message,
+            ))
+        })?;
 
         let member_limit = Self::resolve_member_limit().await;
         if room.members.len() >= member_limit {
@@ -1238,10 +1296,7 @@ impl GroupChatPortImpl {
     }
 
     #[cfg(test)]
-    pub(crate) fn with_store(
-        workspace_path: impl Into<String>,
-        store: GroupChatStore,
-    ) -> Self {
+    pub(crate) fn with_store(workspace_path: impl Into<String>, store: GroupChatStore) -> Self {
         Self {
             workspace_path: workspace_path.into(),
             test_store: Some(store),
@@ -1276,8 +1331,8 @@ impl GroupChatPort for GroupChatPortImpl {
         &self,
         req: GroupChatCreateRequest,
     ) -> Result<GroupChatRoom, GroupChatError> {
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        let coordinator =
+            get_global_coordinator().ok_or_else(|| Self::error("coordinator not initialized"))?;
         GroupChatTool::create_room_impl(
             &coordinator,
             &self.workspace_path,
@@ -1329,8 +1384,8 @@ impl GroupChatPort for GroupChatPortImpl {
     }
 
     async fn join_room(&self, req: GroupChatJoinRequest) -> Result<GroupChatRoom, GroupChatError> {
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        let coordinator =
+            get_global_coordinator().ok_or_else(|| Self::error("coordinator not initialized"))?;
         GroupChatTool::join_room_impl(
             &coordinator,
             &self.workspace_path,
@@ -1342,9 +1397,12 @@ impl GroupChatPort for GroupChatPortImpl {
         .map_err(|error| Self::error(error.to_string()))
     }
 
-    async fn leave_room(&self, req: GroupChatLeaveRequest) -> Result<GroupChatRoom, GroupChatError> {
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+    async fn leave_room(
+        &self,
+        req: GroupChatLeaveRequest,
+    ) -> Result<GroupChatRoom, GroupChatError> {
+        let coordinator =
+            get_global_coordinator().ok_or_else(|| Self::error("coordinator not initialized"))?;
         GroupChatTool::leave_room_impl(
             &coordinator,
             &self.workspace_path,
@@ -1357,16 +1415,11 @@ impl GroupChatPort for GroupChatPortImpl {
     }
 
     async fn delete_room(&self, req: GroupChatDeleteRequest) -> Result<(), GroupChatError> {
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| Self::error("coordinator not initialized"))?;
-        GroupChatTool::delete_room_impl(
-            &coordinator,
-            &self.workspace_path,
-            &req.room_id,
-            req.actor,
-        )
-        .await
-        .map_err(|error| Self::error(error.to_string()))
+        let coordinator =
+            get_global_coordinator().ok_or_else(|| Self::error("coordinator not initialized"))?;
+        GroupChatTool::delete_room_impl(&coordinator, &self.workspace_path, &req.room_id, req.actor)
+            .await
+            .map_err(|error| Self::error(error.to_string()))
     }
 
     async fn set_mode(&self, req: GroupChatModeRequest) -> Result<GroupChatRoom, GroupChatError> {
@@ -1379,8 +1432,8 @@ impl GroupChatPort for GroupChatPortImpl {
         &self,
         req: GroupChatSendRequest,
     ) -> Result<GroupChatSendResult, GroupChatError> {
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| Self::error("coordinator not initialized"))?;
+        let coordinator =
+            get_global_coordinator().ok_or_else(|| Self::error("coordinator not initialized"))?;
         let (message_id, delivered_to, failed_to) = GroupChatTool::send_message_impl(
             &coordinator,
             &self.workspace_path,
@@ -1441,6 +1494,8 @@ impl GroupChatPort for GroupChatPortImpl {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agentic::session::SessionManager;
+    use std::sync::Arc;
 
     #[test]
     fn group_chat_action_parses_known_actions() {
@@ -1674,8 +1729,14 @@ mod tests {
     #[tokio::test]
     async fn group_chat_port_list_rooms_returns_seeded_rooms() {
         let (_dir, store) = temp_store();
-        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
-        store.save_room(&sample_room("room-2", "Beta")).await.expect("save room");
+        store
+            .save_room(&sample_room("room-1", "Alpha"))
+            .await
+            .expect("save room");
+        store
+            .save_room(&sample_room("room-2", "Beta"))
+            .await
+            .expect("save room");
         let port = GroupChatPortImpl::with_store("/ws", store);
 
         let rooms = port.list_rooms("/ws").await.expect("list rooms");
@@ -1686,8 +1747,15 @@ mod tests {
     #[tokio::test]
     async fn group_chat_port_load_room_reads_seeded_room_with_members() {
         let (_dir, store) = temp_store();
-        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
-        store.save_members("room-1", &[sample_member("m-1", GroupChatMemberRole::Member)])
+        store
+            .save_room(&sample_room("room-1", "Alpha"))
+            .await
+            .expect("save room");
+        store
+            .save_members(
+                "room-1",
+                &[sample_member("m-1", GroupChatMemberRole::Member)],
+            )
             .await
             .expect("save members");
         let port = GroupChatPortImpl::with_store("/ws", store);
@@ -1701,7 +1769,10 @@ mod tests {
     #[tokio::test]
     async fn group_chat_port_list_members_reads_seeded_members() {
         let (_dir, store) = temp_store();
-        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store
+            .save_room(&sample_room("room-1", "Alpha"))
+            .await
+            .expect("save room");
         store
             .save_members(
                 "room-1",
@@ -1722,7 +1793,10 @@ mod tests {
     #[tokio::test]
     async fn group_chat_port_list_messages_returns_window_with_cursor() {
         let (_dir, store) = temp_store();
-        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store
+            .save_room(&sample_room("room-1", "Alpha"))
+            .await
+            .expect("save room");
         let msg = GroupChatMessage {
             message_id: "msg-1".to_string(),
             room_id: "room-1".to_string(),
@@ -1734,7 +1808,10 @@ mod tests {
             timestamp: 1,
             status: GroupChatMessageStatus::Delivered,
         };
-        store.append_message("room-1", &msg).await.expect("append message");
+        store
+            .append_message("room-1", &msg)
+            .await
+            .expect("append message");
         let port = GroupChatPortImpl::with_store("/ws", store);
 
         let res = port
@@ -1752,7 +1829,10 @@ mod tests {
     #[tokio::test]
     async fn group_chat_port_ingest_reply_marks_replied_and_appends_body() {
         let (_dir, store) = temp_store();
-        store.save_room(&sample_room("room-1", "Alpha")).await.expect("save room");
+        store
+            .save_room(&sample_room("room-1", "Alpha"))
+            .await
+            .expect("save room");
         let msg = GroupChatMessage {
             message_id: "msg-1".to_string(),
             room_id: "room-1".to_string(),
@@ -1764,22 +1844,24 @@ mod tests {
             timestamp: 1,
             status: GroupChatMessageStatus::Delivered,
         };
-        store.append_message("room-1", &msg).await.expect("append message");
+        store
+            .append_message("room-1", &msg)
+            .await
+            .expect("append message");
         let port = GroupChatPortImpl::with_store("/ws", store);
 
-        port
-            .ingest_reply(GroupChatIngestReplyRequest {
-                room_id: "room-1".to_string(),
-                message_id: "msg-1".to_string(),
-                reply_content: "answer".to_string(),
-                author: GroupChatActor::Claw {
-                    session_id: "m-1".to_string(),
-                    agent_type: "Claw".to_string(),
-                },
-                timestamp: 2,
-            })
-            .await
-            .expect("ingest reply");
+        port.ingest_reply(GroupChatIngestReplyRequest {
+            room_id: "room-1".to_string(),
+            message_id: "msg-1".to_string(),
+            reply_content: "answer".to_string(),
+            author: GroupChatActor::Claw {
+                session_id: "m-1".to_string(),
+                agent_type: "Claw".to_string(),
+            },
+            timestamp: 2,
+        })
+        .await
+        .expect("ingest reply");
 
         let room = port.load_room("room-1").await.expect("load room");
         let res = port
@@ -1871,5 +1953,165 @@ mod tests {
             .await
             .expect_err("set_mode on missing room must fail");
         assert!(!mode.message.is_empty());
+    }
+
+    // ── P0 fix (2026-08-13): group chat members are assistant workspaces;
+    // a missing session is auto-created as a Claw session instead of failing
+    // with "does not exist" (主人定标：按 Claw 预设类型新建对话). ──────────
+
+    /// Minimal real-coordinator harness (mirrors session_message_tool tests).
+    fn test_group_chat_coordinator_harness() -> (
+        Arc<ConversationCoordinator>,
+        Arc<SessionManager>,
+        tempfile::TempDir,
+    ) {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            compression::{CompressionConfig, ContextCompressor},
+            SessionContextStore, SessionManagerConfig,
+        };
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::agentic::tools::{ToolPipeline, ToolStateManager};
+        use crate::infrastructure::PathManager;
+        use std::time::Duration;
+        use tokio::sync::RwLock as TokioRwLock;
+        use uuid::Uuid;
+
+        let root = tempfile::tempdir().expect("test root");
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(
+                PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+                    root.path().join("user-root"),
+                )))
+                .expect("persistence manager"),
+            ),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: false,
+                prompt_cache_policy: crate::agentic::session::PromptCachePolicy::default(),
+            },
+        ));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(TokioRwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let coordinator = Arc::new(ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue.clone(),
+            Arc::new(EventRouter::new()),
+            Arc::new(
+                crate::runtime_ownership::CoreRuntimeOwnership::embedded_with_facts(
+                    root.path().join(format!("ownership-{}", Uuid::new_v4())),
+                    "bitfun".to_string(),
+                    "test",
+                ),
+            ),
+        ));
+        (coordinator, session_manager, root)
+    }
+
+    #[tokio::test]
+    async fn group_chat_missing_member_session_is_auto_created_as_claw() {
+        // P0 fix: a member id that has no session yet (an assistant workspace
+        // id) must be auto-created as a Claw session, not rejected with
+        // "does not exist". The assistant workspace dir must exist (the dir
+        // is the source of truth for "this assistant is addable").
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness();
+        let assistant_id = "bd56fce3";
+        let assistant_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(assistant_id, None);
+        std::fs::create_dir_all(&assistant_dir).expect("create assistant workspace dir");
+
+        // Before the fix this returned Err("group chat member session 'bd56fce3' does not exist").
+        GroupChatTool::ensure_claw_member_sessions(&coordinator, &[assistant_id.to_string()])
+            .await
+            .expect("missing member session must be auto-created as Claw");
+
+        let session = session_manager
+            .get_session(assistant_id)
+            .expect("auto-created session must exist");
+        assert_eq!(session.agent_type, "Claw");
+        assert_eq!(
+            session.config.workspace_path.as_deref(),
+            Some(assistant_dir.to_string_lossy().as_ref())
+        );
+        let _ = root;
+    }
+
+    #[tokio::test]
+    async fn group_chat_missing_member_without_assistant_workspace_returns_clear_error() {
+        // The assistant workspace dir is the source of truth: a member id
+        // without a session AND without a workspace dir must fail with a clear
+        // error (never a silent skip).
+        let (coordinator, _session_manager, root) = test_group_chat_coordinator_harness();
+        let missing_id = "no-such-assistant";
+        let err =
+            GroupChatTool::ensure_claw_member_sessions(&coordinator, &[missing_id.to_string()])
+                .await
+                .expect_err("member without assistant workspace must fail");
+        assert!(
+            err.contains("assistant workspace") && err.contains(missing_id),
+            "unexpected error: {err}"
+        );
+        let _ = root;
+    }
+
+    #[tokio::test]
+    async fn group_chat_existing_non_claw_session_is_rejected() {
+        // P1-7 contract is preserved: an existing session with a non-Claw
+        // agent type must still be rejected (NotClaw), not overwritten.
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness();
+        let session_id = "agentic-member";
+        let assistant_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(session_id, None);
+        std::fs::create_dir_all(&assistant_dir).expect("create assistant workspace dir");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "Agentic".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(assistant_dir.to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create agentic session");
+
+        let err =
+            GroupChatTool::ensure_claw_member_sessions(&coordinator, &[session_id.to_string()])
+                .await
+                .expect_err("non-Claw member must be rejected");
+        assert!(
+            err.contains("is not a Claw assistant"),
+            "unexpected error: {err}"
+        );
+        let _ = root;
     }
 }
