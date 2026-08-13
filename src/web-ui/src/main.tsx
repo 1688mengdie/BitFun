@@ -11,6 +11,15 @@ import { I18nProvider } from "./infrastructure/i18n/providers/I18nProvider";
 import { mouseGlowService } from "./infrastructure/mouse-glow/core/MouseGlowService";
 import "./app/styles/index.scss";
 
+// Immer MapSet plugin: groupChatStore (and other flow-chat stores) keep state
+// in Map/Set (rooms/members/messages, contract §2.2). Immer cannot draft
+// Map/Set without this plugin; it must be enabled once before any store
+// mutates via immer (test/setup.ts already does this for vitest — the
+// production entry was missing it, which crashed at runtime with
+// "The plugin for 'MapSet' has not been loaded into Immer").
+import { enableMapSet } from "immer";
+enableMapSet();
+
 // Font: Noto Sans SC is loaded via a <link> tag in index.html.
 // File path: public/fonts/fonts.css, served as /fonts/fonts.css.
 
