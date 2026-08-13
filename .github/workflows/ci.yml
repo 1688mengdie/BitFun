@@ -162,7 +162,11 @@ jobs:
         run: cargo deny check advisories
 
       - name: Deny licenses
-        run: cargo deny check licenses
+        # -A no-license-field silences the diagnostic for crates that declare
+        # `license-file` instead of the SPDX `license` expression field
+        # (display-info 0.4.8 via screenshots); the actual LICENSE text is
+        # still parsed and gated by the allow list below.
+        run: cargo deny check licenses -A no-license-field
 
       - name: Deny sources
         run: cargo deny check sources
