@@ -10,6 +10,13 @@
  */
 import { enableMapSet } from 'immer';
 
+// Enable React's act() environment for every test. Without this, React logs
+// "Warning: The current testing environment is not configured to support
+// act(...)" once per act()/render() call (~1100+ lines in CI logs), and ~80
+// test files each set the flag manually. Setting it once here removes the
+// per-file duplication and silences the warning globally.
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 // groupChatStore state uses Map (rooms/members/messages, contract §2.2).
 // immer needs the MapSet plugin enabled explicitly to draft-change Maps.
 enableMapSet();
