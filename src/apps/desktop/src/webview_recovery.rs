@@ -5,7 +5,9 @@
 //! builds nothing outside `#[cfg(test)]` references it, so the dead-code lint
 //! would otherwise fire. All of it is intentional: the recovery decision rules
 //! stay platform-neutral and unit-testable on every host.
+#[cfg(any(target_os = "windows", test))]
 use serde::{Deserialize, Serialize};
+#[cfg(any(target_os = "windows", test))]
 use std::time::Duration;
 
 // The decision engine below is platform-neutral: the Windows install path
