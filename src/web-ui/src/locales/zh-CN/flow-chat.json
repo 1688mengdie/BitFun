@@ -93,6 +93,7 @@
     "failedDescription": "可以重新加载已保存的会话内容；若会话来自其他设备，请先检查账号登录与网络连接。",
     "preparingOlderHistory": "正在准备更早的历史记录...",
     "olderHistoryNotReady": "更早的历史记录暂未准备好。",
+    "newerHistoryNotReady": "更新的历史记录暂未准备好。",
     "remoteSessionMissing": "在后端找不到该会话数据。若刚重新连接过 SSH 远程工作区，请关闭并重新打开该远程项目，或新建会话后再试。",
     "retry": "重试"
   },
@@ -174,7 +175,6 @@
       "tokens": "{{value}} Tokens"
     },
     "loading": {
-      "markdown": "正在生成用量报告...",
       "title": "正在生成用量报告",
       "description": "正在读取本地会话记录，并整理隐私安全的统计摘要。",
       "steps": {
@@ -280,7 +280,9 @@
     },
     "slowestLabels": {
       "modelCall": "第 {{turn}} 轮模型调用",
-      "modelCallUnknown": "模型调用"
+      "modelCallUnknown": "模型调用",
+      "turn": "第 {{turn}} 轮",
+      "turnUnknown": "轮次"
     },
     "slowest": {
       "details": {
@@ -485,11 +487,6 @@
     "rollbackDialogIntro": "将执行：",
     "rollbackDialogBulletFiles": "撤销从该轮开始的所有文件修改",
     "rollbackDialogBulletHistory": "删除该轮及之后的对话记录（不可恢复）",
-    "rollbackPanelDialogTitle": "回滚到第 {{index}} 轮之前？",
-    "rollbackPanelDialogIntro": "将执行：",
-    "rollbackPanelBulletRestore": "将文件恢复到第 {{index}} 轮之前的状态",
-    "rollbackPanelBulletUndo": "撤销从该轮开始的所有文件变更",
-    "rollbackPanelBulletHistory": "保留会话历史（之后仍可继续对话）",
     "rollbackSuccess": "已回滚并删除后续对话记录",
     "rollbackFailed": "回滚失败",
     "saveEdit": "保存并重跑",
@@ -1324,9 +1321,6 @@
       "pruned": "已清理",
       "failed": "命令失败"
     }
-  },
-  "stickyTaskIndicator": {
-    "tooltip": "跳转到当前任务"
   },
   "sessionFilesBadge": {
     "files": "文件",
