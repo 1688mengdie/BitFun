@@ -18,6 +18,19 @@ test('release builds do not mutate DMGs after Tauri signs and notarizes them', (
   const source = readFileSync(join(ROOT, 'scripts', 'desktop-tauri-build.mjs'), 'utf8');
   assert.doesNotMatch(source, /patchDmgExtras/);
   assert.doesNotMatch(source, /patch-dmg-extras\.sh/);
+  assert.match(source, /TAURI_BUNDLER_DMG_IGNORE_CI = 'true'/);
+});
+
+test('Desktop DMG uses the branded installer layout', () => {
+  const config = JSON.parse(
+    readFileSync(join(ROOT, 'src', 'apps', 'desktop', 'tauri.conf.json'), 'utf8')
+  );
+  assert.deepEqual(config.bundle.macOS.dmg, {
+    background: 'dmg/background.png',
+    windowSize: { width: 800, height: 563 },
+    appPosition: { x: 235, y: 240 },
+    applicationFolderPosition: { x: 565, y: 240 },
+  });
 });
 
 test('macOS release signing covers the bundled flashgrep executable', () => {
