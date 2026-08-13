@@ -32,6 +32,8 @@ import { recordHistorySessionDiagnosticEvent } from '@/flow_chat/services/histor
 import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
 import {
   compareSessionsForNavStable,
+  isOrphanSession,
+  resolveSessionOrphanKind,
   sessionBelongsToWorkspaceNavRow,
 } from '@/flow_chat/utils/sessionOrdering';
 import { stateMachineManager } from '@/flow_chat/state-machine';
@@ -203,6 +205,8 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [expandLevel, setExpandLevel] = useState<0 | 1 | 2>(0);
+  /** R-AD-08: orphan section collapses independently of the main list expansion. */
+  const [isOrphanSectionExpanded, setIsOrphanSectionExpanded] = useState(true);
   // Level-2 ("show all") renders in pages of 200 rows so a huge session
   // history cannot mount thousands of un-virtualized rows at once.
   const [level2DisplayCount, setLevel2DisplayCount] = useState(SESSIONS_LEVEL_2_PAGE);
@@ -631,9 +635,10 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     [flowChatState.sessions, workspacePath, remoteConnectionId, remoteSshHost]
   );
 
-  const { topLevelSessions: allTopLevelSessions, childrenByParent } = useMemo(() => {
+  const { topLevelSessions: allTopLevelSessions, orphanedSessions, childrenByParent } = useMemo(() => {
     const childMap = new Map<string, Session[]>();
     const parents: Session[] = [];
+    const orphans: Session[] = [];
 
     const knownIds = new Set(sessions.map(s => s.sessionId));
 
@@ -643,6 +648,13 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
         const list = childMap.get(pid) || [];
         list.push(s);
         childMap.set(pid, list);
+      } else if (isOrphanSession(s)) {
+        // R-AD-08: sessions whose parent chain is missing get their own
+        // trailing group instead of masquerading as normal top-level rows.
+        // They still count as top-level (the backend paginates them that
+        // way), so they stay in `topLevelSessions` for count consistency;
+        // the main walk skips them and the orphan section renders them.
+        orphans.push(s);
       } else {
         parents.push(s);
       }
@@ -653,7 +665,8 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     }
 
     return {
-      topLevelSessions: [...parents].sort(compareSessionsForNavStable),
+      topLevelSessions: [...parents, ...orphans].sort(compareSessionsForNavStable),
+      orphanedSessions: [...orphans].sort(compareSessionsForNavStable),
       childrenByParent: childMap,
     };
   }, [sessions]);
@@ -771,7 +784,11 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   ]);
 
   const visibleItems = useMemo(() => {
-    const visibleParents = topLevelSessions.slice(0, sessionDisplayLimit);
+    // R-AD-08: orphan sessions render in their own trailing section, so the
+    // main walk only renders non-orphan top-level sessions (and their trees).
+    const visibleParents = topLevelSessions
+      .filter(session => !isOrphanSession(session))
+      .slice(0, sessionDisplayLimit);
     const out: Array<{ session: Session; depth: number }> = [];
 
     const walk = (sessions: Session[], depth: number) => {
@@ -1733,6 +1750,271 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
             <span>{t('nav.sessions.showLess')}</span>
           )}
         </button>
+      )}
+
+      {orphanedSessions.length > 0 && (
+        <div
+          className="bitfun-nav-panel__orphan-section"
+          data-bf-component="sessions-section"
+          data-bf-part="orphanSection"
+          data-bf-state={isOrphanSectionExpanded ? 'expanded' : 'collapsed'}
+          data-testid="nav-session-orphan-section"
+        >
+          <button
+            type="button"
+            className="bitfun-nav-panel__orphan-section-toggle"
+            data-testid="nav-session-orphan-toggle"
+            aria-expanded={isOrphanSectionExpanded}
+            onClick={() => setIsOrphanSectionExpanded(prev => !prev)}
+          >
+            <span className="bitfun-nav-panel__orphan-section-label">
+              {t('nav.sessions.orphanSection', { count: orphanedSessions.length })}
+            </span>
+          </button>
+          {isOrphanSectionExpanded ? (
+            <div className="bitfun-nav-panel__orphan-section-items">
+              {orphanedSessions.map((session) => {
+                const isEditing = editingSessionId === session.sessionId;
+                const orphanKind = resolveSessionOrphanKind(session);
+                const orphanLabel = orphanKind === 'DetachedChild'
+                  ? t('nav.sessions.orphanDetached')
+                  : t('nav.sessions.orphanDangling');
+                const sessionTitle = resolveSessionTitle(session);
+                const isRunning = runningSessionIds.has(session.sessionId);
+                const SessionIcon =
+                  session.mode?.toLowerCase() === 'cowork'
+                    ? ClipboardList
+                    : session.mode?.toLowerCase() === 'claw'
+                      ? (assistantLabel?.trim()?.length ?? 0) > 0
+                        ? Panda
+                        : Bot
+                      : Code2;
+                const isRowActive = isSessionNavRowActive({
+                  rowSessionId: session.sessionId,
+                  activeTabId,
+                  activeSessionId,
+                  activeChildSessionId: activeBtwSessionData?.childSessionId,
+                  activeChildParentSessionId: activeBtwSessionData?.parentSessionId,
+                });
+                const row = (
+                  <div
+                    className={[
+                      'bitfun-nav-panel__inline-item',
+                      'is-orphan',
+                      isRowActive && 'is-active',
+                      isEditing && 'is-editing',
+                      openMenuSessionId === session.sessionId && 'is-menu-open',
+                    ]
+                      .filter(Boolean)
+                      .join(' ')}
+                    data-bf-component="sessions-section"
+                    data-bf-part="row"
+                    data-bf-state={[
+                      isRowActive && 'active',
+                      isEditing && 'editing',
+                      openMenuSessionId === session.sessionId && 'menuOpen',
+                      'orphan',
+                    ].filter(Boolean).join(' ') || undefined}
+                    data-testid="nav-session-item"
+                    data-session-id={session.sessionId}
+                    data-session-kind={resolveSessionRelationship(session).kind}
+                    data-session-level="0"
+                    data-session-orphan="true"
+                    data-session-orphan-kind={orphanKind ?? ''}
+                    data-session-active={isRowActive ? 'true' : 'false'}
+                    onPointerDown={event => handleSessionOpenPointerDown(event, session)}
+                    onClick={() => handleSwitch(session.sessionId)}
+                  >
+                    {showSessionModeIcon ? (
+                      <span className="bitfun-nav-panel__inline-item-icon-slot">
+                        {isRunning ? (
+                          <Loader2
+                            size={14}
+                            className="bitfun-nav-panel__inline-item-icon is-running"
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <SessionIcon
+                            size={14}
+                            className="bitfun-nav-panel__inline-item-icon is-code"
+                            aria-hidden="true"
+                          />
+                        )}
+                      </span>
+                    ) : null}
+                    <span className="bitfun-nav-panel__inline-item-main">
+                      <span className="bitfun-nav-panel__inline-item-label">{sessionTitle}</span>
+                      <span
+                        className="bitfun-nav-panel__inline-item-orphan-badge"
+                        data-orphan-kind={orphanKind ?? ''}
+                        title={orphanLabel}
+                      >
+                        {orphanLabel}
+                      </span>
+                    </span>
+                    <div className="bitfun-nav-panel__inline-item-actions">
+                      <button
+                        type="button"
+                        ref={openMenuSessionId === session.sessionId ? sessionMenuAnchorRef : undefined}
+                        className={`bitfun-nav-panel__inline-item-action-btn${openMenuSessionId === session.sessionId ? ' is-open' : ''}`}
+                        onClick={e => handleMenuOpen(e, session.sessionId)}
+                        data-testid="nav-session-menu-btn"
+                        data-session-id={session.sessionId}
+                      >
+                        <MoreHorizontal size={13} />
+                      </button>
+                    </div>
+                    {openMenuSessionId === session.sessionId && sessionMenuPosition && createPortal(
+                      <div
+                        ref={sessionMenuPopoverRef}
+                        className="bitfun-nav-panel__inline-item-menu-popover"
+                        data-bf-component="sessions-section"
+                        data-bf-part="menu"
+                        data-bf-state="menuOpen"
+                        role="menu"
+                        style={{ top: `${sessionMenuPosition.top}px`, left: `${sessionMenuPosition.left}px` }}
+                        data-testid="nav-session-menu"
+                        data-session-id={session.sessionId}
+                      >
+                        {isExportScopeMenu ? (
+                          <>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setIsExportScopeMenu(false);
+                              }}
+                              data-testid="nav-session-menu-export-back"
+                              data-session-id={session.sessionId}
+                            >
+                              <ChevronLeft size={13} />
+                              <span>{t('nav.sessions.exportMarkdown')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => { void handleExportMarkdown(e, session, 'full'); }}
+                              data-testid="nav-session-menu-export-full"
+                              data-session-id={session.sessionId}
+                            >
+                              <FileDown size={13} />
+                              <span>{t('nav.sessions.exportMarkdownFull')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => { void handleExportMarkdown(e, session, 'result'); }}
+                              data-testid="nav-session-menu-export-result"
+                              data-session-id={session.sessionId}
+                            >
+                              <FileDown size={13} />
+                              <span>{t('nav.sessions.exportMarkdownResult')}</span>
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => { closeSessionMenu(); handleStartEdit(e, session); }}
+                              data-testid="nav-session-menu-rename"
+                              data-session-id={session.sessionId}
+                            >
+                              <Pencil size={13} />
+                              <span>{t('nav.sessions.rename')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => { closeSessionMenu(); void handleCopySessionId(e, session.sessionId); }}
+                              data-testid="nav-session-menu-copy-id"
+                              data-session-id={session.sessionId}
+                            >
+                              <Copy size={13} />
+                              <span>{t('nav.sessions.copySessionId')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => {
+                                e.stopPropagation();
+                                setIsExportScopeMenu(true);
+                              }}
+                              disabled={exportingSessionId === session.sessionId}
+                              data-testid="nav-session-menu-export-markdown"
+                              data-session-id={session.sessionId}
+                            >
+                              {exportingSessionId === session.sessionId
+                                ? <Loader2 size={13} className="bitfun-nav-panel__inline-toggle-spinner" />
+                                : <FileDown size={13} />}
+                              <span>{t('nav.sessions.exportMarkdown')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => {
+                                e.stopPropagation();
+                                closeSessionMenu();
+                                setScheduledJobsSessionId(session.sessionId);
+                              }}
+                              disabled={!workspacePath}
+                              data-testid="nav-session-menu-scheduled-jobs"
+                              data-session-id={session.sessionId}
+                            >
+                              <Clock3 size={13} />
+                              <span>{t('nav.scheduledJobs.open')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item"
+                              onClick={e => { closeSessionMenu(); void handleArchive(e, session.sessionId); }}
+                              data-testid="nav-session-menu-archive"
+                              data-session-id={session.sessionId}
+                            >
+                              <Archive size={13} />
+                              <span>{t('nav.sessions.archive')}</span>
+                            </button>
+                            <button
+                              type="button"
+                              className="bitfun-nav-panel__inline-item-menu-item is-danger"
+                              onClick={e => { closeSessionMenu(); void handleDelete(e, session.sessionId); }}
+                              data-testid="nav-session-menu-delete"
+                              data-session-id={session.sessionId}
+                            >
+                              <Trash2 size={13} />
+                              <span>{t('nav.sessions.delete')}</span>
+                            </button>
+                          </>
+                        )}
+                      </div>,
+                      getAppearanceOverlayHost()
+                    )}
+                  </div>
+                );
+                return (
+                  <Tooltip
+                    key={session.sessionId}
+                    content={
+                      <div className="bitfun-nav-panel__inline-item-tooltip">
+                        <div className="bitfun-nav-panel__inline-item-tooltip-title">{sessionTitle}</div>
+                        <div className="bitfun-nav-panel__inline-item-tooltip-meta">{orphanLabel}</div>
+                        <div className="bitfun-nav-panel__inline-item-tooltip-meta">
+                          {t('nav.sessions.orphanTooltip')}
+                        </div>
+                      </div>
+                    }
+                    placement="right"
+                    followCursor
+                    disabled={isEditing || openMenuSessionId !== null}
+                  >
+                    {row}
+                  </Tooltip>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
       )}
 
       {scheduledJobsSession && (

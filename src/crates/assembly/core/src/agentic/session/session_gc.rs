@@ -155,6 +155,8 @@ mod tests {
             needs_user_attention: None,
             runtime_state: None,
             is_daemon: false,
+            orphaned: false,
+            orphan_kind: None,
         }
     }
 

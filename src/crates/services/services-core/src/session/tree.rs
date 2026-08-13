@@ -430,6 +430,8 @@ mod tests {
             project_workspace_path: None,
             execution_target: None,
             is_daemon: false,
+            orphaned: false,
+            orphan_kind: None,
         }
     }
 

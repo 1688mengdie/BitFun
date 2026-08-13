@@ -28,6 +28,12 @@ const TOP_LEVEL_METADATA_KEYS = new Set([
   'lastFinishedAt',
 ]);
 
+export type OrphanKind = 'DanglingChild' | 'DetachedChild';
+
+export function normalizeOrphanKind(value: unknown): OrphanKind | undefined {
+  return value === 'DanglingChild' || value === 'DetachedChild' ? value : undefined;
+}
+
 type SessionRelationshipInput = Pick<
   Session,
   'sessionKind' | 'parentSessionId' | 'btwOrigin' | 'parentToolCallId' | 'subagentType' | 'depth'
@@ -145,6 +151,33 @@ export function resolveSessionRelationship(
       normalized.sessionKind !== 'normal' && normalized.parentSessionId
     ),
     origin: normalized.btwOrigin,
+  };
+}
+
+export interface ResolvedOrphanStatus {
+  /** When true the session has no surviving parent and is grouped under the orphan section. */
+  isOrphaned: boolean;
+  /** Optional backend orphan classification carried through metadata (R-AD-08). */
+  kind?: OrphanKind;
+}
+
+export function resolveSessionOrphanStatus(
+  input?: Partial<Pick<Session, 'orphaned' | 'orphanKind'>>
+): ResolvedOrphanStatus {
+  const isOrphaned = input?.orphaned === true;
+  return {
+    isOrphaned,
+    kind: isOrphaned ? normalizeOrphanKind(input?.orphanKind) : undefined,
+  };
+}
+
+export function deriveSessionOrphanStatusFromMetadata(
+  metadata?: Pick<SessionMetadata, 'orphaned' | 'orphanKind'> | null
+): ResolvedOrphanStatus {
+  const isOrphaned = metadata?.orphaned === true;
+  return {
+    isOrphaned,
+    kind: isOrphaned ? normalizeOrphanKind(metadata?.orphanKind) : undefined,
   };
 }
 

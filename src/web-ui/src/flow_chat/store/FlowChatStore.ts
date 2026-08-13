@@ -52,6 +52,7 @@ import {
 import type { SessionMetadataPage } from '@/infrastructure/api/service-api/SessionAPI';
 import {
   deriveLastFinishedAtFromMetadata,
+  deriveSessionOrphanStatusFromMetadata,
   deriveSessionRelationshipFromMetadata,
   normalizeSessionRelationship,
 } from '../utils/sessionMetadata';
@@ -6644,6 +6645,7 @@ config: {
         }
 
         const relationship = deriveSessionRelationshipFromMetadata(metadata);
+        const orphanStatus = deriveSessionOrphanStatusFromMetadata(metadata);
         const lastFinishedAt = deriveLastFinishedAtFromMetadata(metadata);
         const titleState = deriveSessionTitleStateFromMetadata(metadata);
         const hasDynamicDefaultTitle = titleState.titleSource === 'i18n';
@@ -6711,6 +6713,8 @@ config: {
             parentToolCallId: relationship.parentToolCallId,
             subagentType: relationship.subagentType,
             depth: relationship.depth,
+            orphaned: orphanStatus.isOrphaned,
+            orphanKind: orphanStatus.kind,
             btwThreads: [],
             btwOrigin: relationship.btwOrigin,
             hasUnreadCompletion: metadata.unreadCompletion,
@@ -7092,6 +7096,7 @@ config: {
           }
 
           const relationship = deriveSessionRelationshipFromMetadata(metadata);
+          const orphanStatus = deriveSessionOrphanStatusFromMetadata(metadata);
           const lastFinishedAt = deriveLastFinishedAtFromMetadata(metadata);
           const titleState = deriveSessionTitleStateFromMetadata(metadata);
           const hasDynamicDefaultTitle = titleState.titleSource === 'i18n';
@@ -7156,6 +7161,8 @@ config: {
               parentToolCallId: relationship.parentToolCallId,
               subagentType: relationship.subagentType,
               depth: relationship.depth,
+              orphaned: orphanStatus.isOrphaned,
+              orphanKind: orphanStatus.kind,
               btwThreads: [],
               btwOrigin: relationship.btwOrigin,
               hasUnreadCompletion: metadata.unreadCompletion,

@@ -24,6 +24,13 @@ export interface SessionRelationship {
   depth?: number | null;
 }
 
+/**
+ * Why a session is considered an orphan. Mirrors the backend
+ * `OrphanKind` (DanglingChild = parent no longer exists / DetachedChild =
+ * creator marker parent no longer exists). Absent for non-orphans.
+ */
+export type SessionOrphanKind = 'DanglingChild' | 'DetachedChild';
+
 export interface SessionCustomMetadata extends Record<string, unknown> {
   kind?: SessionKind;
   parentSessionId?: string | null;
@@ -110,6 +117,13 @@ export interface SessionMetadata {
    * Takes precedence over unreadCompletion in the UI.
    */
   needsUserAttention?: 'ask_user' | 'tool_confirm';
+  /**
+   * R-AD-08: orphan marker carried from the backend tree. When true the
+   * session's parent chain is missing; the UI groups it under the orphan
+   * section and labels it. Optional `orphanKind` narrows the reason.
+   */
+  orphaned?: boolean;
+  orphanKind?: SessionOrphanKind;
   /**
    * Persisted review action bar state for code review / deep review sessions.
    * Allows restoring the review action bar across app restarts.

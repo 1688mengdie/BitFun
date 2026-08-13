@@ -95,6 +95,11 @@ pub fn build_session_metadata(facts: SessionMetadataBuildFacts<'_>) -> SessionMe
         is_daemon: existing
             .map(|value| value.is_daemon)
             .unwrap_or(facts.is_daemon),
+        // R-AD-08: orphan markers are computed by the page/list builders from
+        // the full visible set; a freshly built metadata record is never an
+        // orphan on its own.
+        orphaned: false,
+        orphan_kind: None,
     }
 }
 

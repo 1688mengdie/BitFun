@@ -6,6 +6,10 @@ import {
   compareSessionsForNavStable,
   getSessionMetadataSortTimestamp,
   getSessionSortTimestamp,
+  isOrphanMetadata,
+  isOrphanSession,
+  orphanSessionSortRank,
+  resolveSessionOrphanKind,
   sessionBelongsToWorkspaceNavRow,
 } from './sessionOrdering';
 
@@ -189,5 +193,37 @@ describe('sessionOrdering', () => {
     expect(
       sessionBelongsToWorkspaceNavRow(session, '/projects/BitFun')
     ).toBe(false);
+  });
+
+  it('sorts orphan sessions after normal top-level sessions in the nav list', () => {
+    const sessions = [
+      createSession({ sessionId: 'orphan-new', createdAt: 5000, orphaned: true, orphanKind: 'DanglingChild' }),
+      createSession({ sessionId: 'normal-old', createdAt: 1000 }),
+      createSession({ sessionId: 'normal-new', createdAt: 4000 }),
+    ];
+    const orderedIds = [...sessions].sort(compareSessionsForNavStable).map(s => s.sessionId);
+    expect(orderedIds).toEqual(['normal-new', 'normal-old', 'orphan-new']);
+  });
+
+  it('ranks orphan sessions after non-orphans and ignores kind for ordering', () => {
+    expect(orphanSessionSortRank({ orphaned: false })).toBe(0);
+    expect(orphanSessionSortRank({ orphaned: true, orphanKind: 'DanglingChild' })).toBe(1);
+    expect(orphanSessionSortRank({ orphaned: true, orphanKind: 'DetachedChild' })).toBe(1);
+    expect(isOrphanSession({ orphaned: true, orphanKind: 'DanglingChild' })).toBe(true);
+    expect(isOrphanSession({ orphaned: false })).toBe(false);
+    expect(isOrphanSession({})).toBe(false);
+  });
+
+  it('normalizes orphan kind and keeps the label value', () => {
+    expect(resolveSessionOrphanKind({ orphaned: true, orphanKind: 'DanglingChild' })).toBe('DanglingChild');
+    expect(resolveSessionOrphanKind({ orphaned: true, orphanKind: 'DetachedChild' })).toBe('DetachedChild');
+    expect(resolveSessionOrphanKind({ orphaned: true, orphanKind: 'Unknown' })).toBeUndefined();
+    expect(resolveSessionOrphanKind({ orphaned: false, orphanKind: 'DanglingChild' })).toBeUndefined();
+  });
+
+  it('metadata variant only flags explicitly orphaned entries', () => {
+    expect(isOrphanMetadata({ orphaned: true, orphanKind: 'DetachedChild' })).toBe(true);
+    expect(isOrphanMetadata({ orphaned: false })).toBe(false);
+    expect(isOrphanMetadata({})).toBe(false);
   });
 });

@@ -484,6 +484,15 @@ export interface Session {
   sessionKind: SessionKind;
 
   /**
+   * R-AD-08: when true this session's parent is missing from the loaded set
+   * (backend orphan classification). The nav groups such sessions under the
+   * orphan section instead of pretending they are normal top-level rows.
+   * `orphanKind` narrows the reason (DanglingChild / DetachedChild).
+   */
+  orphaned?: boolean;
+  orphanKind?: import('@/shared/types/session-history').SessionOrphanKind;
+
+  /**
    * For hidden subagent sessions, records which parent Task tool launched it.
    * Helps reopen the real child session from parent task cards and header lists.
    */

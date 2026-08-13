@@ -316,6 +316,20 @@ pub struct SessionMetadata {
     /// deleted via SessionControl(delete).
     #[serde(default)]
     pub is_daemon: bool,
+
+    /// R-AD-08: transient orphan marker computed by the page/list builders,
+    /// never persisted as authoritative metadata. When true the session's
+    /// parent is missing from the scanned set; the frontend groups it under
+    /// the orphan section. `orphan_kind` narrows the reason
+    /// (DanglingChild / DetachedChild).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub orphaned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orphan_kind: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Session status
@@ -1077,6 +1091,8 @@ impl SessionMetadata {
             needs_user_attention: None,
             runtime_state: None,
             is_daemon: false,
+            orphaned: false,
+            orphan_kind: None,
         }
     }
 

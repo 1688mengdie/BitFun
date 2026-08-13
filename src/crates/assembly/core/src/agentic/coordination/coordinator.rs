@@ -3435,6 +3435,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 needs_user_attention: None,
                 runtime_state: None,
                 is_daemon: false,
+                orphaned: false,
+                orphan_kind: None,
             };
             if let Err(e) = persistence_manager
                 .create_session_metadata_if_absent(&workspace_path_buf, &metadata)
