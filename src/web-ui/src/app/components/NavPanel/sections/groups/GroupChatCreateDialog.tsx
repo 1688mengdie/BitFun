@@ -15,7 +15,7 @@ import './GroupChatCreateDialog.scss';
 
 export interface GroupChatCreateDialogProps {
   workspacePath: string;
-  /** Addable candidates: real Claw sessions ∪ assistant presets (inactive = 未激活). */
+  /** Addable candidates: real Claw sessions union assistant presets (inactive = not yet activated). */
   availableAssistants?: AddableAssistant[];
   onClose: () => void;
 }

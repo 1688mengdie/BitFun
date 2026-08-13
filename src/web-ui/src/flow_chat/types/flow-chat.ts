@@ -834,14 +834,15 @@ export interface GroupChatState {
 }
 
 /**
- * 群聊可加成员候选（W2 成员来源单一化，2026-08-13）：
- * 真实 Claw 会话（sessionId = 真实 session_id）∪ assistant 预设
- * （无会话的标 `inactive: true`，用户选中时后端显式新建 Claw 会话）。
- * 不再用 `assistantId || workspace.id` 当 sessionId 的旧映射。
+ * Addable group-chat member candidates (W2 member-source unification, 2026-08-13):
+ * real Claw sessions (sessionId = real session_id) union assistant presets
+ * (no session -> `inactive: true`; the backend explicitly creates a Claw
+ * session when the user selects it). The legacy `assistantId || workspace.id`
+ * sessionId mapping is gone.
  */
 export interface AddableAssistant {
   sessionId: string;
   name: string;
-  /** 无真实 Claw 会话的 assistant 预设——选中时后端显式新建（未激活标记）。 */
+  /** Assistant preset without a real Claw session - the backend creates one on selection (inactive badge). */
   inactive?: boolean;
 }

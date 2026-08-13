@@ -12,18 +12,20 @@ import { mouseGlowService } from "./infrastructure/mouse-glow/core/MouseGlowServ
 import "./app/styles/index.scss";
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 全局插件启用清单（W4 契约化，2026-08-13，方案 v1.1 §四.1）
+// Global plugin enablement checklist (W4 contract, 2026-08-13, plan v1.1 sec 4.1)
 //
-// 任何全局插件 / 一次性初始化必须登记在此清单（含生产与测试两端）：
-//   1. Immer MapSet 插件（enableMapSet）——groupChatStore 等 flow-chat store
-//      的 rooms/members/messages 用 Map（contract §2.2），Immer draft 修改
-//      Map 必须启用该插件；缺失时运行时崩 "The plugin for 'MapSet' has not
-//      been loaded into Immer"。
-//      生产端：下方调用；测试端：test/setup.ts（一致性由测试断言锁死，
-//      防生产/测试分叉复发——见 src/test/setup.ts 的
-//      global-plugin-initialization-consistency 断言）。
+// Any global plugin / one-time initialization must be registered here (both the
+// production and the test side):
+//   1. Immer MapSet plugin (enableMapSet) - groupChatStore and other flow-chat
+//      stores keep rooms/members/messages in Map (contract §2.2); Immer draft
+//      mutation of Map requires this plugin; without it the runtime crashes with
+//      "The plugin for 'MapSet' has not been loaded into Immer".
+//      Production: the call below; Tests: test/setup.ts (consistency locked by
+//      the assertion in src/test/setup.ts - global-plugin-initialization-
+//      consistency - to prevent the production/test divergence regression).
 //
-// 新增全局插件/初始化时：①在此登记 ②同步 test/setup.ts ③更新一致性断言。
+// When adding a global plugin/initialization: (1) register it here (2) keep
+// test/setup.ts in sync (3) update the consistency assertion.
 // ═════════════════════════════════════════════════════════════════════════════
 import { enableMapSet } from "immer";
 enableMapSet();

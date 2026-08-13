@@ -23,13 +23,15 @@ import { resolve } from 'node:path';
 // immer needs the MapSet plugin enabled explicitly to draft-change Maps.
 enableMapSet();
 
-// W4 生产/测试初始化一致性（2026-08-13，方案 v1.1 §四.1，梦情 P2-1 修正）：
-// 任何全局插件/初始化必须在 main.tsx 与 setup.ts 两端都启用（防分叉复发——
-// 曾发生 setup 启用了 enableMapSet 但生产入口缺失导致运行时崩）。双端都读
-// **源码**核对「调用存在性」（非 typeof——import 后 typeof 恒 function 形同
-// 虚设），反向分支（main 启用 setup 未启用）可达，无死代码。
+// W4 production/test initialization consistency (2026-08-13, plan v1.1 sec 4.1,
+// Mengqing P2-1 fix): every global plugin/initialization must be enabled on
+// BOTH main.tsx and setup.ts (prevent the divergence regression - setup had
+// enableMapSet but the production entry lacked it, crashing at runtime). Both
+// sides read the **source** and check call existence (not typeof - after an
+// import, typeof is always 'function' and the check is a no-op). The reverse
+// branch (main enabled, setup missing) is reachable - no dead code.
 
-/** 纯逻辑（可测）：返回分叉错误消息；两端一致返回 null。 */
+/** Pure logic (testable): returns the divergence message, or null when in sync. */
 export function detectMapSetDivergence(mainSource: string, setupSource: string): string | null {
   const mainHasMapSet = mainSource.includes('enableMapSet()');
   const setupHasMapSet = setupSource.includes('enableMapSet()');
@@ -39,7 +41,7 @@ export function detectMapSetDivergence(mainSource: string, setupSource: string):
       'production main.tsx does not. Add it to the global-plugin-enablement checklist in main.tsx.'
     );
   }
-  // 反向分支（main 启用 setup 未启用）——可测，非死代码。
+  // Reverse branch (main enabled, setup missing) - testable, not dead code.
   if (!setupHasMapSet && mainHasMapSet) {
     return (
       'Global plugin initialization divergence: main.tsx enables enableMapSet() but ' +

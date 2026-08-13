@@ -68,9 +68,10 @@ export const useGroupChatStore = create<GroupChatStore>()(
     messages: new Map<string, GroupChatMessage[]>(),
     mode: 'free',
     roundRobinCursor: 0,
-    // W4 显式初始化（2026-08-13，方案 v1.1 §四.2）：store 创建时从
-    // workspaceManager 读取当前 workspace（显式启动流程），不再依赖组件
-    // useEffect 注入；组件只响应变更（setWorkspacePath），不负责首次注入。
+    // W4 explicit init (2026-08-13, plan v1.1 sec 4.2): the store reads the
+    // current workspace from workspaceManager at creation (explicit startup
+    // flow) instead of relying on a component useEffect injection; components
+    // only react to changes (setWorkspacePath), they never seed the first value.
     workspacePath: workspaceManager.getState().currentWorkspace?.rootPath ?? '',
     setWorkspacePath: (workspacePath) => {
       const previous = get().workspacePath;

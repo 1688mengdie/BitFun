@@ -529,10 +529,11 @@ const MainNav: React.FC<MainNavProps> = ({
   const skillsTooltip = t('nav.tooltips.skills');
   const extensionsLabel = t('nav.sections.extensions');
 
-  // W2 成员来源单一化（2026-08-13，方案 v1.1 §一）：
-  // 候选列表 = 真实 Claw 会话（listSessions 过滤 agent_type==Claw）∪
-  // assistant 预设（无真实会话的标 inactive「未激活」，用户选中时后端
-  // 显式新建 Claw 会话）。不再用 `assistantId || workspace.id` 当 sessionId。
+  // W2 member-source unification (2026-08-13, plan v1.1 sec 1):
+  // candidates = real Claw sessions (listSessions filtered by agent_type==Claw)
+  // union assistant presets (no real session -> inactive badge; the backend
+  // explicitly creates a Claw session when the user selects it). The legacy
+  // `assistantId || workspace.id` sessionId mapping is gone.
   const [clawSessions, setClawSessions] = useState<AddableAssistant[]>([]);
   useEffect(() => {
     let cancelled = false;
@@ -551,7 +552,8 @@ const MainNav: React.FC<MainNavProps> = ({
           );
         }
       } catch (error) {
-        // 会话枚举失败不阻塞建群：退化为纯 assistant 预设列表。
+        // Session enumeration failure must not block room creation: fall back
+        // to the plain assistant-preset list.
         log.warn('Failed to list Claw sessions for group chat candidates', { error });
       }
     })();
@@ -561,16 +563,17 @@ const MainNav: React.FC<MainNavProps> = ({
   }, [currentWorkspace?.rootPath]);
 
   const groupChatAvailableAssistants = useMemo<AddableAssistant[]>(() => {
-    // 真实 Claw 会话（sessionId = 真实 session_id）优先，去重。
+    // Real Claw sessions (sessionId = real session_id) first, deduplicated.
     const real = new Map<string, AddableAssistant>();
     for (const session of clawSessions) {
       real.set(session.sessionId, session);
     }
-    // assistant 预设：已有真实会话的跳过（不重复）；无会话的标 inactive。
-    // W2 P2-2: sessionId 一律用 workspace.id（稳定唯一标识）——后端
-    // resolve_assistant_workspace 按「注册表 id → assistant_id 索引 →
-    // legacy」三级解析映射到真实会话/workspace；不再用 assistantId（8-hex
-    // 短 id，可能 ≠ workspace.id）当 sessionId，消除三义残留。
+    // Assistant presets: skip ones already covered by a real session; mark the
+    // rest inactive. W2 P2-2: sessionId always uses workspace.id (stable unique
+    // id) - the backend resolve_assistant_workspace maps it through the
+    // registry-id -> assistant_id-index -> legacy fallback chain. assistantId
+    // (8-hex short id, may differ from workspace.id) is no longer used as the
+    // sessionId, eliminating the three-way ambiguity.
     for (const workspace of assistantWorkspacesList) {
       const sessionId = workspace.id;
       if (!sessionId || real.has(sessionId)) continue;
