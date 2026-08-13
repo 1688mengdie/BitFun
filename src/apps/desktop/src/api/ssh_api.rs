@@ -1122,7 +1122,9 @@ pub async fn remote_get_workspace_info(
 
 #[cfg(test)]
 mod tests {
-    use super::{hydrate_stored_password, validate_remote_name_for_local_download};
+    use super::{
+        hydrate_stored_password, local_download_name_key, validate_remote_name_for_local_download,
+    };
 
     #[test]
     fn download_names_cannot_escape_the_selected_local_directory() {
