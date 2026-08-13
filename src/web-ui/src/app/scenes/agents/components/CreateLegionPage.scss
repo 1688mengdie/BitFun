@@ -1,6 +1,7 @@
 /**
  * CreateLegionPage — legion orchestration pattern picker page.
- * Minimal styles for the create-agent-page shell and legion-* list/grid blocks.
+ * Aligned with the agent-surface-card visual language (gradient layers,
+ * glass icon areas, 15px radius, accent colors) — see LegionCard.scss.
  */
 
 @use '../../../../component-library/styles/tokens' as *;
@@ -12,6 +13,27 @@
   display: flex;
   flex-direction: column;
   gap: $size-gap-4;
+  position: relative;
+  overflow: hidden;
+
+  // Ambient gradient backdrop (page-level accent wash).
+  &::before {
+    content: "";
+    position: absolute;
+    inset: -20% -10% auto;
+    height: 320px;
+    background: var(--legion-page-gradient, var(--bf-appearance-token-color-accent-600));
+    opacity: 0.16;
+    pointer-events: none;
+    z-index: 0;
+  }
+}
+
+.create-agent-page__header,
+.create-agent-page__section,
+.create-agent-page__actions {
+  position: relative;
+  z-index: 1;
 }
 
 .create-agent-page__header {
@@ -51,7 +73,7 @@
   border-top: 1px solid var(--bf-appearance-token-border-subtle);
 }
 
-// ─── Pattern selector ───────────────────────────────────────
+// ─── Pattern selector (agent-surface-card style) ────────────────
 .legion-pattern-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
@@ -59,26 +81,84 @@
 }
 
 .legion-pattern-chip {
+  --legion-chip-accent: var(--bf-appearance-token-color-accent-500);
+
+  position: relative;
   display: flex;
   align-items: center;
-  gap: $size-gap-2;
+  gap: $size-gap-3;
   padding: $size-gap-3;
   border: 1px solid var(--bf-appearance-token-border-subtle);
-  border-radius: 8px;
-  background: var(--bf-appearance-token-color-bg-primary);
+  border-radius: 15px;
+  background: var(--bf-appearance-token-element-bg-soft);
   color: var(--bf-appearance-token-color-text-primary);
   font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+  font-weight: $font-weight-medium;
   cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+  overflow: hidden;
+  transition:
+    transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),
+    border-color 150ms ease,
+    box-shadow 0.25s ease;
+
+  // Gradient layer revealed on hover / active (agent-surface-card pattern).
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--legion-chip-gradient, var(--bf-appearance-token-color-accent-600));
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+    z-index: 0;
+  }
 
   &:hover {
+    transform: translateY(-2px);
     border-color: var(--bf-appearance-token-border-strong);
-    background: var(--bf-appearance-token-element-bg-hover);
+    box-shadow: 0 10px 24px color-mix(in srgb, var(--bf-appearance-token-color-overlay-slate-rgb) 18%, transparent);
+
+    &::before {
+      opacity: 0.3;
+    }
   }
 
   &--active {
     border-color: var(--bf-appearance-token-color-accent-500);
     background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 10%, var(--bf-appearance-token-color-bg-primary));
+
+    &::before {
+      opacity: 0.4;
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--bf-appearance-token-color-accent-500);
+    outline-offset: 2px;
+  }
+
+  &__icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--bf-appearance-token-color-overlay-white-12);
+    backdrop-filter: blur(8px);
+    color: var(--bf-appearance-token-color-accent-500);
+    position: relative;
+    z-index: 1;
+  }
+
+  &__name {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -101,10 +181,11 @@
     padding: 2px 10px;
     border-radius: 999px;
     border: 1px solid var(--bf-appearance-token-border-subtle);
+    background: var(--bf-appearance-token-element-bg-soft);
   }
 }
 
-// ─── Node list ──────────────────────────────────────────────
+// ─── Node list (surface cards) ──────────────────────────────
 .legion-node-list {
   display: flex;
   flex-direction: column;
@@ -117,8 +198,14 @@
   gap: $size-gap-3;
   padding: $size-gap-3;
   border: 1px solid var(--bf-appearance-token-border-subtle);
-  border-radius: 8px;
-  background: var(--bf-appearance-token-color-bg-primary);
+  border-radius: 12px;
+  background: var(--bf-appearance-token-element-bg-soft);
+  transition: border-color 150ms ease, transform 0.2s ease;
+
+  &:hover {
+    border-color: var(--bf-appearance-token-border-medium);
+    transform: translateY(-1px);
+  }
 }
 
 .legion-node-index {
@@ -175,12 +262,13 @@
   flex-shrink: 0;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid var(--bf-appearance-token-border-strong);
-  color: var(--bf-appearance-token-color-text-secondary);
+  border: 1px solid var(--bf-appearance-token-color-accent-500);
+  color: var(--bf-appearance-token-color-accent-500);
   font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+  background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 8%, transparent);
 }
 
-// ─── Edge list ──────────────────────────────────────────────
+// ─── Edge list (surface cards) ──────────────────────────────
 .legion-edge-list {
   display: flex;
   flex-direction: column;
@@ -193,10 +281,15 @@
   gap: $size-gap-2;
   padding: $size-gap-2 $size-gap-3;
   border: 1px solid var(--bf-appearance-token-border-subtle);
-  border-radius: 8px;
-  background: var(--bf-appearance-token-color-bg-primary);
+  border-radius: 12px;
+  background: var(--bf-appearance-token-element-bg-soft);
   font-size: var(--bf-appearance-token-flowchat-font-size-sm);
   color: var(--bf-appearance-token-color-text-primary);
+  transition: border-color 150ms ease;
+
+  &:hover {
+    border-color: var(--bf-appearance-token-border-medium);
+  }
 }
 
 .legion-edge-arrow {
@@ -214,3 +307,4 @@
   color: var(--bf-appearance-token-color-text-muted);
   font-size: var(--bf-appearance-token-flowchat-font-size-sm);
 }
+

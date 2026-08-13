@@ -3,6 +3,7 @@ import { ArrowLeft, GitBranch, Network } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Button, IconButton } from '@/component-library';
 import { useNotification } from '@/shared/notification-system';
+import { getCardGradient } from '@/shared/utils/cardGradients';
 import PATTERNS, {
   type LegionPatternNode,
   type LegionPatternEdge,
@@ -117,6 +118,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
       data-testid="create-legion-page"
       data-bf-component="create-legion-page"
       data-bf-part="root"
+      style={{ '--legion-page-gradient': getCardGradient('legion') } as React.CSSProperties}
     >
       <div
         className="create-agent-page__header"
@@ -152,11 +154,14 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
           className="legion-pattern-grid"
           role="radiogroup"
           aria-label={t('legionPattern.orchestrationPatterns')}
+          data-bf-component="create-legion-page"
+          data-bf-part="patternGrid"
         >
           {PATTERNS.map((pattern) => (
             <div
               key={pattern.id}
               className={`legion-pattern-chip ${pattern.id === selectedPatternId ? 'legion-pattern-chip--active' : ''}`}
+              style={{ '--legion-chip-gradient': getCardGradient(pattern.id || pattern.name) } as React.CSSProperties}
               onClick={() => handleSelectPattern(pattern.id)}
               role="radio"
               tabIndex={pattern.id === selectedPatternId ? 0 : -1}
@@ -169,9 +174,13 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
               }}
               data-testid="legion-pattern-option"
               data-pattern-id={pattern.id}
+              data-bf-component="create-legion-page"
+              data-bf-part="patternChip"
             >
-              <Network size={14} />
-              <span>{pattern.name}</span>
+              <span className="legion-pattern-chip__icon" data-bf-component="create-legion-page" data-bf-part="patternChipIcon">
+                <Network size={16} />
+              </span>
+              <span className="legion-pattern-chip__name">{pattern.name}</span>
             </div>
           ))}
         </div>
@@ -184,6 +193,8 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
             className="create-agent-page__section"
             aria-live="polite"
             aria-atomic="true"
+            data-bf-component="create-legion-page"
+            data-bf-part="summary"
           >
             <h2 className="create-agent-page__section-title">{t('legionPattern.overview')}</h2>
             <p className="legion-summary-desc">{selectedPattern.description}</p>
@@ -195,7 +206,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
           </section>
 
           {/* Nodes */}
-          <section className="create-agent-page__section">
+          <section className="create-agent-page__section" data-bf-component="create-legion-page" data-bf-part="nodes">
             <h2 className="create-agent-page__section-title">
               {t('legionPattern.nodes', { count: selectedPattern.nodes.length })}
             </h2>
@@ -203,7 +214,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
           </section>
 
           {/* Edges */}
-          <section className="create-agent-page__section">
+          <section className="create-agent-page__section" data-bf-component="create-legion-page" data-bf-part="edges">
             <h2 className="create-agent-page__section-title">
               {t('legionPattern.edges', { count: selectedPattern.edges.length })}
             </h2>
