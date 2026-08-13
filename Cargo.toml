@@ -18,6 +18,7 @@ members = [
     "src/crates/assembly/external-sources",
     "src/crates/adapters/ai-adapters",
     "src/crates/adapters/opencode-adapter",
+    "src/crates/adapters/dsh-adapter",
     "src/crates/adapters/claude-code-adapter",
     "src/crates/adapters/codex-adapter",
     "src/crates/adapters/static-hook-support",
