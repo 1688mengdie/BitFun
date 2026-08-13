@@ -1,12 +1,18 @@
+// @vitest-environment jsdom
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  getInteractionMotion,
   getMotionAwareScrollBehavior,
+  installInteractionModalityTracking,
   isReducedMotionPreferred,
+  recordInteractionModality,
 } from './motionPreference';
 
 describe('getMotionAwareScrollBehavior', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    recordInteractionModality('programmatic');
   });
 
   it('keeps smooth scrolling when reduced motion is not requested', () => {
@@ -39,5 +45,25 @@ describe('getMotionAwareScrollBehavior', () => {
     vi.stubGlobal('matchMedia', undefined);
 
     expect(isReducedMotionPreferred()).toBe(false);
+  });
+
+  it('exposes pointer motion only for the current pointer interaction', () => {
+    recordInteractionModality('pointer');
+    expect(getInteractionMotion()).toBe('pointer');
+
+    recordInteractionModality('keyboard');
+    expect(getInteractionMotion()).toBe('instant');
+  });
+
+  it('tracks pointer and keyboard modality in the capture phase', () => {
+    const target = document.implementation.createHTMLDocument();
+    const remove = installInteractionModalityTracking(target);
+
+    target.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(getInteractionMotion()).toBe('pointer');
+
+    target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(getInteractionMotion()).toBe('instant');
+    remove();
   });
 });
