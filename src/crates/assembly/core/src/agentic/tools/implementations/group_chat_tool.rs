@@ -1103,16 +1103,23 @@ impl GroupChatTool {
     }
 
     /// Static back-index helper (used by both tool and command paths).
+    ///
+    /// 反标必须写到 **成员自己的 assistant workspace**（metadata 存在那里），
+    /// 不是群聊主工作区 —— 否则 "Session metadata not found: <member>"
+    /// （P0 v2 实测：成员 bd56fce3 的 metadata 在 workspace-bd56fce3 下）。
+    /// 内部用 `resolve_assistant_workspace` 解析真实路径。
     async fn tag_member_group_chat_static(
         coordinator: &ConversationCoordinator,
-        workspace_path: &str,
+        _group_workspace_path: &str,
         session_id: &str,
         room_id: &str,
     ) -> BitFunResult<()> {
+        let member_workspace = Self::resolve_assistant_workspace(coordinator, session_id)
+            .await
+            .map_err(BitFunError::tool)?;
         let session_manager = coordinator.get_session_manager();
-        let workspace_path = std::path::Path::new(workspace_path);
         session_manager
-            .update_session_metadata(workspace_path, session_id, |metadata| {
+            .update_session_metadata(&member_workspace, session_id, |metadata| {
                 let custom = metadata.custom_metadata.as_ref();
                 let patched = add_room_to_group_chats(custom, room_id);
                 metadata.custom_metadata = Some(patched);
@@ -1123,16 +1130,19 @@ impl GroupChatTool {
     }
 
     /// Static back-index cleanup (used by both tool and command paths).
+    /// Resolves the member's real assistant workspace (see tag helper).
     async fn untag_member_group_chat_static(
         coordinator: &ConversationCoordinator,
-        workspace_path: &str,
+        _group_workspace_path: &str,
         session_id: &str,
         room_id: &str,
     ) -> BitFunResult<()> {
+        let member_workspace = Self::resolve_assistant_workspace(coordinator, session_id)
+            .await
+            .map_err(BitFunError::tool)?;
         let session_manager = coordinator.get_session_manager();
-        let workspace_path = std::path::Path::new(workspace_path);
         session_manager
-            .update_session_metadata(workspace_path, session_id, |metadata| {
+            .update_session_metadata(&member_workspace, session_id, |metadata| {
                 let custom = metadata.custom_metadata.as_ref();
                 let patched = remove_room_from_group_chats(custom, room_id);
                 metadata.custom_metadata = Some(patched);
