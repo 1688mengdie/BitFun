@@ -11,12 +11,20 @@ import { I18nProvider } from "./infrastructure/i18n/providers/I18nProvider";
 import { mouseGlowService } from "./infrastructure/mouse-glow/core/MouseGlowService";
 import "./app/styles/index.scss";
 
-// Immer MapSet plugin: groupChatStore (and other flow-chat stores) keep state
-// in Map/Set (rooms/members/messages, contract §2.2). Immer cannot draft
-// Map/Set without this plugin; it must be enabled once before any store
-// mutates via immer (test/setup.ts already does this for vitest — the
-// production entry was missing it, which crashed at runtime with
-// "The plugin for 'MapSet' has not been loaded into Immer").
+// ═════════════════════════════════════════════════════════════════════════════
+// 全局插件启用清单（W4 契约化，2026-08-13，方案 v1.1 §四.1）
+//
+// 任何全局插件 / 一次性初始化必须登记在此清单（含生产与测试两端）：
+//   1. Immer MapSet 插件（enableMapSet）——groupChatStore 等 flow-chat store
+//      的 rooms/members/messages 用 Map（contract §2.2），Immer draft 修改
+//      Map 必须启用该插件；缺失时运行时崩 "The plugin for 'MapSet' has not
+//      been loaded into Immer"。
+//      生产端：下方调用；测试端：test/setup.ts（一致性由测试断言锁死，
+//      防生产/测试分叉复发——见 src/test/setup.ts 的
+//      global-plugin-initialization-consistency 断言）。
+//
+// 新增全局插件/初始化时：①在此登记 ②同步 test/setup.ts ③更新一致性断言。
+// ═════════════════════════════════════════════════════════════════════════════
 import { enableMapSet } from "immer";
 enableMapSet();
 

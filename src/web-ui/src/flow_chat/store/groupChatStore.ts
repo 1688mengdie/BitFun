@@ -8,6 +8,7 @@
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { api } from '@/infrastructure/api/service-api/ApiClient';
+import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import type {
   GroupChatActor,
   GroupChatMember,
@@ -67,7 +68,10 @@ export const useGroupChatStore = create<GroupChatStore>()(
     messages: new Map<string, GroupChatMessage[]>(),
     mode: 'free',
     roundRobinCursor: 0,
-    workspacePath: '',
+    // W4 显式初始化（2026-08-13，方案 v1.1 §四.2）：store 创建时从
+    // workspaceManager 读取当前 workspace（显式启动流程），不再依赖组件
+    // useEffect 注入；组件只响应变更（setWorkspacePath），不负责首次注入。
+    workspacePath: workspaceManager.getState().currentWorkspace?.rootPath ?? '',
     setWorkspacePath: (workspacePath) => {
       const previous = get().workspacePath;
       if (previous === workspacePath) {
