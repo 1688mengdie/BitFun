@@ -86,6 +86,11 @@ describe('GroupChatsSection', () => {
     root = createRoot(container);
     mockedConfirm.mockReset();
     mockedInvoke.mockReset();
+    // GroupChatsSection's mount effect calls loadRooms/loadMembers which set
+    // store state on IPC resolve. Keep those promises pending so the effect's
+    // state updates never land outside act() (they would trigger "not wrapped
+    // in act(...)" warnings); the tests seed the store directly instead.
+    mockedInvoke.mockReturnValue(new Promise(() => {}));
     useGroupChatStore.setState({
       rooms: new Map(),
       activeRoomId: null,
@@ -159,7 +164,12 @@ describe('GroupChatsSection', () => {
       activeRoomId: 'room-1',
     });
     mockedConfirm.mockResolvedValueOnce(true);
-    mockedInvoke.mockResolvedValueOnce(undefined);
+    // Only the delete IPC resolves; loadRooms/loadMembers keep pending so the
+    // mount effect does not produce act() warnings.
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'group_chat_delete') return Promise.resolve(undefined);
+      return new Promise(() => {});
+    });
     renderSection();
 
     const deleteButton = container.querySelector('[data-bf-action="delete-room"]') as HTMLElement;

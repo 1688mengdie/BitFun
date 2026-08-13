@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -123,9 +123,14 @@ function sampleMessages(): GroupChatMessage[] {
 let container: HTMLDivElement;
 let root: Root;
 
-function renderPane() {
-  act(() => {
+async function renderPane() {
+  await act(async () => {
     root.render(<GroupChatPane roomId="room-1" isViewportActive />);
+    // Flush the mount effects: loadMembers/loadMessages resolve through the
+    // mocked IPC and call store set() before act() exits, so their state
+    // changes are not flagged by "not wrapped in act(...)".
+    await Promise.resolve();
+    await Promise.resolve();
   });
 }
 
@@ -139,6 +144,15 @@ describe('GroupChatPane', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockedInvoke.mockReset();
+    // Default IPC answers keep the store data the effects load consistent with
+    // what beforeEach pre-seeds, so mount effects can be flushed inside act()
+    // without clobbering the asserted state. Tests that drive a specific
+    // command override this with their own mockResolvedValue.
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'group_chat_members') return Promise.resolve(sampleMembers());
+      if (command === 'group_chat_messages') return Promise.resolve({ messages: sampleMessages(), nextCursor: null });
+      return Promise.resolve([]);
+    });
     useGroupChatStore.setState({
       rooms: new Map([['room-1', sampleRoom('room-1')]]),
       activeRoomId: 'room-1',
@@ -157,24 +171,24 @@ describe('GroupChatPane', () => {
     container.remove();
   });
 
-  it('renders the header with room name, member count, and mode toggle', () => {
-    renderPane();
+  it('renders the header with room name, member count, and mode toggle', async () => {
+    await renderPane();
     const header = container.querySelector('[data-bf-part="header"]');
     expect(header?.textContent).toContain('Alpha Room');
     expect(container.querySelector('[data-bf-part="memberCount"]')?.textContent).toContain('2');
     expect(container.querySelector('[data-bf-part="modeToggle"]')).toBeTruthy();
   });
 
-  it('renders messages with sender labels (主人 / member displayName)', () => {
-    renderPane();
+  it('renders messages with sender labels (主人 / member displayName)', async () => {
+    await renderPane();
     const messages = Array.from(container.querySelectorAll('[data-bf-part="message"]'));
     expect(messages.length).toBe(2);
     expect(messages[0].textContent).toContain('主人');
     expect(messages[0].textContent).toContain('hello from master');
     expect(messages[1].textContent).toContain('Assistant One');
     expect(messages[1].textContent).toContain('reply from assistant');
-  });  it('renders the shared ChatInput in the input footer (Task A)', () => {
-    renderPane();
+  });  it('renders the shared ChatInput in the input footer (Task A)', async () => {
+    await renderPane();
     // The full composer is reused instead of the legacy plain-text input.
     expect(container.querySelector('[data-bf-part="textInput"]')).toBeNull();
     expect(container.querySelector('[data-testid="chat-input-textarea"]')).toBeTruthy();
@@ -226,7 +240,7 @@ describe('GroupChatPane', () => {
   it('sends a message via sendMessage with master author', async () => {
     // useEffect 触发 loadMembers + loadMessages；通过 store 直接驱动发送路径。
     mockedInvoke.mockResolvedValue([]);
-    renderPane();
+    await renderPane();
 
     await useGroupChatStore.getState().sendMessage('room-1', { kind: 'master' }, 'hi group', []);
 
@@ -243,7 +257,7 @@ describe('GroupChatPane', () => {
     // submission — including text that starts with "/" which must be sent to
     // the group chat verbatim instead of executing a session-scoped command.
     mockedInvoke.mockResolvedValue([]);
-    renderPane();
+    await renderPane();
 
     expect(capturedRegistration).toBeTruthy();
     expect(capturedRegistration?.onSubmit).toBeTypeOf('function');
@@ -272,7 +286,7 @@ describe('GroupChatPane', () => {
 
   it('routes @@ member-mention submissions through the ChatInput registration (E-3)', async () => {
     mockedInvoke.mockResolvedValue([]);
-    renderPane();
+    await renderPane();
 
     expect(capturedRegistration?.onSubmit).toBeTypeOf('function');
 
@@ -308,7 +322,7 @@ describe('GroupChatPane', () => {
 
   it('toggles mode via setMode', async () => {
     mockedInvoke.mockResolvedValue(sampleRoom('room-1'));
-    renderPane();
+    await renderPane();
 
     const toggle = container.querySelector('[data-bf-part="modeToggle"]') as HTMLElement;
     await act(async () => {
