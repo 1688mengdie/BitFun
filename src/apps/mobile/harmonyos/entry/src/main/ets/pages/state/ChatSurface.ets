@@ -1,4 +1,5 @@
 export enum ChatSurface {
   General = 'general',
-  Remote = 'remote'
+  Remote = 'remote',
+  Create = 'create'
 }

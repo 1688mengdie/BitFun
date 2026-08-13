@@ -3,8 +3,8 @@ import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatTimelineItem } from '../../services/ChatTimelineProjector';
 import { ConnectionStatusPresenter } from '../../services/ConnectionStatusPresenter';
 import { RemoteLogger } from '../../services/RemoteLogger';
-import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
-import { ChatSurface } from './ChatSurface';
+import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from '../state/ChatComposerCapabilities';
+import { ChatSurface } from '../state/ChatSurface';
 import { ChatStatusBar } from './ChatStatusBar';
 import { ChatTimeline } from './ChatTimeline';
 import { ConversationLoadingState } from './ConversationLoadingState';
@@ -14,10 +14,10 @@ import {
   ConversationUiQuestionAnswer,
   ConversationUiSelectedImage,
   ConversationUiSession
-} from './ConversationUiModels';
+} from '../state/ConversationUiModels';
 import { ComposerBar, ComposerPresentation } from './ComposerBar';
-import { GeneralChatHeader } from './GeneralChatHeader';
-import { RemoteChatHeader } from './RemoteChatHeader';
+import { ConversationHeader } from './ConversationHeader';
+import { ConversationHeaderPolicy, ConversationHeaderPresentation } from '../policy/ConversationHeaderPolicy';
 import { FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
 
 @ComponentV2
@@ -59,7 +59,9 @@ export struct ConversationView {
   @Param showBackButton: boolean = true;
   @Param showSidebarRestoreButton: boolean = false;
   @Param composerPresentation: ComposerPresentation = ComposerPresentation.Compact;
+  @Param composerInputId: string = 'conversation-composer-input';
   @Param contentHorizontalOffset: number = 0;
+  @BuilderParam aboveComposer: () => void = this.EmptyBuilder;
   @Event onOpenSidebar: () => void = () => {};
   @Event onRestoreSidebar: () => void = () => {};
   @Event onBack: () => void = () => {};
@@ -87,6 +89,7 @@ export struct ConversationView {
   @Event onSend: () => void = () => {};
   @Event onVoiceInput: () => void = () => {};
   @Event onChatInputChange: (value: string) => void = (_value: string) => {};
+  @Event onBackgroundTap: () => void = () => {};
   @Local showHeaderActions: boolean = false;
   private previousKeyboardAvoidMode: KeyboardAvoidMode = KeyboardAvoidMode.OFFSET;
 
@@ -114,6 +117,13 @@ export struct ConversationView {
               maxContentWidth: this.composerPresentation === ComposerPresentation.Floating ? 800 : 0
             })
               .layoutWeight(1)
+          } else if (this.surface === ChatSurface.Create) {
+            Blank()
+              .layoutWeight(1)
+              .width('100%')
+              .onClick(() => {
+                this.onBackgroundTap();
+              })
           } else if (this.shouldCenterInlineStatus()) {
             this.CenteredInlineStatus()
           } else {
@@ -140,65 +150,38 @@ export struct ConversationView {
 
   @Builder
   Header() {
-    if (this.surface === ChatSurface.General) {
-      GeneralChatHeader({
-        title: this.activeSession.title,
-        showActions: ConversationViewContract.hasRealTimelineItem(this.timelineItems),
-        showSidebarButton: this.showSidebarButton,
-        showBackButton: this.showBackButton,
-        showSidebarRestoreButton: this.showSidebarRestoreButton,
-        showActionsMenu: this.showHeaderActions,
-        actionsMenu: () => {
-          this.HeaderActionsPopover();
-        },
-        onOpenSidebar: () => {
-          this.onOpenSidebar();
-        },
-        onRestoreSidebar: () => {
-          this.onRestoreSidebar();
-        },
-        onBack: () => {
-          this.onBack();
-        },
-        onOpenActions: () => {
-          this.showHeaderActions = !this.showHeaderActions;
-        },
-        onActionsMenuStateChange: (visible: boolean) => {
-          this.showHeaderActions = visible;
-        }
-      })
-    } else {
-      RemoteChatHeader({
-        activeSession: this.activeSession,
-        workspaceBranch: this.workspaceBranch,
-        desktopName: this.desktopName,
-        showBackButton: this.showBackButton,
-        showSidebarButton: this.showSidebarButton,
-        showSidebarRestoreButton: this.showSidebarRestoreButton,
-        showActionsMenu: this.showHeaderActions,
-        actionsMenu: () => {
-          this.HeaderActionsPopover();
-        },
-        onBack: () => {
-          this.onBack();
-        },
-        onOpenSidebar: () => {
-          this.onOpenSidebar();
-        },
-        onRestoreSidebar: () => {
-          this.onRestoreSidebar();
-        },
-        onOpenActions: () => {
-          this.showHeaderActions = !this.showHeaderActions;
-        },
-        onActionsMenuStateChange: (visible: boolean) => {
-          this.showHeaderActions = visible;
-        },
-        onRenameSession: (title: string) => {
-          this.onRenameSession(title);
-        }
-      })
-    }
+    ConversationHeader({
+      title: this.headerTitle(),
+      subtitle: this.headerSubtitle(),
+      titleFallback: this.headerFallback(),
+      allowRename: this.headerAllowRename(),
+      showActions: this.headerShowActions(),
+      showSidebarButton: this.showSidebarButton,
+      showBackButton: this.showBackButton,
+      showSidebarRestoreButton: this.showSidebarRestoreButton,
+      showActionsMenu: this.showHeaderActions,
+      actionsMenu: () => {
+        this.HeaderActionsPopover();
+      },
+      onOpenSidebar: () => {
+        this.onOpenSidebar();
+      },
+      onRestoreSidebar: () => {
+        this.onRestoreSidebar();
+      },
+      onBack: () => {
+        this.onBack();
+      },
+      onOpenActions: () => {
+        this.showHeaderActions = !this.showHeaderActions;
+      },
+      onActionsMenuStateChange: (visible: boolean) => {
+        this.showHeaderActions = visible;
+      },
+      onRenameSession: (title: string) => {
+        this.onRenameSession(title);
+      }
+    })
   }
 
   @Builder
@@ -278,9 +261,12 @@ export struct ConversationView {
 
   @Builder
   Composer() {
-    ComposerBar({
+    Column() {
+      this.aboveComposer()
+      ComposerBar({
       presentation: this.composerPresentation,
       capabilities: this.composerCapabilities,
+      inputId: this.composerInputId,
       chatInput: this.chatInput,
       selectedImages: this.selectedImages,
       isBusy: this.isBusy,
@@ -310,7 +296,13 @@ export struct ConversationView {
       onChatInputChange: (value: string) => {
         this.onChatInputChange(value);
       }
-    })
+      })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private EmptyBuilder() {
   }
 
   @Builder
@@ -429,7 +421,39 @@ export struct ConversationView {
   }
 
   private shouldShowStatusBar(): boolean {
-    return !this.isLoadingConversation && this.surface === ChatSurface.Remote && this.connectionState !== 'connected';
+    return this.surface === ChatSurface.Remote &&
+      !this.isLoadingConversation &&
+      this.connectionState !== 'connected';
+  }
+
+  private headerTitle(): string {
+    return this.headerPresentation().title;
+  }
+
+  private headerSubtitle(): string {
+    return this.headerPresentation().subtitle;
+  }
+
+  private headerFallback(): string {
+    return RemoteI18n.t(this.headerPresentation().fallbackKey);
+  }
+
+  private headerAllowRename(): boolean {
+    return this.headerPresentation().allowRename;
+  }
+
+  private headerShowActions(): boolean {
+    return this.headerPresentation().showActions;
+  }
+
+  private headerPresentation(): ConversationHeaderPresentation {
+    return ConversationHeaderPolicy.present(
+      this.surface,
+      this.activeSession.title,
+      this.desktopName,
+      this.workspaceBranch,
+      ConversationViewContract.hasRealTimelineItem(this.timelineItems)
+    );
   }
 
   private connectionColor(): ResourceColor {

@@ -1,6 +1,7 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
 import { ACCENT, CARD, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
+import { AccountDeviceSelectionPolicy } from '../policy/AccountDeviceSelectionPolicy';
 
 @ComponentV2
 export struct ConnectAccountDevicePage {
@@ -151,7 +152,15 @@ export struct ConnectAccountDevicePage {
       }
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
-      if (device.online) {
+      if (this.canSelectAccountDevice(device) && AccountDeviceSelectionPolicy.shouldShowConnectAction(
+        device.online, device.deviceId, this.deviceId, this.controlTargetDeviceId, this.connectionState
+      )) {
+        Text(this.switchingDeviceId === device.deviceId ?
+          RemoteI18n.t('remote.settings.deviceConnecting') : RemoteI18n.t('connect.connect'))
+          .fontSize(14).fontColor(INK)
+          .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+          .backgroundColor(SOFT).borderRadius(14)
+      } else if (device.online) {
         SymbolGlyph($r('sys.symbol.chevron_right'))
           .fontSize(13).fontColor([MUTED]).width(16).height(16).opacity(0.44)
       }
@@ -194,7 +203,9 @@ export struct ConnectAccountDevicePage {
   }
 
   private canSelectAccountDevice(device: CloudAccountDevice): boolean {
-    return device.online && device.deviceId !== this.deviceId && this.switchingDeviceId.length === 0;
+    return AccountDeviceSelectionPolicy.canSelectOnline(
+      device.online, device.deviceId, this.deviceId, this.switchingDeviceId
+    );
   }
 
   private accountDeviceStatus(device: CloudAccountDevice): string {
