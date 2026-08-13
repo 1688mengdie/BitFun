@@ -3,12 +3,95 @@ import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { prepareTauriConfig, shouldRetryMacDmgBuild } from './desktop-tauri-build.mjs';
+import {
+  prepareMacOSFlashgrepForSigning,
+  prepareTauriConfig,
+  shouldRetryMacDmgBuild,
+} from './desktop-tauri-build.mjs';
 import { resolveProductDefinition } from './product-customization/resolver.mjs';
 
 const FAILED_BUILD = { status: 1 };
 const DMG_ARGS = ['--target', 'x86_64-apple-darwin', '--bundles', 'app,dmg'];
 const ROOT = join(import.meta.dirname, '..');
+
+test('release builds do not mutate DMGs after Tauri signs and notarizes them', () => {
+  const source = readFileSync(join(ROOT, 'scripts', 'desktop-tauri-build.mjs'), 'utf8');
+  assert.doesNotMatch(source, /patchDmgExtras/);
+  assert.doesNotMatch(source, /patch-dmg-extras\.sh/);
+});
+
+test('macOS release signing covers the bundled flashgrep executable', () => {
+  const fixture = join(tmpdir(), `bitfun-flashgrep-signing-${process.pid}-${Date.now()}`);
+  const desktopDir = join(fixture, 'src', 'apps', 'desktop');
+  const source = join(fixture, 'flashgrep-aarch64-apple-darwin');
+  const calls = [];
+  mkdirSync(desktopDir, { recursive: true });
+  writeFileSync(source, 'test-binary');
+
+  try {
+    const signed = prepareMacOSFlashgrepForSigning(source, desktopDir, {
+      platform: 'darwin',
+      signingIdentity: 'Developer ID Application: Test (TEAMID)',
+      spawnSync: (...args) => {
+        calls.push(args);
+        return { status: 0 };
+      },
+    });
+
+    assert.notEqual(signed, source);
+    assert.equal(readFileSync(signed, 'utf8'), 'test-binary');
+    assert.deepEqual(calls[0][0], 'codesign');
+    assert.deepEqual(calls[0][1], [
+      '--force',
+      '--sign',
+      'Developer ID Application: Test (TEAMID)',
+      '--options',
+      'runtime',
+      '--timestamp',
+      signed,
+    ]);
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
+test('unsigned and non-macOS builds keep the original flashgrep executable', () => {
+  assert.equal(
+    prepareMacOSFlashgrepForSigning('/tmp/flashgrep', '/tmp/desktop', {
+      platform: 'darwin',
+      signingIdentity: '',
+    }),
+    '/tmp/flashgrep',
+  );
+  assert.equal(
+    prepareMacOSFlashgrepForSigning('/tmp/flashgrep', '/tmp/desktop', {
+      platform: 'linux',
+      signingIdentity: 'unused',
+    }),
+    '/tmp/flashgrep',
+  );
+});
+
+test('macOS packaging fails when bundled flashgrep signing fails', () => {
+  const fixture = join(tmpdir(), `bitfun-flashgrep-signing-failure-${process.pid}-${Date.now()}`);
+  const desktopDir = join(fixture, 'src', 'apps', 'desktop');
+  const source = join(fixture, 'flashgrep-x86_64-apple-darwin');
+  mkdirSync(desktopDir, { recursive: true });
+  writeFileSync(source, 'test-binary');
+
+  try {
+    assert.throws(
+      () => prepareMacOSFlashgrepForSigning(source, desktopDir, {
+        platform: 'darwin',
+        signingIdentity: 'Developer ID Application: Test (TEAMID)',
+        spawnSync: () => ({ status: 1, stderr: 'identity unavailable' }),
+      }),
+      /Failed to sign bundled flashgrep binary: identity unavailable/,
+    );
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
 
 function retryFixture() {
   const root = join(tmpdir(), `bitfun-dmg-retry-${process.pid}-${Date.now()}`);
@@ -130,7 +213,12 @@ test('Windows updater installs NSIS packages without showing its progress window
   const baseConfig = join(fixture, 'tauri.conf.json');
   const updaterEnv = {
     BITFUN_ENABLE_UPDATER_ARTIFACTS: process.env.BITFUN_ENABLE_UPDATER_ARTIFACTS,
+    BITFUN_RELEASE_CHANNEL: process.env.BITFUN_RELEASE_CHANNEL,
+    BITFUN_UPDATER_FALLBACK_ENDPOINT: process.env.BITFUN_UPDATER_FALLBACK_ENDPOINT,
+    BITFUN_UPDATER_PRIMARY_ENDPOINT: process.env.BITFUN_UPDATER_PRIMARY_ENDPOINT,
     TAURI_SIGNING_PRIVATE_KEY: process.env.TAURI_SIGNING_PRIVATE_KEY,
+    TAURI_UPDATER_ENDPOINT: process.env.TAURI_UPDATER_ENDPOINT,
+    TAURI_UPDATER_FALLBACK_ENDPOINT: process.env.TAURI_UPDATER_FALLBACK_ENDPOINT,
     TAURI_UPDATER_PUBKEY: process.env.TAURI_UPDATER_PUBKEY,
   };
   mkdirSync(fixture, { recursive: true });
@@ -146,6 +234,7 @@ test('Windows updater installs NSIS packages without showing its progress window
     });
     const config = JSON.parse(readFileSync(generated, 'utf8'));
     assert.equal(config.plugins.updater.windows.installMode, 'quiet');
+    assert.match(config.plugins.updater.endpoints[0], /releases\/latest\/download/);
   } finally {
     for (const [name, value] of Object.entries(updaterEnv)) {
       if (value === undefined) {
@@ -153,6 +242,60 @@ test('Windows updater installs NSIS packages without showing its progress window
       } else {
         process.env[name] = value;
       }
+    }
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
+test('beta Desktop artifacts compile and bundle only beta updater endpoints', () => {
+  const fixture = join(tmpdir(), `bitfun-tauri-beta-${process.pid}-${Date.now()}`);
+  const baseConfig = join(fixture, 'tauri.conf.json');
+  const names = [
+    'BITFUN_ENABLE_UPDATER_ARTIFACTS',
+    'BITFUN_RELEASE_CHANNEL',
+    'BITFUN_UPDATER_FALLBACK_ENDPOINT',
+    'BITFUN_UPDATER_PRIMARY_ENDPOINT',
+    'TAURI_SIGNING_PRIVATE_KEY',
+    'TAURI_UPDATER_ENDPOINT',
+    'TAURI_UPDATER_FALLBACK_ENDPOINT',
+    'TAURI_UPDATER_PUBKEY',
+  ];
+  const previous = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+  mkdirSync(fixture, { recursive: true });
+  writeFileSync(baseConfig, JSON.stringify({ bundle: { resources: {} } }));
+  process.env.BITFUN_ENABLE_UPDATER_ARTIFACTS = 'true';
+  process.env.BITFUN_RELEASE_CHANNEL = 'beta';
+  process.env.TAURI_SIGNING_PRIVATE_KEY = 'test-private-key';
+  process.env.TAURI_UPDATER_PUBKEY = 'test-public-key';
+  delete process.env.TAURI_UPDATER_ENDPOINT;
+  delete process.env.TAURI_UPDATER_FALLBACK_ENDPOINT;
+
+  try {
+    const generated = prepareTauriConfig(baseConfig, {
+      desktopDir: fixture,
+      flashgrepBinary: join(fixture, 'flashgrep'),
+    });
+    const config = JSON.parse(readFileSync(generated, 'utf8'));
+    assert.equal(
+      config.plugins.updater.endpoints[0],
+      'https://github.com/GCWing/BitFun/releases/download/channel-beta/latest.json',
+    );
+    assert.equal(
+      config.plugins.updater.endpoints[1],
+      'https://openbitfun.com/release/beta/latest.json',
+    );
+    assert.equal(
+      process.env.BITFUN_UPDATER_PRIMARY_ENDPOINT,
+      config.plugins.updater.endpoints[0],
+    );
+    assert.equal(
+      process.env.BITFUN_UPDATER_FALLBACK_ENDPOINT,
+      config.plugins.updater.endpoints[1],
+    );
+  } finally {
+    for (const [name, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
     }
     rmSync(fixture, { force: true, recursive: true });
   }

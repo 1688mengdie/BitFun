@@ -4,6 +4,8 @@ import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -15,6 +17,7 @@ import { ensureFlashgrepBinary } from './prepare-flashgrep-resource.mjs';
 import { extractProductConfigArg } from './product-customization/cli.mjs';
 import { productBuildEnvironment } from './product-customization/projections.mjs';
 import { resolveProductDefinition } from './product-customization/resolver.mjs';
+import { resolveReleaseChannel } from './release-channel.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -40,11 +43,15 @@ async function main() {
   const resolution = resolveProductDefinition({ rootDir: ROOT, productConfig, member: 'desktop' });
   Object.assign(process.env, productBuildEnvironment(resolution));
   console.log(`[product] ${resolution.assembly.member} ${resolution.assembly.assemblyDigest}`);
-
-  const flashgrepBinary = ensureFlashgrepBinary();
-  process.env.FLASHGREP_DAEMON_BIN = flashgrepBinary;
+  const releaseChannel = resolveReleaseChannel(process.env.BITFUN_RELEASE_CHANNEL);
+  console.log(`[release] channel=${releaseChannel.channel}`);
 
   const desktopDir = join(ROOT, 'src', 'apps', 'desktop');
+  const flashgrepBinary = prepareMacOSFlashgrepForSigning(
+    ensureFlashgrepBinary(),
+    desktopDir,
+  );
+  process.env.FLASHGREP_DAEMON_BIN = flashgrepBinary;
   // Tauri CLI reads CI and rejects numeric "1" (common in CI providers).
   process.env.CI = 'true';
 
@@ -52,6 +59,7 @@ async function main() {
     desktopDir,
     flashgrepBinary,
     resolution,
+    releaseChannel,
   });
   const tauriBin = join(ROOT, 'node_modules', '.bin', 'tauri');
   const tauriArgs = ['build', '--config', tauriConfig, ...forward];
@@ -69,10 +77,6 @@ async function main() {
   if (r.error) {
     console.error(r.error);
     process.exit(1);
-  }
-
-  if (r.status === 0 && process.platform === 'darwin') {
-    patchDmgExtras(ROOT);
   }
 
   // Keep only the latest useful Cargo caches for this build profile after tauri build ends.
@@ -166,9 +170,49 @@ function optionValue(args, option) {
   return undefined;
 }
 
+export function prepareMacOSFlashgrepForSigning(
+  flashgrepBinary,
+  desktopDir,
+  runtime = {},
+) {
+  const platform = runtime.platform ?? process.platform;
+  const signingIdentity = runtime.signingIdentity ?? process.env.APPLE_SIGNING_IDENTITY;
+  if (platform !== 'darwin' || !signingIdentity) {
+    return flashgrepBinary;
+  }
+
+  const signedDir = join(desktopDir, 'gen', 'signed-resources', 'flashgrep');
+  const signedBinary = join(signedDir, basename(flashgrepBinary));
+  mkdirSync(signedDir, { recursive: true });
+  copyFileSync(flashgrepBinary, signedBinary);
+  chmodSync(signedBinary, statSync(signedBinary).mode | 0o111);
+
+  const run = runtime.spawnSync ?? spawnSync;
+  const result = run(
+    'codesign',
+    [
+      '--force',
+      '--sign',
+      signingIdentity,
+      '--options',
+      'runtime',
+      '--timestamp',
+      signedBinary,
+    ],
+    { encoding: 'utf8', shell: false },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr || `exit status ${result.status}`;
+    throw new Error(`Failed to sign bundled flashgrep binary: ${detail}`);
+  }
+
+  console.log(`[tauri-build] Signed bundled flashgrep binary: ${signedBinary}`);
+  return signedBinary;
+}
+
 export function prepareTauriConfig(
   baseConfigPath,
-  { desktopDir, flashgrepBinary, resolution }
+  { desktopDir, flashgrepBinary, resolution, releaseChannel }
 ) {
   const config = JSON.parse(readFileSync(baseConfigPath, 'utf8'));
   if (resolution) {
@@ -180,6 +224,16 @@ export function prepareTauriConfig(
     config.identifier = resolution.assembly.bundleId;
   }
   injectTargetFlashgrepResource(config, desktopDir, flashgrepBinary);
+
+  const release = releaseChannel
+    ?? resolveReleaseChannel(process.env.BITFUN_RELEASE_CHANNEL);
+  const primaryEndpoint =
+    process.env.TAURI_UPDATER_ENDPOINT || release.primaryUpdaterEndpoint;
+  const fallbackEndpoint =
+    process.env.TAURI_UPDATER_FALLBACK_ENDPOINT || release.fallbackUpdaterEndpoint;
+  process.env.BITFUN_RELEASE_CHANNEL = release.channel;
+  process.env.BITFUN_UPDATER_PRIMARY_ENDPOINT = primaryEndpoint;
+  process.env.BITFUN_UPDATER_FALLBACK_ENDPOINT = fallbackEndpoint;
 
   const enabled = ['1', 'true', 'yes'].includes(
     String(process.env.BITFUN_ENABLE_UPDATER_ARTIFACTS || '').toLowerCase()
@@ -196,16 +250,9 @@ export function prepareTauriConfig(
       process.exit(1);
     }
 
-    const primaryEndpoint =
-      process.env.TAURI_UPDATER_ENDPOINT ||
-      'https://github.com/GCWing/BitFun/releases/latest/download/latest.json';
     // Fallback endpoint used when GitHub is unreachable (not when no update is found).
     // Tauri updater iterates endpoints and only falls through on network/HTTP errors;
     // a 204 (no update) or a successfully parsed manifest stops the loop.
-    const fallbackEndpoint =
-      process.env.TAURI_UPDATER_FALLBACK_ENDPOINT ||
-      'https://openbitfun.com/release/latest.json';
-
     config.bundle = {
       ...(config.bundle || {}),
       createUpdaterArtifacts: true,
@@ -221,7 +268,7 @@ export function prepareTauriConfig(
       },
     };
     console.log(
-      `[tauri-build] Updater artifacts enabled: ${primaryEndpoint} (fallback: ${fallbackEndpoint})`
+      `[tauri-build] Updater artifacts enabled for ${release.channel}: ${primaryEndpoint} (fallback: ${fallbackEndpoint})`
     );
   }
 
@@ -268,48 +315,6 @@ function bundledFlashgrepResources(primaryBinary) {
 
 function toTauriPath(value) {
   return value.split(sep).join('/');
-}
-
-// Find all .dmg files under target/ and inject the helper TXT files
-// (quarantine removal instructions) into each one.
-function patchDmgExtras(root) {
-  const patchScript = join(root, 'scripts', 'patch-dmg-extras.sh');
-  const targetDir = join(root, 'target');
-
-  const dmgFiles = findDmgFiles(targetDir);
-  if (dmgFiles.length === 0) {
-    console.log('[patch-dmg] No .dmg files found — skipping.');
-    return;
-  }
-
-  for (const dmg of dmgFiles) {
-    console.log(`[patch-dmg] Patching ${dmg}`);
-    const p = spawnSync('bash', [patchScript, dmg], {
-      stdio: 'inherit',
-      shell: false,
-    });
-    if (p.status !== 0) {
-      console.error(`[patch-dmg] Failed to patch ${dmg}`);
-      process.exit(1);
-    }
-  }
-}
-
-function findDmgFiles(dir) {
-  const results = [];
-  try {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        results.push(...findDmgFiles(full));
-      } else if (entry.name.endsWith('.dmg')) {
-        results.push(full);
-      }
-    }
-  } catch {
-    // directory may not exist for some targets
-  }
-  return results;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
