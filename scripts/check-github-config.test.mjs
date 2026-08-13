@@ -377,22 +377,148 @@ test('stages unique release asset names before publishing', () => {
     ),
   );
   const steps = workflow.jobs['upload-release-assets'].steps;
-  const stagingIndex = steps.findIndex(
-    (step) => step.name === 'Stage uniquely named release assets',
-  );
+  const stagingIndexes = [
+    steps.findIndex((step) => step.name === 'Stage stable release assets'),
+    steps.findIndex((step) => step.name === 'Stage beta release assets'),
+  ];
   const uploadIndex = steps.findIndex((step) => step.name === 'Upload to release');
 
-  assert.notEqual(stagingIndex, -1);
+  assert.equal(stagingIndexes.every((index) => index >= 0), true);
   assert.notEqual(uploadIndex, -1);
-  assert.ok(stagingIndex < uploadIndex);
-  assert.match(
-    steps[stagingIndex].run,
-    /node scripts\/stage-github-release-assets\.mjs/,
-  );
-  assert.doesNotMatch(
-    steps[stagingIndex].run,
-    /release-assets\/\*\*\/\*\.sig(?:\s|\\)/,
-    'raw updater signatures have colliding names across macOS architectures',
-  );
+  for (const stagingIndex of stagingIndexes) {
+    assert.ok(stagingIndex < uploadIndex);
+    assert.match(
+      steps[stagingIndex].run,
+      /node scripts\/stage-github-release-assets\.mjs/,
+    );
+    assert.doesNotMatch(
+      steps[stagingIndex].run,
+      /release-assets\/\*\*\/\*\.sig(?:\s|\\)/,
+      'raw updater signatures have colliding names across macOS architectures',
+    );
+  }
   assert.equal(steps[uploadIndex].with.files, 'release-upload-assets/*');
+});
+
+test('Desktop packaging keeps beta identity explicit and stable-safe', () => {
+  const workflow = yaml.parse(
+    readFileSync(
+      path.join(repoRoot, '.github/workflows/desktop-package.yml'),
+      'utf8',
+    ),
+  );
+  const inputs = workflow.on.workflow_dispatch.inputs;
+  assert.deepEqual(inputs.release_channel.options, ['stable', 'beta']);
+  assert.equal(inputs.release_channel.default, 'stable');
+
+  const prepareStep = workflow.jobs.prepare.steps.find(
+    (step) => step.name === 'Resolve version metadata',
+  );
+  assert.match(prepareStep.run, /GITHUB_REPOSITORY.*GCWing\/BitFun/);
+  assert.match(prepareStep.run, /merge-base --is-ancestor/);
+  assert.match(prepareStep.run, /rev-parse --verify --quiet/);
+
+  const packageJob = workflow.jobs.package;
+  assert.equal(
+    packageJob.env.BITFUN_RELEASE_CHANNEL,
+    '${{ needs.prepare.outputs.release_channel }}',
+  );
+  assert.match(packageJob.env.TAURI_UPDATER_ENDPOINT, /github\.repository/);
+  assert.match(packageJob.env.TAURI_UPDATER_ENDPOINT, /channel-beta/);
+  assert.match(packageJob.env.BITFUN_RELEASE_PUBKEY, /BITFUN_RELEASE_PUBKEY/);
+  const patchIndex = packageJob.steps.findIndex(
+    (step) => step.name === 'Project beta build version',
+  );
+  const verifyIndex = packageJob.steps.findIndex(
+    (step) => step.name === 'Verify release version metadata',
+  );
+  assert.ok(patchIndex >= 0 && patchIndex < verifyIndex);
+  assert.equal(
+    packageJob.steps[patchIndex].if,
+    "needs.prepare.outputs.release_channel == 'beta'",
+  );
+
+  const uploadSteps = workflow.jobs['upload-release-assets'].steps;
+  const release = uploadSteps.find((step) => step.name === 'Upload to release');
+  assert.equal(
+    release.with.prerelease,
+    "${{ needs.prepare.outputs.release_channel == 'beta' }}",
+  );
+  const verifyIndexPublished = uploadSteps.findIndex(
+    (step) => step.name === 'Verify published updater manifest',
+  );
+  const promoteIndex = uploadSteps.findIndex(
+    (step) => step.name === 'Publish beta channel manifest',
+  );
+  assert.ok(verifyIndexPublished >= 0 && verifyIndexPublished < promoteIndex);
+  assert.match(workflow.jobs['linux-binaries'].if, /release_channel == 'stable'/);
+  assert.equal(
+    uploadSteps.find((step) => step.name === 'Stage beta release assets').if,
+    "needs.prepare.outputs.release_channel == 'beta'",
+  );
+  assert.match(
+    uploadSteps.find((step) => step.name === 'Generate updater manifest').run,
+    /github\.repository/,
+  );
+  const signingStep = uploadSteps.find(
+    (step) => step.name === 'Sign installer packages',
+  );
+  assert.match(signingStep.run, /write-minisign-public-key\.mjs/);
+  assert.doesNotMatch(signingStep.run, /BITFUN_SIGNING_PUBKEY.*base64 -d/);
+  const promotionStep = uploadSteps.find(
+    (step) => step.name === 'Resolve beta channel promotion',
+  );
+  assert.doesNotMatch(promotionStep.run, /current\.beta\.json \|\| true/);
+  assert.match(promotionStep.run, /case "\$\{channel_status\}" in/);
+  assert.match(promotionStep.run, /404\)/);
+  assert.match(promotionStep.run, /GitHub API returned/);
+  const publishStep = uploadSteps.find(
+    (step) => step.name === 'Publish beta channel manifest',
+  );
+  assert.equal(
+    publishStep.env.CHANNEL_EXISTS,
+    '${{ steps.beta-channel.outputs.channel_exists }}',
+  );
+});
+
+test('beta publishing cannot advance the Relay latest image tag', () => {
+  const workflow = yaml.parse(
+    readFileSync(
+      path.join(repoRoot, '.github/workflows/desktop-package.yml'),
+      'utf8',
+    ),
+  );
+  const imageTags = workflow.jobs['publish-relay-image'].steps.find(
+    (step) => step.name === 'Resolve image tags',
+  );
+  assert.equal(
+    imageTags.env.RELEASE_CHANNEL,
+    '${{ needs.prepare.outputs.release_channel }}',
+  );
+  assert.match(imageTags.run, /RELEASE_CHANNEL.*stable/);
+  assert.doesNotMatch(imageTags.run, /RELEASE_PRERELEASE/);
+});
+
+test('nightly and beta use the shared build-version projection', () => {
+  const nightly = yaml.parse(
+    readFileSync(path.join(repoRoot, '.github/workflows/nightly.yml'), 'utf8'),
+  );
+  const patch = nightly.jobs.package.steps.find(
+    (step) => step.name === 'Patch nightly version',
+  );
+  assert.match(patch.run, /node scripts\/set-build-version\.mjs/);
+  assert.equal(nightly.jobs.package.env.BITFUN_RELEASE_CHANNEL, 'nightly');
+  assert.equal(
+    nightly.jobs.package.env.TAURI_UPDATER_ENDPOINT,
+    'https://github.com/GCWing/BitFun/releases/latest/download/latest.json',
+  );
+  assert.equal(
+    nightly.jobs.package.env.TAURI_UPDATER_FALLBACK_ENDPOINT,
+    'https://openbitfun.com/release/latest.json',
+  );
+  assert.equal(nightly.jobs.package.env.BITFUN_ENABLE_UPDATER_ARTIFACTS, undefined);
+  const signingStep = nightly.jobs['publish-nightly'].steps.find(
+    (step) => step.name === 'Sign installer packages',
+  );
+  assert.match(signingStep.run, /write-minisign-public-key\.mjs/);
 });
