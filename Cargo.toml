@@ -64,6 +64,11 @@ unsafe_op_in_unsafe_fn = "warn"
 unexpected_cfgs = "warn"
 unreachable_pub = "warn"
 unused_lifetimes = "warn"
+# MSVC link.exe emits localized stdout (e.g. Chinese "正在创建库 ... .lib")
+# plus LNK4098 (LIBCMT/default-lib conflict) for every native link. These are
+# platform build artifacts, not source warnings; the lint also ignores
+# `-D warnings` on purpose, so allow it workspace-wide rather than per crate.
+linker_messages = "allow"
 
 [workspace.lints.clippy]
 correctness = { level = "deny", priority = -1 }

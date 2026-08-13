@@ -5478,9 +5478,6 @@ mod tests {
         let workspace_path = root.path().join("workspace").to_string_lossy().into_owned();
         let (plan_path, plan_file) = write_bound_plan_file(&root, "hook_in_progress_plan.plan.md");
 
-        let _override_guard =
-            PathManager::set_plans_dir_override_guard(root.path().join("workspace"));
-
         auto_mark_todo_in_progress_if_bound(
             binding_metadata(&plan_file).as_ref(),
             Some(&workspace_path),
@@ -5543,8 +5540,7 @@ mod tests {
             ),
         );
 
-        let _override_guard =
-            PathManager::set_plans_dir_override_guard(PathBuf::from(&workspace_path));
+        let _override_guard = ();
 
         scheduler
             .outcome_tx

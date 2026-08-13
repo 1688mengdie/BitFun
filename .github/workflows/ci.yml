@@ -83,6 +83,9 @@ jobs:
     name: CLI Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      # Same warning gate as rust-build-check.
+      RUSTFLAGS: "-D warnings"
     strategy:
       fail-fast: false
       matrix:
@@ -182,6 +185,11 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # Warning gate: any rustc warning (dead code, unused imports, ...) fails
+      # the build, so a warning regression cannot re-enter silently. The
+      # linker_messages lint intentionally ignores -D warnings (see workspace
+      # lints), so MSVC link noise stays non-fatal.
+      RUSTFLAGS: "-D warnings"
     strategy:
       fail-fast: false
       matrix:
@@ -422,7 +430,9 @@ jobs:
         run: pnpm run verify:webkit-compatibility:test
 
       - name: Lint web UI
-        run: pnpm run lint:web
+        # Warning gate: any eslint warning (not just errors) fails the job so
+        # lint regressions cannot re-enter silently.
+        run: pnpm --dir src/web-ui exec eslint . --max-warnings=0
 
       - name: Run web UI tests
         run: pnpm --dir src/web-ui run test:run

@@ -1085,6 +1085,7 @@ mod tests {
         assert_eq!(json, "\"partial_timeout\"");
     }
 
+    #[test]
     fn reasoning_preset_auto_clear_is_a_high_priority_session_event() {
         let event = AgenticEvent::SessionReasoningPresetAutoCleared {
             session_id: "session-1".to_string(),

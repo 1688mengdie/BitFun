@@ -179,8 +179,6 @@ fn ensure_private_request_file(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn token_shape_is_lowercase_hex() {
         let valid = "ab".repeat(32);
