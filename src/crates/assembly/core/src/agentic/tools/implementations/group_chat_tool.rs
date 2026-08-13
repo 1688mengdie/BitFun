@@ -279,26 +279,105 @@ impl GroupChatTool {
 
             // 4) No session anywhere: create a Claw session bound to the real
             //    assistant workspace (主人定标：按 Claw 预设类型新建对话).
+            //    W2 P2-1: 白名单校验——member_id 必须已在 assistant 预设集
+            //    （注册表 assistant workspace ∪ legacy 目录）内才自动建；
+            //    白名单外（unknown assistant）直接报错，取消后端自动兜底
+            //    所有缺失成员。
+            //    W3: 跨进程文件锁争用（SessionInUse）重试 100ms×3，仍失败返回
+            //    可读错误（非裸 SessionInUse 字符串）。
             let workspace_root_str = workspace_root.to_string_lossy().to_string();
-            let config = SessionConfig {
-                workspace_path: Some(workspace_root_str.clone()),
-                project_workspace_path: Some(workspace_root_str.clone()),
-                ..Default::default()
-            };
-            coordinator
+            Self::ensure_known_assistant(coordinator, session_id).await?;
+            Self::create_claw_session_with_retry(coordinator, session_id, &workspace_root_str)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// W2 P2-1: 校验 member_id 是否在 assistant 预设集内（注册表 assistant
+    /// workspace ∪ legacy assistant 目录）。白名单外返回 unknown assistant。
+    /// 供 create 前防御性确认（resolve 成功后状态可能变化）。
+    async fn ensure_known_assistant(
+        coordinator: &ConversationCoordinator,
+        session_id: &str,
+    ) -> Result<(), String> {
+        if let Some(service) = crate::service::workspace::get_global_workspace_service() {
+            let registered = service.get_workspace(session_id).await.is_some()
+                || service
+                    .get_assistant_workspaces()
+                    .await
+                    .into_iter()
+                    .any(|workspace| {
+                        workspace
+                            .assistant_id
+                            .as_deref()
+                            .is_some_and(|assistant_id| assistant_id == session_id)
+                    });
+            if registered {
+                return Ok(());
+            }
+        }
+        let legacy_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(session_id, None);
+        if legacy_dir.exists() {
+            return Ok(());
+        }
+        Err(format!(
+            "unknown assistant: '{session_id}' is not a registered assistant workspace"
+        ))
+    }
+
+    /// W3 写锁策略（方案 v1.1 §三.3b）：跨进程文件锁争用时重试。
+    ///
+    /// 真源：`SessionWriteLock::try_acquire` 非 reuse 路径（write_lock.rs:79-83
+    /// 进程内注册表 / :92-94 跨进程文件锁）遇 InUse → 群聊路径不立即失败，
+    /// 重试 100ms×3；仍失败返回可读错误（主人可见「正被其他进程使用，请重试」）。
+    const GROUP_CHAT_LOCK_RETRY_COUNT: u32 = 3;
+    const GROUP_CHAT_LOCK_RETRY_DELAY_MS: u64 = 100;
+
+    async fn create_claw_session_with_retry(
+        coordinator: &ConversationCoordinator,
+        session_id: &str,
+        workspace_root_str: &str,
+    ) -> Result<(), String> {
+        let config = SessionConfig {
+            workspace_path: Some(workspace_root_str.to_string()),
+            project_workspace_path: Some(workspace_root_str.to_string()),
+            ..Default::default()
+        };
+        for attempt in 0..=Self::GROUP_CHAT_LOCK_RETRY_COUNT {
+            let result = coordinator
                 .create_session_with_workspace(
                     Some(session_id.to_string()),
                     format!("Assistant {session_id}"),
                     "Claw".to_string(),
-                    config,
-                    workspace_root_str,
+                    config.clone(),
+                    workspace_root_str.to_string(),
                 )
-                .await
-                .map_err(|error| {
-                    format!(
+                .await;
+            match result {
+                Ok(_) => return Ok(()),
+                Err(BitFunError::SessionInUse { .. })
+                    if attempt < Self::GROUP_CHAT_LOCK_RETRY_COUNT =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        Self::GROUP_CHAT_LOCK_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                }
+                Err(BitFunError::SessionInUse { .. }) => {
+                    return Err(format!(
+                        "成员会话 '{session_id}' 正被其他进程使用，请稍后重试（已重试 {} 次）",
+                        Self::GROUP_CHAT_LOCK_RETRY_COUNT
+                    ));
+                }
+                Err(error) => {
+                    return Err(format!(
                         "failed to create Claw session for group chat member '{session_id}': {error}"
-                    )
-                })?;
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -1129,15 +1208,15 @@ impl GroupChatTool {
         let member_workspace = Self::resolve_assistant_workspace(coordinator, session_id)
             .await
             .map_err(BitFunError::tool)?;
-        let session_manager = coordinator.get_session_manager();
-        session_manager
-            .update_session_metadata(&member_workspace, session_id, |metadata| {
-                let custom = metadata.custom_metadata.as_ref();
-                let patched = add_room_to_group_chats(custom, room_id);
-                metadata.custom_metadata = Some(patched);
-            })
-            .await
-            .map_err(BitFunError::tool)?;
+        Self::update_member_metadata_with_retry(
+            coordinator,
+            &member_workspace,
+            session_id,
+            room_id,
+            true,
+        )
+        .await
+        .map_err(BitFunError::tool)?;
         Ok(())
     }
 
@@ -1152,15 +1231,60 @@ impl GroupChatTool {
         let member_workspace = Self::resolve_assistant_workspace(coordinator, session_id)
             .await
             .map_err(BitFunError::tool)?;
+        Self::update_member_metadata_with_retry(
+            coordinator,
+            &member_workspace,
+            session_id,
+            room_id,
+            false,
+        )
+        .await
+        .map_err(BitFunError::tool)?;
+        Ok(())
+    }
+
+    /// W3: 成员反标 metadata 更新，遇 SessionInUse（跨进程文件锁争用）重试
+    /// 100ms×3，仍失败返回可读错误。`add` = tag（加房间反标），`false` =
+    /// untag（移除反标）。
+    async fn update_member_metadata_with_retry(
+        coordinator: &ConversationCoordinator,
+        member_workspace: &std::path::Path,
+        session_id: &str,
+        room_id: &str,
+        add: bool,
+    ) -> Result<(), String> {
         let session_manager = coordinator.get_session_manager();
-        session_manager
-            .update_session_metadata(&member_workspace, session_id, |metadata| {
-                let custom = metadata.custom_metadata.as_ref();
-                let patched = remove_room_from_group_chats(custom, room_id);
-                metadata.custom_metadata = Some(patched);
-            })
-            .await
-            .map_err(BitFunError::tool)?;
+        for attempt in 0..=Self::GROUP_CHAT_LOCK_RETRY_COUNT {
+            let result = session_manager
+                .update_session_metadata(member_workspace, session_id, |metadata| {
+                    let custom = metadata.custom_metadata.as_ref();
+                    let patched = if add {
+                        add_room_to_group_chats(custom, room_id)
+                    } else {
+                        remove_room_from_group_chats(custom, room_id)
+                    };
+                    metadata.custom_metadata = Some(patched);
+                })
+                .await;
+            match result {
+                Ok(()) => return Ok(()),
+                Err(BitFunError::SessionInUse { .. })
+                    if attempt < Self::GROUP_CHAT_LOCK_RETRY_COUNT =>
+                {
+                    tokio::time::sleep(std::time::Duration::from_millis(
+                        Self::GROUP_CHAT_LOCK_RETRY_DELAY_MS,
+                    ))
+                    .await;
+                }
+                Err(BitFunError::SessionInUse { .. }) => {
+                    return Err(format!(
+                        "成员会话 '{session_id}' 正被其他进程使用，请稍后重试（已重试 {} 次）",
+                        Self::GROUP_CHAT_LOCK_RETRY_COUNT
+                    ));
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+        }
         Ok(())
     }
 }
@@ -2914,6 +3038,41 @@ mod tests {
             .await
             .expect_err("missing id must fail cleanly");
         assert!(err.contains("not found") && err.contains(missing));
+        let _ = root;
+    }
+
+    // ── W2 P2-1 (2026-08-13 梦情退回修正): 白名单外不自动建会话 ─────────
+    #[tokio::test]
+    async fn group_chat_unknown_assistant_is_rejected_not_auto_created() {
+        // 取消「后端自动兜底所有缺失成员」：白名单外（非注册表 assistant
+        // workspace、无 legacy 目录）的 member_id 直接报 unknown assistant，
+        // 绝不自动建会话。
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness();
+
+        // 白名单外：无注册表、无 legacy 目录 → 必须拒绝。
+        let unknown = "not-a-real-assistant";
+        let err = GroupChatTool::ensure_known_assistant(&coordinator, unknown)
+            .await
+            .expect_err("unknown assistant must be rejected");
+        assert!(
+            err.contains("unknown assistant") && err.contains(unknown),
+            "unexpected error: {err}"
+        );
+
+        // ensure_claw_member_sessions 对白名单外成员整体拒绝（不建会话）。
+        let ensure_err =
+            GroupChatTool::ensure_claw_member_sessions(&coordinator, &[unknown.to_string()])
+                .await
+                .expect_err("unknown member must fail the whole ensure");
+        assert!(
+            ensure_err.contains("unknown assistant") || ensure_err.contains("not found"),
+            "unexpected ensure error: {ensure_err}"
+        );
+        // 未创建任何会话。
+        assert!(
+            session_manager.get_session(unknown).is_none(),
+            "unknown assistant must not get a session"
+        );
         let _ = root;
     }
 }

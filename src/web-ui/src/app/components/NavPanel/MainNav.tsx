@@ -567,8 +567,12 @@ const MainNav: React.FC<MainNavProps> = ({
       real.set(session.sessionId, session);
     }
     // assistant 预设：已有真实会话的跳过（不重复）；无会话的标 inactive。
+    // W2 P2-2: sessionId 一律用 workspace.id（稳定唯一标识）——后端
+    // resolve_assistant_workspace 按「注册表 id → assistant_id 索引 →
+    // legacy」三级解析映射到真实会话/workspace；不再用 assistantId（8-hex
+    // 短 id，可能 ≠ workspace.id）当 sessionId，消除三义残留。
     for (const workspace of assistantWorkspacesList) {
-      const sessionId = workspace.assistantId || workspace.id;
+      const sessionId = workspace.id;
       if (!sessionId || real.has(sessionId)) continue;
       real.set(sessionId, {
         sessionId,
