@@ -7,8 +7,9 @@
 //! tools or execute plugin code.
 
 use async_trait::async_trait;
+use bitfun_dsh_adapter::load_dsh_package_adapter;
 use bitfun_opencode_adapter::load_opencode_package_adapter;
-use bitfun_plugin_runtime_client::DefaultPluginRuntimeClient;
+use bitfun_plugin_runtime_client::{DefaultPluginRuntimeClient, PluginRuntimeAdapter};
 use bitfun_product_domains::plugin_source::{
     PluginActivationAuthority, PluginPackageInput, PluginPackageSourceIdentity,
 };
@@ -34,6 +35,27 @@ type PluginDispatchTarget = (
     PluginCapabilityRef,
     Vec<(PluginTargetRef, PluginRiskLevel)>,
 );
+
+fn load_package_adapter(
+    input: PluginPackageInput,
+    activation: Option<PluginActivationAuthority>,
+    observed_at_ms: u64,
+) -> Result<(Arc<dyn PluginRuntimeAdapter>, Vec<PluginDispatchTarget>), ManagedPluginSourceError> {
+    let (adapter, package_id) = {
+        let (manifest, source, _files) = input.clone().into_parts();
+        (manifest.adapter, source.package_id)
+    };
+    match adapter.as_str() {
+        "opencode_compatible" => load_opencode_package_adapter(input, activation, observed_at_ms)
+            .map_err(|error| invalid_package(&package_id, error.to_string())),
+        "dsh_compatible" => load_dsh_package_adapter(input, activation, observed_at_ms)
+            .map_err(|error| invalid_package(&package_id, error.to_string())),
+        other => Err(invalid_package(
+            &package_id,
+            format!("unsupported managed package adapter: {other}"),
+        )),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPluginCandidateView {
@@ -113,8 +135,7 @@ async fn preview_with_service(
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
     let input = service.load_package(workspace, package_id).await?;
     let source = input.clone().into_parts().1;
-    let (adapter, dispatch_targets) = load_opencode_package_adapter(input, None, current_time_ms())
-        .map_err(|error| invalid_package(package_id, error.to_string()))?;
+    let (adapter, dispatch_targets) = load_package_adapter(input, None, current_time_ms())?;
     let binding = PluginRuntimeBinding::client(Arc::new(DefaultPluginRuntimeClient::new(adapter)));
     let response = binding
         .as_client()
@@ -151,7 +172,7 @@ async fn activate_with_service(
             "activation confirmation does not match the current package content".to_string(),
         ));
     }
-    if !preview.provider_candidates_supported {
+    if preview.adapter == "opencode_compatible" && !preview.provider_candidates_supported {
         return Err(invalid_package(
             package_id,
             "the package contains no supported OpenCode custom tool declaration".to_string(),
@@ -252,6 +273,7 @@ async fn project_activated(
         authority.clone().into_parts();
     let (binding, dispatch_targets) =
         activated_binding(service, workspace, package_id, input, authority)?;
+    let provider_candidates_supported = !dispatch_targets.is_empty();
     let client = binding.as_client();
     let read = client
         .read_plugins(read_request(
@@ -293,10 +315,15 @@ async fn project_activated(
     }
     diagnostics.sort();
     diagnostics.dedup();
-    Ok(
-        project_view(source, true, Some(activation_epoch), true, read, candidates)
-            .with_diagnostics(diagnostics),
+    Ok(project_view(
+        source,
+        true,
+        Some(activation_epoch),
+        provider_candidates_supported,
+        read,
+        candidates,
     )
+    .with_diagnostics(diagnostics))
 }
 
 fn preview_candidates(
@@ -324,8 +351,7 @@ fn activated_binding(
     authority: PluginActivationAuthority,
 ) -> Result<(PluginRuntimeBinding, Vec<PluginDispatchTarget>), ManagedPluginSourceError> {
     let (adapter, dispatch_targets) =
-        load_opencode_package_adapter(input, Some(authority.clone()), current_time_ms())
-            .map_err(|error| invalid_package(package_id, error.to_string()))?;
+        load_package_adapter(input, Some(authority.clone()), current_time_ms())?;
     let client: Arc<dyn PluginRuntimeClient> = Arc::new(DefaultPluginRuntimeClient::new(adapter));
     Ok((
         PluginRuntimeBinding::client(Arc::new(ActivationGatedPluginRuntimeClient {
@@ -542,6 +568,7 @@ impl PluginRuntimeClient for ActivationGatedPluginRuntimeClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitfun_product_domains::plugin_source::{PluginPackageFile, PluginPackageManifest};
     use bitfun_services_integrations::plugin_source::ManagedPluginTrustDecision;
     use sha2::{Digest, Sha256};
     use std::fs;
@@ -977,5 +1004,71 @@ export const WorkspaceToolsPlugin: Plugin = async () => ({
             .expect("dispatch task")
             .expect_err("revoked dispatch result must be discarded");
         assert_eq!(error.kind, PortErrorKind::NotAvailable);
+    }
+
+    #[tokio::test]
+    async fn dsh_packages_route_to_the_dsh_adapter() {
+        let manifest = PluginPackageManifest {
+            schema_version: 1,
+            id: "acme.dsh".to_string(),
+            version: "1.0.0".to_string(),
+            adapter: "dsh_compatible".to_string(),
+            files: vec![PluginPackageFile {
+                path: "package.json".to_string(),
+                sha256: format!(
+                    "sha256:{}",
+                    hex::encode(Sha256::digest(
+                        br#"{ "dsh": { "profile": { "bundles": ["@acme/dsh-base"] } } }"#
+                    ))
+                ),
+            }],
+        };
+        let source = PluginPackageSourceIdentity {
+            package_id: "acme.dsh".to_string(),
+            version: "1.0.0".to_string(),
+            adapter: "dsh_compatible".to_string(),
+            source_path: "/managed/acme.dsh".to_string(),
+            content_hash: manifest.content_hash().expect("content hash"),
+        };
+        let files = std::collections::BTreeMap::from([(
+            "package.json".to_string(),
+            br#"{ "dsh": { "profile": { "bundles": ["@acme/dsh-base"] } } }"#.to_vec(),
+        )]);
+        let input = PluginPackageInput::new(manifest, source, files).expect("dsh input");
+
+        let (adapter, dispatch_targets) =
+            load_package_adapter(input, None, current_time_ms()).expect("route dsh adapter");
+        assert_eq!(adapter.adapter_id(), "dsh-compatible");
+        assert!(dispatch_targets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn unsupported_managed_package_adapter_is_rejected() {
+        let manifest = PluginPackageManifest {
+            schema_version: 1,
+            id: "acme.unknown".to_string(),
+            version: "1.0.0".to_string(),
+            adapter: "unknown_compatible".to_string(),
+            files: vec![PluginPackageFile {
+                path: "package.json".to_string(),
+                sha256: format!("sha256:{}", hex::encode(Sha256::digest(b"{}"))),
+            }],
+        };
+        let source = PluginPackageSourceIdentity {
+            package_id: "acme.unknown".to_string(),
+            version: "1.0.0".to_string(),
+            adapter: "unknown_compatible".to_string(),
+            source_path: "/managed/acme.unknown".to_string(),
+            content_hash: manifest.content_hash().expect("content hash"),
+        };
+        let files =
+            std::collections::BTreeMap::from([("package.json".to_string(), b"{}".to_vec())]);
+        let input = PluginPackageInput::new(manifest, source, files).expect("unknown input");
+        let error = load_package_adapter(input, None, current_time_ms())
+            .err()
+            .expect("unsupported adapter must fail");
+        assert!(error
+            .to_string()
+            .contains("unsupported managed package adapter"));
     }
 }
