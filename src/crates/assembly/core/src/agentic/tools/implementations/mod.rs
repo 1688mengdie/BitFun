@@ -138,7 +138,10 @@ pub use page_publish_tool::PagePublishTool;
 pub use plan_list_tool::PlanListTool;
 pub use plan_read_tool::PlanReadTool;
 pub use plan_update_tool::PlanUpdateTool;
-pub use quant_tools::{OrderTool, QuantBacktestTool, QuoteTool, StrategyTool};
+pub use quant_tools::{
+    OrderTool, QuantBacktestTool, QuantPatternChanTool, QuantPatternDtwTool, QuoteTool,
+    StrategyTool,
+};
 #[cfg(feature = "tools-miniapp")]
 pub use playbook_tool::PlaybookTool;
 #[cfg(feature = "tools-git")]

@@ -93,6 +93,11 @@ fn build_default_role_permissions() -> RolePermissionMap {
         allowed_tools.insert("quote".to_string());
         allowed_tools.insert("strategy".to_string());
         allowed_tools.insert("order".to_string());
+        // W1-1（pattern 工具族）：quant_pattern_chan / quant_pattern_dtw
+        // 走 9527 JSON-RPC（与 quote/strategy/order 同通道），Commander
+        // 白名单同步登记。
+        allowed_tools.insert("quant_pattern_chan".to_string());
+        allowed_tools.insert("quant_pattern_dtw".to_string());
         // Deferred 工具链核心：GetToolSpec/CallDeferredTool 不在
         // subagent_default_tools()，但缺失会导致全部 deferred 工具
         // （SessionControl/SessionMessage/Git/Plan 等）无法解锁。

@@ -88,6 +88,8 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "quote" => Some(Arc::new(QuoteTool::new())),
             "strategy" => Some(Arc::new(StrategyTool::new())),
             "order" => Some(Arc::new(OrderTool::new())),
+            "quant_pattern_chan" => Some(Arc::new(QuantPatternChanTool::new())),
+            "quant_pattern_dtw" => Some(Arc::new(QuantPatternDtwTool::new())),
             #[cfg(feature = "tools-agent-control")]
             "Cron" => Some(Arc::new(CronTool::new())),
             #[cfg(feature = "tools-browser-web")]

@@ -904,6 +904,273 @@ Arguments:
     }
 }
 
+// ── quant_pattern_chan / quant_pattern_dtw (9527 JSON-RPC: pattern.*) ────────
+//
+// W1-1（pattern 工具族）：复用 taiji_rpc_call（std TCP 直连 9527 /api/rpc），
+// 零新依赖——与 quote/strategy/order 完全同通道、同超时、同错误映射。
+// taiji-server 侧 pattern.chan（缠论 18 类买卖点）+ pattern.dtw（DTW 相似度）
+// 由 taiji-pattern 能力 crate 提供（源区 taiji-lvpa 已注册）。
+
+/// `quant_pattern_chan` — 缠论 18 类买卖点识别（taiji-server `pattern.chan`）。
+pub struct QuantPatternChanTool;
+
+impl Default for QuantPatternChanTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantPatternChanTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for QuantPatternChanTool {
+    fn name(&self) -> &str {
+        "quant_pattern_chan"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(
+            r#"Run Chan theory (缠论) buy/sell point recognition through the taiji quant engine (taiji-server JSON-RPC `pattern.chan`).
+
+The engine detects fractals → bi strokes → hub (中枢) → segments → divergence → 18 buy/sell point types (一买/一卖/二买/二卖/三买/三卖 + T 系列).
+
+Arguments:
+- "bars": Optional. K-line array in ascending time order: [{"open":..,"high":..,"low":..,"close":..,"volume":..,"timestamp":..}, ...].
+- "bis": Optional. Pre-computed bi strokes: [{"start_index":..,"end_index":..,"direction":"up"|"down","start_price":..,"end_price":..}, ...]. Provide either bars (full pipeline) or bis (hub→segment→divergence→BSP).
+- "macd": Optional. MACD histogram values aligned with bars.
+- "workspace_path": Optional absolute workspace path; defaults to the current workspace."#
+                .to_string(),
+        )
+    }
+
+    fn short_description(&self) -> String {
+        "Run Chan theory buy/sell point recognition via taiji JSON-RPC.".to_string()
+    }
+
+    fn default_exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "bars": {
+                    "type": "array",
+                    "description": "K-line array: [{\"open\":..,\"high\":..,\"low\":..,\"close\":..,\"volume\":..,\"timestamp\":..}, ...]."
+                },
+                "bis": {
+                    "type": "array",
+                    "description": "Pre-computed bi strokes (skips the fractal/bi detection stage)."
+                },
+                "macd": {
+                    "type": "array",
+                    "description": "MACD histogram values aligned with bars (optional)."
+                },
+                "workspace_path": {
+                    "type": "string",
+                    "description": "Optional absolute workspace path."
+                }
+            },
+            "additionalProperties": false
+        })
+    }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
+        true
+    }
+
+    async fn validate_input(
+        &self,
+        input: &Value,
+        _context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        let has_bars = input
+            .get("bars")
+            .map(Value::is_array)
+            .unwrap_or(false);
+        let has_bis = input.get("bis").map(Value::is_array).unwrap_or(false);
+        ValidationResult {
+            result: has_bars || has_bis,
+            message: if has_bars || has_bis {
+                None
+            } else {
+                Some("bars or bis is required".to_string())
+            },
+            error_code: if has_bars || has_bis { None } else { Some(400) },
+            meta: None,
+        }
+    }
+
+    fn render_tool_use_message(&self, _input: &Value, _options: &ToolRenderOptions) -> String {
+        "Run taiji Chan buy/sell point recognition".to_string()
+    }
+
+    async fn call_impl(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let mut params = match input.get("bars").map(Value::is_array).unwrap_or(false) {
+            true => json!({ "bars": input.get("bars").unwrap() }),
+            false => json!({ "bis": input.get("bis").unwrap_or(&Value::Null) }),
+        };
+        if let Some(macd) = input.get("macd").filter(|v| v.is_array()) {
+            params["macd"] = macd.clone();
+        }
+        let result = taiji_rpc_call("pattern.chan", params).await?;
+        Ok(quant_tool_result(json!({
+            "success": true,
+            "method": "pattern.chan",
+            "channel": "rpc",
+            "response": result,
+        })))
+    }
+}
+
+/// `quant_pattern_dtw` — 多维 DTW 相似度（taiji-server `pattern.dtw`）。
+pub struct QuantPatternDtwTool;
+
+impl Default for QuantPatternDtwTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantPatternDtwTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for QuantPatternDtwTool {
+    fn name(&self) -> &str {
+        "quant_pattern_dtw"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(
+            r#"Compute DTW (Dynamic Time Warping) similarity through the taiji quant engine (taiji-server JSON-RPC `pattern.dtw`).
+
+Returns distance + LB_Keogh lower bound using the weighted-Euclidean DtwEngine with Sakoe-Chiba band.
+
+Arguments:
+- "query": Required. Query series as 2D array: [[f,..], ..] (each row = one time step, each column = one feature).
+- "template": Required. Template series, same feature dimension as query.
+- "window": Optional. Sakoe-Chiba window width in time steps (0/omitted = no band).
+- "feature_weights": Optional. Per-feature weights (length must equal feature count; default all 1.0).
+- "workspace_path": Optional absolute workspace path; defaults to the current workspace."#
+                .to_string(),
+        )
+    }
+
+    fn short_description(&self) -> String {
+        "Compute DTW similarity via taiji JSON-RPC.".to_string()
+    }
+
+    fn default_exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "array",
+                    "description": "Query series 2D array: [[f,..], ..]."
+                },
+                "template": {
+                    "type": "array",
+                    "description": "Template series 2D array, same feature dimension."
+                },
+                "window": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Sakoe-Chiba window width (0 = no band)."
+                },
+                "feature_weights": {
+                    "type": "array",
+                    "description": "Per-feature weights (default all 1.0)."
+                },
+                "workspace_path": {
+                    "type": "string",
+                    "description": "Optional absolute workspace path."
+                }
+            },
+            "required": ["query", "template"],
+            "additionalProperties": false
+        })
+    }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
+        true
+    }
+
+    async fn validate_input(
+        &self,
+        input: &Value,
+        _context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        let ok = input.get("query").map(Value::is_array).unwrap_or(false)
+            && input.get("template").map(Value::is_array).unwrap_or(false);
+        ValidationResult {
+            result: ok,
+            message: if ok {
+                None
+            } else {
+                Some("query and template are required".to_string())
+            },
+            error_code: if ok { None } else { Some(400) },
+            meta: None,
+        }
+    }
+
+    fn render_tool_use_message(&self, _input: &Value, _options: &ToolRenderOptions) -> String {
+        "Compute taiji DTW similarity".to_string()
+    }
+
+    async fn call_impl(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let query = input
+            .get("query")
+            .ok_or_else(|| BitFunError::tool("query is required".to_string()))?;
+        let template = input
+            .get("template")
+            .ok_or_else(|| BitFunError::tool("template is required".to_string()))?;
+        let mut params = json!({ "query": query, "template": template });
+        if let Some(window) = input.get("window").and_then(Value::as_u64) {
+            params["window"] = json!(window);
+        }
+        if let Some(weights) = input.get("feature_weights").filter(|v| v.is_array()) {
+            params["feature_weights"] = weights.clone();
+        }
+        let result = taiji_rpc_call("pattern.dtw", params).await?;
+        Ok(quant_tool_result(json!({
+            "success": true,
+            "method": "pattern.dtw",
+            "channel": "rpc",
+            "response": result,
+        })))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -914,6 +1181,8 @@ mod tests {
         assert_eq!(QuoteTool::new().name(), "quote");
         assert_eq!(StrategyTool::new().name(), "strategy");
         assert_eq!(OrderTool::new().name(), "order");
+        assert_eq!(QuantPatternChanTool::new().name(), "quant_pattern_chan");
+        assert_eq!(QuantPatternDtwTool::new().name(), "quant_pattern_dtw");
     }
 
     #[tokio::test]
@@ -979,6 +1248,41 @@ mod tests {
 
         let ok = tool
             .validate_input(&json!({ "config": "yaml", "csv_data": "date,open\n" }), None)
+            .await;
+        assert!(ok.result);
+    }
+
+    #[tokio::test]
+    async fn pattern_chan_validation_requires_bars_or_bis() {
+        let tool = QuantPatternChanTool::new();
+        let bad = tool.validate_input(&json!({}), None).await;
+        assert!(!bad.result);
+
+        let bars_ok = tool
+            .validate_input(
+                &json!({ "bars": [{"open":1.0,"high":2.0,"low":0.5,"close":1.5}] }),
+                None,
+            )
+            .await;
+        assert!(bars_ok.result);
+
+        let bis_ok = tool
+            .validate_input(
+                &json!({ "bis": [{"start_index":0,"end_index":1,"direction":"up","start_price":1.0,"end_price":2.0}] }),
+                None,
+            )
+            .await;
+        assert!(bis_ok.result);
+    }
+
+    #[tokio::test]
+    async fn pattern_dtw_validation_requires_query_and_template() {
+        let tool = QuantPatternDtwTool::new();
+        let bad = tool.validate_input(&json!({ "query": [[1.0]] }), None).await;
+        assert!(!bad.result);
+
+        let ok = tool
+            .validate_input(&json!({ "query": [[1.0]], "template": [[1.0]] }), None)
             .await;
         assert!(ok.result);
     }
