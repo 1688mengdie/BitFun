@@ -2,6 +2,7 @@ import React from 'react';
 import { GitBranch, Users, Network } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/component-library';
+import { getCardGradient } from '@/shared/utils/cardGradients';
 import type { LegionPattern } from '../data/orchestration-patterns';
 import './LegionCard.scss';
 
@@ -28,7 +29,10 @@ const LegionCard: React.FC<LegionCardProps> = ({
   return (
     <div
       className="legion-card"
-      style={{ '--surface-stagger-index': index } as React.CSSProperties}
+      style={{
+        '--surface-stagger-index': index,
+        '--legion-card-gradient': getCardGradient(pattern.id || pattern.name),
+      } as React.CSSProperties}
       onClick={openDetails}
       role="button"
       tabIndex={0}
