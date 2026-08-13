@@ -236,15 +236,21 @@ impl GroupChatTool {
 
     /// Ensures every member session exists as a Claw assistant session (P1-7).
     ///
-    /// 主人定标 2026-08-13（P0 bug）：创建群聊不是硬编码对话 ID，应该根据
-    /// Claw 预设类型新建对话。群聊成员来自 assistant workspace 枚举
-    /// （`assistantId`，如 `bd56fce3`），该 ID 不一定是已注册会话 ——
-    /// 当会话不存在时，按 `agent_type="Claw"` 自动新建一个绑定到该
-    /// assistant workspace 的会话，而不是报 "does not exist"。
+    /// 主人定标 2026-08-13（P0 bug v1 返工）：创建群聊不是硬编码对话 ID，
+    /// 应该根据 Claw 预设类型新建对话。群聊成员来自 assistant workspace
+    /// 枚举，其 sessionId 可能是 `assistantId`（8 位 hex，如 `bd56fce3`）
+    /// 或 workspace 稳定 id（`local_+UUID`，如 `local_5a1557...`，当该
+    /// assistant workspace 没有 assistantId 时由前端 fallback）。
+    ///
+    /// 关键：workspace 目录路径必须来自 **workspace service 注册表**
+    /// （`get_workspace(id).root_path`），不能拿 id 瞎拼
+    /// `assistant_workspace_dir(id)` —— 实测：默认 Claw 助理
+    /// （assistantId 为空）的 rootPath = `personal_assistant/workspace`，
+    /// 拼出来是 `personal_assistant/workspace/local_5a1557...`（不存在）。
     ///
     /// 幂等：先查内存会话（get_session）→ 再查磁盘会话
-    /// （load_session_metadata under the assistant workspace）→ 都不存在才新建。
-    /// 新建指定 `session_id = assistantId`（deterministic），重复调用不会重复建。
+    /// （load_session_metadata under the resolved workspace）→ 都不存在才新建。
+    /// 新建指定 `session_id`（deterministic），重复调用不会重复建。
     async fn ensure_claw_member_sessions(
         coordinator: &ConversationCoordinator,
         member_ids: &[String],
@@ -260,14 +266,14 @@ impl GroupChatTool {
                 ));
             }
 
+            // 2) Resolve the REAL assistant workspace path from the workspace
+            //    registry (covers 8-hex assistantId and local_+UUID ids).
+            let workspace_root = Self::resolve_assistant_workspace(coordinator, session_id).await?;
             let manager = coordinator.get_session_manager();
-            let assistant_dir = manager
-                .path_manager()
-                .assistant_workspace_dir(session_id, None);
 
-            // 2) Persisted session under the assistant workspace (restart-safe).
+            // 3) Persisted session under the resolved workspace (restart-safe).
             let persisted = manager
-                .load_session_metadata(&assistant_dir, session_id)
+                .load_session_metadata(&workspace_root, session_id)
                 .await;
             match persisted {
                 Ok(Some(metadata)) => {
@@ -287,18 +293,12 @@ impl GroupChatTool {
                 }
             }
 
-            // 3) No session anywhere: create a Claw session bound to the
+            // 4) No session anywhere: create a Claw session bound to the real
             //    assistant workspace (主人定标：按 Claw 预设类型新建对话).
-            if !assistant_dir.exists() {
-                return Err(format!(
-                    "assistant workspace '{}' not found for group chat member '{session_id}'",
-                    assistant_dir.display()
-                ));
-            }
-            let assistant_dir_str = assistant_dir.to_string_lossy().to_string();
+            let workspace_root_str = workspace_root.to_string_lossy().to_string();
             let config = SessionConfig {
-                workspace_path: Some(assistant_dir_str.clone()),
-                project_workspace_path: Some(assistant_dir_str.clone()),
+                workspace_path: Some(workspace_root_str.clone()),
+                project_workspace_path: Some(workspace_root_str.clone()),
                 ..Default::default()
             };
             coordinator
@@ -307,7 +307,7 @@ impl GroupChatTool {
                     format!("Assistant {session_id}"),
                     "Claw".to_string(),
                     config,
-                    assistant_dir_str,
+                    workspace_root_str,
                 )
                 .await
                 .map_err(|error| {
@@ -317,6 +317,59 @@ impl GroupChatTool {
                 })?;
         }
         Ok(())
+    }
+
+    /// Resolves the real assistant workspace root path for a group chat member.
+    ///
+    /// The member id may be either an 8-hex `assistantId` (`bd56fce3`) or a
+    /// workspace stable id (`local_+UUID`, used when the assistant workspace
+    /// has no `assistantId`). Resolution order:
+    ///
+    /// 1. **Workspace registry by id** — the authoritative source. A registered
+    ///    assistant workspace's `root_path` is the true directory (e.g.
+    ///    `personal_assistant/workspace` for the default Claw, or
+    ///    `personal_assistant/workspace-{assistantId}` for named ones).
+    /// 2. **assistant_workspace_dir(id)** — legacy layout fallback for 8-hex
+    ///    ids whose workspace is not registered (only used when the directory
+    ///    actually exists).
+    ///
+    /// Returns a clear error when neither resolves to an existing directory
+    /// (never silently skips the member).
+    async fn resolve_assistant_workspace(
+        coordinator: &ConversationCoordinator,
+        session_id: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        // 1) Workspace registry (authoritative): matches workspace.id exactly,
+        //    which covers local_+UUID stable ids AND 8-hex ids when they are
+        //    the workspace key.
+        if let Some(service) = crate::service::workspace::get_global_workspace_service() {
+            if let Some(workspace) = service.get_workspace(session_id).await {
+                let root = workspace.root_path.clone();
+                if root.exists() {
+                    return Ok(root);
+                }
+                return Err(format!(
+                    "assistant workspace '{}' (registered id '{}') does not exist on disk",
+                    root.display(),
+                    session_id
+                ));
+            }
+        }
+
+        // 2) Legacy assistant-workspace layout fallback: `workspace-{id}` dir
+        //    under personal_assistant. Only accept it when the directory
+        //    actually exists.
+        let manager = coordinator.get_session_manager();
+        let legacy_dir = manager
+            .path_manager()
+            .assistant_workspace_dir(session_id, None);
+        if legacy_dir.exists() {
+            return Ok(legacy_dir);
+        }
+
+        Err(format!(
+            "assistant workspace not found for group chat member '{session_id}' (no registered workspace and no legacy assistant dir)"
+        ))
     }
 
     /// create: validation chain + room persistence + initial member back-index.
@@ -2036,8 +2089,9 @@ mod tests {
     async fn group_chat_missing_member_session_is_auto_created_as_claw() {
         // P0 fix: a member id that has no session yet (an assistant workspace
         // id) must be auto-created as a Claw session, not rejected with
-        // "does not exist". The assistant workspace dir must exist (the dir
-        // is the source of truth for "this assistant is addable").
+        // "does not exist". Uses the 8-hex assistantId shape; the assistant
+        // workspace dir must exist (the dir is the source of truth for
+        // "this assistant is addable").
         let (coordinator, session_manager, root) = test_group_chat_coordinator_harness();
         let assistant_id = "bd56fce3";
         let assistant_dir = coordinator
@@ -2063,6 +2117,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn group_chat_local_uuid_member_resolves_via_legacy_assistant_dir() {
+        // P0 v2 regression: the real-world default Claw assistant has NO
+        // assistantId, so the frontend falls back to the workspace stable id
+        // `local_<uuid>` (e.g. local_5a1557a8afd417b173d9ce873553e66a). The
+        // v1 fix wrongly called `assistant_workspace_dir(local_...)` which
+        // produced `personal_assistant/workspace/local_...` (missing) instead
+        // of the real workspace root. Resolution must fail cleanly when the
+        // id resolves to nothing, and auto-create the Claw session bound to
+        // the real dir once it exists.
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness();
+        let member_id = "local_5a1557a8afd417b173d9ce873553e66a";
+        let resolved = GroupChatTool::resolve_assistant_workspace(&coordinator, member_id)
+            .await
+            .expect_err("unregistered local_ id without a legacy dir must fail cleanly");
+        assert!(
+            resolved.contains(member_id) && resolved.contains("not found"),
+            "unexpected error: {resolved}"
+        );
+
+        // Now create the legacy assistant dir matching the id and retry.
+        let legacy_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(member_id, None);
+        std::fs::create_dir_all(&legacy_dir).expect("create legacy assistant dir");
+
+        GroupChatTool::ensure_claw_member_sessions(&coordinator, &[member_id.to_string()])
+            .await
+            .expect("member with existing legacy assistant dir must be auto-created as Claw");
+
+        let session = session_manager
+            .get_session(member_id)
+            .expect("auto-created session must exist");
+        assert_eq!(session.agent_type, "Claw");
+        assert_eq!(
+            session.config.workspace_path.as_deref(),
+            Some(legacy_dir.to_string_lossy().as_ref())
+        );
+        let _ = root;
+    }
+
+    #[tokio::test]
     async fn group_chat_missing_member_without_assistant_workspace_returns_clear_error() {
         // The assistant workspace dir is the source of truth: a member id
         // without a session AND without a workspace dir must fail with a clear
@@ -2074,7 +2170,7 @@ mod tests {
                 .await
                 .expect_err("member without assistant workspace must fail");
         assert!(
-            err.contains("assistant workspace") && err.contains(missing_id),
+            err.contains("not found") && err.contains(missing_id),
             "unexpected error: {err}"
         );
         let _ = root;
