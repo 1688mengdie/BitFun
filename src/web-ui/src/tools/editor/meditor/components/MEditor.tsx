@@ -27,57 +27,6 @@ let markdownTextareaTargetCounter = 0
 
 export type MEditorProps = EditorOptions;
 
-interface MEditorErrorBoundaryProps {
-  children: ReactNode
-  editorProps: MEditorProps
-  forwardedRef: ForwardedRef<EditorInstance>
-}
-
-interface MEditorErrorBoundaryState {
-  error: Error | null
-}
-
-export class MEditorErrorBoundary extends Component<
-  MEditorErrorBoundaryProps,
-  MEditorErrorBoundaryState
-> {
-  state: MEditorErrorBoundaryState = { error: null }
-
-  static getDerivedStateFromError(error: Error): MEditorErrorBoundaryState {
-    return { error }
-  }
-
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    log.error('Markdown editor render failed, showing source fallback', {
-      message: error.message,
-      componentStack: errorInfo.componentStack,
-      filePath: this.props.editorProps.filePath,
-    })
-  }
-
-  componentDidUpdate(previousProps: MEditorErrorBoundaryProps) {
-    if (
-      this.state.error &&
-      previousProps.editorProps.filePath !== this.props.editorProps.filePath
-    ) {
-      this.setState({ error: null })
-    }
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <MEditorSourceFallback
-          {...this.props.editorProps}
-          ref={this.props.forwardedRef}
-        />
-      )
-    }
-
-    return this.props.children
-  }
-}
-
 function executeTextareaAction(
   textarea: HTMLTextAreaElement | null,
   action: 'undo' | 'redo' | 'cut' | 'copy' | 'paste' | 'selectAll',
@@ -178,6 +127,10 @@ const MEditorSourceFallback = forwardRef<EditorInstance, MEditorProps>((props, r
     width: typeof width === 'number' ? `${width}px` : width,
   }
 
+  // Sizes the textarea when the container has no definite height, where a CSS
+  // height cannot resolve and the element would collapse to the default two rows.
+  const rows = Math.max(currentValue.split('\n').length + 1, 4)
+
   return (
     <div
       className={`m-editor m-editor-mode-source-fallback ${className}`}
@@ -197,6 +150,7 @@ const MEditorSourceFallback = forwardRef<EditorInstance, MEditorProps>((props, r
         ref={textareaRef}
         className="m-editor-source-fallback"
         value={currentValue}
+        rows={rows}
         readOnly={readonly}
         autoFocus={autofocus}
         placeholder={placeholder}
@@ -210,6 +164,60 @@ const MEditorSourceFallback = forwardRef<EditorInstance, MEditorProps>((props, r
 })
 
 MEditorSourceFallback.displayName = 'MEditorSourceFallback'
+
+interface MEditorErrorBoundaryProps {
+  children: ReactNode
+  editorProps: MEditorProps
+  forwardedRef: ForwardedRef<EditorInstance>
+}
+
+interface MEditorErrorBoundaryState {
+  error: Error | null
+}
+
+export class MEditorErrorBoundary extends Component<
+  MEditorErrorBoundaryProps,
+  MEditorErrorBoundaryState
+> {
+  state: MEditorErrorBoundaryState = { error: null }
+
+  static getDerivedStateFromError(error: Error): MEditorErrorBoundaryState {
+    return { error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    log.error('Markdown editor render failed, showing source fallback', {
+      message: error.message,
+      componentStack: errorInfo.componentStack,
+      filePath: this.props.editorProps.filePath,
+    })
+  }
+
+  // Only a new document clears the error. Retrying on every prop change would
+  // re-mount the editor that just threw and loop, because the failures this
+  // guards against (unsupported engine features) are deterministic.
+  componentDidUpdate(previousProps: MEditorErrorBoundaryProps) {
+    if (
+      this.state.error &&
+      previousProps.editorProps.filePath !== this.props.editorProps.filePath
+    ) {
+      this.setState({ error: null })
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <MEditorSourceFallback
+          {...this.props.editorProps}
+          ref={this.props.forwardedRef}
+        />
+      )
+    }
+
+    return this.props.children
+  }
+}
 
 const MEditorInner = forwardRef<EditorInstance, MEditorProps>((props, ref) => {
   const {
