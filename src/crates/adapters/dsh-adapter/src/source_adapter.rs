@@ -1,11 +1,12 @@
 //! DeepSeek Harness (`dsh`) bundle source projection.
 //!
 //! The adapter covers the `dsh` distribution shape: a `package.json` whose
-//! `dsh` field declares either a bundle (`dsh.bundle.patch` -> a
-//! `cordis.patch.yml` list of Cordis plugin rows) or a profile
+//! `dsh` field declares a bundle (`dsh.bundle.patch` -> a
+//! `cordis.patch.yml` list of Cordis plugin rows), a profile
 //! (`dsh.profile.bundles` -> an ordered list of bundle names). It projects the
-//! discovered entries as projection-only plugin sources. It does not execute
-//! JavaScript, install packages, or become the runtime client.
+//! discovered entries for either or both roles as projection-only plugin
+//! sources. It does not execute JavaScript, install packages, or become the
+//! runtime client.
 
 use async_trait::async_trait;
 use bitfun_plugin_runtime_client::PluginRuntimeAdapter;
@@ -31,7 +32,6 @@ const DSH_PACKAGE_SCHEMA_VERSION: &str = "dsh.package.v1";
 const DSH_BUNDLE_SCHEMA_VERSION: &str = "dsh.bundle.v1";
 const DSH_PROFILE_SCHEMA_VERSION: &str = "dsh.profile.v1";
 const PACKAGE_JSON: &str = "package.json";
-const DEFAULT_BUNDLE_PATCH: &str = "cordis.patch.yml";
 const MAX_PLUGIN_ID_COMPONENT_LEN: usize = 40;
 const MAX_ENTRIES_PER_PACKAGE: usize = 256;
 const MAX_ENTRY_ID_BYTES: usize = 256;
@@ -102,6 +102,11 @@ impl DshPluginRuntimeAdapter {
         let input = PluginPackageInput::new(manifest, source, files)
             .map_err(|error| PortError::new(PortErrorKind::InvalidRequest, error.to_string()))?;
         let mut adapter = Self::from_package(input, observed_at_ms)?;
+        if adapter.projections.iter().any(DshProjection::is_invalid) {
+            return Err(adapter_port_error(
+                "invalid dsh package projection cannot be activated".to_string(),
+            ));
+        }
         for projection in &mut adapter.projections {
             projection.activate_supported_source();
         }
@@ -296,6 +301,9 @@ impl PluginRuntimeAdapter for DshPluginRuntimeAdapter {
     }
 }
 
+// Product Assembly consumes the same compatibility tuple exposed by the
+// sibling OpenCode adapter.
+#[allow(clippy::type_complexity)]
 pub fn load_dsh_package_adapter(
     input: PluginPackageInput,
     activation: Option<PluginActivationAuthority>,
@@ -318,8 +326,9 @@ pub fn load_dsh_package_adapter(
         }
         None => DshPluginRuntimeAdapter::from_package(input, observed_at_ms)?,
     };
-    // dsh bundles contribute Cordis services, not model-facing tool candidates,
-    // so the static adapter projects no provider dispatch targets.
+    // Cordis rows can mount services that later register model-facing tools in
+    // dsh, but static row metadata is not a safe executable BitFun provider
+    // candidate. This runtime-free adapter therefore exposes no dispatch target.
     Ok((Arc::new(adapter), Vec::new()))
 }
 
@@ -337,6 +346,10 @@ enum DshProjection {
 }
 
 impl DshProjection {
+    fn is_invalid(&self) -> bool {
+        matches!(self, Self::Invalid(_))
+    }
+
     fn activate_supported_source(&mut self) {
         if let Self::Entry(projection) = self {
             projection.source.trust_level = PluginTrustLevel::Trusted;
@@ -640,12 +653,17 @@ struct DshInvalidProjection {
 impl DshInvalidProjection {
     fn invalid(
         source_uri: &str,
+        package_source: &PluginPackageSourceIdentity,
         code: &str,
         field: &str,
         message: String,
         observed_at_ms: u64,
     ) -> Self {
-        let plugin_id = stable_plugin_id("dsh.package", "source", source_uri);
+        let plugin_id = stable_plugin_id(
+            "dsh.package",
+            &sanitize_plugin_id_component(code),
+            &format!("{source_uri}#{code}"),
+        );
         let manifest = PluginManifestRef {
             manifest_id: format!("{plugin_id}:{DSH_PACKAGE_SCHEMA_VERSION}"),
             schema_version: DSH_PACKAGE_SCHEMA_VERSION.to_string(),
@@ -656,8 +674,8 @@ impl DshInvalidProjection {
                 plugin_id,
                 source_kind: PluginSourceKind::DeepSeekHarnessCompatible,
                 source: source_uri.to_string(),
-                version: None,
-                content_hash: sha256_content_hash(source_uri),
+                version: Some(package_source.version.clone()),
+                content_hash: package_source.content_hash.clone(),
                 trust_level: PluginTrustLevel::Unknown,
                 manifest: Some(manifest.clone()),
             },
@@ -797,11 +815,25 @@ struct DshProfileDecl {
 }
 
 #[derive(Debug, Deserialize)]
-struct DshPatchEntry {
+struct DshPatchOperation {
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
-    insert: Option<Vec<DshPatchEntry>>,
+    insert: Option<Vec<DshCordisEntry>>,
+    #[serde(default)]
+    group: Option<bool>,
+    #[serde(default)]
+    config: Option<serde_yaml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DshCordisEntry {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    group: Option<bool>,
+    #[serde(default)]
+    config: Option<serde_yaml::Value>,
 }
 
 fn project_package(
@@ -814,15 +846,20 @@ fn project_package(
 ) -> PortResult<Vec<DshProjection>> {
     let mut projections = Vec::new();
 
-    let Some(package_doc) =
-        read_package_doc(files, package_json_uri, observed_at_ms, &mut projections)
-    else {
+    let Some(package_doc) = read_package_doc(
+        files,
+        source,
+        package_json_uri,
+        observed_at_ms,
+        &mut projections,
+    ) else {
         return Ok(projections);
     };
 
     let Some(field) = package_doc.dsh.as_ref() else {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
+            source,
             "dsh.package_no_dsh_field",
             "dsh",
             "package.json declares no dsh bundle or profile".to_string(),
@@ -831,7 +868,9 @@ fn project_package(
         return Ok(projections);
     };
 
+    let mut declared_role = false;
     if let Some(bundle) = field.bundle.as_ref() {
+        declared_role = true;
         project_bundle(
             bundle,
             files,
@@ -841,7 +880,9 @@ fn project_package(
             observed_at_ms,
             &mut projections,
         )?;
-    } else if let Some(profile) = field.profile.as_ref() {
+    }
+    if let Some(profile) = field.profile.as_ref() {
+        declared_role = true;
         project_profile(
             profile,
             source,
@@ -850,12 +891,14 @@ fn project_package(
             observed_at_ms,
             &mut projections,
         )?;
-    } else {
+    }
+    if !declared_role {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
-            "dsh.package_no_dsh_field",
+            source,
+            "dsh.package_no_supported_role",
             "dsh",
-            "package.json declares no dsh bundle or profile".to_string(),
+            "dsh declaration has no supported bundle or profile role".to_string(),
             observed_at_ms,
         )));
     }
@@ -865,6 +908,7 @@ fn project_package(
 
 fn read_package_doc(
     files: &BTreeMap<String, Vec<u8>>,
+    source: &PluginPackageSourceIdentity,
     package_json_uri: &str,
     observed_at_ms: u64,
     projections: &mut Vec<DshProjection>,
@@ -872,6 +916,7 @@ fn read_package_doc(
     let Some(bytes) = files.get(PACKAGE_JSON) else {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
+            source,
             "dsh.package_json_missing",
             "package.json",
             "managed package has no package.json".to_string(),
@@ -884,6 +929,7 @@ fn read_package_doc(
         Err(error) => {
             projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
                 package_json_uri,
+                source,
                 "dsh.package_json_invalid",
                 "package.json",
                 format!("package.json must be UTF-8: {error}"),
@@ -897,6 +943,7 @@ fn read_package_doc(
         Err(error) => {
             projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
                 package_json_uri,
+                source,
                 "dsh.package_json_invalid",
                 "package.json",
                 error.to_string(),
@@ -917,13 +964,34 @@ fn project_bundle(
     observed_at_ms: u64,
     projections: &mut Vec<DshProjection>,
 ) -> PortResult<()> {
-    let patch_rel =
-        normalize_relative_path(bundle.patch.as_deref().unwrap_or(DEFAULT_BUNDLE_PATCH));
+    let Some(declared_patch) = bundle.patch.as_deref().filter(|patch| !patch.is_empty()) else {
+        projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
+            package_json_uri,
+            source,
+            "dsh.bundle_patch_missing",
+            "dsh.bundle.patch",
+            "dsh bundle declaration must name its patch file".to_string(),
+            observed_at_ms,
+        )));
+        return Ok(());
+    };
+    let Some(patch_rel) = normalize_relative_path(declared_patch) else {
+        projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
+            package_json_uri,
+            source,
+            "dsh.bundle_patch_invalid",
+            "dsh.bundle.patch",
+            "dsh bundle patch must resolve to a file inside the managed package".to_string(),
+            observed_at_ms,
+        )));
+        return Ok(());
+    };
     let patch_uri = managed_source_uri(provenance_id, &source.package_id, &patch_rel);
 
     let Some(bytes) = files.get(&patch_rel) else {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
+            source,
             "dsh.bundle_patch_missing",
             "dsh.bundle.patch",
             format!("declared bundle patch file is not part of the package: {patch_rel}"),
@@ -937,6 +1005,7 @@ fn project_bundle(
         Err(error) => {
             projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
                 package_json_uri,
+                source,
                 "dsh.bundle_patch_invalid",
                 "dsh.bundle.patch",
                 format!("bundle patch must be UTF-8: {error}"),
@@ -949,6 +1018,7 @@ fn project_bundle(
     if patch_yaml.trim().is_empty() {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             &patch_uri,
+            source,
             "dsh.bundle_no_entries",
             "cordis.patch.yml",
             "bundle patch declares no cordis entries".to_string(),
@@ -957,11 +1027,12 @@ fn project_bundle(
         return Ok(());
     }
 
-    let entries = match serde_yaml::from_str::<Vec<DshPatchEntry>>(patch_yaml) {
+    let entries = match serde_yaml::from_str::<Vec<DshPatchOperation>>(patch_yaml) {
         Ok(entries) => entries,
         Err(error) => {
             projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
                 &patch_uri,
+                source,
                 "dsh.bundle_patch_invalid",
                 "cordis.patch.yml",
                 format!("bundle patch must be a YAML list: {error}"),
@@ -973,15 +1044,37 @@ fn project_bundle(
 
     let mut entry_ids = Vec::new();
     let mut seen = HashSet::new();
-    collect_entry_ids(&entries, &mut entry_ids, &mut seen);
-    if entry_ids.len() > MAX_ENTRIES_PER_PACKAGE {
+    let mut visited_entries = 0usize;
+    let mut unprojectable_entries = 0usize;
+    collect_entry_ids(
+        &entries,
+        &mut entry_ids,
+        &mut seen,
+        &mut visited_entries,
+        &mut unprojectable_entries,
+    );
+    if visited_entries > MAX_ENTRIES_PER_PACKAGE {
         return Err(adapter_port_error(format!(
             "managed package declares more than {MAX_ENTRIES_PER_PACKAGE} dsh bundle entries"
+        )));
+    }
+    if unprojectable_entries > 0 {
+        let invalid_uri = format!("{patch_uri}#unprojectable-entry");
+        projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
+            &invalid_uri,
+            source,
+            "dsh.bundle_entry_invalid",
+            "cordis.patch.yml",
+            format!(
+                "bundle patch contains {unprojectable_entries} Cordis entry or group value(s) without a valid stable identity"
+            ),
+            observed_at_ms,
         )));
     }
     if entry_ids.is_empty() {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             &patch_uri,
+            source,
             "dsh.bundle_no_entries",
             "cordis.patch.yml",
             "bundle patch declares no cordis entries".to_string(),
@@ -1021,6 +1114,7 @@ fn project_profile(
     if profile.bundles.is_empty() {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
+            source,
             "dsh.profile_no_bundles",
             "dsh.profile.bundles",
             "dsh profile declares no bundles".to_string(),
@@ -1029,18 +1123,30 @@ fn project_profile(
         return Ok(());
     }
 
-    let mut seen = HashSet::new();
     let mut projected = 0usize;
-    for name in &profile.bundles {
-        let name = name.trim();
-        if name.is_empty() || name.len() > MAX_PROFILE_BUNDLE_NAME_BYTES {
-            continue;
-        }
-        if !seen.insert(name.to_string()) {
+    for (index, name) in profile.bundles.iter().enumerate() {
+        if name.is_empty()
+            || name.trim() != name
+            || name.len() > MAX_PROFILE_BUNDLE_NAME_BYTES
+            || name.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+        {
+            let invalid_uri = format!("{package_json_uri}#bundle-index={index}");
+            projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
+                &invalid_uri,
+                source,
+                "dsh.profile_bundle_invalid",
+                &format!("dsh.profile.bundles[{index}]"),
+                "dsh profile bundle name must be a non-empty package name without whitespace"
+                    .to_string(),
+                observed_at_ms,
+            )));
             continue;
         }
         projected += 1;
-        let source_uri = format!("{package_uri}#bundle={}", urlencoding::encode(name));
+        let source_uri = format!(
+            "{package_uri}#bundle-index={index}&bundle={}",
+            urlencoding::encode(name)
+        );
         projections.push(DshProjection::Entry(DshEntryProjection::new(
             name.to_string(),
             source_uri,
@@ -1055,6 +1161,7 @@ fn project_profile(
     if projected == 0 {
         projections.push(DshProjection::Invalid(DshInvalidProjection::invalid(
             package_json_uri,
+            source,
             "dsh.profile_no_bundles",
             "dsh.profile.bundles",
             "dsh profile declares no valid bundle names".to_string(),
@@ -1064,25 +1171,124 @@ fn project_profile(
     Ok(())
 }
 
-fn collect_entry_ids(entries: &[DshPatchEntry], out: &mut Vec<String>, seen: &mut HashSet<String>) {
-    for entry in entries {
-        if let Some(id) = entry.id.as_deref() {
-            let id = id.trim().to_string();
-            if id.is_empty() || id.len() > MAX_ENTRY_ID_BYTES {
-                continue;
-            }
-            if seen.insert(id.clone()) {
-                out.push(id);
+fn collect_entry_ids(
+    entries: &[DshPatchOperation],
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    visited_entries: &mut usize,
+    unprojectable_entries: &mut usize,
+) {
+    for operation in entries {
+        *visited_entries = (*visited_entries).saturating_add(1);
+        if *visited_entries > MAX_ENTRIES_PER_PACKAGE {
+            return;
+        }
+        if let Some(id) = operation.id.as_deref() {
+            collect_stable_entry_id(id, out, seen, unprojectable_entries);
+        }
+        if let Some(insert) = operation.insert.as_deref() {
+            collect_cordis_entries(insert, out, seen, visited_entries, unprojectable_entries);
+            if *visited_entries > MAX_ENTRIES_PER_PACKAGE {
+                return;
             }
         }
-        if let Some(insert) = entry.insert.as_deref() {
-            collect_entry_ids(insert, out, seen);
-        }
+        collect_group_entries(
+            operation.group,
+            operation.config.as_ref(),
+            out,
+            seen,
+            visited_entries,
+            unprojectable_entries,
+        );
     }
 }
 
-fn normalize_relative_path(path: &str) -> String {
-    path.strip_prefix("./").unwrap_or(path).to_string()
+fn collect_cordis_entries(
+    entries: &[DshCordisEntry],
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    visited_entries: &mut usize,
+    unprojectable_entries: &mut usize,
+) {
+    for entry in entries {
+        *visited_entries = (*visited_entries).saturating_add(1);
+        if *visited_entries > MAX_ENTRIES_PER_PACKAGE {
+            return;
+        }
+        match entry.id.as_deref() {
+            Some(id) => collect_stable_entry_id(id, out, seen, unprojectable_entries),
+            None => *unprojectable_entries = (*unprojectable_entries).saturating_add(1),
+        }
+        collect_group_entries(
+            entry.group,
+            entry.config.as_ref(),
+            out,
+            seen,
+            visited_entries,
+            unprojectable_entries,
+        );
+    }
+}
+
+fn collect_group_entries(
+    group: Option<bool>,
+    config: Option<&serde_yaml::Value>,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    visited_entries: &mut usize,
+    unprojectable_entries: &mut usize,
+) {
+    if group != Some(true) {
+        return;
+    }
+    let Some(serde_yaml::Value::Sequence(values)) = config else {
+        if config.is_some() {
+            *unprojectable_entries = (*unprojectable_entries).saturating_add(1);
+        }
+        return;
+    };
+    let mut entries = Vec::with_capacity(values.len());
+    for value in values {
+        match serde_yaml::from_value::<DshCordisEntry>(value.clone()) {
+            Ok(entry) => entries.push(entry),
+            Err(_) => *unprojectable_entries = (*unprojectable_entries).saturating_add(1),
+        }
+    }
+    collect_cordis_entries(&entries, out, seen, visited_entries, unprojectable_entries);
+}
+
+fn collect_stable_entry_id(
+    id: &str,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    unprojectable_entries: &mut usize,
+) {
+    if id.is_empty() || id.len() > MAX_ENTRY_ID_BYTES || id.chars().any(char::is_control) {
+        *unprojectable_entries = (*unprojectable_entries).saturating_add(1);
+        return;
+    }
+    if seen.insert(id.to_string()) {
+        out.push(id.to_string());
+    }
+}
+
+fn normalize_relative_path(path: &str) -> Option<String> {
+    if path.starts_with('/') || path.contains('\\') {
+        return None;
+    }
+
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                segments.pop()?;
+            }
+            _ if segment.contains(':') || segment.chars().any(char::is_control) => return None,
+            _ => segments.push(segment),
+        }
+    }
+    (!segments.is_empty()).then(|| segments.join("/"))
 }
 
 fn stable_plugin_id(prefix: &str, component: &str, identity: &str) -> String {
