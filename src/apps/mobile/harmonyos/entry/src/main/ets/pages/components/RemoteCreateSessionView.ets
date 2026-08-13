@@ -136,11 +136,13 @@ export struct RemoteCreateSessionView {
           controlSize: 48,
           onToggle: this.onRestoreSidebar
         })
-      } else if (this.presentation !== ComposerPresentation.Floating) {
+      } else {
         Button() {
-          SymbolGlyph($r('sys.symbol.chevron_left'))
-            .fontSize(22)
-            .fontColor([INK])
+          TemplateIcon({
+            src: $r('app.media.remote_ref_back'),
+            iconWidth: 15,
+            iconHeight: 23
+          })
         }
         .width(48)
         .height(48)
@@ -151,8 +153,6 @@ export struct RemoteCreateSessionView {
         .borderRadius(24)
         .accessibilityText(RemoteI18n.t('common.back'))
         .onClick(() => this.onBack())
-      } else {
-        Blank().width(48).height(48)
       }
       Text(RemoteI18n.t('remote.create.title'))
         .layoutWeight(1)

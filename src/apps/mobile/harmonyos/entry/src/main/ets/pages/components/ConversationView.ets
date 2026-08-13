@@ -18,7 +18,7 @@ import {
 import { ComposerBar, ComposerPresentation } from './ComposerBar';
 import { GeneralChatHeader } from './GeneralChatHeader';
 import { RemoteChatHeader } from './RemoteChatHeader';
-import { CARD, FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
+import { FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, PAGE_BG, RED, SOFT } from './Theme';
 
 @ComponentV2
 export struct ConversationView {
@@ -41,10 +41,6 @@ export struct ConversationView {
   @Param hasMoreMessages: boolean = false;
   @Param timelineItems: ChatTimelineItem[] = [];
   @Param timelineRevision: number = 0;
-  @Param showSuggestionsWhenEmpty: boolean = false;
-  @Param supportsSearch: boolean = false;
-  @Param supportsImages: boolean = false;
-  @Param supportsFiles: boolean = false;
   @Param modelCatalog: ConversationUiModelCatalog = {
     version: 0,
     models: [],
@@ -118,11 +114,6 @@ export struct ConversationView {
               maxContentWidth: this.composerPresentation === ComposerPresentation.Floating ? 800 : 0
             })
               .layoutWeight(1)
-          } else if (this.shouldShowSuggestions()) {
-            Blank().layoutWeight(1)
-            if (!this.isVoiceListening) {
-              this.PromptArea()
-            }
           } else if (this.shouldCenterInlineStatus()) {
             this.CenteredInlineStatus()
           } else {
@@ -286,40 +277,6 @@ export struct ConversationView {
   }
 
   @Builder
-  PromptArea() {
-    Column({ space: 15 }) {
-      if (this.supportsSearch) {
-        this.SuggestionRow('globe', RemoteI18n.t('chatHome.research'), RemoteI18n.t('chatHome.researchPrompt'))
-      }
-      if (this.supportsImages) {
-        this.SuggestionRow('image', RemoteI18n.t('chatHome.image'), RemoteI18n.t('chatHome.imagePrompt'))
-      }
-      if (this.supportsFiles) {
-        this.SuggestionRow('file', RemoteI18n.t('chatHome.file'), RemoteI18n.t('chatHome.filePrompt'))
-      }
-    }
-    .width('100%')
-    .padding({ left: 24, right: 36, bottom: 18 })
-  }
-
-  @Builder
-  SuggestionRow(icon: string, label: string, prompt: string) {
-    Row({ space: 14 }) {
-      this.SuggestionIcon(icon)
-      Text(label)
-        .fontSize(17)
-        .fontWeight(FontWeight.Medium)
-        .fontColor(MUTED)
-        .layoutWeight(1)
-    }
-    .width('100%')
-    .height(38)
-    .onClick(() => {
-      this.onChatInputChange(prompt);
-    })
-  }
-
-  @Builder
   Composer() {
     ComposerBar({
       presentation: this.composerPresentation,
@@ -374,18 +331,22 @@ export struct ConversationView {
 
   @Builder
   HeaderActionsContent() {
-    Text('会话')
+    Text(RemoteI18n.t('chat.sessionSection'))
       .fontSize(13).fontWeight(FontWeight.Medium).fontColor(MUTED)
       .width('100%').height(28).padding({ left: 8 })
     if (this.surface === ChatSurface.General) {
       this.RemoteStyleMenuItem('remote_actions_check',
-        this.isSessionPinned ? '取消置顶' : '置顶', () => this.onTogglePinSession(), this.isSessionPinned)
+        this.isSessionPinned ? RemoteI18n.t('chat.unpin') : RemoteI18n.t('chat.pin'),
+        () => this.onTogglePinSession(), this.isSessionPinned)
     }
-    this.RemoteStyleMenuItem('remote_actions_cloud', '已上传的文件', () => this.onShowUploadedFiles())
+    this.RemoteStyleMenuItem('remote_actions_cloud', RemoteI18n.t('chat.uploadedFiles'),
+      () => this.onShowUploadedFiles())
     if (this.surface === ChatSurface.General) {
       Divider().strokeWidth(1).color(LINE).margin({ top: 8, bottom: 8 })
-      this.RemoteStyleMenuItem('remote_actions_folder', '归档', () => this.onArchiveSession())
-      this.RemoteStyleMenuItem('remote_actions_settings', '删除', () => this.onDeleteSession())
+      this.RemoteStyleMenuItem('remote_actions_folder', RemoteI18n.t('sidebar.archive'),
+        () => this.onArchiveSession())
+      this.RemoteStyleMenuItem('remote_actions_settings', RemoteI18n.t('common.delete'),
+        () => this.onDeleteSession())
     } else if (this.canStop) {
       Divider().strokeWidth(1).color(LINE).margin({ top: 8, bottom: 8 })
       this.RemoteStyleMenuItem('remote_actions_settings', RemoteI18n.t('chat.stop'), () => this.onStop())
@@ -425,70 +386,9 @@ export struct ConversationView {
     }
   }
 
-  @Builder
-  SuggestionIcon(kind: string) {
-    Stack({ alignContent: Alignment.Center }) {
-      if (kind === 'write') {
-        Text('Aa')
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(MUTED)
-      } else if (kind === 'organize') {
-        Text('=')
-          .fontSize(23)
-          .fontColor(MUTED)
-      } else if (kind === 'plan') {
-        Text('✓')
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(MUTED)
-      } else if (kind === 'globe') {
-        SymbolGlyph($r('sys.symbol.website'))
-          .fontSize(21)
-          .fontColor([MUTED])
-      } else if (kind === 'image') {
-        SymbolGlyph($r('sys.symbol.picture'))
-          .fontSize(21)
-          .fontColor([MUTED])
-      } else {
-        this.FileGlyph()
-      }
-    }
-    .width(26)
-    .height(26)
-  }
-
-  @Builder
-  FileGlyph() {
-    Stack() {
-      Text('')
-        .width(19)
-        .height(23)
-        .borderRadius(3)
-        .border({ width: 1.5, color: MUTED })
-        .position({ x: 3, y: 2 })
-      Text('')
-        .width(7)
-        .height(7)
-        .border({ width: { right: 1.5, bottom: 1.5 }, color: MUTED })
-        .position({ x: 15, y: 3 })
-    }
-    .width(26)
-    .height(26)
-  }
-
-  private shouldShowSuggestions(): boolean {
-    return ConversationViewContract.shouldShowSuggestions(
-      this.showSuggestionsWhenEmpty,
-      this.isBusy,
-      this.timelineItems
-    ) && (this.supportsSearch || this.supportsImages || this.supportsFiles);
-  }
-
   private shouldCenterInlineStatus(): boolean {
     return this.inlineStatusText.length > 0 &&
       !this.isBusy &&
-      !this.shouldShowSuggestions() &&
       !ConversationViewContract.hasRealTimelineItem(this.timelineItems);
   }
 
