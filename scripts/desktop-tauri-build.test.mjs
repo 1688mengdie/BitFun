@@ -10,6 +10,12 @@ const FAILED_BUILD = { status: 1 };
 const DMG_ARGS = ['--target', 'x86_64-apple-darwin', '--bundles', 'app,dmg'];
 const ROOT = join(import.meta.dirname, '..');
 
+test('release builds do not mutate DMGs after Tauri signs and notarizes them', () => {
+  const source = readFileSync(join(ROOT, 'scripts', 'desktop-tauri-build.mjs'), 'utf8');
+  assert.doesNotMatch(source, /patchDmgExtras/);
+  assert.doesNotMatch(source, /patch-dmg-extras\.sh/);
+});
+
 function retryFixture() {
   const root = join(tmpdir(), `bitfun-dmg-retry-${process.pid}-${Date.now()}`);
   const desktopDir = join(root, 'src', 'apps', 'desktop');
