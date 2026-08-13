@@ -12,6 +12,7 @@ export const groupChatMemberPickerAppearanceDescriptor: AppearanceSurfaceDescrip
     { id: 'addToggle' },
     { id: 'addList' },
     { id: 'addItem' },
+    { id: 'inactiveBadge' },
   ],
   states: [
     { id: 'owner', selector: { kind: 'self', suffix: '[data-bf-state~="owner"]' } },

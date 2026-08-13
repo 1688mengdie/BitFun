@@ -9,6 +9,7 @@ export const groupChatCreateDialogAppearanceDescriptor: AppearanceSurfaceDescrip
     { id: 'nameInput' },
     { id: 'memberList' },
     { id: 'memberOption' },
+    { id: 'inactiveBadge' },
     { id: 'cancel' },
     { id: 'create' },
   ],
