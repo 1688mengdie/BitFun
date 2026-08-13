@@ -98,6 +98,22 @@ fn build_default_role_permissions() -> RolePermissionMap {
         // 白名单同步登记。
         allowed_tools.insert("quant_pattern_chan".to_string());
         allowed_tools.insert("quant_pattern_dtw".to_string());
+        // W1-3（sentiment 工具族）：quant_sentiment（analyze/fgi）走 9527
+        // JSON-RPC（与 quant_pattern_* 同通道），Commander 白名单同步登记。
+        allowed_tools.insert("quant_sentiment".to_string());
+        // W1-5（alert 工具族）：quant_alert（send/heartbeat）走 9527 JSON-RPC
+        //（与 quant_pattern_* 同通道）；dry_run 默认 true（干跑优先，副作用红线
+        // ——真实发送通道需显式 dry_run=false + 用户确认），Commander 白名单
+        // 同步登记。
+        allowed_tools.insert("quant_alert".to_string());
+        // W1-4（strategen 工具族）：quant_strategen（generate/validate）走
+        // 9527 JSON-RPC（与 quant_pattern_* 同通道；generate 默认 mock refiner
+        // 无 LLM key 可跑），Commander 白名单同步登记。
+        allowed_tools.insert("quant_strategen".to_string());
+        // W1-2（anomaly 工具族）：quant_anomaly（abnormal.score）走 9527
+        // JSON-RPC（与 quant_pattern_* 同通道；5 指标加权融合评分卡，
+        // 阈值 warn70/reduce85/emergency95），Commander 白名单同步登记。
+        allowed_tools.insert("quant_anomaly".to_string());
         // Deferred 工具链核心：GetToolSpec/CallDeferredTool 不在
         // subagent_default_tools()，但缺失会导致全部 deferred 工具
         // （SessionControl/SessionMessage/Git/Plan 等）无法解锁。

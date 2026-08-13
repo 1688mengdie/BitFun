@@ -139,8 +139,8 @@ pub use plan_list_tool::PlanListTool;
 pub use plan_read_tool::PlanReadTool;
 pub use plan_update_tool::PlanUpdateTool;
 pub use quant_tools::{
-    OrderTool, QuantBacktestTool, QuantPatternChanTool, QuantPatternDtwTool, QuoteTool,
-    StrategyTool,
+    OrderTool, QuantAlertTool, QuantAnomalyTool, QuantBacktestTool, QuantPatternChanTool,
+    QuantPatternDtwTool, QuantSentimentTool, QuantStrategenTool, QuoteTool, StrategyTool,
 };
 #[cfg(feature = "tools-miniapp")]
 pub use playbook_tool::PlaybookTool;
