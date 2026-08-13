@@ -34,7 +34,7 @@ use crate::agentic::round_preempt::{DialogRoundInjectionSource, SessionRoundInje
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::restrictions::get_session_role;
-use crate::infrastructure::{get_path_manager_arc, PathManager};
+use crate::infrastructure::PathManager;
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::ThreadGoal;
@@ -3655,7 +3655,7 @@ mod tests {
     };
     use crate::agentic::tools::registry::ToolRegistry;
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
-    use crate::infrastructure::PathManager;
+    use crate::infrastructure::{get_path_manager_arc, PathManager};
     use bitfun_runtime_ports::{AgentDialogPrependedReminder, AgentInputAttachment, PortErrorKind};
     use tokio::sync::RwLock as TokioRwLock;
 
