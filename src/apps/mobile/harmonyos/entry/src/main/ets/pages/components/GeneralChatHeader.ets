@@ -38,7 +38,7 @@ export struct GeneralChatHeader {
   @Builder
   private TitleBlock() {
     Column({ space: 3 }) {
-      Text(this.title || 'BitFun')
+      Text(this.title || RemoteI18n.t('app.title'))
         .fontSize(this.hasSubtitle() ? 18 : 17)
         .fontWeight(FontWeight.Medium)
         .fontColor(INK)

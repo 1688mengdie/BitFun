@@ -38,10 +38,7 @@ export class ConversationViewState {
   hasMoreMessages: boolean = false;
   timelineItems: ChatTimelineItem[] = [];
   timelineRevision: number = 0;
-  showSuggestionsWhenEmpty: boolean = true;
-  supportsSearch: boolean = false;
-  supportsImages: boolean = false;
-  supportsFiles: boolean = false;
+  showSuggestionsWhenEmpty: boolean = false;
   modelCatalog: ConversationUiModelCatalog = toConversationUiModelCatalog(RemoteUiState.emptyModelCatalog());
   selectedModelId: string = '';
   isSessionPinned: boolean = false;

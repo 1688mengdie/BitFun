@@ -1,5 +1,6 @@
 import { RemotePermissionMode, RemoteSession } from '../../model/RemoteModels';
 import { CloudAccountDevice } from '../../services/CloudAccountClient';
+import { DetectedUrlAction } from '../../services/ConnectScanDecisionPolicy';
 import { ConversationIntent } from './ConversationIntent';
 import { AppRoute, ConversationSource } from '../navigation/AppRouteContract';
 
@@ -100,7 +101,7 @@ export interface ConnectPresentationActions {
   readonly clearPairing: () => void;
   readonly urlChanged: (url: string) => void;
   readonly userChanged: (user: string) => void;
-  readonly detected: (url: string) => boolean;
+  readonly detected: (url: string) => string;
   readonly inputVisible: (visible: boolean) => void;
   readonly paste: () => void;
   readonly scan: () => void;
@@ -142,7 +143,7 @@ export function emptyAppRootPresentationActions(): AppRootPresentationActions {
     },
     onConnect: {
       back: () => {}, connect: () => {}, clearPairing: () => {}, urlChanged: () => {}, userChanged: () => {},
-      detected: () => false, inputVisible: () => {}, paste: () => {}, scan: () => {},
+      detected: () => DetectedUrlAction.INVALID, inputVisible: () => {}, paste: () => {}, scan: () => {},
       cloudListDevices: async () => [], cloudSelectDevice: async () => {}
     },
     onFilePreview: { close: () => {}, refresh: () => {}, download: () => {}, openLink: () => {} },

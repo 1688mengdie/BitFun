@@ -1094,6 +1094,9 @@ export default function conversationStateUnitTest() {
       expect(generalProjection.surface).assertEqual(ChatSurface.General);
       expect(generalProjection.chatInput).assertEqual('general draft');
       expect(generalProjection.inlineStatusText).assertEqual('Configure model');
+      expect(generalProjection.showSuggestionsWhenEmpty).assertFalse();
+      expect(generalProjection.composerCapabilities.supportsAttachments).assertTrue();
+      expect(generalProjection.composerCapabilities.showAddButton).assertTrue();
     });
   });
 

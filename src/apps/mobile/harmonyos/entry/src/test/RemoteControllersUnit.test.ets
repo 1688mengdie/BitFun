@@ -1989,7 +1989,7 @@ export default function remoteControllersUnitTest() {
 
     it('keeps general chat independent from remote-only composer requirements', 0, () => {
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.surface).assertEqual(ChatSurface.General);
-      expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertFalse();
+      expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertTrue();
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.requiresRemoteConnection).assertFalse();
       // Nothing queues a message on this surface, so a draft written mid-reply
       // has nowhere to go until the reply finishes.
