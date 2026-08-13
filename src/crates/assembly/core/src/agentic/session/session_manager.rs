@@ -12806,35 +12806,7 @@ mod tests {
             .await
             .expect("legacy compatibility metadata should seed");
 
-        // Diagnostic: capture the exact storage path that persist_session_lineage
-        // will resolve, and verify metadata is present at BOTH the workspace
-        // path and the resolved path. If persist fails with NotFound while this
-        // assertion holds, the disturbance happens inside the update call.
-        let resolved_storage_path = manager
-            .effective_session_storage_path(&session.session_id)
-            .await;
-        let loaded_at_workspace = persistence_manager
-            .load_session_metadata(workspace.path(), &session.session_id)
-            .await
-            .expect("metadata lookup at workspace should succeed");
-        let loaded_at_resolved = match resolved_storage_path.as_deref() {
-            Some(path) => persistence_manager
-                .load_session_metadata(path, &session.session_id)
-                .await
-                .expect("metadata lookup at resolved path should succeed"),
-            None => None,
-        };
-        assert!(
-            loaded_at_workspace.is_some() && loaded_at_resolved.is_some(),
-            "metadata missing before persist: session_id={}, workspace={}, resolved_storage_path={:?}, at_workspace={}, at_resolved={}",
-            session.session_id,
-            workspace.path().display(),
-            resolved_storage_path,
-            loaded_at_workspace.is_some(),
-            loaded_at_resolved.is_some(),
-        );
-
-        let persist_result = manager
+        manager
             .persist_session_lineage(
                 &session.session_id,
                 SessionRelationship {
@@ -12849,31 +12821,8 @@ mod tests {
                     ..Default::default()
                 },
             )
-            .await;
-        if let Err(error) = persist_result {
-            // CI-only diagnostic: dump every state that could explain the
-            // NotFound so the disturbance becomes visible on the next run.
-            let should_persist = manager.should_persist_session_id(&session.session_id);
-            let resolved_now = manager
-                .effective_session_storage_path(&session.session_id)
-                .await;
-            let in_sessions_map = manager.sessions.contains_key(&session.session_id);
-            let at_resolved_now = match resolved_now.as_deref() {
-                Some(path) => persistence_manager
-                    .load_session_metadata(path, &session.session_id)
-                    .await
-                    .expect("metadata lookup at resolved path should succeed"),
-                None => None,
-            };
-            panic!(
-                "lineage should persist: {error}\n  session_id={}\n  in_sessions_map={}\n  should_persist_session_id={}\n  resolved_storage_path_now={:?}\n  metadata_at_resolved_now={}",
-                session.session_id,
-                in_sessions_map,
-                should_persist,
-                resolved_now,
-                at_resolved_now.is_some(),
-            );
-        }
+            .await
+            .expect("lineage should persist");
 
         let metadata = persistence_manager
             .load_session_metadata(workspace.path(), &session.session_id)

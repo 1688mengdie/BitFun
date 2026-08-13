@@ -45,7 +45,7 @@ use bitfun_services_core::{
     },
 };
 use futures::{stream, StreamExt};
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -1356,22 +1356,6 @@ impl PersistenceManager {
         if updated {
             Ok(())
         } else {
-            // CI-only diagnostic (RAD08 flake): dump the exact storage path
-            // and metadata file that were probed so a NotFound between
-            // merge_session_custom_metadata and persist_session_lineage can
-            // be attributed to a concrete path.
-            #[cfg(test)]
-            {
-                let layout = self.session_layout(workspace_path);
-                error!(
-                    "update_session_metadata NotFound diagnostic: session_id={}, workspace_path={}, sessions_root={}, metadata_path={}, sessions_root_exists={}",
-                    session_id,
-                    workspace_path.display(),
-                    layout.sessions_root().display(),
-                    layout.metadata_path(session_id).display(),
-                    layout.sessions_root().exists(),
-                );
-            }
             Err(BitFunError::NotFound(format!(
                 "Session metadata not found: {}",
                 session_id
