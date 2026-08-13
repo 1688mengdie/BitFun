@@ -22,7 +22,7 @@
     position: absolute;
     inset: -20% -10% auto;
     height: 320px;
-    background: var(--legion-page-gradient, var(--bf-appearance-token-color-accent-600));
+    background: var(--legion-page-gradient);
     opacity: 0.16;
     pointer-events: none;
     z-index: 0;
@@ -106,7 +106,7 @@
     content: "";
     position: absolute;
     inset: 0;
-    background: var(--legion-chip-gradient, var(--bf-appearance-token-color-accent-600));
+    background: var(--legion-chip-gradient);
     opacity: 0;
     transition: opacity 0.3s ease;
     pointer-events: none;
