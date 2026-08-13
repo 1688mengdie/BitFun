@@ -12235,7 +12235,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     .complete(task_pk, result.as_ref())
                     .await;
 
-                let (completion_status, _) = match &result {
+                let (completion_status, completion_text) = match &result {
                     Ok(sr) => {
                         let status = match sr.status {
                             SubagentResultStatus::Completed => SubagentCompletionStatus::Completed,
@@ -12267,9 +12267,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 let _ = scheduler_for_cancel
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
-                        message: background_subagent_follow_up_notice(
+                        message: background_subagent_follow_up_message(
                             &subagent_session_id_for_emit,
                             &agent_type,
+                            completion_text.as_deref(),
                         ),
                         original_message: None,
                         turn_id: None,
@@ -12403,7 +12404,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .complete(task_pk, result.as_ref())
                 .await;
 
-            let (completion_status, _) = match &result {
+            let (completion_status, completion_text) = match &result {
                 Ok(sr) => {
                     let status = match sr.status {
                         SubagentResultStatus::Completed => SubagentCompletionStatus::Completed,
@@ -12434,9 +12435,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 let _ = scheduler
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
-                        message: background_subagent_follow_up_notice(
+                        message: background_subagent_follow_up_message(
                             &subagent_session_id_for_emit,
                             &agent_type,
+                            completion_text.as_deref(),
                         ),
                         original_message: None,
                         turn_id: None,
@@ -12785,12 +12787,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 }
 
-/// P-19：后台 subagent 完成主会话通知只含极简元信息（session_id + 身份标识 +
-/// 已回复状态 + use SessionHistory 指引），对齐 scheduler.rs
-/// background_result_follow_up_user_input 语义。
+/// P-19 修订（2026-08-13 主人定标）：后台 subagent 完成主会话通知携带最终
+/// 结果全文（对齐 SessionMessage 回传体验），但仍保持单一来源（通知 turn 是
+/// 全文的唯一投递通道，SubagentTurnCompleted 事件 output_text 仍为 None，
+/// 不产生重复事件流）。
 ///
-/// 全量 output_text 不回主会话，只由 SubagentTurnCompleted 事件与子会话自身
-/// turn 持久化承载；按需经 SessionHistory(session_id) 检索。
+/// 截断护栏：全文超过 [`BACKGROUND_FOLLOW_UP_TEXT_LIMIT`] 字符时截断为
+/// 前缀摘要 + "完整回复见 SessionHistory(session_id)" 指引，防止上下文膨胀。
+const BACKGROUND_FOLLOW_UP_TEXT_LIMIT: usize = 16_000;
+
 fn background_subagent_follow_up_notice(session_id: &str, agent_type: &str) -> String {
     let identity = if agent_type.trim().is_empty() {
         "agent".to_string()
@@ -12800,6 +12805,30 @@ fn background_subagent_follow_up_notice(session_id: &str, agent_type: &str) -> S
     format!(
         "Background agent session {session_id} ({identity}) has replied; use SessionHistory to view the full reply."
     )
+}
+
+/// 组装后台完成通知主文：通知句 + 最终结果全文（截断护栏）。
+/// `full_text` 为 None（失败/无文本）时退化为纯通知句。
+pub(crate) fn background_subagent_follow_up_message(
+    session_id: &str,
+    agent_type: &str,
+    full_text: Option<&str>,
+) -> String {
+    let notice = background_subagent_follow_up_notice(session_id, agent_type);
+    match full_text {
+        Some(text) if !text.trim().is_empty() => {
+            if text.chars().count() > BACKGROUND_FOLLOW_UP_TEXT_LIMIT {
+                let truncated: String =
+                    text.chars().take(BACKGROUND_FOLLOW_UP_TEXT_LIMIT).collect();
+                format!(
+                    "{notice}\n\n{truncated}\n\n[完整回复超过 {BACKGROUND_FOLLOW_UP_TEXT_LIMIT} 字符，已截断；全文见 SessionHistory({session_id})]"
+                )
+            } else {
+                format!("{notice}\n\n{text}")
+            }
+        }
+        _ => notice,
+    }
 }
 
 fn resolve_agent_submission_turn_id(
@@ -14989,7 +15018,7 @@ fn merge_prepended_messages_for_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_primary_agent_model_default, background_subagent_follow_up_notice,
+        apply_primary_agent_model_default, background_subagent_follow_up_message,
         btw_session_memory_mode, build_subagent_session_relationship,
         lineage_active_turn_after_transcript, lineage_post_admission_cancellation_error,
         lineage_session_is_settling_without_active_state, logical_subagent_type_or_runtime,
@@ -15003,7 +15032,8 @@ mod tests {
         validate_required_lineage_turns_settled, ActiveSubagentExecution,
         BackgroundSubagentWaitMode, ContextCompactionOutcome, ConversationCoordinator,
         ManualCompactionCommitGate, SessionMemoryMode, SessionReferenceLocator,
-        SessionRelationshipKind, SubagentExecutionRequest, TEST_AGENT_MODEL_DEFAULTS,
+        SessionRelationshipKind, SubagentExecutionRequest, BACKGROUND_FOLLOW_UP_TEXT_LIMIT,
+        TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::agents::ExternalSubagentModelBinding;
     use crate::agentic::coordination::coordination_store::{
@@ -20817,12 +20847,7 @@ mod tests {
         let mut events = coordinator.event_queue.subscribe();
 
         let discarded = coordinator
-            .discard_transient_session(
-                &workspace_path,
-                None,
-                None,
-                &root.session_id,
-            )
+            .discard_transient_session(&workspace_path, None, None, &root.session_id)
             .await
             .expect("transient family discard should succeed");
         assert!(discarded, "a live transient family must be discarded");
@@ -20831,12 +20856,7 @@ mod tests {
         let mut deleted_ids = Vec::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while deleted_ids.len() < 3 && tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout_at(
-                deadline,
-                events.recv(),
-            )
-            .await
-            {
+            match tokio::time::timeout_at(deadline, events.recv()).await {
                 Ok(Ok(envelope)) => {
                     if let AgenticEvent::SessionDeleted { session_id } = envelope.event {
                         deleted_ids.push(session_id);
@@ -20859,7 +20879,9 @@ mod tests {
         // In-memory state is gone: no residual shell on the runtime side.
         assert!(session_manager.get_session(&root.session_id).is_none());
         assert!(session_manager.get_session(&child.session_id).is_none());
-        assert!(session_manager.get_session(&grandchild.session_id).is_none());
+        assert!(session_manager
+            .get_session(&grandchild.session_id)
+            .is_none());
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }
@@ -22188,21 +22210,35 @@ mod tests {
     }
 
     #[test]
-    fn background_subagent_follow_up_returns_minimal_metadata_only() {
-        // P-19 防回退（B/C 代表路径）：后台 subagent 完成主会话仅收极简元信息
-        // （session_id + 身份 + 已回复 + use SessionHistory 指引），不含全量
-        // output_text / 全文；全量由 SubagentTurnCompleted 事件与子会话 turn
-        // 落盘承载。
+    fn background_subagent_follow_up_message_carries_full_text_single_source() {
+        // P-19 修订（2026-08-13 主人定标）：后台 subagent 完成通知携带最终
+        // 结果全文（对齐 SessionMessage 回传），但仍是单一来源（通知 turn 是
+        // 全文唯一投递通道；SubagentTurnCompleted 事件 output_text 仍为 None，
+        // 不产生重复事件流）。
         let full_output = format!("SUBAGENT_FULL_OUTPUT_MARKER_{}", "x".repeat(4096));
-        let notice = background_subagent_follow_up_notice("flow-session-9", "acp:claude");
+        let notice = background_subagent_follow_up_message(
+            "flow-session-9",
+            "acp:claude",
+            Some(&full_output),
+        );
         assert!(notice.contains("flow-session-9"));
         assert!(notice.contains("acp:claude"));
         assert!(notice.contains("has replied"));
-        assert!(notice.contains("use SessionHistory"));
-        assert!(!notice.contains(&full_output));
-        assert!(!notice.contains("SUBAGENT_FULL_OUTPUT_MARKER_"));
-        // 身份为空时回退 "agent"，与 scheduler background_result_follow_up 一致。
-        let fallback = background_subagent_follow_up_notice("flow-session-8", "");
+        // 全文随通知投递（单一来源）
+        assert!(notice.contains(&full_output));
+        // 截断护栏：超过上限截断 + SessionHistory 指引
+        let huge = "y".repeat(BACKGROUND_FOLLOW_UP_TEXT_LIMIT + 100);
+        let truncated =
+            background_subagent_follow_up_message("flow-session-10", "agentic", Some(&huge));
+        assert!(truncated.contains("已截断"));
+        assert!(truncated.contains("SessionHistory(flow-session-10)"));
+        assert!(!truncated.contains(&huge));
+        // 无全文（失败）退化为纯通知句
+        let failed = background_subagent_follow_up_message("flow-session-11", "agentic", None);
+        assert!(failed.contains("flow-session-11"));
+        assert!(failed.contains("use SessionHistory"));
+        // 身份为空时回退 "agent"
+        let fallback = background_subagent_follow_up_message("flow-session-8", "", None);
         assert!(fallback.contains("flow-session-8"));
         assert!(fallback.contains("(agent)"));
     }

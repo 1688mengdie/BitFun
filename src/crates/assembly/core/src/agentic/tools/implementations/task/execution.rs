@@ -256,24 +256,6 @@ fn acp_send_input_notice(_full_response: &str, session_id: &str) -> String {
     )
 }
 
-/// P-19：后台 ACP 子任务结果主会话通知只含极简元信息（session_id + 身份标识 +
-/// 已回复状态 + use SessionHistory 指引），对齐 scheduler.rs
-/// background_result_follow_up_user_input 语义。
-///
-/// 全量回复不回主会话，只由 P-03 persist_background_acp_turn_to_workspace
-/// 落盘成 turn，经 SessionHistory(session_id) 检索；不附带 prepended 提醒
-/// 旁路（单路元数据通知）。
-fn acp_background_result_notice(session_id: &str, agent_type: &str) -> String {
-    let identity = if agent_type.trim().is_empty() {
-        "agent".to_string()
-    } else {
-        agent_type.to_string()
-    };
-    format!(
-        "Background agent session {session_id} ({identity}) has replied; use SessionHistory to view the full reply."
-    )
-}
-
 /// P-03：后台 ACP 回复完整 turn 落盘（核心，注入 PersistenceManager 可测）。
 ///
 /// 参照 session_message_tool::persist_acp_direct_delivery_turn 同构：落盘存
@@ -976,7 +958,9 @@ impl TaskTool {
                 let output_text = match &sent {
                     Ok(result) => {
                         // P-03：后台 ACP 回复完整 turn 落盘（全文供 SessionHistory
-                        // 检索）；注入主会话的 message 保持通知句（03 文档铁则）。
+                        // 检索）；注入主会话的 message = 通知句 + 全文（主人定标
+                        // 2026-08-13：Task 异步最终输出像 SessionMessage 一样直接
+                        // 回传，截断护栏在组装层处理）。
                         persist_background_acp_turn_to_workspace(
                             workspace_path_for_task.clone(),
                             &flow_session_id_for_task,
@@ -986,10 +970,13 @@ impl TaskTool {
                             None,
                         )
                         .await;
-                        Some(acp_background_result_notice(
-                            &flow_session_id_for_task,
-                            &agent_type_for_task,
-                        ))
+                        Some(
+                            crate::agentic::coordination::background_subagent_follow_up_message(
+                                &flow_session_id_for_task,
+                                &agent_type_for_task,
+                                Some(&result.response),
+                            ),
+                        )
                     }
                     Err(error) => {
                         // P-03：后台 ACP 失败分支同样落盘失败 turn
@@ -2459,20 +2446,24 @@ mod target_context_tests {
     }
 
     #[test]
-    fn acp_background_result_notice_carries_only_minimal_metadata() {
-        // P-19 防回退：Task 后台 ACP 结果通知仅含极简元信息（session_id +
-        // 身份标识 + 已回复状态 + use SessionHistory 指引），不含全文正文；
-        // prepended 提醒旁路已移除（单路元数据通知）。
+    fn acp_background_result_message_carries_full_reply_single_source() {
+        // P-19 修订（2026-08-13 主人定标）：Task 后台 ACP 结果通知携带最终
+        // 回复全文（对齐 SessionMessage 回传），单一来源投递。
         let full_reply = format!("EXTERNAL_REPLY_MARKER_{}", "x".repeat(4096));
-        let notice = acp_background_result_notice("flow-123", "acp:codex");
+        let notice = crate::agentic::coordination::background_subagent_follow_up_message(
+            "flow-123",
+            "acp:codex",
+            Some(&full_reply),
+        );
         assert!(notice.contains("flow-123"));
         assert!(notice.contains("acp:codex"));
         assert!(notice.contains("has replied"));
-        assert!(notice.contains("use SessionHistory"));
-        assert!(!notice.contains(&full_reply));
-        assert!(!notice.contains("Background ACP subagent task completed"));
-        // 身份为空时回退 "agent"，与 scheduler background_result_follow_up 一致。
-        let fallback = acp_background_result_notice("flow-456", "");
+        // 全文随通知投递（单一来源）
+        assert!(notice.contains(&full_reply));
+        // 身份为空时回退 "agent"
+        let fallback = crate::agentic::coordination::background_subagent_follow_up_message(
+            "flow-456", "", None,
+        );
         assert!(fallback.contains("flow-456"));
         assert!(fallback.contains("(agent)"));
     }
