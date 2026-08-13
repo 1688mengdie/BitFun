@@ -217,6 +217,9 @@ mod tests {
     /// milliseconds.
     async fn assert_port_released(port: u16, what: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // `last_err` is only read by the panic branch below; the assignment
+        // itself is deliberately discardable (the retry loop owns the error).
+        #[allow(unused_assignments)]
         let mut last_err = None;
         loop {
             match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {

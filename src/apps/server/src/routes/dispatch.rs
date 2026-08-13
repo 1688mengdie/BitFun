@@ -3,6 +3,11 @@
 //! This route owns no Agent Runtime and no target session. It only exposes the
 //! same platform-neutral controller used by Desktop, backed by saved SSH
 //! profiles and the observer-only outbound index.
+//!
+//! NOTE: today the Server Host's HTTP shell does not mount these routes (only
+//! tests exercise them); they are retained for the follow-up that re-wires the
+//! external_sources dispatch path onto the app-server schema.
+#![allow(dead_code)]
 
 use bitfun_core::external_sources::{
     ExternalSourceOperationError, ExternalSourceOperationErrorCode, ExternalSourceOperationResult,

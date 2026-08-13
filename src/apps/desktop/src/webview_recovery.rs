@@ -1,3 +1,12 @@
+//! WebView2 process-failure recovery.
+//!
+//! The decision engine (constants, enums, pure functions) is used by the
+//! Windows-only install path and by the unit tests below; on non-Windows
+//! builds nothing outside `#[cfg(test)]` references it, so the dead-code lint
+//! would otherwise fire. All of it is intentional: the recovery decision rules
+//! stay platform-neutral and unit-testable on every host.
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 

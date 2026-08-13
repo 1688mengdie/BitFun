@@ -36,7 +36,13 @@ mod bootstrap;
 mod routes;
 
 pub(crate) struct DispatchHostState {
+    // NOTE: the detached-dispatch routes are only exercised from tests today;
+    // the HTTP shell keeps them dormant. Fields are retained for the follow-up
+    // that re-wires the external_sources dispatch path onto the app-server
+    // schema (see the comment on AppState.dispatch_host).
+    #[allow(dead_code)]
     path_manager: Arc<bitfun_core::infrastructure::PathManager>,
+    #[allow(dead_code)]
     ssh_manager: Arc<bitfun_core::service::remote_ssh::SSHConnectionManager>,
 }
 
@@ -49,6 +55,10 @@ pub struct AppState {
     #[allow(dead_code)]
     external_workspace_root: Option<PathBuf>,
     allowed_browser_origins: Arc<HashSet<String>>,
+    // NOTE(Step 2a): only read by the external_sources dispatch path, which is
+    // temporarily dead under browser-direct ACP-over-WS. Kept for the follow-up
+    // that brings external_sources onto the app-server schema.
+    #[allow(dead_code)]
     dispatch_host: Option<Arc<DispatchHostState>>,
     /// In-process agent runtime surface, present only when the host is started
     /// with `--with-runtime`. Kept dormant (None) for the default read-only

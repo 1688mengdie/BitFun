@@ -828,19 +828,19 @@ mod tests {
         let store = GroupChatStore::new(root.path().join("group-chats"));
         seed_ingest_room(&store, "room-f2", "msg-1");
         ingest_via_router(&store, "room-f2", "msg-1").await;
-        assert_ingest_result(&store, "room-f2", "msg-1");
+        assert_ingest_result(&store, "room-f2", "msg-1").await;
 
         let root = TestTempDir::new("f2-converge-core");
         let store = GroupChatStore::new(root.path().join("group-chats"));
         seed_ingest_room(&store, "room-f2", "msg-1");
         ingest_via_core(&store, "room-f2", "msg-1").await;
-        assert_ingest_result(&store, "room-f2", "msg-1");
+        assert_ingest_result(&store, "room-f2", "msg-1").await;
 
         let root = TestTempDir::new("f2-converge-port");
         let store = GroupChatStore::new(root.path().join("group-chats"));
         seed_ingest_room(&store, "room-f2", "msg-1");
         ingest_via_port(&store, "room-f2", "msg-1").await;
-        assert_ingest_result(&store, "room-f2", "msg-1");
+        assert_ingest_result(&store, "room-f2", "msg-1").await;
     }
 
     #[tokio::test]
