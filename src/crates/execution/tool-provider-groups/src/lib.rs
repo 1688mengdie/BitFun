@@ -115,7 +115,7 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         | "get_goal" | "create_goal" | "update_goal" | "CreatePlan" | "PlanList" | "PlanRead"
         | "PlanUpdate" | "LegionControl" | "acp_control" | "acp_message" | "acp_history"
         | "quant_backtest" | "quote" | "strategy" | "order" | "quant_pattern_chan"
-        | "quant_pattern_dtw" | "quant_sentiment" | "quant_alert" | "quant_anomaly" | "quant_strategen" | "submit_code_review"
+        | "quant_pattern_dtw" | "quant_sentiment" | "quant_alert" | "quant_anomaly" | "quant_strategen" | "content_publish" | "content_render_kline" | "knowledge_graph" | "gbrain" | "submit_code_review"
         | "GetToolSpec" | "CallDeferredTool" | "SessionControl" | "SessionMessage"
         | "SessionHistory" | "Cron" => Some(ToolPackFeatureGroup::AgentControl),
         _ => None,
@@ -244,6 +244,10 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "quant_alert",
             "quant_anomaly",
             "quant_strategen",
+            "content_publish",
+            "content_render_kline",
+            "knowledge_graph",
+            "gbrain",
             "Cron",
         ],
     },
@@ -550,6 +554,10 @@ mod tests {
                 "quant_alert",
                 "quant_anomaly",
                 "quant_strategen",
+                "content_publish",
+                "content_render_kline",
+                "knowledge_graph",
+                "gbrain",
                 "Cron",
                 "WebSearch",
                 "WebFetch",

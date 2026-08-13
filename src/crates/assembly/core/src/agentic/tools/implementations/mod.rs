@@ -34,6 +34,7 @@ pub mod generative_ui_tool;
 #[cfg(feature = "tools-git")]
 pub mod get_file_diff_tool;
 pub mod get_time_tool;
+pub mod gbrain_tool;
 #[cfg(feature = "tools-git")]
 pub mod git_tool;
 pub mod glob_tool;
@@ -112,6 +113,7 @@ pub use generative_ui_tool::GenerativeUITool;
 #[cfg(feature = "tools-git")]
 pub use get_file_diff_tool::GetFileDiffTool;
 pub use get_time_tool::GetTimeTool;
+pub use gbrain_tool::GbrainTool;
 #[cfg(feature = "tools-git")]
 pub use git_tool::GitTool;
 pub use glob_tool::GlobTool;
@@ -139,8 +141,9 @@ pub use plan_list_tool::PlanListTool;
 pub use plan_read_tool::PlanReadTool;
 pub use plan_update_tool::PlanUpdateTool;
 pub use quant_tools::{
-    OrderTool, QuantAlertTool, QuantAnomalyTool, QuantBacktestTool, QuantPatternChanTool,
-    QuantPatternDtwTool, QuantSentimentTool, QuantStrategenTool, QuoteTool, StrategyTool,
+    OrderTool, QuantAlertTool, QuantAnomalyTool, QuantBacktestTool, QuantContentRenderKlineTool,
+    QuantKnowledgeGraphTool, QuantPatternChanTool, QuantPatternDtwTool, QuantPublishTool,
+    QuantSentimentTool, QuantStrategenTool, QuoteTool, StrategyTool,
 };
 #[cfg(feature = "tools-miniapp")]
 pub use playbook_tool::PlaybookTool;

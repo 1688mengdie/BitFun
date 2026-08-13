@@ -1422,6 +1422,32 @@ fn default_dry_run_true() -> bool {
     true
 }
 
+// ── knowledge_graph 输入（W2-4：kgraph.* 多 action）────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct QuantKnowledgeGraphInput {
+    /// One of "query" | "search" | "path" | "meta".
+    pub action: String,
+    /// Root node id (query).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept_id: Option<String>,
+    /// Search query (search).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// Search mode (search): grep | semantic | hybrid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Result count (search).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u64>,
+    /// Path start node id (path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_id: Option<String>,
+    /// Path end node id (path).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_id: Option<String>,
+}
+
 /// `quant_alert` — taiji alert actions (send / heartbeat) via JSON-RPC.
 pub struct QuantAlertTool;
 
@@ -1781,6 +1807,232 @@ Arguments:
     }
 }
 
+// ── content_publish (9527 JSON-RPC: publish.preview / publish.submit) ───────
+//
+// W2-2（publisher 工具族）：复用 taiji_rpc_call（std TCP 直连 9527 /api/rpc），
+// 零新依赖——与 quote/strategy/order/quant_pattern_*/quant_sentiment/
+// quant_alert 完全同通道、同超时、同错误映射。
+// taiji-server 侧 publish.preview（平台探测：凭证配置 + auth + CLI，只读）+
+// publish.submit（显式触发发布——PublishScheduler 并发 + 指数退避重试）由
+// taiji-publisher 能力 crate 提供（源区 taiji-lvpa 已注册）。
+//
+// 副作用红线（W2-2，同 W1-5 alert）：publish.submit 涉及真实发布到外部平台
+//（B 站/Twitter/微信/抖音/小红书）。本工具默认 dry_run=true（仅资产校验 +
+// 平台探测，**零真实发布**）；显式 dry_run=false 才放行真实投递——真实发布
+// 需用户确认（干跑优先）。凭证纪律：四平台凭证只在 taiji-server 服务端，
+// 本工具/响应**零回传**。
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct QuantPublishInput {
+    /// One of "preview" | "submit".
+    pub action: String,
+    /// Platform whitelist (preview/submit; optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platforms: Option<Vec<String>>,
+    /// Video asset JSON (submit 必填; preview 可选):
+    /// {title, description, tags?, video_path, instrument?, freq?}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video: Option<Value>,
+    /// dry-run (submit; default true): true = asset validation + platform probe
+    /// only, ZERO real publish. Real publish requires explicit dry_run=false.
+    #[serde(default = "default_publish_dry_run_true")]
+    pub dry_run: bool,
+}
+
+/// serde 缺省：dry_run 默认 true（干跑优先，副作用红线——真实发布需显式
+/// dry_run=false + 用户确认）。
+fn default_publish_dry_run_true() -> bool {
+    true
+}
+
+/// `content_publish` — taiji publisher actions (preview / submit) via JSON-RPC.
+pub struct QuantPublishTool;
+
+impl Default for QuantPublishTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantPublishTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for QuantPublishTool {
+    fn name(&self) -> &str {
+        "content_publish"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(
+            r#"Run taiji multi-platform content publishing through the taiji quant engine (taiji-server JSON-RPC `publish.preview` / `publish.submit`).
+
+Actions:
+- "preview": Read-only platform probe — checks server-side credentials configuration, auth validity, and CLI availability for each platform. Returns available_platforms (configured/auth_ok/cli_ok). Zero side effects. Platform credentials NEVER leave the server (they are not returned in the response).
+- "submit": Explicitly trigger publishing via PublishScheduler (concurrent + exponential backoff retry). Requires "video". **dry_run defaults to true**: true = asset validation + platform probe only, ZERO real publish (attempts all failed/degrated registration); real publish to external platforms requires explicit dry_run=false and user confirmation (side-effect red line, same as quant_alert).
+
+Arguments:
+- "action": Required. One of "preview", "submit".
+- "platforms": Optional whitelist ["bilibili","twitter","wechat_mp","douyin","xiaohongshu"]; omitted = all configured.
+- "video": JSON object for submit (required): {title, description, tags?, video_path, instrument?, freq?}. video_path must be an existing file on the server.
+- "dry_run": Optional for submit (default true)."#
+                .to_string(),
+        )
+    }
+
+    fn short_description(&self) -> String {
+        "Run taiji multi-platform publish preview / submit via JSON-RPC.".to_string()
+    }
+
+    fn default_exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["preview", "submit"],
+                    "description": "Publish action to perform."
+                },
+                "platforms": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Platform whitelist; optional."
+                },
+                "video": {
+                    "type": "object",
+                    "description": "Video asset: {title, description, tags?, video_path, instrument?, freq?}; required for submit."
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Default true: asset validation + platform probe only, ZERO real publish."
+                }
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        })
+    }
+
+    fn is_readonly(&self) -> bool {
+        false
+    }
+
+    fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
+        false
+    }
+
+    async fn validate_input(
+        &self,
+        input: &Value,
+        _context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        let parsed: QuantPublishInput = match serde_json::from_value(input.clone()) {
+            Ok(value) => value,
+            Err(error) => {
+                return ValidationResult {
+                    result: false,
+                    message: Some(format!("Invalid input: {}", error)),
+                    error_code: Some(400),
+                    meta: None,
+                };
+            }
+        };
+        let result = match parsed.action.as_str() {
+            "preview" => true,
+            "submit" => {
+                parsed.video.as_ref().map(Value::is_object).unwrap_or(false)
+                    && parsed
+                        .video
+                        .as_ref()
+                        .and_then(|v| v.get("title"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|v| !v.is_empty())
+                    && parsed
+                        .video
+                        .as_ref()
+                        .and_then(|v| v.get("description"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|v| !v.is_empty())
+                    && parsed
+                        .video
+                        .as_ref()
+                        .and_then(|v| v.get("video_path"))
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .is_some_and(|v| !v.is_empty())
+            }
+            _ => false,
+        };
+        ValidationResult {
+            result,
+            message: if result {
+                None
+            } else {
+                Some("action 'submit' needs video{title,description,video_path}; action 'preview' takes optional platforms/video".to_string())
+            },
+            error_code: if result { None } else { Some(400) },
+            meta: None,
+        }
+    }
+
+    fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
+        let action = input
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        format!("Run taiji publish '{}'", action)
+    }
+
+    async fn call_impl(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let params: QuantPublishInput = serde_json::from_value(input.clone())
+            .map_err(|error| BitFunError::tool(format!("Invalid input: {}", error)))?;
+
+        let mut call_params = serde_json::Map::new();
+        if let Some(platforms) = params.platforms {
+            call_params.insert(
+                "platforms".to_string(),
+                json!(platforms.iter().filter(|s| !s.trim().is_empty()).collect::<Vec<_>>()),
+            );
+        }
+        if let Some(video) = params.video {
+            call_params.insert("video".to_string(), video);
+        }
+        // 副作用红线：默认 dry_run=true（干跑优先，零真实发布）；
+        // 显式 dry_run=false 才放行真实投递（需用户确认）。
+        call_params.insert("dry_run".to_string(), json!(params.dry_run));
+
+        let (method, call_params) = match params.action.as_str() {
+            "preview" => ("publish.preview", Value::Object(call_params)),
+            "submit" => ("publish.submit", Value::Object(call_params)),
+            other => {
+                return Err(BitFunError::tool(format!(
+                    "unknown publish action '{}'; expected preview or submit",
+                    other
+                )));
+            }
+        };
+        let result = taiji_rpc_call(method, call_params).await?;
+        Ok(quant_tool_result(json!({
+            "success": true,
+            "method": method,
+            "channel": "rpc",
+            "response": result,
+        })))
+    }
+}
+
 // ── quant_anomaly (9527 JSON-RPC: abnormal.score) ──────────────────────────
 //
 // W1-2（anomaly 工具族）：复用 taiji_rpc_call（std TCP 直连 9527 /api/rpc），
@@ -1927,6 +2179,385 @@ Arguments:
     }
 }
 
+// ── knowledge_graph (9527 JSON-RPC: kgraph.*) ──────────────────────────────
+//
+// W2-4（knowledge_graph 工具族）：复用 taiji_rpc_call（std TCP 直连 9527
+// /api/rpc），零新依赖——与 quote/strategy/order 完全同通道、同超时、同错误
+// 映射。taiji-server 侧 kgraph.query（2-hop 子图）/ kgraph.search（grep/
+// semantic/hybrid 三层搜索）/ kgraph.path（astar 最短路）/ kgraph.meta（统计
+// + 布局）由 taiji-knowledge-graph 能力 crate 提供（编译期静态数据——build.rs
+// 从 7 Agent JSON Schema + golden tick 生成，纯只读，无运行时写）。
+//
+// 与群聊/KnowledgeBaseSearch 零重叠：本工具 = 策略知识图谱（概念/策略/案例
+// 三层次关系图 + 语义检索）；KnowledgeBaseSearch = 文件系统全文检索；gbrain
+// = 结构化 RAG 知识库。
+
+/// `knowledge_graph` — 策略知识图谱查询（taiji-server `kgraph.*`）。
+pub struct QuantKnowledgeGraphTool;
+
+impl Default for QuantKnowledgeGraphTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantKnowledgeGraphTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for QuantKnowledgeGraphTool {
+    fn name(&self) -> &str {
+        "knowledge_graph"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(
+            r#"Query the taiji strategy knowledge graph through the taiji quant engine (taiji-server JSON-RPC `kgraph.*`).
+
+The graph is a petgraph-backed concept/strategy/case relation graph (量价时空理论概念 + 7 Agent 策略规则 + golden tick 案例), compiled from 7 Agent JSON Schemas + golden tick data at build time. Pure read-only queries over static data.
+
+Actions:
+- "query": 2-hop subgraph rooted at a concept. Requires concept_id (e.g. "agent_decision", "theory_structure"). Returns {nodes, edges, root, node_count, edge_count}.
+- "search": Search nodes. Requires query. Optional mode ("grep" keyword | "semantic" embedding | "hybrid" merged, default "hybrid") and top_k (default 10). Semantic mode uses a deterministic local mock embedder (offline, no LLM key).
+- "path": Shortest path between two nodes (astar). Requires from_id and to_id. Returns {path, cost, found}.
+- "meta": Graph statistics + category distribution + optional BFS layer layout. Optional include_layout (default false; layout is an O(N) full-graph BFS, computed lazily on demand).
+
+Arguments:
+- "action": Required. One of "query", "search", "path", "meta".
+- "concept_id": Required for query.
+- "query": Required for search.
+- "mode": Optional for search ("grep" | "semantic" | "hybrid", default hybrid).
+- "top_k": Optional for search (default 10, clamped [1,50]).
+- "from_id" / "to_id": Required for path.
+- "include_layout": Optional bool for meta (default false)."#
+                .to_string(),
+        )
+    }
+
+    fn short_description(&self) -> String {
+        "Query the taiji strategy knowledge graph (kgraph.*) via JSON-RPC.".to_string()
+    }
+
+    fn default_exposure(&self) -> ToolExposure {
+        // 只读纯查询（编译期静态数据，零副作用）→ Direct（规划 §二 判定：
+        // 只读纯函数 → Direct；多 action 的写工具（gbrain/publish）→ Deferred）
+        ToolExposure::Direct
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["query", "search", "path", "meta"],
+                    "description": "Knowledge graph action to perform."
+                },
+                "concept_id": {
+                    "type": "string",
+                    "description": "Root node id; required for query."
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query; required for search."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["grep", "semantic", "hybrid"],
+                    "description": "Search mode (default hybrid)."
+                },
+                "top_k": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "Result count (default 10)."
+                },
+                "from_id": {
+                    "type": "string",
+                    "description": "Path start node id; required for path."
+                },
+                "to_id": {
+                    "type": "string",
+                    "description": "Path end node id; required for path."
+                },
+                "include_layout": {
+                    "type": "boolean",
+                    "description": "Include BFS layer layout in meta (default false)."
+                }
+            },
+            "required": ["action"],
+            "additionalProperties": false
+        })
+    }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
+        true
+    }
+
+    async fn validate_input(
+        &self,
+        input: &Value,
+        _context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        let action = input.get("action").and_then(Value::as_str);
+        let non_empty = |key: &str| {
+            input
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .is_some_and(|v| !v.is_empty())
+        };
+        let result = match action {
+            Some("query") => non_empty("concept_id"),
+            Some("search") => non_empty("query"),
+            Some("path") => non_empty("from_id") && non_empty("to_id"),
+            Some("meta") => true,
+            _ => false,
+        };
+        ValidationResult {
+            result,
+            message: if result {
+                None
+            } else {
+                Some(
+                    "action 'query' needs concept_id; 'search' needs query; \
+                     'path' needs from_id and to_id; 'meta' takes optional include_layout"
+                        .to_string(),
+                )
+            },
+            error_code: if result { None } else { Some(400) },
+            meta: None,
+        }
+    }
+
+    fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
+        let action = input
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        format!("Query taiji knowledge graph '{}'", action)
+    }
+
+    async fn call_impl(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let params: QuantKnowledgeGraphInput = serde_json::from_value(input.clone())
+            .map_err(|error| BitFunError::tool(format!("Invalid input: {}", error)))?;
+
+        let (method, call_params) = match params.action.as_str() {
+            "query" => (
+                "kgraph.query",
+                json!({ "concept_id": params.concept_id.unwrap_or_default() }),
+            ),
+            "search" => {
+                let mut map = serde_json::Map::new();
+                map.insert("query".to_string(), json!(params.query.unwrap_or_default()));
+                if let Some(mode) = params.mode {
+                    map.insert("mode".to_string(), json!(mode));
+                }
+                if let Some(top_k) = params.top_k {
+                    map.insert("top_k".to_string(), json!(top_k));
+                }
+                ("kgraph.search", Value::Object(map))
+            }
+            "path" => (
+                "kgraph.path",
+                json!({
+                    "from_id": params.from_id.unwrap_or_default(),
+                    "to_id": params.to_id.unwrap_or_default(),
+                }),
+            ),
+            "meta" => {
+                let mut map = serde_json::Map::new();
+                if let Some(include_layout) = input.get("include_layout").and_then(Value::as_bool) {
+                    map.insert("include_layout".to_string(), json!(include_layout));
+                }
+                ("kgraph.meta", Value::Object(map))
+            }
+            other => {
+                return Err(BitFunError::tool(format!(
+                    "unknown knowledge_graph action '{}'; expected query, search, path or meta",
+                    other
+                )));
+            }
+        };
+        let result = taiji_rpc_call(method, call_params).await?;
+        Ok(quant_tool_result(json!({
+            "success": true,
+            "method": method,
+            "channel": "rpc",
+            "response": result,
+        })))
+    }
+}
+
+// ── content_render_kline (9527 JSON-RPC: content.render) ───────────────────
+//
+// W2-1（content 工具族）：复用 taiji_rpc_call（std TCP 直连 9527 /api/rpc），
+// 零新依赖——与 quant_pattern_*/quant_sentiment 完全同通道、同超时、同错误映射。
+// taiji-server 侧 content.render（taiji-content KLineRenderer 纯函数 PNG 渲染
+// → base64）由 taiji-content 能力 crate 提供（源区 taiji-lvpa 已注册）。
+//
+// 纯函数只读（零副作用——不碰 ffmpeg/文件系统/RTMP；视频合成/直播/定时任务
+// 属重副作用能力，已由幻梦池六步管线承载，本工具不重复暴露）。
+
+/// `content_render_kline` — taiji K 线 PNG 纯函数渲染（taiji-server `content.render`）。
+pub struct QuantContentRenderKlineTool;
+
+impl Default for QuantContentRenderKlineTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl QuantContentRenderKlineTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for QuantContentRenderKlineTool {
+    fn name(&self) -> &str {
+        "content_render_kline"
+    }
+
+    async fn description(&self) -> BitFunResult<String> {
+        Ok(
+            r#"Render a K-line chart to PNG (base64) through the taiji quant engine (taiji-server JSON-RPC `content.render`).
+
+The engine uses the taiji-content KLineRenderer pure function: candlesticks + volume bars + optional indicator labels, with NaN/Inf OHLCV forward-filled from the previous valid bar. Returns a PNG base64 string plus bars_count / sanitized_nan (forward-filled field count) / frame_type ("full" or "empty" when the first bar is non-finite with no valid predecessor).
+
+Pure render only — no filesystem / ffmpeg / RTMP side effects. Video composition, live streaming and scheduled jobs stay in the taiji dream pipeline.
+
+Arguments:
+- "bars": Required. K-line array in ascending time order: [{"open":..,"high":..,"low":..,"close":..,"volume":..,"timestamp":..}, ...] (last bar is the current bar, previous bars are trailing context).
+- "width": Optional. Canvas width in pixels (default 400; clamped to [12, 1600]).
+- "height": Optional. Canvas height in pixels (default 300; clamped to [12, 1600]).
+- "indicators": Optional. Indicator object {name: value} rendered in the bottom label row (non-finite values are skipped).
+- "workspace_path": Optional absolute workspace path; defaults to the current workspace."#
+                .to_string(),
+        )
+    }
+
+    fn short_description(&self) -> String {
+        "Render taiji K-line chart to PNG base64 via JSON-RPC.".to_string()
+    }
+
+    fn default_exposure(&self) -> ToolExposure {
+        ToolExposure::Deferred
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "bars": {
+                    "type": "array",
+                    "description": "K-line array: [{\"open\":..,\"high\":..,\"low\":..,\"close\":..,\"volume\":..,\"timestamp\":..}, ...]."
+                },
+                "width": {
+                    "type": "integer",
+                    "minimum": 12,
+                    "maximum": 1600,
+                    "description": "Canvas width (default 400)."
+                },
+                "height": {
+                    "type": "integer",
+                    "minimum": 12,
+                    "maximum": 1600,
+                    "description": "Canvas height (default 300)."
+                },
+                "indicators": {
+                    "type": "object",
+                    "description": "Indicator labels {name: value}."
+                },
+                "workspace_path": {
+                    "type": "string",
+                    "description": "Optional absolute workspace path."
+                }
+            },
+            "required": ["bars"],
+            "additionalProperties": false
+        })
+    }
+
+    fn is_readonly(&self) -> bool {
+        true
+    }
+
+    fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
+        true
+    }
+
+    async fn validate_input(
+        &self,
+        input: &Value,
+        _context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        let has_bars = input
+            .get("bars")
+            .map(Value::is_array)
+            .unwrap_or(false);
+        let bars_non_empty = input
+            .get("bars")
+            .and_then(Value::as_array)
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let result = has_bars && bars_non_empty;
+        ValidationResult {
+            result,
+            message: if result {
+                None
+            } else {
+                Some("bars (non-empty array) is required".to_string())
+            },
+            error_code: if result { None } else { Some(400) },
+            meta: None,
+        }
+    }
+
+    fn render_tool_use_message(&self, _input: &Value, _options: &ToolRenderOptions) -> String {
+        "Render taiji K-line chart to PNG".to_string()
+    }
+
+    async fn call_impl(
+        &self,
+        input: &Value,
+        _context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let bars = input
+            .get("bars")
+            .ok_or_else(|| BitFunError::tool("bars is required".to_string()))?;
+        let mut params = json!({ "bars": bars });
+        if let Some(width) = input.get("width").and_then(Value::as_u64) {
+            params["width"] = json!(width);
+        }
+        if let Some(height) = input.get("height").and_then(Value::as_u64) {
+            params["height"] = json!(height);
+        }
+        if let Some(indicators) = input.get("indicators").filter(|v| v.is_object()) {
+            params["indicators"] = indicators.clone();
+        }
+        let result = taiji_rpc_call("content.render", params).await?;
+        Ok(quant_tool_result(json!({
+            "success": true,
+            "method": "content.render",
+            "channel": "rpc",
+            "response": result,
+        })))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1943,6 +2574,152 @@ mod tests {
         assert_eq!(QuantAlertTool::new().name(), "quant_alert");
         assert_eq!(QuantStrategenTool::new().name(), "quant_strategen");
         assert_eq!(QuantAnomalyTool::new().name(), "quant_anomaly");
+        assert_eq!(QuantPublishTool::new().name(), "content_publish");
+        assert_eq!(QuantKnowledgeGraphTool::new().name(), "knowledge_graph");
+        assert_eq!(
+            QuantContentRenderKlineTool::new().name(),
+            "content_render_kline"
+        );
+    }
+
+    #[tokio::test]
+    async fn content_render_kline_validation_requires_non_empty_bars() {
+        let tool = QuantContentRenderKlineTool::new();
+        let missing = tool.validate_input(&json!({}), None).await;
+        assert!(!missing.result, "缺 bars 应拒绝");
+
+        let empty = tool.validate_input(&json!({ "bars": [] }), None).await;
+        assert!(!empty.result, "空数组应拒绝");
+
+        let ok = tool
+            .validate_input(
+                &json!({ "bars": [{"open":1.0,"high":2.0,"low":0.5,"close":1.5,"volume":100.0}] }),
+                None,
+            )
+            .await;
+        assert!(ok.result, "非空 bars 应通过");
+
+        let ok_with_opts = tool
+            .validate_input(
+                &json!({
+                    "bars": [{"open":1.0,"high":2.0,"low":0.5,"close":1.5}],
+                    "width": 800, "height": 600,
+                    "indicators": { "MA5": 1.2 }
+                }),
+                None,
+            )
+            .await;
+        assert!(ok_with_opts.result, "带尺寸/指标应通过");
+    }
+
+    #[tokio::test]
+    async fn knowledge_graph_validation_matches_action_arguments() {
+        let tool = QuantKnowledgeGraphTool::new();
+        let query_ok = tool
+            .validate_input(&json!({ "action": "query", "concept_id": "agent_decision" }), None)
+            .await;
+        assert!(query_ok.result, "query + concept_id 应通过");
+
+        let query_missing = tool.validate_input(&json!({ "action": "query" }), None).await;
+        assert!(!query_missing.result, "query 缺 concept_id 应拒绝");
+
+        let search_ok = tool
+            .validate_input(&json!({ "action": "search", "query": "结构", "mode": "hybrid", "top_k": 5 }), None)
+            .await;
+        assert!(search_ok.result, "search + query 应通过");
+
+        let search_missing = tool.validate_input(&json!({ "action": "search" }), None).await;
+        assert!(!search_missing.result, "search 缺 query 应拒绝");
+
+        let path_ok = tool
+            .validate_input(
+                &json!({ "action": "path", "from_id": "theory_structure", "to_id": "data_trend_direction" }),
+                None,
+            )
+            .await;
+        assert!(path_ok.result, "path + from/to 应通过");
+
+        let path_missing = tool
+            .validate_input(&json!({ "action": "path", "from_id": "theory_structure" }), None)
+            .await;
+        assert!(!path_missing.result, "path 缺 to_id 应拒绝");
+
+        let meta_ok = tool
+            .validate_input(&json!({ "action": "meta", "include_layout": true }), None)
+            .await;
+        assert!(meta_ok.result, "meta 可带 include_layout");
+
+        let unknown = tool.validate_input(&json!({ "action": "bogus" }), None).await;
+        assert!(!unknown.result, "未知 action 应拒绝");
+    }
+
+    #[tokio::test]
+    async fn knowledge_graph_default_exposure_is_direct() {
+        let tool = QuantKnowledgeGraphTool::new();
+        assert!(matches!(tool.default_exposure(), ToolExposure::Direct));
+        assert!(tool.is_readonly(), "kgraph 纯只读（编译期静态数据）");
+        assert!(tool.is_concurrency_safe(None), "kgraph 并发安全");
+    }
+
+    /// content_publish 输入 dry_run 缺省应为 true（副作用红线——真实发布需
+    /// 显式 dry_run=false + 用户确认）。
+    #[test]
+    fn publish_input_defaults_dry_run_true() {
+        let input: QuantPublishInput = serde_json::from_value(json!({
+            "action": "submit",
+            "video": {
+                "title": "t",
+                "description": "d",
+                "video_path": "C:/video.mp4",
+            }
+        }))
+        .expect("submit shape should deserialize");
+        assert!(input.dry_run, "dry_run 缺省应为 true（干跑优先，副作用红线）");
+    }
+
+    #[tokio::test]
+    async fn publish_validation_requires_video_for_submit() {
+        let tool = QuantPublishTool::new();
+        let preview_ok = tool
+            .validate_input(&json!({ "action": "preview" }), None)
+            .await;
+        assert!(preview_ok.result, "preview 无需 video");
+
+        let submit_ok = tool
+            .validate_input(
+                &json!({
+                    "action": "submit",
+                    "video": {
+                        "title": "t",
+                        "description": "d",
+                        "video_path": "C:/video.mp4",
+                    }
+                }),
+                None,
+            )
+            .await;
+        assert!(submit_ok.result, "submit + video 应通过");
+
+        let missing_video = tool
+            .validate_input(&json!({ "action": "submit" }), None)
+            .await;
+        assert!(!missing_video.result, "submit 缺 video 应拒绝");
+
+        let missing_title = tool
+            .validate_input(
+                &json!({
+                    "action": "submit",
+                    "video": {"description": "d", "video_path": "C:/video.mp4"}
+                }),
+                None,
+            )
+            .await;
+        assert!(!missing_title.result, "submit 缺 title 应拒绝");
+
+        let unknown = tool
+            .validate_input(&json!({ "action": "bogus" }), None)
+            .await;
+        assert!(!unknown.result, "未知 action 应拒绝");
     }
 
     #[tokio::test]

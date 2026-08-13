@@ -94,6 +94,10 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "quant_alert" => Some(Arc::new(QuantAlertTool::new())),
             "quant_strategen" => Some(Arc::new(QuantStrategenTool::new())),
             "quant_anomaly" => Some(Arc::new(QuantAnomalyTool::new())),
+            "content_publish" => Some(Arc::new(QuantPublishTool::new())),
+            "knowledge_graph" => Some(Arc::new(QuantKnowledgeGraphTool::new())),
+            "content_render_kline" => Some(Arc::new(QuantContentRenderKlineTool::new())),
+            "gbrain" => Some(Arc::new(GbrainTool::new())),
             #[cfg(feature = "tools-agent-control")]
             "Cron" => Some(Arc::new(CronTool::new())),
             #[cfg(feature = "tools-browser-web")]
