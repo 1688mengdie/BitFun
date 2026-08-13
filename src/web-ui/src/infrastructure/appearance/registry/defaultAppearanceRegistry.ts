@@ -30,6 +30,7 @@ import { textStrokeEffectAppearanceDescriptor } from '@/component-library/compon
 import { windowControlsAppearanceDescriptor } from '@/component-library/components/WindowControls/appearance';
 import { markdownAppearanceDescriptor } from '@/component-library/components/Markdown/appearance';
 import { flowChatCardAppearanceDescriptor } from '@/component-library/components/FlowChatCards/appearance';
+import { viewTransitionBoundaryAppearanceDescriptor } from '@/component-library/components/ViewTransitionBoundary/appearance';
 import { chatInputAppearanceDescriptor } from '@/flow_chat/components/ChatInput.appearance';
 import { composerVoiceInputAppearanceDescriptor } from '@/flow_chat/components/voice/ComposerVoiceInputButton.appearance';
 import { sessionUsagePanelAppearanceDescriptor } from '@/flow_chat/components/usage/appearance';
@@ -318,6 +319,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(windowControlsAppearanceDescriptor)
     .registerComponent(markdownAppearanceDescriptor)
     .registerComponent(flowChatCardAppearanceDescriptor)
+    .registerComponent(viewTransitionBoundaryAppearanceDescriptor)
     .registerComponent(chatInputAppearanceDescriptor)
     .registerComponent(composerVoiceInputAppearanceDescriptor)
     .registerComponent(sessionUsagePanelAppearanceDescriptor)

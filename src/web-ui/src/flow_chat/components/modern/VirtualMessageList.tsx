@@ -35,6 +35,7 @@ import {
 import { useChatInputState } from '../../store/chatInputStateStore';
 import type { ActiveTurnRenderRange } from '../../types/flow-chat';
 import { computeFlowChatInputStackFooterPx } from '../../utils/flowChatScrollLayout';
+import { getMotionAwareScrollBehavior } from '../../utils/motionPreference';
 import { ScrollToLatestBar } from '../ScrollToLatestBar';
 import { ScrollToTurnHeaderButton } from '../ScrollToTurnHeaderButton';
 import {
@@ -1990,6 +1991,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
     scrollerElementRef.current = scroller;
     setScrollerElement(scroller);
     if (scroller) {
+      if (!scroller.hasAttribute('tabindex')) {
+        scroller.tabIndex = -1;
+      }
       setViewportHeightPx(scroller.clientHeight);
       // Seed the box so the observer's first callback is not read as a resize.
       observedViewportBoxRef.current = {
@@ -2045,7 +2049,9 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
   const visibleTurnInfo = useModernFlowChatStore(state => state.visibleTurnInfo);
   const handleJumpToCurrentTurn = useCallback(() => {
     if (visibleTurnInfo?.turnId) {
-      navigateToTurn(visibleTurnInfo.turnId, { behavior: 'smooth' });
+      navigateToTurn(visibleTurnInfo.turnId, {
+        behavior: getMotionAwareScrollBehavior('smooth'),
+      });
     }
   }, [navigateToTurn, visibleTurnInfo?.turnId]);
   const { shouldShowButton: shouldShowTurnHeaderButton, handleClick: handleTurnHeaderClick } =
@@ -2161,6 +2167,7 @@ const VirtualMessageListSession = forwardRef<VirtualMessageListRef, VirtualMessa
         onClick={viewportMode === 'history-reading' && onRequestJumpToLatest
           ? onRequestJumpToLatest
           : scrollToLatestEndPosition}
+        focusReturnRef={scrollerElementRef}
         isInputActive={isInputActive}
         isInputExpanded={isInputExpanded}
         inputHeight={inputHeight}

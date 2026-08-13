@@ -12,6 +12,7 @@ import {
   nextEasedScrollTopPx,
   shouldEaseTailFollow,
 } from '../../utils/flowChatTailEase';
+import { getMotionAwareScrollBehavior } from '../../utils/motionPreference';
 import type { FlowChatViewportOwnerApi } from './useFlowChatViewportOwner';
 import { USER_DRIVEN_SCROLL_WINDOW_MS } from './flowChatViewportAnchor';
 import { SNAP_BACK_HOLD_MS } from './flowChatViewportOwnership';
@@ -447,13 +448,16 @@ export function useFlowChatFollowOutput({
    * the animation never plays.
    */
   const runContentEndScroll = useCallback((behavior: ScrollBehavior) => {
-    if (behavior === 'smooth') {
+    const resolvedBehavior = getMotionAwareScrollBehavior(
+      behavior === 'smooth' ? 'smooth' : 'auto',
+    );
+    if (resolvedBehavior === 'smooth') {
       beginSmoothScrollYield();
     } else {
       // An instant scroll of ours replaces whatever was travelling.
       endSmoothScrollYield('superseded');
     }
-    scrollToContentEnd(behavior);
+    scrollToContentEnd(resolvedBehavior);
   }, [beginSmoothScrollYield, endSmoothScrollYield, scrollToContentEnd]);
 
   /**
@@ -463,22 +467,26 @@ export function useFlowChatFollowOutput({
    * animation that was never issued and one the loop cut short both end as a
    * viewport that arrived without moving through anything — and they call for
    * opposite fixes. This line says which one a reader is describing.
-   */
+  */
   const resolveJumpBehavior = useCallback((scroller: HTMLElement, targetPx: number) => {
-    const behavior = resolveAnimatedJumpBehavior({
+    const distanceBehavior = resolveAnimatedJumpBehavior({
       fromPx: scroller.scrollTop,
       targetPx,
       clientHeight: scroller.clientHeight,
     });
+    const behavior = getMotionAwareScrollBehavior(distanceBehavior);
     const distancePx = Math.abs(targetPx - scroller.scrollTop);
     traceViewportRepeating(`follow|jumpBehavior|${behavior}`, {
       location: 'followOutput.jumpBehavior',
       message: behavior === 'smooth'
         ? 'the jump to latest is near enough to animate'
-        : 'the jump to latest is too far to animate, so it lands outright',
+        : distanceBehavior === 'smooth'
+          ? 'the jump to latest lands outright because reduced motion is enabled'
+          : 'the jump to latest is too far to animate, so it lands outright',
       travelPx: targetPx - scroller.scrollTop,
       data: () => ({
         behavior,
+        distanceBehavior,
         viewportId,
         distancePx: roundViewportPx(distancePx),
         viewports: scroller.clientHeight > 0
@@ -1095,7 +1103,7 @@ export function useFlowChatFollowOutput({
     const issued = viewportOwner.write({
       owner: 'snap-back',
       topPx: snapTo,
-      behavior: 'smooth',
+      behavior: getMotionAwareScrollBehavior('smooth'),
       holdForMs: SNAP_BACK_HOLD_MS,
     });
     traceViewportRepeating(`snapBack|issued|${issued}`, {

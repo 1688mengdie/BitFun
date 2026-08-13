@@ -75,6 +75,11 @@ async function main() {
   process.env.FLASHGREP_DAEMON_BIN = flashgrepBinary;
   // Tauri CLI reads CI and rejects numeric "1" (common in CI providers).
   process.env.CI = 'true';
+  if (process.platform === 'darwin' && requestsDmgBundle(forward)) {
+    // Tauri otherwise passes --skip-jenkins under CI, which drops the branded
+    // Finder background and icon positions from the generated DMG.
+    process.env.TAURI_BUNDLER_DMG_IGNORE_CI = 'true';
+  }
 
   const tauriConfig = prepareTauriConfig(join(desktopDir, 'tauri.conf.json'), {
     desktopDir,
