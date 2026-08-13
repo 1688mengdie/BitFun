@@ -1,4 +1,4 @@
-import { ConversationUiQuestionAnswer, ConversationUiToolStatus } from './ConversationUiModels';
+import { ConversationUiQuestionAnswer, ConversationUiToolStatus } from '../state/ConversationUiModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ToolFileReference, ToolFileReferenceResolver } from '../../services/ToolFileReferenceResolver';
 import { CARD, FILE_LINK, GREEN, INK, LINE, MUTED, RED, SOFT } from './Theme';

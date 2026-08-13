@@ -1,7 +1,7 @@
-import { ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, toConversationUiMessage } from './ConversationUiModels';
+import { ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, toConversationUiMessage } from '../state/ConversationUiModels';
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatTimelineItem, ChatTimelineRevisionTracker } from '../../services/ChatTimelineProjector';
-import { ChatSurface } from './ChatSurface';
+import { ChatSurface } from '../state/ChatSurface';
 import { CARD, INK, LINE, MUTED, RED } from './Theme';
 import { ChatMessageBubble } from './ChatMessageBubble';
 import { RemoteLogger } from '../../services/RemoteLogger';

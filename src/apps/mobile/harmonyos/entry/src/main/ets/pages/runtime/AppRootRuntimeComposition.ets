@@ -870,6 +870,8 @@ export abstract class AppRootRuntimeComposition {
         this.settingsController.loginCloudAccount(relayUrl, username, password),
       cloudLogout: (): Promise<void> => this.settingsController.logoutCloudAccount(),
       cloudListDevices: (): Promise<CloudAccountDevice[]> => this.settingsController.listCloudAccountDevices(),
+      cloudSelectDevice: (device: CloudAccountDevice): Promise<void> =>
+        this.settingsController.selectCloudAccountDevice(device),
       getPermissionMode: (): Promise<RemotePermissionMode> => this.settingsController.getRemotePermissionMode(),
       setPermissionMode: (mode: RemotePermissionMode): Promise<RemotePermissionMode> =>
         this.settingsController.setRemotePermissionMode(mode),

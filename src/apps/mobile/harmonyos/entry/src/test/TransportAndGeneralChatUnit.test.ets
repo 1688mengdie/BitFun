@@ -53,7 +53,7 @@ import { ModelProviderSseParser } from '../main/ets/services/general-chat/ModelP
 import { MockGeneralChatAdapter } from '../main/ets/services/general-chat/MockGeneralChatAdapter';
 import { MarkdownParser } from '../main/ets/services/MarkdownParser';
 import { RemoteCommandFactory } from '../main/ets/services/RemoteCommandFactory';
-import { toRemoteQuestionAnswer } from '../main/ets/pages/components/ConversationUiModels';
+import { toRemoteQuestionAnswer } from '../main/ets/pages/state/ConversationUiModels';
 import { RemoteCrypto, RemoteCryptoCipher } from '../main/ets/services/RemoteCrypto';
 import { RemoteDescriptorParser } from '../main/ets/services/RemoteDescriptorParser';
 import { RemoteActivityLifecycleController } from '../main/ets/services/RemoteActivityLifecycleController';
@@ -92,8 +92,8 @@ import { ConversationViewState } from '../main/ets/pages/state/ConversationViewS
 import {
   GENERAL_CHAT_COMPOSER_CAPABILITIES,
   REMOTE_CHAT_COMPOSER_CAPABILITIES
-} from '../main/ets/pages/components/ChatComposerCapabilities';
-import { ChatSurface } from '../main/ets/pages/components/ChatSurface';
+} from '../main/ets/pages/state/ChatComposerCapabilities';
+import { ChatSurface } from '../main/ets/pages/state/ChatSurface';
 import { ConversationViewContract } from '../main/ets/pages/components/ConversationViewContract';
 import {
   AppNavigationBackAction,

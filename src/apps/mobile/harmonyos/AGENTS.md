@@ -13,22 +13,26 @@ the module. Keep the official responsibilities explicit:
   intents/events rather than calling services directly.
 - ViewModels bridge services and views by owning feature state, projecting data,
   and handling intents. ViewModels must not import components.
+- Shared conversation presentation DTOs (`ChatSurface`, `ChatComposerCapabilities`,
+  `ConversationUiModels`) live in `pages/state/`. State must not import
+  `pages/components`.
 
 The following constraints are enforced incrementally by
 `pnpm run harmony:architecture` (the runtime behavior checks remain in
 `entry/src/test/ArchitectureUnit.test.ets`):
 
 1. `services/**` must not import `../pages/`.
-2. `pages/components/**` must not import `pages/viewmodel/`; imports of
+2. `pages/state/**` must not import `pages/components/`.
+3. `pages/components/**` must not import `pages/viewmodel/`; imports of
    `pages/state/` and `pages/policy/` are allowed for observable state and pure
    policies.
-3. The page dependency graph must remain acyclic; ViewModels must not depend on
+4. The page dependency graph must remain acyclic; ViewModels must not depend on
    components.
-4. Actions and Hooks use typed interfaces with object literals. Do not add
+5. Actions and Hooks use typed interfaces with object literals. Do not add
    position-dependent callback constructors.
-5. New components use `@ComponentV2`; do not add V1 `@Component`, `@State`,
+6. New components use `@ComponentV2`; do not add V1 `@Component`, `@State`,
    `@Prop`, `@Link`, or `@Watch` declarations. `@BuilderParam` remains supported.
-6. General Chat and Remote Chat shared observable fields belong to
+7. General Chat and Remote Chat shared observable fields belong to
    `pages/state/ConversationCoreState.ets`. Page-specific state objects compose
    that core and must not redeclare the shared `@Trace` fields.
 

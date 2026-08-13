@@ -1,12 +1,11 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ChatComposerPolicy, ComposerPrimaryAction } from '../../services/ChatComposerPolicy';
-import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from './ChatComposerCapabilities';
-import { ChatSurface } from './ChatSurface';
+import { ChatComposerCapabilities, REMOTE_CHAT_COMPOSER_CAPABILITIES } from '../state/ChatComposerCapabilities';
 import {
   ConversationUiModel,
   ConversationUiModelCatalog,
   ConversationUiSelectedImage
-} from './ConversationUiModels';
+} from '../state/ConversationUiModels';
 import { ConversationModelPresentationPolicy } from '../policy/ConversationModelPresentationPolicy';
 import { CARD, FLOATING_PANEL_BG, GREEN, INK, LINE, MUTED, RED, SOFT } from './Theme';
 
@@ -562,8 +561,7 @@ export struct ComposerBar {
   }
 
   private shouldShowModelControl(): boolean {
-    return (this.capabilities.surface === ChatSurface.Remote || this.capabilities.surface === ChatSurface.General) &&
-      this.enabledModels().length > 0;
+    return this.enabledModels().length > 0;
   }
 
   private enabledModels(): ConversationUiModel[] {

@@ -1,4 +1,4 @@
-import { ConversationUiImage, ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, ConversationUiToolStatus } from './ConversationUiModels';
+import { ConversationUiImage, ConversationUiMessage, ConversationUiMessageItem, ConversationUiQuestionAnswer, ConversationUiToolStatus } from '../state/ConversationUiModels';
 import { INK, LINE, MUTED, SOFT } from './Theme';
 import { MessageFileCards, MessageImageGallery, MessageMarkdown } from './ChatMessageContent';
 import { ChatMessageRetryAction, ChatTypingDots, ChatUserMessageBubble } from './ChatMessageChrome';

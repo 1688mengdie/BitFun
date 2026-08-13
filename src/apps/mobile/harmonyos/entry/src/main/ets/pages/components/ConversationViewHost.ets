@@ -5,7 +5,7 @@ import {
   ConversationIntents,
   ConversationIntentType
 } from '../actions/ConversationIntent';
-import { ConversationUiQuestionAnswer } from './ConversationUiModels';
+import { ConversationUiQuestionAnswer } from '../state/ConversationUiModels';
 import { ComposerPresentation } from './ComposerBar';
 
 @ComponentV2

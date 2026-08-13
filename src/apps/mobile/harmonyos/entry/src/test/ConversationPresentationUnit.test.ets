@@ -1,15 +1,18 @@
 import { describe, it, expect } from '@ohos/hypium';
 import { RemoteI18n } from '../main/ets/i18n/RemoteI18n';
 import { ChatComposerPolicy, ComposerPrimaryAction } from '../main/ets/services/ChatComposerPolicy';
-import { ChatSurface } from '../main/ets/pages/components/ChatSurface';
+import { ChatSurface } from '../main/ets/pages/state/ChatSurface';
 import {
   GENERAL_CHAT_COMPOSER_CAPABILITIES,
-  REMOTE_CHAT_COMPOSER_CAPABILITIES
-} from '../main/ets/pages/components/ChatComposerCapabilities';
+  REMOTE_CHAT_COMPOSER_CAPABILITIES,
+  REMOTE_CREATE_COMPOSER_CAPABILITIES
+} from '../main/ets/pages/state/ChatComposerCapabilities';
 import { ConversationViewState } from '../main/ets/pages/state/ConversationViewState';
 import { GeneralChatPageState } from '../main/ets/pages/state/GeneralChatPageState';
+import { RemoteCreateSessionState } from '../main/ets/pages/state/RemoteCreateSessionState';
 import { RemotePageState } from '../main/ets/pages/state/RemotePageState';
 import { AppRoute } from '../main/ets/pages/navigation/AppRouteContract';
+import { ConversationHeaderPolicy } from '../main/ets/pages/policy/ConversationHeaderPolicy';
 import { ThinkingPresentationPolicy } from '../main/ets/pages/policy/ThinkingPresentationPolicy';
 import {
   ConnectSheetLandingPolicy,
@@ -20,6 +23,8 @@ import {
   RemoteConnectEntryKind,
   RemoteSurfaceEntryPolicy
 } from '../main/ets/pages/policy/RemoteSurfaceEntryPolicy';
+import { RemoteCompactHomePolicy } from '../main/ets/pages/policy/RemoteCompactHomePolicy';
+import { AccountDeviceSelectionPolicy } from '../main/ets/pages/policy/AccountDeviceSelectionPolicy';
 import { CONNECT_INTENT_AUTO, CONNECT_INTENT_SCAN } from '../main/ets/pages/state/AppShellState';
 import {
   ConnectScanDecisionPolicy,
@@ -160,6 +165,49 @@ export default function conversationPresentationUnitTest() {
     });
   });
 
+  describe('RemoteCompactHomePolicy', () => {
+    it('keeps pick-session chrome only while the desktop link is actually connected', 0, () => {
+      expect(RemoteCompactHomePolicy.shouldShowConnectHome('connected')).assertFalse();
+    });
+
+    it('opens the connect home after the desktop drops even when cached sessions remain', 0, () => {
+      expect(RemoteCompactHomePolicy.shouldShowConnectHome('reconnecting')).assertTrue();
+      expect(RemoteCompactHomePolicy.shouldShowConnectHome('failed')).assertTrue();
+      expect(RemoteCompactHomePolicy.shouldShowConnectHome('disconnected')).assertTrue();
+      expect(RemoteCompactHomePolicy.shouldShowConnectHome('idle')).assertTrue();
+      expect(RemoteCompactHomePolicy.headerSubtitle('reconnecting', 'Studio')).assertEqual('');
+      expect(RemoteCompactHomePolicy.headerSubtitle('connected', 'Studio')).assertEqual('Studio');
+    });
+  });
+
+  describe('AccountDeviceSelectionPolicy', () => {
+    it('lets an online desktop be selected unless this phone is already switching', 0, () => {
+      expect(AccountDeviceSelectionPolicy.canSelectOnline(true, 'desk-1', 'phone-1', '')).assertTrue();
+      expect(AccountDeviceSelectionPolicy.canSelectOnline(false, 'desk-1', 'phone-1', '')).assertFalse();
+      expect(AccountDeviceSelectionPolicy.canSelectOnline(true, 'phone-1', 'phone-1', '')).assertFalse();
+      expect(AccountDeviceSelectionPolicy.canSelectOnline(true, 'desk-1', 'phone-1', 'desk-1')).assertFalse();
+    });
+
+    it('offers connect on device management for another online desktop or the last target after drop', 0, () => {
+      expect(AccountDeviceSelectionPolicy.shouldShowConnectAction(true, 'desk-1', 'phone-1', 'desk-1', 'connected'))
+        .assertFalse();
+      expect(AccountDeviceSelectionPolicy.shouldShowConnectAction(true, 'desk-1', 'phone-1', 'desk-1', 'failed'))
+        .assertTrue();
+      expect(AccountDeviceSelectionPolicy.shouldShowConnectAction(true, 'desk-2', 'phone-1', 'desk-1', 'connected'))
+        .assertTrue();
+      expect(AccountDeviceSelectionPolicy.shouldShowConnectAction(false, 'desk-1', 'phone-1', 'desk-1', 'failed'))
+        .assertTrue();
+      expect(AccountDeviceSelectionPolicy.shouldShowConnectAction(false, 'desk-2', 'phone-1', 'desk-1', 'failed'))
+        .assertFalse();
+    });
+
+    it('reconnects the last control target when it is no longer live', 0, () => {
+      expect(AccountDeviceSelectionPolicy.shouldReconnectLastTarget('desk-1', 'desk-1', 'failed')).assertTrue();
+      expect(AccountDeviceSelectionPolicy.shouldReconnectLastTarget('desk-1', 'desk-1', 'connected')).assertFalse();
+      expect(AccountDeviceSelectionPolicy.shouldReconnectLastTarget('desk-2', 'desk-1', 'failed')).assertFalse();
+    });
+  });
+
   describe('ConnectScanDecisionPolicy', () => {
     it('pairs an ordinary QR immediately without asking for an account password', 0, () => {
       expect(ConnectScanDecisionPolicy.decide(false, false, '', '', ''))
@@ -185,6 +233,65 @@ export default function conversationPresentationUnitTest() {
     it('still asks for a password when the QR belongs to a different account', 0, () => {
       expect(ConnectScanDecisionPolicy.decide(true, true, 'alice', 'bob', 'desktop-1'))
         .assertEqual(DetectedUrlAction.PROMPT_ACCOUNT_PASSWORD);
+    });
+  });
+
+  describe('ConversationHeaderPolicy', () => {
+    it('keeps local chat on a single-line title and only shows actions once a timeline exists', 0, () => {
+      const empty = ConversationHeaderPolicy.present(ChatSurface.General, '今日计划', '', '', false);
+      expect(empty.fallbackKey).assertEqual('app.title');
+      expect(empty.title).assertEqual('今日计划');
+      expect(empty.subtitle).assertEqual('');
+      expect(empty.allowRename).assertFalse();
+      expect(empty.showActions).assertFalse();
+      const withTimeline = ConversationHeaderPolicy.present(ChatSurface.General, '今日计划', '', '', true);
+      expect(withTimeline.showActions).assertTrue();
+    });
+
+    it('gives remote chat a subtitle, rename, and a persistent overflow control', 0, () => {
+      const named = ConversationHeaderPolicy.present(ChatSurface.Remote, '修登录', 'Studio', 'main', false);
+      expect(named.fallbackKey).assertEqual('chat.remoteSession');
+      expect(named.subtitle).assertEqual('Studio');
+      expect(named.allowRename).assertTrue();
+      expect(named.showActions).assertTrue();
+      const branded = ConversationHeaderPolicy.present(ChatSurface.Remote, '', '', 'feat/ui', false);
+      expect(branded.subtitle).assertEqual('BitFun · feat/ui');
+    });
+
+    it('treats create as a titled conversation chrome without actions or rename', 0, () => {
+      const create = ConversationHeaderPolicy.present(ChatSurface.Create, 'ignored', 'Studio', 'main', true);
+      expect(create.fallbackKey).assertEqual('remote.create.title');
+      expect(create.title).assertEqual('');
+      expect(create.subtitle).assertEqual('');
+      expect(create.allowRename).assertFalse();
+      expect(create.showActions).assertFalse();
+    });
+  });
+
+  describe('Create conversation projection', () => {
+    it('projects remote create onto the shared conversation view with create capabilities', 0, () => {
+      const remote = new RemotePageState();
+      remote.desktopName = 'Studio';
+      const create = new RemoteCreateSessionState();
+      create.setDraft('hello from create');
+      create.setSelectedModelId('model-1');
+      create.isSubmitting = true;
+      create.errorText = 'device mismatch';
+      const projection = ConversationViewState.project(
+        AppRoute.RemoteCreate,
+        remote,
+        new GeneralChatPageState(),
+        '',
+        create
+      );
+      expect(projection.surface).assertEqual(ChatSurface.Create);
+      expect(projection.composerCapabilities.supportsAttachments).assertFalse();
+      expect(projection.composerCapabilities.showAddButton).assertFalse();
+      expect(projection.chatInput).assertEqual('hello from create');
+      expect(projection.isBusy).assertTrue();
+      expect(projection.inlineStatusText).assertEqual('device mismatch');
+      expect(projection.timelineItems.length).assertEqual(0);
+      expect(projection.desktopName).assertEqual('Studio');
     });
   });
 }
