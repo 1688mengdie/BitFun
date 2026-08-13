@@ -3075,4 +3075,174 @@ mod tests {
         );
         let _ = root;
     }
+
+    // ── W3 跨进程文件锁争用复现（2026-08-13，方案 §三.4）───────────────
+    // 子进程持 SessionWriteLock（跨进程 OS 文件锁）→ 主进程
+    // create_claw_session_with_retry 遇 InUse → 重试 100ms×3 → 子进程释放
+    // 锁 → 重试成功（不报裸 SessionInUse）。模拟「另一进程打开该成员会话
+    // 写 metadata」的并发组合场景。
+
+    #[tokio::test]
+    async fn group_chat_cross_process_lock_contention_retries_and_succeeds() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let storage_root = root.path().join("sessions");
+        std::fs::create_dir_all(&storage_root).expect("create sessions dir");
+        let ready_path = root.path().join("child-ready");
+        let release_path = root.path().join("child-release");
+
+        // 子进程：持锁 → 写 ready → 等 release 信号 → drop 锁。
+        let mut child = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .arg("--exact")
+            .arg("agentic::tools::implementations::group_chat_tool::tests::group_chat_lock_contention_child_holds_writer")
+            .arg("--nocapture")
+            .env("GROUP_CHAT_LOCK_CHILD", "1")
+            .env("GROUP_CHAT_LOCK_STORAGE_ROOT", &storage_root)
+            .env("GROUP_CHAT_LOCK_READY_PATH", &ready_path)
+            .env("GROUP_CHAT_LOCK_RELEASE_PATH", &release_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn lock child");
+
+        // 等子进程持锁就绪。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready_path.exists() && std::time::Instant::now() < deadline {
+            if let Some(status) = child.try_wait().expect("poll child") {
+                panic!("lock child exited before acquiring: {status}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(ready_path.exists(), "lock child did not become ready");
+
+        // 主进程 create（内部 try_acquire 非 reuse → 跨进程文件锁 InUse →
+        // 重试 100ms×3）。重试窗口内子进程仍持锁 → 第一次必然 InUse 触发重试。
+        let (coordinator, _session_manager, _hroot) = test_group_chat_coordinator_harness();
+        let session_id = "cross-process-session";
+        let workspace_root = root.path().to_string_lossy().to_string();
+        let create_result = GroupChatTool::create_claw_session_with_retry(
+            &coordinator,
+            session_id,
+            &workspace_root,
+        )
+        .await;
+
+        // 子进程释放锁，让重试最终成功（若重试耗尽则验证可读错误）。
+        std::fs::write(&release_path, b"release").expect("signal release");
+        let _ = child.wait();
+
+        match create_result {
+            Ok(()) => {
+                // 重试化解：会话已建（内存）。
+                assert!(
+                    coordinator
+                        .get_session_manager()
+                        .get_session(session_id)
+                        .is_some(),
+                    "session must exist after retry success"
+                );
+            }
+            Err(error) => {
+                // 重试耗尽：必须可读错误（非裸 SessionInUse）。
+                assert!(
+                    error.contains("正被其他进程使用") || error.contains("SessionInUse") == false,
+                    "exhausted retry must be a readable error, got: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn group_chat_lock_contention_child_holds_writer() {
+        if std::env::var_os("GROUP_CHAT_LOCK_CHILD").is_none() {
+            return;
+        }
+        let storage_root = std::path::PathBuf::from(
+            std::env::var_os("GROUP_CHAT_LOCK_STORAGE_ROOT").expect("child storage root"),
+        );
+        let ready_path = std::path::PathBuf::from(
+            std::env::var_os("GROUP_CHAT_LOCK_READY_PATH").expect("child ready path"),
+        );
+        let release_path = std::path::PathBuf::from(
+            std::env::var_os("GROUP_CHAT_LOCK_RELEASE_PATH").expect("child release path"),
+        );
+        let _writer = bitfun_services_core::session::SessionWriteLock::try_acquire(
+            &storage_root,
+            "cross-process-session",
+        )
+        .expect("child writer");
+        std::fs::write(&ready_path, b"ready").expect("publish readiness");
+        // 等主进程信号后释放（最长 10s 防挂死）。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !release_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // 锁随 _writer drop 释放。
+    }
+
+    // ── W3 并发组合清单（P2-2，2026-08-13）：建群（含自动建会话）──
+    // 组合：①建群（ensure 自动建会话）②派发消息 ③另一进程写成员会话
+    // metadata。本测试验证 ①+③ 并发：子进程对成员会话持写锁 → 主进程
+    // 建群链路（ensure + tag）→ 全程不报裸 SessionInUse（重试化解或可读
+    // 错误）。②派发不碰成员会话写锁（只写全局群聊 store + dispatch），
+    // 无锁冲突面。
+    #[tokio::test]
+    async fn group_chat_concurrent_create_room_with_member_lock_contention() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let storage_root = root.path().join("sessions");
+        std::fs::create_dir_all(&storage_root).expect("create sessions dir");
+        let ready_path = root.path().join("child-ready");
+        let release_path = root.path().join("child-release");
+
+        let mut child = std::process::Command::new(std::env::current_exe().expect("current exe"))
+            .arg("--exact")
+            .arg("agentic::tools::implementations::group_chat_tool::tests::group_chat_lock_contention_child_holds_writer")
+            .arg("--nocapture")
+            .env("GROUP_CHAT_LOCK_CHILD", "1")
+            .env("GROUP_CHAT_LOCK_STORAGE_ROOT", &storage_root)
+            .env("GROUP_CHAT_LOCK_READY_PATH", &ready_path)
+            .env("GROUP_CHAT_LOCK_RELEASE_PATH", &release_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn lock child");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !ready_path.exists() && std::time::Instant::now() < deadline {
+            if let Some(status) = child.try_wait().expect("poll child") {
+                panic!("lock child exited before acquiring: {status}");
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(ready_path.exists(), "lock child did not become ready");
+
+        // 主进程建群链路：成员必须在白名单（legacy 目录）内。
+        let (coordinator, session_manager, _hroot) = test_group_chat_coordinator_harness();
+        let member_id = "cross-process-session";
+        let member_ws = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(member_id, None);
+        std::fs::create_dir_all(&member_ws).expect("create member ws");
+
+        // ①建群（自动建会话）——锁争用下重试化解或可读错误。
+        let create_result = GroupChatTool::create_claw_session_with_retry(
+            &coordinator,
+            member_id,
+            &member_ws.to_string_lossy(),
+        )
+        .await;
+        std::fs::write(&release_path, b"release").expect("signal release");
+        let _ = child.wait();
+
+        match create_result {
+            Ok(()) => assert!(
+                session_manager.get_session(member_id).is_some(),
+                "session must exist after retry success"
+            ),
+            Err(error) => assert!(
+                error.contains("正被其他进程使用"),
+                "exhausted retry must be a readable error, got: {error}"
+            ),
+        }
+    }
 }
