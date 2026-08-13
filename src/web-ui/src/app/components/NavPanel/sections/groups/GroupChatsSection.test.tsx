@@ -8,8 +8,9 @@ import { GroupChatsSection } from './GroupChatsSection';
 import { useGroupChatStore } from '../../../../../flow_chat/store/groupChatStore';
 import type { GroupChatMember, GroupChatRoom } from '../../../../../flow_chat/types/flow-chat';
 
+let mockCurrentWorkspace: { rootPath: string } | null = { rootPath: '/ws' };
 vi.mock('@/infrastructure/contexts/WorkspaceContext', () => ({
-  useWorkspaceContext: () => ({ currentWorkspace: { rootPath: '/ws' } }),
+  useWorkspaceContext: () => ({ currentWorkspace: mockCurrentWorkspace }),
 }));
 
 vi.mock('@/infrastructure/api/service-api/ApiClient', () => ({
@@ -78,6 +79,7 @@ function renderSection() {
 
 describe('GroupChatsSection', () => {
   beforeEach(() => {
+    mockCurrentWorkspace = { rootPath: '/ws' };
     container = document.createElement('div');
     // P2-13: the virtualized list needs a measurable viewport height — without
     // it Virtuoso renders zero rows in jsdom.
@@ -197,5 +199,60 @@ describe('GroupChatsSection', () => {
     });
 
     expect(useGroupChatStore.getState().rooms.has('room-1')).toBe(true);
+  });
+
+  // P0 regression (2026-08-14, owner report: newly created group chat does not
+  // show in the list). Candidate A: the workspace context is initially null
+  // (workspaceManager loads asynchronously), so effectiveWorkspacePath is ''
+  // on first mount. The section must NOT skip loading forever - once the
+  // workspace resolves it must load rooms.
+  it('loads rooms when the workspace becomes ready after mount (delayed workspace)', async () => {
+    mockCurrentWorkspace = null; // workspace not ready on first mount
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'group_chat_list') {
+        return Promise.resolve([sampleRoom('room-late', 'LateRoom')]);
+      }
+      return new Promise(() => {});
+    });
+    renderSection();
+
+    // First mount with no workspace: no load yet, empty state shown.
+    expect(container.querySelector('[data-bf-part="empty"]')).toBeTruthy();
+
+    // Workspace resolves; effectiveWorkspacePath changes -> effect re-runs.
+    mockCurrentWorkspace = { rootPath: '/ws' };
+    await act(async () => {
+      root.render(<GroupChatsSection workspacePath="/ws" isVisible />);
+    });
+
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', {
+      request: { workspace_path: '/ws' },
+    });
+    const item = container.querySelector('[data-bf-part="item"]');
+    expect(item?.textContent).toContain('LateRoom');
+  });
+
+  // Candidate B: a room created while the section is already mounted must
+  // appear immediately (createRoom sets the store + re-syncs the list; the
+  // section subscribes to rooms). This guards the "created but list stays
+  // empty" regression.
+  it('renders a newly created room without requiring remount (reactive rooms)', async () => {
+    mockedInvoke.mockImplementation((command: string) => {
+      if (command === 'group_chat_create') {
+        return Promise.resolve(sampleRoom('room-fresh', 'FreshRoom'));
+      }
+      if (command === 'group_chat_list') {
+        return Promise.resolve([sampleRoom('room-fresh', 'FreshRoom')]);
+      }
+      return new Promise(() => {});
+    });
+    renderSection();
+
+    await act(async () => {
+      await useGroupChatStore.getState().createRoom('FreshRoom', { kind: 'master' }, ['m-1'], 'free');
+    });
+
+    const item = container.querySelector('[data-bf-part="item"]');
+    expect(item?.textContent).toContain('FreshRoom');
   });
 });

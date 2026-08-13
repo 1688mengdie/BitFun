@@ -105,7 +105,9 @@ describe('groupChatStore', () => {
 
   it('createRoom adds the room via group_chat_create', async () => {
     useGroupChatStore.setState({ workspacePath: '/ws' });
-    mockedInvoke.mockResolvedValueOnce(sampleRoom('room-9', 'New Room'));
+    mockedInvoke
+      .mockResolvedValueOnce(sampleRoom('room-9', 'New Room')) // group_chat_create
+      .mockResolvedValueOnce([sampleRoom('room-9', 'New Room')]); // group_chat_list re-sync
 
     const room = await useGroupChatStore
       .getState()
@@ -122,6 +124,11 @@ describe('groupChatStore', () => {
     });
     expect(room.roomId).toBe('room-9');
     expect(useGroupChatStore.getState().rooms.has('room-9')).toBe(true);
+    // P0 regression (2026-08-14): create re-syncs the list so the new room is
+    // guaranteed visible without a remount.
+    expect(mockedInvoke).toHaveBeenCalledWith('group_chat_list', {
+      request: { workspace_path: '/ws' },
+    });
   });
 
   it('deleteRoom removes the room and its member/message caches (P0-3)', async () => {

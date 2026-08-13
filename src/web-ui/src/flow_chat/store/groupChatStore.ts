@@ -140,6 +140,16 @@ export const useGroupChatStore = create<GroupChatStore>()(
       set((state) => {
         state.rooms.set(room.roomId, room);
       });
+      // P0 regression (2026-08-14): after a successful create, re-sync the
+      // room list from the backend so any external/duplicated room state is
+      // reconciled and the new room is guaranteed visible even when the list
+      // section is not remounted (e.g. created while the section is folded).
+      // Best-effort: a list failure must not fail the create itself.
+      try {
+        await get().loadRooms(workspacePath);
+      } catch {
+        // Keep the locally-set room; the next mount will re-sync.
+      }
       return room;
     },
 
