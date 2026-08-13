@@ -5697,9 +5697,9 @@ mod tests {
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
     use crate::agentic::workspace::{local_workspace_services, WorkspaceBinding};
     use crate::infrastructure::PathManager;
-    use crate::instruction_sources::test_support::InstructionSwitches;
+    use crate::instruction_sources::test_support::{lock_environment, InstructionSwitches};
     #[cfg(feature = "external-sources")]
-    use crate::instruction_sources::test_support::{lock_environment, EnvironmentGuard};
+    use crate::instruction_sources::test_support::EnvironmentGuard;
     use crate::service::config::types::AIConfig;
     use crate::service::config::types::AIModelConfig;
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
@@ -5892,7 +5892,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // environment lock is intentionally held for the whole test body
     async fn workspace_instruction_read_failure_is_not_cacheable_and_can_recover() {
+        // E-5: `InstructionSwitches::set` reads+writes the process-level
+        // instruction master switches (instruction_sources.rs). Without the
+        // environment lock, concurrent switch-mutating tests race the
+        // read-modify-write here. Same lock_environment() discipline as the
+        // sibling tests below (5948/5980/6001/6076/6124).
+        let _environment = lock_environment();
         // Guard restores the previous switch values on drop.
         let _switches = InstructionSwitches::set(Some(true), None);
         let fs = InstructionWorkspaceFs::recovering();

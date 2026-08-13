@@ -9522,9 +9522,13 @@ mod tests {
     /// RAII guard that serializes on-disk persisted-session tests against each
     /// other. Acquired by `TestWorkspace::new()` so the whole persisted-session
     /// family (not just the lineage test) runs mutually exclusively against the
-    /// shared process-global registries and the host `temp_dir()`. Pure
-    /// in-memory tests never touch the disk and stay parallel. Re-entrant per
-    /// thread (a test may build several workspaces).
+    /// shared process-global registries. Pure in-memory tests never touch the
+    /// disk and stay parallel. Re-entrant per thread (a test may build several
+    /// workspaces).
+    ///
+    /// The `MutexGuard` field is intentionally never read: it exists only to
+    /// keep the lock held for the lifetime of the guard.
+    #[allow(dead_code)]
     struct PersistedSessionTestGuard(Option<std::sync::MutexGuard<'static, ()>>);
 
     impl PersistedSessionTestGuard {
@@ -9557,7 +9561,14 @@ mod tests {
     }
 
     struct TestWorkspace {
+        // `tempfile::TempDir` gives each test its own directory rooted below
+        // the host temp root and deletes it on drop. The previous hand-rolled
+        // `temp_dir() + UUID + create_dir_all` left directories behind and
+        // depended on /tmp canonicalization staying stable between workspace
+        // creation and persist, which CI (ubuntu) intermittently violated
+        // (E-5: `persist_session_lineage_...` NotFound before persist).
         path: PathBuf,
+        _dir: tempfile::TempDir,
         _serialized: PersistedSessionTestGuard,
     }
 
@@ -9565,13 +9576,16 @@ mod tests {
         fn new() -> Self {
             // Every on-disk persisted-session test goes through this
             // constructor; holding the family-wide guard here hardens the
-            // whole family against concurrent registry/temp-dir interference
+            // whole family against concurrent registry interference
             // (see PERSISTED_SESSION_TESTS_LOCK).
             let _serialized = PersistedSessionTestGuard::acquire();
-            let path = std::env::temp_dir()
-                .join(format!("bitfun-session-restore-test-{}", Uuid::new_v4()));
-            std::fs::create_dir_all(&path).expect("test workspace should be created");
-            Self { path, _serialized }
+            let _dir = tempfile::tempdir().expect("test workspace tempdir");
+            let path = _dir.path().to_path_buf();
+            Self {
+                path,
+                _dir,
+                _serialized,
+            }
         }
 
         fn path(&self) -> &Path {
@@ -12813,7 +12827,9 @@ mod tests {
         // This test exercises on-disk persisted session metadata through the
         // process-global persistence lock registry. `TestWorkspace::new()`
         // already holds PERSISTED_SESSION_TESTS_LOCK for the whole persisted
-        // session family, so it runs exclusively against sibling on-disk tests.
+        // session family and roots its directory in a `tempfile::tempdir()`
+        // owned by the test (E-5: no shared temp_dir/UUID/canonicalize
+        // jitter), so it runs exclusively against sibling on-disk tests.
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
