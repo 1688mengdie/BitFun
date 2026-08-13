@@ -10,7 +10,6 @@
  */
 
 import { createLogger } from '@/shared/utils/logger';
-import { globalEventBus } from '@/infrastructure/event-bus';
 import { i18nService } from '@/infrastructure/i18n';
 import type {
   PermissionReplyKind,
@@ -32,10 +31,6 @@ import type {
   TurnTracker,
   UsageReportUiParams,
 } from '../types';
-import {
-  FLOWCHAT_PIN_TURN_TO_TOP_EVENT,
-  type FlowChatPinTurnToTopRequest,
-} from '../../events/flowchatNavigation';
 import {
   isDispatchJobTerminal,
   isNonLocalDispatchTarget,
@@ -115,20 +110,6 @@ function dispatchAttachments(
     }
   }
   return attachments;
-}
-
-function pinTurnToTop(sessionId: string, turnId: string): void {
-  globalEventBus.emit(
-    FLOWCHAT_PIN_TURN_TO_TOP_EVENT,
-    {
-      sessionId,
-      turnId,
-      behavior: 'auto',
-      source: 'send-message',
-      pinMode: 'sticky-latest',
-    } satisfies FlowChatPinTurnToTopRequest,
-    'DispatchSessionDriver',
-  );
 }
 
 async function appendToDispatchJob(
@@ -230,7 +211,6 @@ async function continueDispatchJob(
     status: 'pending',
     startTime: Date.now(),
   });
-  pinTurnToTop(sessionId, optimisticTurnId);
 
   try {
     const response = await dispatchApi.continueJob(
@@ -542,7 +522,7 @@ export const dispatchSessionDriver: SessionDriver = {
     context: FlowChatContext,
     sessionId: string,
     uiParams: UsageReportUiParams,
-  ): Promise<{ inserted: boolean }> {
+  ): Promise<{ shown: boolean }> {
     const session = context.flowChatStore.getState().sessions.get(sessionId);
     if (!session) {
       throw new Error(
@@ -559,16 +539,14 @@ export const dispatchSessionDriver: SessionDriver = {
     const result = await runUsageReportCommand({
       session,
       ...uiParams,
-      // The target computes the report from its persisted session; the
-      // rendered turn stays in the projection (transcript cache), never in
-      // local session persistence.
+      // The target computes the report from its persisted session; nothing is
+      // written back, here or there.
       fetchReport: async () => {
         const response = await dispatchApi.query(jobId, 'usageReport');
         return response.report as SessionUsageReport;
       },
-      persistTurn: false,
     });
-    return { inserted: result.inserted };
+    return { shown: result.shown };
   },
 
   permissionRequestSource(sessionId: string) {
@@ -745,7 +723,6 @@ export const dispatchSessionDriver: SessionDriver = {
     };
     context.flowChatStore.addDialogTurn(sessionId, optimisticTurn);
     tracker.createdLocalTurnId = optimisticTurnId;
-    pinTurnToTop(sessionId, optimisticTurnId);
 
     const includeUncommitted = readySession.config.dispatchIncludeUncommitted ?? false;
     const baseRef = readySession.config.dispatchBaseRef?.trim() || 'HEAD';

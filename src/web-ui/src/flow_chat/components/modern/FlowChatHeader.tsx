@@ -472,9 +472,13 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   // which must be reachable from the very first message (or an empty session).
   // Previously `totalTurns === 0` returned null, hiding those actions entirely
   // in empty/new sessions — the reported "changes not effective" symptom.
+  // (Upstream unmounts on `!visible` to avoid list resize mid-session; we keep
+  // the header mounted for the active session while withholding the centre
+  // message via `hasTurnInfo` below — both concerns satisfied.)
   if (!visible && !sessionId) {
     return null;
   }
+  const hasTurnInfo = totalTurns > 0;
 
   return (
     <div
@@ -492,38 +496,39 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
         <SessionFilesBadge sessionId={sessionId} />
       </div>
 
-      <Tooltip content={currentUserMessage} placement="bottom">
-        <div
-          className="flowchat-header__message"
-          data-bf-component="flow-chat-header"
-          data-bf-part="message"
-          role="button"
-          tabIndex={0}
-          onClick={onJumpToCurrentTurn}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onJumpToCurrentTurn?.();
-            }
-          }}
-          aria-label={t('flowChatHeader.jumpToCurrentTurn', {
-            turn: currentTurn
-          })}
-          style={totalTurns > 0 ? undefined : { display: 'none' }}
-        >
-          <span
-            className="flowchat-header__turn-badge"
-            aria-label={turnBadgeLabel}
+      {hasTurnInfo ? (
+        <Tooltip content={currentUserMessage} placement="bottom">
+          <div
+            className="flowchat-header__message"
             data-bf-component="flow-chat-header"
-            data-bf-part="turnBadge"
+            data-bf-part="message"
+            role="button"
+            tabIndex={0}
+            onClick={onJumpToCurrentTurn}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onJumpToCurrentTurn?.();
+              }
+            }}
+            aria-label={t('flowChatHeader.jumpToCurrentTurn', {
+              turn: currentTurn
+            })}
           >
-            <span>{turnBadgeLabel}</span>
-          </span>
-          <span className="flowchat-header__message-text">
-            {truncatedMessage}
-          </span>
-        </div>
-      </Tooltip>
+            <span
+              className="flowchat-header__turn-badge"
+              aria-label={turnBadgeLabel}
+              data-bf-component="flow-chat-header"
+              data-bf-part="turnBadge"
+            >
+              <span>{turnBadgeLabel}</span>
+            </span>
+            <span className="flowchat-header__message-text">
+              {truncatedMessage}
+            </span>
+          </div>
+        </Tooltip>
+      ) : null}
 
       <div
         className="flowchat-header__actions"

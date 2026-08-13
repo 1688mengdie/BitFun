@@ -66,6 +66,7 @@ import { inlineDiffPreviewAppearanceDescriptor } from '@/flow_chat/components/In
 import { exportImageAppearanceDescriptor } from '@/flow_chat/components/modern/ExportImageButton.appearance';
 import { userMessageItemAppearanceDescriptor } from '@/flow_chat/components/modern/UserMessageItem.appearance';
 import { sessionUsageReportCardAppearanceDescriptor } from '@/flow_chat/components/usage/SessionUsageReportCard.appearance';
+import { sessionUsageModalAppearanceDescriptor } from '@/flow_chat/components/usage/SessionUsageModal.appearance';
 import { askUserQuestionCardAppearanceDescriptor } from '@/flow_chat/tool-cards/AskUserQuestionCard.appearance';
 import { createPlanDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/CreatePlanDisplay.appearance';
 import { execProcessToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/ExecProcessToolCardView.appearance';
@@ -178,7 +179,6 @@ import { exploreGroupAppearanceDescriptor } from '@/flow_chat/components/modern/
 import { pendingQueuePanelAppearanceDescriptor } from '@/flow_chat/components/PendingQueuePanel.appearance';
 import { subagentProjectionAppearanceDescriptor } from '@/flow_chat/components/subagent/SubagentProjectionView.appearance';
 import { threadGoalDialogsAppearanceDescriptor } from '@/flow_chat/components/thread-goal/ThreadGoalDialogs.appearance';
-import { userSteeringBubbleAppearanceDescriptor } from '@/flow_chat/components/UserSteeringBubble.appearance';
 import { welcomePanelAppearanceDescriptor } from '@/flow_chat/components/WelcomePanel.appearance';
 import { generativeWidgetToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/GenerativeWidgetToolCard.appearance';
 import { gitToolDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/GitToolDisplay.appearance';
@@ -228,7 +228,6 @@ import { reviewSessionSummaryCardAppearanceDescriptor } from '@/flow_chat/tool-c
 import { deepReviewConsentDialogAppearanceDescriptor } from '@/flow_chat/components/DeepReviewConsentDialog.appearance';
 import { flowTextBlockAppearanceDescriptor } from '@/flow_chat/components/FlowTextBlock.appearance';
 import { permissionRequestPanelAppearanceDescriptor } from '@/flow_chat/components/modern/PermissionRequestPanel.appearance';
-import { userMessageAppearanceDescriptor } from '@/flow_chat/components/UserMessage.appearance';
 import { toolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/BaseToolCard.appearance';
 import { canvasToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/CanvasToolCard.appearance';
 import { computerUseToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/ComputerUseToolCard.appearance';
@@ -261,9 +260,6 @@ import { tokenUsageIndicatorAppearanceDescriptor } from '@/flow_chat/components/
 import { toolApprovalBarAppearanceDescriptor } from '@/flow_chat/components/ToolApprovalBar.appearance';
 import { snapshotRollbackButtonAppearanceDescriptor } from '@/flow_chat/components/SnapshotRollbackButton.appearance';
 import { smartRecommendationsAppearanceDescriptor } from '@/flow_chat/components/smart-recommendations/SmartRecommendations.appearance';
-import { stickyTaskIndicatorAppearanceDescriptor } from '@/flow_chat/components/StickyTaskIndicator.appearance';
-import { turnHistoryPanelAppearanceDescriptor } from '@/flow_chat/components/TurnHistoryPanel.appearance';
-import { turnRollbackButtonAppearanceDescriptor } from '@/flow_chat/components/TurnRollbackButton.appearance';
 import { sessionRuntimeStatusEntryAppearanceDescriptor } from '@/flow_chat/components/usage/SessionRuntimeStatusEntry.appearance';
 import { runtimeStatusSlotAppearanceDescriptor } from '@/flow_chat/components/modern/RuntimeStatusSlot.appearance';
 import { sessionMenuAppearanceDescriptor } from '@/flow_chat/components/session-menu/SessionMenu.appearance';
@@ -360,6 +356,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(exportImageAppearanceDescriptor)
     .registerComponent(userMessageItemAppearanceDescriptor)
     .registerComponent(sessionUsageReportCardAppearanceDescriptor)
+    .registerComponent(sessionUsageModalAppearanceDescriptor)
     .registerComponent(askUserQuestionCardAppearanceDescriptor)
     .registerComponent(createPlanDisplayAppearanceDescriptor)
     .registerComponent(execProcessToolCardAppearanceDescriptor)
@@ -476,7 +473,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(pendingQueuePanelAppearanceDescriptor)
     .registerComponent(subagentProjectionAppearanceDescriptor)
     .registerComponent(threadGoalDialogsAppearanceDescriptor)
-    .registerComponent(userSteeringBubbleAppearanceDescriptor)
     .registerComponent(welcomePanelAppearanceDescriptor)
     .registerComponent(generativeWidgetToolCardAppearanceDescriptor)
     .registerComponent(gitToolDisplayAppearanceDescriptor)
@@ -500,7 +496,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(deepReviewConsentDialogAppearanceDescriptor)
     .registerComponent(flowTextBlockAppearanceDescriptor)
     .registerComponent(permissionRequestPanelAppearanceDescriptor)
-    .registerComponent(userMessageAppearanceDescriptor)
     .registerComponent(toolCardAppearanceDescriptor)
     .registerComponent(canvasToolCardAppearanceDescriptor)
     .registerComponent(computerUseToolCardAppearanceDescriptor)
@@ -533,9 +528,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(toolApprovalBarAppearanceDescriptor)
     .registerComponent(snapshotRollbackButtonAppearanceDescriptor)
     .registerComponent(smartRecommendationsAppearanceDescriptor)
-    .registerComponent(stickyTaskIndicatorAppearanceDescriptor)
-    .registerComponent(turnHistoryPanelAppearanceDescriptor)
-    .registerComponent(turnRollbackButtonAppearanceDescriptor)
     .registerComponent(sessionRuntimeStatusEntryAppearanceDescriptor)
     .registerComponent(runtimeStatusSlotAppearanceDescriptor)
     .registerComponent(sessionMenuAppearanceDescriptor)

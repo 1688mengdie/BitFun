@@ -118,6 +118,7 @@
     "failedDescription": "Retry loading the saved conversation. If it was imported from another device, check your account and connection first.",
     "preparingOlderHistory": "Preparing older history...",
     "olderHistoryNotReady": "Older history is not ready yet.",
+    "newerHistoryNotReady": "Newer history is not ready yet.",
     "remoteSessionMissing": "The backend session data was not found. If you just reconnected an SSH remote workspace, close and reopen the remote project, or create a new session and try again.",
     "retry": "Retry"
   },
@@ -199,7 +200,6 @@
       "tokens": "{{value}} tokens"
     },
     "loading": {
-      "markdown": "Generating usage report...",
       "title": "Generating usage report",
       "description": "Reading local session records and preparing a privacy-safe summary.",
       "steps": {
@@ -340,7 +340,9 @@
     },
     "slowestLabels": {
       "modelCall": "Turn {{turn}} model call",
-      "modelCallUnknown": "Model call"
+      "modelCallUnknown": "Model call",
+      "turn": "Turn {{turn}}",
+      "turnUnknown": "Turn"
     },
     "slowest": {
       "details": {
@@ -510,11 +512,6 @@
     "rollbackDialogIntro": "This will:",
     "rollbackDialogBulletFiles": "Undo all file modifications from that turn onwards",
     "rollbackDialogBulletHistory": "Delete that turn and all following dialog records (irreversible)",
-    "rollbackPanelDialogTitle": "Roll back to before turn {{index}}?",
-    "rollbackPanelDialogIntro": "This will:",
-    "rollbackPanelBulletRestore": "Restore files to the state before turn {{index}}",
-    "rollbackPanelBulletUndo": "Undo all file changes from that turn onward",
-    "rollbackPanelBulletHistory": "Keep the session history (you can roll forward again anytime)",
     "rollbackSuccess": "Rolled back and deleted subsequent dialog records",
     "rollbackFailed": "Rollback failed",
     "saveEdit": "Save and rerun",
@@ -1357,9 +1354,6 @@
       "pruned": "Pruned",
       "failed": "Command failed"
     }
-  },
-  "stickyTaskIndicator": {
-    "tooltip": "Jump to current task"
   },
   "sessionFilesBadge": {
     "files": "files",
