@@ -9,6 +9,7 @@ export * from './WindowControls';
 
 export * from './Modal';
 export * from './PresenceBoundary';
+export * from './ViewTransitionBoundary';
 export * from './InputDialog';
 export * from './ConfirmDialog';
 
