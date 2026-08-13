@@ -4,7 +4,7 @@ This crate owns the static, runtime-free projection of DeepSeek Harness (`dsh`)
 plugin package sources. It reads a BitFun-managed package whose
 `bitfun.plugin.json` declares `adapter: "dsh_compatible"`, parses the package's
 `package.json` `dsh` declaration, and projects the discovered bundle entries
-(`dsh.bundle.patch` -> `cordis.patch.yml` rows) or profile bundle references
+(`dsh.bundle.patch` -> `cordis.patch.yml` rows) and/or profile bundle references
 (`dsh.profile.bundles`) as projection-only plugin sources.
 
 It does not execute Cordis plugins, install npm packages, or depend on a
@@ -20,14 +20,15 @@ external-ACP work, not this adapter boundary.
   extraction inside this crate. Cross-crate outputs use typed
   `PluginSourceRef` / `PluginStatusSnapshot` / `PluginDiagnostic` DTOs; do not
   expose raw dsh YAML or JSON as product contracts.
-- dsh bundles contribute Cordis services, not model-facing tool candidates, so
-  `load_dsh_package_adapter` returns no provider dispatch targets. Unsupported
-  or unparsable content must produce typed invalid projections and diagnostics,
-  never silent success.
+- Cordis rows may mount services that register model-facing tools when dsh runs
+  them, but static row metadata is not an executable BitFun provider candidate.
+  `load_dsh_package_adapter` therefore returns no provider dispatch targets.
+  Unsupported or unparsable content must produce typed invalid projections and
+  diagnostics, never silent success.
 - New ecosystems are sibling adapters registered by Product Assembly
   (`bitfun-core/plugin_runtime`), not modes of this adapter.
 
 ## Verification
 
-- `cargo test -p bitfun-dsh-adapter`
-- `cargo test -p bitfun-core --features plugin-runtime plugin_runtime::tests`
+- `cargo test --locked -p bitfun-dsh-adapter --test dsh_source_adapter`
+- `cargo test --locked -p bitfun-core --no-default-features --features plugin-runtime --lib plugin_runtime::tests`

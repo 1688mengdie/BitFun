@@ -2,6 +2,7 @@ use bitfun_dsh_adapter::load_dsh_package_adapter;
 use bitfun_plugin_runtime_client::DefaultPluginRuntimeClient;
 use bitfun_product_domains::plugin_source::{
     PluginPackageFile, PluginPackageInput, PluginPackageManifest, PluginPackageSourceIdentity,
+    PluginTrustDecision, PluginTrustStore,
 };
 use bitfun_runtime_ports::{
     PluginCapabilityRef, PluginDispatchEnvelope, PluginOwnerKind, PluginOwnerRef,
@@ -18,18 +19,32 @@ const BUNDLE_PACKAGE_JSON: &str = r#"{
 }"#;
 
 const BUNDLE_PATCH: &str = r#"
-- id: acme.tool
-  config:
-    command: [node, tool.js]
-- id: acme.agent
-  insert:
-    - id: acme.agent.inner
+- insert:
+    - id: acme.tool
+      disabled: !!js process.platform === 'win32'
+      config:
+        command: [node, tool.js]
+    - id: acme.agent
+      name: group
+      group: true
+      config:
+        - id: acme.agent.inner
+          name: acme-agent-inner
 "#;
 
 const PROFILE_PACKAGE_JSON: &str = r#"{
   "name": "acme-dsh-profile",
   "version": "1.0.0",
   "dsh": { "profile": { "bundles": ["@acme/dsh-base", "@acme/dsh-web"] } }
+}"#;
+
+const BUNDLE_AND_PROFILE_PACKAGE_JSON: &str = r#"{
+  "name": "acme-dsh-combined",
+  "version": "1.0.0",
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "profile": { "bundles": ["@acme/dsh-base", "@acme/dsh-web"] }
+  }
 }"#;
 
 fn build_input(files: &[(&str, &str)]) -> PluginPackageInput {
@@ -114,6 +129,28 @@ fn dispatch_envelope(source: bitfun_runtime_ports::PluginSourceRef) -> PluginDis
     }
 }
 
+fn activation_authority(
+    input: &PluginPackageInput,
+) -> bitfun_product_domains::plugin_source::PluginActivationAuthority {
+    let source = input.clone().into_parts().1;
+    let mut trust = PluginTrustStore::new(1);
+    trust
+        .apply_decision(
+            "project",
+            "workspace",
+            source.clone(),
+            PluginTrustDecision::ApproveSource,
+            1_720_000_000,
+        )
+        .expect("approve dsh source");
+    trust
+        .activate("project", "workspace", source.clone(), 1_720_000_001)
+        .expect("activate dsh source");
+    trust
+        .activation_authority("project", "workspace", &source)
+        .expect("dsh activation authority")
+}
+
 #[tokio::test]
 async fn bundle_entries_project_as_projection_only_sources() {
     let (adapter, dispatch_targets) =
@@ -186,6 +223,72 @@ async fn profile_bundles_project_as_projection_only_sources() {
 }
 
 #[tokio::test]
+async fn invalid_profile_names_are_diagnosed_and_duplicate_layers_are_preserved() {
+    let package_json = r#"{
+      "name": "acme-dsh-profile",
+      "version": "1.0.0",
+      "dsh": {
+        "profile": {
+          "bundles": ["@acme/dsh-base", " ", "@acme/dsh-base"]
+        }
+      }
+    }"#;
+    let input = build_input(&[("package.json", package_json)]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+
+    let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
+    assert_eq!(
+        read.sources.len(),
+        3,
+        "two ordered layer references and one invalid projection"
+    );
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.profile_bundle_invalid"));
+    assert_eq!(
+        read.plugin_statuses
+            .iter()
+            .filter(|status| status.status == PluginStatusKind::InvalidConfig)
+            .count(),
+        1
+    );
+    let valid_sources = read
+        .plugin_statuses
+        .iter()
+        .filter(|status| status.status == PluginStatusKind::TrustRequired)
+        .map(|status| &status.source)
+        .collect::<Vec<_>>();
+    assert_eq!(valid_sources.len(), 2);
+    assert_ne!(valid_sources[0].plugin_id, valid_sources[1].plugin_id);
+}
+
+#[tokio::test]
+async fn package_can_project_bundle_and_profile_roles_together() {
+    let input = build_input(&[
+        ("package.json", BUNDLE_AND_PROFILE_PACKAGE_JSON),
+        ("cordis.patch.yml", BUNDLE_PATCH),
+    ]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+
+    let read = client
+        .read_plugins(read_request(Vec::new()))
+        .await
+        .expect("read combined dsh package");
+    assert_eq!(read.sources.len(), 5, "three patch rows plus two bundles");
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.bundle_entry_projection_only"));
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.profile_bundle_projection_only"));
+}
+
+#[tokio::test]
 async fn read_plugins_filters_by_plugin_id() {
     let (adapter, _) = load_dsh_package_adapter(bundle_input(), None, 1_720_000_001).unwrap();
     let client = DefaultPluginRuntimeClient::new(adapter);
@@ -203,10 +306,13 @@ async fn read_plugins_filters_by_plugin_id() {
 #[tokio::test]
 async fn missing_package_json_produces_invalid_projection() {
     let input = build_input(&[("cordis.patch.yml", BUNDLE_PATCH)]);
+    let expected_source = input.clone().into_parts().1;
     let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
     let client = DefaultPluginRuntimeClient::new(adapter);
     let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
     assert_eq!(read.sources.len(), 1);
+    assert_eq!(read.sources[0].version.as_deref(), Some("1.0.0"));
+    assert_eq!(read.sources[0].content_hash, expected_source.content_hash);
     assert_eq!(
         read.plugin_statuses[0].status,
         PluginStatusKind::InvalidConfig
@@ -215,6 +321,54 @@ async fn missing_package_json_produces_invalid_projection() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "dsh.package_json_missing"));
+}
+
+#[tokio::test]
+async fn bundle_declaration_requires_an_explicit_patch_path() {
+    let package_json = r#"{
+      "name": "acme-dsh-bundle",
+      "version": "1.0.0",
+      "dsh": { "bundle": {} }
+    }"#;
+    let input = build_input(&[
+        ("package.json", package_json),
+        ("cordis.patch.yml", BUNDLE_PATCH),
+    ]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+    let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
+
+    assert_eq!(read.sources.len(), 1);
+    assert_eq!(
+        read.plugin_statuses[0].status,
+        PluginStatusKind::InvalidConfig
+    );
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.bundle_patch_missing"));
+}
+
+#[tokio::test]
+async fn bundle_patch_path_uses_package_relative_normalization() {
+    let package_json = r#"{
+      "name": "acme-dsh-bundle",
+      "version": "1.0.0",
+      "dsh": { "bundle": { "patch": "./config/../cordis.patch.yml" } }
+    }"#;
+    let input = build_input(&[
+        ("package.json", package_json),
+        ("cordis.patch.yml", BUNDLE_PATCH),
+    ]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+    let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
+
+    assert_eq!(read.sources.len(), 3);
+    assert!(read
+        .plugin_statuses
+        .iter()
+        .all(|status| status.status == PluginStatusKind::TrustRequired));
 }
 
 #[tokio::test]
@@ -228,6 +382,35 @@ async fn package_without_dsh_field_produces_invalid_projection() {
         PluginStatusKind::InvalidConfig
     );
     assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.package_no_dsh_field"));
+}
+
+#[tokio::test]
+async fn unsupported_client_only_package_reports_its_actual_role() {
+    let input = build_input(&[(
+        "package.json",
+        r#"{
+          "name": "client-only",
+          "dsh": {
+            "client": { "platform": "web", "inject": [] }
+          }
+        }"#,
+    )]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+    let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
+
+    assert_eq!(
+        read.plugin_statuses[0].status,
+        PluginStatusKind::InvalidConfig
+    );
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.package_no_supported_role"));
+    assert!(!read
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "dsh.package_no_dsh_field"));
@@ -266,6 +449,42 @@ async fn empty_bundle_patch_produces_invalid_projection() {
         .diagnostics
         .iter()
         .any(|diagnostic| diagnostic.code == "dsh.bundle_no_entries"));
+}
+
+#[tokio::test]
+async fn bundle_entries_without_stable_ids_are_not_silently_dropped() {
+    let patch = r#"
+- insert:
+    - id: valid-entry
+    - id: ""
+"#;
+    let input = build_input(&[
+        ("package.json", BUNDLE_PACKAGE_JSON),
+        ("cordis.patch.yml", patch),
+    ]);
+    let (adapter, _) = load_dsh_package_adapter(input, None, 1_720_000_001).unwrap();
+    let client = DefaultPluginRuntimeClient::new(adapter);
+    let read = client.read_plugins(read_request(Vec::new())).await.unwrap();
+
+    assert_eq!(
+        read.sources.len(),
+        2,
+        "one valid and one invalid projection"
+    );
+    assert!(read
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.code == "dsh.bundle_entry_invalid"));
+}
+
+#[tokio::test]
+async fn invalid_package_cannot_be_activated() {
+    let input = build_input(&[("package.json", r#"{ "name": "plain" }"#)]);
+    let authority = activation_authority(&input);
+    let error = load_dsh_package_adapter(input, Some(authority), 1_720_000_001)
+        .err()
+        .expect("invalid dsh package must not activate");
+    assert!(error.to_string().contains("invalid dsh package projection"));
 }
 
 #[tokio::test]
