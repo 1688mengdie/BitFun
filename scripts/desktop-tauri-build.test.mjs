@@ -3,7 +3,11 @@ import { mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { prepareTauriConfig, shouldRetryMacDmgBuild } from './desktop-tauri-build.mjs';
+import {
+  prepareMacOSFlashgrepForSigning,
+  prepareTauriConfig,
+  shouldRetryMacDmgBuild,
+} from './desktop-tauri-build.mjs';
 import { resolveProductDefinition } from './product-customization/resolver.mjs';
 
 const FAILED_BUILD = { status: 1 };
@@ -14,6 +18,79 @@ test('release builds do not mutate DMGs after Tauri signs and notarizes them', (
   const source = readFileSync(join(ROOT, 'scripts', 'desktop-tauri-build.mjs'), 'utf8');
   assert.doesNotMatch(source, /patchDmgExtras/);
   assert.doesNotMatch(source, /patch-dmg-extras\.sh/);
+});
+
+test('macOS release signing covers the bundled flashgrep executable', () => {
+  const fixture = join(tmpdir(), `bitfun-flashgrep-signing-${process.pid}-${Date.now()}`);
+  const desktopDir = join(fixture, 'src', 'apps', 'desktop');
+  const source = join(fixture, 'flashgrep-aarch64-apple-darwin');
+  const calls = [];
+  mkdirSync(desktopDir, { recursive: true });
+  writeFileSync(source, 'test-binary');
+
+  try {
+    const signed = prepareMacOSFlashgrepForSigning(source, desktopDir, {
+      platform: 'darwin',
+      signingIdentity: 'Developer ID Application: Test (TEAMID)',
+      spawnSync: (...args) => {
+        calls.push(args);
+        return { status: 0 };
+      },
+    });
+
+    assert.notEqual(signed, source);
+    assert.equal(readFileSync(signed, 'utf8'), 'test-binary');
+    assert.deepEqual(calls[0][0], 'codesign');
+    assert.deepEqual(calls[0][1], [
+      '--force',
+      '--sign',
+      'Developer ID Application: Test (TEAMID)',
+      '--options',
+      'runtime',
+      '--timestamp',
+      signed,
+    ]);
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
+});
+
+test('unsigned and non-macOS builds keep the original flashgrep executable', () => {
+  assert.equal(
+    prepareMacOSFlashgrepForSigning('/tmp/flashgrep', '/tmp/desktop', {
+      platform: 'darwin',
+      signingIdentity: '',
+    }),
+    '/tmp/flashgrep',
+  );
+  assert.equal(
+    prepareMacOSFlashgrepForSigning('/tmp/flashgrep', '/tmp/desktop', {
+      platform: 'linux',
+      signingIdentity: 'unused',
+    }),
+    '/tmp/flashgrep',
+  );
+});
+
+test('macOS packaging fails when bundled flashgrep signing fails', () => {
+  const fixture = join(tmpdir(), `bitfun-flashgrep-signing-failure-${process.pid}-${Date.now()}`);
+  const desktopDir = join(fixture, 'src', 'apps', 'desktop');
+  const source = join(fixture, 'flashgrep-x86_64-apple-darwin');
+  mkdirSync(desktopDir, { recursive: true });
+  writeFileSync(source, 'test-binary');
+
+  try {
+    assert.throws(
+      () => prepareMacOSFlashgrepForSigning(source, desktopDir, {
+        platform: 'darwin',
+        signingIdentity: 'Developer ID Application: Test (TEAMID)',
+        spawnSync: () => ({ status: 1, stderr: 'identity unavailable' }),
+      }),
+      /Failed to sign bundled flashgrep binary: identity unavailable/,
+    );
+  } finally {
+    rmSync(fixture, { force: true, recursive: true });
+  }
 });
 
 function retryFixture() {

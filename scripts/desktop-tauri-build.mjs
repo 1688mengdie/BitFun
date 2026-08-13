@@ -4,6 +4,8 @@ import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -44,10 +46,12 @@ async function main() {
   const releaseChannel = resolveReleaseChannel(process.env.BITFUN_RELEASE_CHANNEL);
   console.log(`[release] channel=${releaseChannel.channel}`);
 
-  const flashgrepBinary = ensureFlashgrepBinary();
-  process.env.FLASHGREP_DAEMON_BIN = flashgrepBinary;
-
   const desktopDir = join(ROOT, 'src', 'apps', 'desktop');
+  const flashgrepBinary = prepareMacOSFlashgrepForSigning(
+    ensureFlashgrepBinary(),
+    desktopDir,
+  );
+  process.env.FLASHGREP_DAEMON_BIN = flashgrepBinary;
   // Tauri CLI reads CI and rejects numeric "1" (common in CI providers).
   process.env.CI = 'true';
 
@@ -164,6 +168,46 @@ function optionValue(args, option) {
     }
   }
   return undefined;
+}
+
+export function prepareMacOSFlashgrepForSigning(
+  flashgrepBinary,
+  desktopDir,
+  runtime = {},
+) {
+  const platform = runtime.platform ?? process.platform;
+  const signingIdentity = runtime.signingIdentity ?? process.env.APPLE_SIGNING_IDENTITY;
+  if (platform !== 'darwin' || !signingIdentity) {
+    return flashgrepBinary;
+  }
+
+  const signedDir = join(desktopDir, 'gen', 'signed-resources', 'flashgrep');
+  const signedBinary = join(signedDir, basename(flashgrepBinary));
+  mkdirSync(signedDir, { recursive: true });
+  copyFileSync(flashgrepBinary, signedBinary);
+  chmodSync(signedBinary, statSync(signedBinary).mode | 0o111);
+
+  const run = runtime.spawnSync ?? spawnSync;
+  const result = run(
+    'codesign',
+    [
+      '--force',
+      '--sign',
+      signingIdentity,
+      '--options',
+      'runtime',
+      '--timestamp',
+      signedBinary,
+    ],
+    { encoding: 'utf8', shell: false },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr || `exit status ${result.status}`;
+    throw new Error(`Failed to sign bundled flashgrep binary: ${detail}`);
+  }
+
+  console.log(`[tauri-build] Signed bundled flashgrep binary: ${signedBinary}`);
+  return signedBinary;
 }
 
 export function prepareTauriConfig(

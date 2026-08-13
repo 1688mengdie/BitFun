@@ -20,6 +20,15 @@ fi
 
 for app in "${apps[@]}"; do
   codesign --verify --deep --strict --verbose=2 "${app}"
+  while IFS= read -r -d '' candidate; do
+    if ! file -b "${candidate}" | grep -q 'Mach-O'; then
+      continue
+    fi
+    signature_details="$(codesign -dv --verbose=4 "${candidate}" 2>&1)"
+    grep -Fq 'Authority=Developer ID Application:' <<<"${signature_details}"
+    grep -Eq 'flags=.*\(runtime\)' <<<"${signature_details}"
+    grep -Fq 'Timestamp=' <<<"${signature_details}"
+  done < <(find "${app}" -type f -print0)
   xcrun stapler validate "${app}"
   spctl --assess --type execute --verbose=4 "${app}"
 done
