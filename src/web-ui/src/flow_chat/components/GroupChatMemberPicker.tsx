@@ -11,14 +11,14 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { UserPlus, UserMinus, Crown } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
-import type { GroupChatActor, GroupChatMember } from '../types/flow-chat';
+import type { AddableAssistant, GroupChatActor, GroupChatMember } from '../types/flow-chat';
 import './GroupChatMemberPicker.scss';
 
 export interface GroupChatMemberPickerProps {
   roomId: string;
   members: GroupChatMember[];
   currentActor: GroupChatActor;
-  availableAssistants: { sessionId: string; name: string }[];  // addable Claw assistants
+  availableAssistants: AddableAssistant[];  // addable candidates: real Claw sessions ∪ inactive presets
   onJoin: (sessionId: string) => void;
   onLeave: (sessionId: string) => void;
 }
@@ -121,6 +121,15 @@ export const GroupChatMemberPicker: React.FC<GroupChatMemberPickerProps> = ({
                     onClick={() => handleJoin(assistant.sessionId)}
                   >
                     {assistant.name}
+                    {assistant.inactive ? (
+                      <span
+                        className="group-chat-member-picker__inactive-badge"
+                        data-bf-component="group-chat-member-picker"
+                        data-bf-part="inactiveBadge"
+                      >
+                        {t('nav.groupChat.inactiveBadge')}
+                      </span>
+                    ) : null}
                   </button>
                 ))
               )}

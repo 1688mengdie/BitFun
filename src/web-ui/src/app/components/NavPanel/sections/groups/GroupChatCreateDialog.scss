@@ -105,6 +105,23 @@
     }
   }
 
+  &__member-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__inactive-badge {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px dashed var(--bf-appearance-token-border-strong);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
   &__empty {
     color: var(--bf-appearance-token-color-text-muted);
     font-size: 12px;

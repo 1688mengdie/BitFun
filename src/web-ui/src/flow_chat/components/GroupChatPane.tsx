@@ -18,7 +18,7 @@ import { Virtuoso } from 'react-virtuoso';
 import { useI18n } from '@/infrastructure/i18n';
 import { useOptionalWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useGroupChatStore } from '../store/groupChatStore';
-import type { GroupChatActor, GroupChatMember, GroupChatMessage } from '../types/flow-chat';
+import type { AddableAssistant, GroupChatActor, GroupChatMember, GroupChatMessage } from '../types/flow-chat';
 import type { ChatInputRegistration, ChatInputSubmission } from './chatInputRegistration';
 import { ChatInput } from './ChatInput';
 import { buildGroupChatSubmission } from './buildGroupChatSubmission';
@@ -37,8 +37,8 @@ const GROUP_CHAT_TIMEOUT_SCAN_INTERVAL_MS = 60_000;
 export interface GroupChatPaneProps {
   roomId: string;
   isViewportActive?: boolean;
-  /** P2-10: addable Claw assistants (real data source wired by the host). */
-  availableAssistants?: { sessionId: string; name: string }[];
+  /** W2: addable candidates (real Claw sessions ∪ inactive presets), wired by the host. */
+  availableAssistants?: AddableAssistant[];
 }
 
 export const GroupChatPane: React.FC<GroupChatPaneProps> = ({

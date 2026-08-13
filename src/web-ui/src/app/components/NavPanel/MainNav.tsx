@@ -36,6 +36,8 @@ import { useMiniAppCatalogSync } from '../../scenes/miniapps/hooks/useMiniAppCat
 import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { resolveAgentTypeForSessionCreation } from '@/flow_chat/services/flow-chat-manager';
 import { openMainSession } from '@/flow_chat/services/sessionActivation';
+import type { AddableAssistant } from '@/flow_chat/types/flow-chat';
+import { agentAPI } from '@/infrastructure/api/service-api/AgentAPI';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
@@ -527,18 +529,55 @@ const MainNav: React.FC<MainNavProps> = ({
   const skillsTooltip = t('nav.tooltips.skills');
   const extensionsLabel = t('nav.sections.extensions');
 
-  // P0-1/P2-10: real addable-assistant data source for the group chat member
-  // picker / create dialog — Claw assistant workspaces (sessionId = assistantId
-  // when the assistant session exists, else the workspace id as fallback).
-  const groupChatAvailableAssistants = useMemo(
-    () =>
-      assistantWorkspacesList
-        .map((workspace) => ({
-          sessionId: workspace.assistantId || workspace.id,
-          name: workspace.identity?.name?.trim() || workspace.name,
-        })),
-    [assistantWorkspacesList],
-  );
+  // W2 成员来源单一化（2026-08-13，方案 v1.1 §一）：
+  // 候选列表 = 真实 Claw 会话（listSessions 过滤 agent_type==Claw）∪
+  // assistant 预设（无真实会话的标 inactive「未激活」，用户选中时后端
+  // 显式新建 Claw 会话）。不再用 `assistantId || workspace.id` 当 sessionId。
+  const [clawSessions, setClawSessions] = useState<AddableAssistant[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!currentWorkspace?.rootPath) return;
+      try {
+        const sessions = await agentAPI.listSessions(currentWorkspace.rootPath);
+        if (!cancelled) {
+          setClawSessions(
+            sessions
+              .filter((session) => session.agentType === 'Claw')
+              .map((session) => ({
+                sessionId: session.sessionId,
+                name: session.sessionName || session.sessionId,
+              })),
+          );
+        }
+      } catch (error) {
+        // 会话枚举失败不阻塞建群：退化为纯 assistant 预设列表。
+        log.warn('Failed to list Claw sessions for group chat candidates', { error });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentWorkspace?.rootPath]);
+
+  const groupChatAvailableAssistants = useMemo<AddableAssistant[]>(() => {
+    // 真实 Claw 会话（sessionId = 真实 session_id）优先，去重。
+    const real = new Map<string, AddableAssistant>();
+    for (const session of clawSessions) {
+      real.set(session.sessionId, session);
+    }
+    // assistant 预设：已有真实会话的跳过（不重复）；无会话的标 inactive。
+    for (const workspace of assistantWorkspacesList) {
+      const sessionId = workspace.assistantId || workspace.id;
+      if (!sessionId || real.has(sessionId)) continue;
+      real.set(sessionId, {
+        sessionId,
+        name: workspace.identity?.name?.trim() || workspace.name,
+        inactive: true,
+      });
+    }
+    return Array.from(real.values());
+  }, [clawSessions, assistantWorkspacesList]);
   const groupChatActiveRoomId = useGroupChatStore((state) => state.activeRoomId);
 
   return (

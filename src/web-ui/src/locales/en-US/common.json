@@ -112,6 +112,7 @@
       "noMessages": "No messages yet",
       "addMember": "Add member",
       "noAddable": "No assistants available",
+      "inactiveBadge": "Not activated",
       "noMembers": "No members",
       "roleOwner": "Owner",
       "roleMember": "Member",

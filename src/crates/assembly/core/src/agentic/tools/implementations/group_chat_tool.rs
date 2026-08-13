@@ -305,15 +305,18 @@ impl GroupChatTool {
 
     /// Resolves the real assistant workspace root path for a group chat member.
     ///
-    /// The member id may be either an 8-hex `assistantId` (`bd56fce3`) or a
-    /// workspace stable id (`local_+UUID`, used when the assistant workspace
-    /// has no `assistantId`). Resolution order:
+    /// The member id may be an 8-hex `assistantId` (`bd56fce3`), a workspace
+    /// stable id (`local_+UUID`), or a workspace id for an assistant without
+    /// `assistantId`. Resolution order (W2 补强，方案 v1.1 §五.2):
     ///
     /// 1. **Workspace registry by id** — the authoritative source. A registered
     ///    assistant workspace's `root_path` is the true directory (e.g.
     ///    `personal_assistant/workspace` for the default Claw, or
     ///    `personal_assistant/workspace-{assistantId}` for named ones).
-    /// 2. **assistant_workspace_dir(id)** — legacy layout fallback for 8-hex
+    /// 2. **Workspace registry by assistant_id index** — covers the case where
+    ///    `assistantId ≠ workspace.id` but the assistant workspace is
+    ///    registered (filter `get_assistant_workspaces()` by `assistant_id`).
+    /// 3. **assistant_workspace_dir(id)** — legacy layout fallback for 8-hex
     ///    ids whose workspace is not registered (only used when the directory
     ///    actually exists).
     ///
@@ -338,9 +341,34 @@ impl GroupChatTool {
                     session_id
                 ));
             }
+
+            // 2) Assistant-id index: `assistantId` (8-hex) may differ from the
+            //    workspace.id key; filter the assistant workspace registry.
+            if let Some(workspace) =
+                service
+                    .get_assistant_workspaces()
+                    .await
+                    .into_iter()
+                    .find(|workspace| {
+                        workspace
+                            .assistant_id
+                            .as_deref()
+                            .is_some_and(|assistant_id| assistant_id == session_id)
+                    })
+            {
+                let root = workspace.root_path.clone();
+                if root.exists() {
+                    return Ok(root);
+                }
+                return Err(format!(
+                    "assistant workspace '{}' (assistant_id '{}') does not exist on disk",
+                    root.display(),
+                    session_id
+                ));
+            }
         }
 
-        // 2) Legacy assistant-workspace layout fallback: `workspace-{id}` dir
+        // 3) Legacy assistant-workspace layout fallback: `workspace-{id}` dir
         //    under personal_assistant. Only accept it when the directory
         //    actually exists.
         let manager = coordinator.get_session_manager();
@@ -2835,5 +2863,57 @@ mod tests {
         // 两份数据都在（原名 + 重命名副本），消息总数 = 4。
         assert_eq!(second.total_messages_migrated, 2);
         assert_eq!(first.total_messages_migrated, 2);
+    }
+
+    // ── W2 成员来源单一化 (2026-08-13): 三形态断言矩阵 ───────────────────
+    // local_UUID / 8-hex / 无 assistantId 三种成员 id 形状，resolve_assistant_workspace
+    // 必须全部解析到真实 assistant workspace（legacy 目录兜底路径，真实形状）。
+    #[tokio::test]
+    async fn group_chat_resolve_assistant_workspace_covers_all_three_id_shapes() {
+        let (coordinator, _session_manager, root) = test_group_chat_coordinator_harness();
+
+        // 形态 1: 8-hex assistantId（如 bd56fce3）→ workspace-bd56fce3 目录。
+        let hex_id = "bd56fce3";
+        let hex_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(hex_id, None);
+        std::fs::create_dir_all(&hex_dir).expect("create hex assistant dir");
+        let resolved_hex = GroupChatTool::resolve_assistant_workspace(&coordinator, hex_id)
+            .await
+            .expect("8-hex must resolve");
+        assert_eq!(resolved_hex, hex_dir);
+
+        // 形态 2: local_+UUID workspace 稳定 id（无 assistantId 默认 Claw fallback）。
+        let uuid_id = "local_5a1557a8afd417b173d9ce873553e66a";
+        let uuid_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(uuid_id, None);
+        std::fs::create_dir_all(&uuid_dir).expect("create uuid assistant dir");
+        let resolved_uuid = GroupChatTool::resolve_assistant_workspace(&coordinator, uuid_id)
+            .await
+            .expect("local_UUID must resolve");
+        assert_eq!(resolved_uuid, uuid_dir);
+
+        // 形态 3: 无 assistantId 的默认 Claw（id 无前缀形状，如 "claw-main"）。
+        let bare_id = "claw-main";
+        let bare_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(bare_id, None);
+        std::fs::create_dir_all(&bare_dir).expect("create bare assistant dir");
+        let resolved_bare = GroupChatTool::resolve_assistant_workspace(&coordinator, bare_id)
+            .await
+            .expect("bare id must resolve");
+        assert_eq!(resolved_bare, bare_dir);
+
+        // 无效 id：无注册表 + 无 legacy 目录 → 清晰错误（不静默跳过）。
+        let missing = "no-such-assistant-anywhere";
+        let err = GroupChatTool::resolve_assistant_workspace(&coordinator, missing)
+            .await
+            .expect_err("missing id must fail cleanly");
+        assert!(err.contains("not found") && err.contains(missing));
+        let _ = root;
     }
 }

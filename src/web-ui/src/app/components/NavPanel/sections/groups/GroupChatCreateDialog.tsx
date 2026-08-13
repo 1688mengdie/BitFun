@@ -9,13 +9,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, Users } from 'lucide-react';
 import { useI18n } from '@/infrastructure/i18n';
+import type { AddableAssistant } from '@/flow_chat/types/flow-chat';
 import { useGroupChatStore } from '../../../../../flow_chat/store/groupChatStore';
 import './GroupChatCreateDialog.scss';
 
 export interface GroupChatCreateDialogProps {
   workspacePath: string;
-  /** Addable Claw assistants (sessionId + name). */
-  availableAssistants?: { sessionId: string; name: string }[];
+  /** Addable candidates: real Claw sessions ∪ assistant presets (inactive = 未激活). */
+  availableAssistants?: AddableAssistant[];
   onClose: () => void;
 }
 
@@ -123,7 +124,16 @@ export const GroupChatCreateDialog: React.FC<GroupChatCreateDialogProps> = ({
                       checked={selected.has(assistant.sessionId)}
                       onChange={() => toggleMember(assistant.sessionId)}
                     />
-                    <span>{assistant.name}</span>
+                    <span className="group-chat-create-dialog__member-name">{assistant.name}</span>
+                    {assistant.inactive ? (
+                      <span
+                        className="group-chat-create-dialog__inactive-badge"
+                        data-bf-component="group-chat-create-dialog"
+                        data-bf-part="inactiveBadge"
+                      >
+                        {t('nav.groupChat.inactiveBadge')}
+                      </span>
+                    ) : null}
                   </label>
                 ))
               )}
