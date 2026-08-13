@@ -64,7 +64,7 @@ import {
 import {
   useBackgroundSubagentActivityStore,
 } from '../../store/backgroundSubagentActivityStore';
-import type { LineRange } from '@/component-library';
+import { PresenceBoundary, type LineRange } from '@/component-library';
 import { isChatPopupActive, subscribeChatPopupChange } from '../chatPopupState';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { flowChatSessionConfigForCurrentWorkspace } from '@/app/utils/projectSessionWorkspace';
@@ -461,6 +461,29 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     respond: respondPermission,
     respondBatch: respondPermissionBatch,
   } = usePermissionRequests(activeSession?.sessionId);
+  const activePermissionPanelSnapshot = activeSession && activePermissionBatch
+    ? {
+        ownerSessionId: activeSession.sessionId,
+        batch: activePermissionBatch,
+        totalPendingCount: permissionRequests.length,
+        aboveChatInput: permissionPanelAboveChatInput,
+        onRespond: respondPermission,
+        onRespondBatch: respondPermissionBatch,
+      }
+    : null;
+  const retainedPermissionPanelSnapshotRef = useRef(activePermissionPanelSnapshot);
+  let renderedPermissionPanelSnapshot = activePermissionPanelSnapshot;
+  if (activePermissionPanelSnapshot) {
+    retainedPermissionPanelSnapshotRef.current = activePermissionPanelSnapshot;
+  } else if (
+    retainedPermissionPanelSnapshotRef.current?.ownerSessionId === activeSession?.sessionId
+  ) {
+    renderedPermissionPanelSnapshot = retainedPermissionPanelSnapshotRef.current;
+  } else {
+    // A retained exit belongs to its originating session. Never let it cross a
+    // session boundary with the new session's callbacks or surrounding props.
+    retainedPermissionPanelSnapshotRef.current = null;
+  }
   const visibleTurnInfo = useVisibleTurnInfo();
   const [queuedTurnNavigation, setQueuedTurnNavigation] = useState<QueuedTurnNavigation | null>(null);
   const [pendingHistoryOpenSession, setPendingHistoryOpenSession] = useState<HistorySessionOpenIntentDetail | null>(null);
@@ -2468,16 +2491,19 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
           onSend={handleSendBackgroundCommandInput}
         />
 
-        {activePermissionBatch && (
-          <PermissionRequestPanel
-            key={`${activePermissionBatch.sessionId}:${activePermissionBatch.roundId}`}
-            requests={activePermissionBatch.requests}
-            totalPendingCount={permissionRequests.length}
-            aboveChatInput={permissionPanelAboveChatInput}
-            onRespond={respondPermission}
-            onRespondBatch={respondPermissionBatch}
-          />
-        )}
+        <PresenceBoundary active={activePermissionPanelSnapshot != null}>
+          {renderedPermissionPanelSnapshot ? (
+            <PermissionRequestPanel
+              key={`${renderedPermissionPanelSnapshot.batch.sessionId}:${renderedPermissionPanelSnapshot.batch.roundId}`}
+              requests={renderedPermissionPanelSnapshot.batch.requests}
+              totalPendingCount={renderedPermissionPanelSnapshot.totalPendingCount}
+              aboveChatInput={renderedPermissionPanelSnapshot.aboveChatInput}
+              visible={activePermissionPanelSnapshot != null}
+              onRespond={renderedPermissionPanelSnapshot.onRespond}
+              onRespondBatch={renderedPermissionPanelSnapshot.onRespondBatch}
+            />
+          ) : null}
+        </PresenceBoundary>
 
         <div
           className="modern-flowchat-container__messages"

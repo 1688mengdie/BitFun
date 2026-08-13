@@ -601,6 +601,12 @@ describe('useFlowChatFollowOutput', () => {
     expect(jumpToLatestAcross(VIEWPORT)).toHaveBeenCalledWith('smooth');
   });
 
+  it('lands a near jump immediately when reduced motion is requested', () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+
+    expect(jumpToLatestAcross(VIEWPORT)).toHaveBeenCalledWith('auto');
+  });
+
   it('lands a jump too far to follow rather than animate part of it', () => {
     /*
      * The animation cannot finish this and the frame loop takes the viewport
