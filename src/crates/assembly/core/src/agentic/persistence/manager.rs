@@ -1356,6 +1356,28 @@ impl PersistenceManager {
         if updated {
             Ok(())
         } else {
+            // CI-only diagnostic (RAD08/遗留2 flake): when the metadata file is
+            // missing inside the update call, log the exact probed paths so the
+            // divergence between merge (write OK) and persist (read NotFound)
+            // becomes visible. eprintln is used instead of the log crate to
+            // guarantee the line reaches the test stdout even when tracing
+            // filters would drop it.
+            #[cfg(test)]
+            eprintln!(
+                "[session-meta-diag] update NotFound: session_id={}, workspace_path={}, sessions_root={}, metadata_path={}, root_exists={}, session_dir_exists={}",
+                session_id,
+                workspace_path.display(),
+                self.session_layout(workspace_path).sessions_root().display(),
+                self.session_layout(workspace_path)
+                    .metadata_path(session_id)
+                    .display(),
+                self.session_layout(workspace_path)
+                    .sessions_root()
+                    .exists(),
+                self.session_layout(workspace_path)
+                    .session_dir(session_id)
+                    .exists(),
+            );
             Err(BitFunError::NotFound(format!(
                 "Session metadata not found: {}",
                 session_id
