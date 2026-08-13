@@ -844,7 +844,6 @@ pub async fn delete_all_archived_sessions(
 
 use crate::api::remote_workspace_policy::GroupChatWorkspaceScope;
 use bitfun_core::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
-use bitfun_core::agentic::session::session_store_port::CoreSessionStorePort;
 use bitfun_core::agentic::tools::implementations::group_chat_tool::{
     parse_group_chat_error_code, GroupChatTool,
 };
@@ -852,7 +851,7 @@ use bitfun_core::service::session::GroupChatStore;
 use bitfun_core::util::errors::BitFunError;
 use bitfun_runtime_ports::{
     GroupChatActor, GroupChatError, GroupChatErrorCode, GroupChatMember, GroupChatMessagesResponse,
-    GroupChatMode, GroupChatRoom, GroupChatSendResult, SessionStoragePathRequest, SessionStorePort,
+    GroupChatMode, GroupChatRoom, GroupChatSendResult,
 };
 use std::sync::Arc;
 
@@ -959,26 +958,12 @@ pub struct GroupChatScanTimeoutsRequest {
     pub room_id: Option<String>,
 }
 
-/// Resolves the group-chats root (sibling of the sessions root) for a workspace.
-/// `scope` carries the real `remote_connection_id`/`remote_ssh_host` (F-3: the
-/// 12 group-chat commands declare `RemoteRouted`; a hardcoded `None` connection
-/// id made remote workspaces opened at the same path on different hosts
-/// resolve against the wrong — or `_unresolved` — mirror tree).
-async fn group_chats_root(scope: &GroupChatWorkspaceScope) -> Result<std::path::PathBuf, String> {
-    let request = SessionStoragePathRequest {
-        workspace_path: std::path::PathBuf::from(&scope.workspace_path),
-        remote_connection_id: scope.remote_connection_id.clone(),
-        remote_ssh_host: scope.remote_ssh_host.clone(),
-    };
-    let resolution = CoreSessionStorePort::default()
-        .resolve_session_storage_path(request)
-        .await
-        .map_err(|error| format!("Failed to resolve sessions root: {error}"))?;
-    let sessions_root = resolution.effective_storage_path;
-    let parent = sessions_root
-        .parent()
-        .ok_or_else(|| "sessions root has no parent directory".to_string())?;
-    Ok(parent.join("group-chats"))
+/// Resolves the global group-chats root (W1 数据归属全局化，2026-08-13):
+/// `~/.bitfun/group-chats/`（PathManager 唯一权威源），不再随 workspace /
+/// remote scope 解析——12 群聊命令改 WorkspaceAgnostic，跨工作区同一视图。
+/// `scope` 仅保留兼容调用面（用于成员会话解析的上下文），不再决定存储位置。
+async fn group_chats_root(_scope: &GroupChatWorkspaceScope) -> Result<std::path::PathBuf, String> {
+    Ok(bitfun_core::infrastructure::get_path_manager_arc().group_chats_root())
 }
 
 async fn group_chat_store(scope: &GroupChatWorkspaceScope) -> Result<GroupChatStore, String> {
@@ -1133,16 +1118,19 @@ pub async fn group_chat_leave(
 }
 
 #[tauri::command]
-pub async fn group_chat_delete(
-    request: GroupChatDeleteRequest,
-) -> Result<(), GroupChatError> {
+pub async fn group_chat_delete(request: GroupChatDeleteRequest) -> Result<(), GroupChatError> {
     let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
         .resolve()
         .await;
     let coordinator = require_coordinator()?;
-    GroupChatTool::delete_room_impl(&coordinator, &scope.workspace_path, &request.room_id, request.actor)
-        .await
-        .map_err(group_chat_command_error)
+    GroupChatTool::delete_room_impl(
+        &coordinator,
+        &scope.workspace_path,
+        &request.room_id,
+        request.actor,
+    )
+    .await
+    .map_err(group_chat_command_error)
 }
 
 #[tauri::command]
@@ -1152,9 +1140,14 @@ pub async fn group_chat_set_mode(
     let scope = GroupChatWorkspaceScope::new(request.workspace_path.clone())
         .resolve()
         .await;
-    GroupChatTool::set_mode_impl(&scope.workspace_path, &request.room_id, request.mode, request.actor)
-        .await
-        .map_err(group_chat_command_error)
+    GroupChatTool::set_mode_impl(
+        &scope.workspace_path,
+        &request.room_id,
+        request.mode,
+        request.actor,
+    )
+    .await
+    .map_err(group_chat_command_error)
 }
 
 #[tauri::command]

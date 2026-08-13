@@ -10,7 +10,6 @@
 
 use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
 use crate::agentic::core::SessionConfig;
-use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::tools::framework::{Tool, ToolExposure, ToolResult, ToolUseContext};
 use crate::service::config::{
     default_group_chat_member_limit, default_group_chat_reply_timeout_secs,
@@ -24,7 +23,6 @@ use bitfun_runtime_ports::{
     GroupChatMember, GroupChatMemberRole, GroupChatMessage, GroupChatMessageKind,
     GroupChatMessageStatus, GroupChatMessagesRequest, GroupChatMessagesResponse, GroupChatMode,
     GroupChatModeRequest, GroupChatPort, GroupChatRoom, GroupChatSendRequest, GroupChatSendResult,
-    SessionStoragePathRequest, SessionStorePort,
 };
 use bitfun_services_core::session::{
     add_room_to_group_chats, remove_room_from_group_chats, GroupChatStore,
@@ -115,26 +113,12 @@ impl GroupChatTool {
         Self
     }
 
-    /// Resolves the group-chats root for a workspace: sibling of the sessions
-    /// root resolved through the core session store port.
-    async fn group_chats_root(workspace_path: &str) -> BitFunResult<PathBuf> {
-        let request = SessionStoragePathRequest {
-            workspace_path: PathBuf::from(workspace_path),
-            remote_connection_id: None,
-            remote_ssh_host: None,
-        };
-        let resolution = CoreSessionStorePort::default()
-            .resolve_session_storage_path(request)
-            .await
-            .map_err(|error| BitFunError::tool(error.to_string()))?;
-        let sessions_root = resolution.effective_storage_path;
-        let parent = sessions_root.parent().ok_or_else(|| {
-            BitFunError::tool(format!(
-                "sessions root has no parent directory: {}",
-                sessions_root.display()
-            ))
-        })?;
-        Ok(parent.join("group-chats"))
+    /// Resolves the global group-chats root (W1 数据归属全局化，2026-08-13):
+    /// `~/.bitfun/group-chats/`（PathManager 唯一权威根），不再随 workspace
+    /// 解析——群聊数据全局共享，任何 workspace 打开看到同一视图。
+    /// `workspace_path` 参数保留仅为兼容调用面（不再用于决定存储位置）。
+    async fn group_chats_root(_workspace_path: &str) -> BitFunResult<PathBuf> {
+        Ok(crate::infrastructure::get_path_manager_arc().group_chats_root())
     }
 
     async fn store(workspace_path: &str) -> BitFunResult<GroupChatStore> {
@@ -1554,6 +1538,238 @@ impl GroupChatPort for GroupChatPortImpl {
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// W1 数据归属全局化（2026-08-13）：旧布局 group-chats 迁移工具
+//
+// 旧布局：每个 workspace 的 `~/.bitfun/projects/<slug>/group-chats/<room_id>/`
+// （sessions 的 sibling）；新布局：全局 `~/.bitfun/group-chats/<room_id>/`
+// （PathManager 唯一权威根）。迁移 = 扫描 projects 下所有旧 group-chats，
+// 整目录复制到全局根；冲突 room_id（不同 workspace 同名）重命名（加
+// `-migrated-<sha256 前 8>` 后缀 + 改写 meta.json 的 roomId）；迁移后对账
+// （房间数 / 每房间 message 数）+ 迁移记录落盘。
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// 单次迁移结果（落盘 + 测试断言用）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupChatMigrationReport {
+    pub migrated_rooms: usize,
+    pub conflict_renamed_rooms: usize,
+    pub failed_rooms: Vec<String>,
+    pub total_rooms_before: usize,
+    pub total_rooms_after: usize,
+    pub total_messages_migrated: usize,
+    pub record_path: Option<String>,
+}
+
+/// 迁移一条旧房间目录到全局根。返回 (目标 room_id, 迁移的 message 数)。
+async fn migrate_room_dir(
+    source: &std::path::Path,
+    global_root: &std::path::Path,
+) -> Result<(String, usize), String> {
+    let original_room_id = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("invalid room dir name: {}", source.display()))?
+        .to_string();
+    // 冲突检测：全局根已有同 room_id → 重命名（保留两份数据，roomId 后缀区分）。
+    let mut target_room_id = original_room_id.clone();
+    if global_root.join(&target_room_id).exists() {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(original_room_id.as_bytes());
+        hasher.update(source.to_string_lossy().as_bytes());
+        let digest = hasher.finalize();
+        let suffix: String = digest.iter().take(4).map(|b| format!("{b:02x}")).collect();
+        target_room_id = format!("{original_room_id}-migrated-{suffix}");
+    }
+
+    let target_dir = global_root.join(&target_room_id);
+    if target_dir.exists() {
+        return Err(format!(
+            "target room dir already exists: {}",
+            target_dir.display()
+        ));
+    }
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|error| format!("failed to create {}: {error}", target_dir.display()))?;
+
+    // 复制 meta.json（冲突重命名时改写 roomId 字段，保持单一权威源一致）。
+    let meta_src = source.join("meta.json");
+    if meta_src.exists() {
+        let mut meta: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&meta_src)
+                .map_err(|error| format!("failed to read {}: {error}", meta_src.display()))?,
+        )
+        .map_err(|error| format!("failed to parse {}: {error}", meta_src.display()))?;
+        if let Some(obj) = meta.as_object_mut() {
+            obj.insert(
+                "roomId".to_string(),
+                serde_json::Value::String(target_room_id.clone()),
+            );
+            obj.insert(
+                "room_id".to_string(),
+                serde_json::Value::String(target_room_id.clone()),
+            );
+        }
+        let meta_dst = target_dir.join("meta.json");
+        std::fs::write(
+            &meta_dst,
+            serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
+        )
+        .map_err(|error| format!("failed to write {}: {error}", meta_dst.display()))?;
+    }
+
+    // 复制 members.json（若存在）。
+    let members_src = source.join("members.json");
+    if members_src.exists() {
+        std::fs::copy(&members_src, target_dir.join("members.json"))
+            .map_err(|error| format!("failed to copy members.json: {error}"))?;
+    }
+
+    // 复制 message-catalog.json（若存在）。
+    let catalog_src = source.join("message-catalog.json");
+    if catalog_src.exists() {
+        std::fs::copy(&catalog_src, target_dir.join("message-catalog.json"))
+            .map_err(|error| format!("failed to copy message-catalog.json: {error}"))?;
+    }
+
+    // 复制 messages/ 目录（若存在）。
+    let mut message_count = 0usize;
+    let messages_src = source.join("messages");
+    if messages_src.exists() {
+        let messages_dst = target_dir.join("messages");
+        std::fs::create_dir_all(&messages_dst)
+            .map_err(|error| format!("failed to create {}: {error}", messages_dst.display()))?;
+        let entries = std::fs::read_dir(&messages_src)
+            .map_err(|error| format!("failed to read {}: {error}", messages_src.display()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| format!("failed to read dir entry: {error}"))?;
+            let name = entry.file_name();
+            let src_path = entry.path();
+            if src_path.is_file() {
+                std::fs::copy(&src_path, messages_dst.join(&name))
+                    .map_err(|error| format!("failed to copy {}: {error}", src_path.display()))?;
+                message_count += 1;
+            }
+        }
+    }
+
+    Ok((target_room_id, message_count))
+}
+
+/// W1 迁移入口：扫描 `~/.bitfun/projects/*/group-chats/` → 迁移到全局根。
+/// 幂等：全局根已存在的 room_id 触发冲突重命名（不覆盖）；重复调用安全。
+/// 返回迁移报告；报告同时落盘 `~/.bitfun/group-chats/migration-record-<ts>.json`。
+pub async fn migrate_legacy_group_chats() -> Result<GroupChatMigrationReport, String> {
+    let path_manager = crate::infrastructure::get_path_manager_arc();
+    let global_root = path_manager.group_chats_root();
+    let projects_root = path_manager.projects_root();
+    migrate_legacy_group_chats_with_roots(&projects_root, &global_root).await
+}
+
+/// 迁移核心（root 注入版，测试用 temp 目录，生产走全局根）。
+async fn migrate_legacy_group_chats_with_roots(
+    projects_root: &std::path::Path,
+    global_root: &std::path::Path,
+) -> Result<GroupChatMigrationReport, String> {
+    std::fs::create_dir_all(global_root)
+        .map_err(|error| format!("failed to create global group-chats root: {error}"))?;
+
+    let mut report = GroupChatMigrationReport {
+        migrated_rooms: 0,
+        conflict_renamed_rooms: 0,
+        failed_rooms: Vec::new(),
+        total_rooms_before: 0,
+        total_rooms_after: 0,
+        total_messages_migrated: 0,
+        record_path: None,
+    };
+
+    // 扫描 projects/*/group-chats/<room_id>/
+    let projects_entries = std::fs::read_dir(&projects_root).map_err(|error| {
+        format!(
+            "failed to read projects root {}: {error}",
+            projects_root.display()
+        )
+    })?;
+    for workspace_entry in projects_entries {
+        let workspace_entry = workspace_entry.map_err(|e| e.to_string())?;
+        let workspace_dir = workspace_entry.path();
+        let legacy_gc = workspace_dir.join("group-chats");
+        if !legacy_gc.is_dir() {
+            continue;
+        }
+        let room_entries = std::fs::read_dir(&legacy_gc)
+            .map_err(|error| format!("failed to read {}: {error}", legacy_gc.display()))?;
+        for room_entry in room_entries {
+            let room_entry = room_entry.map_err(|e| e.to_string())?;
+            let room_dir = room_entry.path();
+            if !room_dir.is_dir() {
+                continue;
+            }
+            report.total_rooms_before += 1;
+            match migrate_room_dir(&room_dir, &global_root).await {
+                Ok((target_room_id, message_count)) => {
+                    if target_room_id
+                        != room_dir
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or_default()
+                    {
+                        report.conflict_renamed_rooms += 1;
+                    } else {
+                        report.migrated_rooms += 1;
+                    }
+                    report.total_messages_migrated += message_count;
+                }
+                Err(error) => {
+                    report.failed_rooms.push(room_dir.display().to_string());
+                    log::warn!(
+                        "Group chat migration failed for {}: {error}",
+                        room_dir.display()
+                    );
+                }
+            }
+        }
+    }
+
+    // 对账：全局根房间数（排除 index.json / migration-record）。
+    let mut after_rooms = 0usize;
+    let global_entries = std::fs::read_dir(&global_root).map_err(|error| {
+        format!(
+            "failed to read global root {}: {error}",
+            global_root.display()
+        )
+    })?;
+    for entry in global_entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.path().is_dir() {
+            after_rooms += 1;
+        }
+    }
+    report.total_rooms_after = after_rooms;
+
+    // 迁移记录落盘。
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let record_path = global_root.join(format!("migration-record-{timestamp}.json"));
+    let record_json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    std::fs::write(&record_path, record_json)
+        .map_err(|error| format!("failed to write migration record: {error}"))?;
+    report.record_path = Some(record_path.display().to_string());
+
+    // 重建全局 index（缓存派生，从 meta.json 重建）。
+    let store = GroupChatStore::new(global_root);
+    store
+        .rebuild_index()
+        .await
+        .map_err(|error| format!("failed to rebuild global group-chats index: {error}"))?;
+
+    Ok(report)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2219,5 +2435,405 @@ mod tests {
             "unexpected error: {err}"
         );
         let _ = root;
+    }
+
+    // ── P0 残留疑点验证 (2026-08-13): create→tag 之间 metadata 立即可用性 ────
+    // 背景：主人实测 "Session metadata not found: bd56fce3"（tag 反标在主工作区
+    // 路径找不到 metadata）。a31a23b6e 已改为按成员 workspace 解析，但残留疑点：
+    // create 的持久化是否可靠、create→tag 之间 load_session_metadata 是否立即可
+    // 见。以下测试用 enable_persistence:true 的真实 coordinator harness 实证。
+
+    /// Coordinator harness with persistence enabled: the auto-created Claw
+    /// session must be durably written to disk, not only held in memory.
+    fn test_group_chat_coordinator_harness_persistent() -> (
+        Arc<ConversationCoordinator>,
+        Arc<SessionManager>,
+        tempfile::TempDir,
+    ) {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            compression::{CompressionConfig, ContextCompressor},
+            SessionContextStore, SessionManagerConfig,
+        };
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::agentic::tools::{ToolPipeline, ToolStateManager};
+        use crate::infrastructure::PathManager;
+        use std::time::Duration;
+        use tokio::sync::RwLock as TokioRwLock;
+        use uuid::Uuid;
+
+        let root = tempfile::tempdir().expect("test root");
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(
+                PersistenceManager::new(Arc::new(PathManager::with_user_root_for_tests(
+                    root.path().join("user-root"),
+                )))
+                .expect("persistence manager"),
+            ),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: true,
+                prompt_cache_policy: crate::agentic::session::PromptCachePolicy::default(),
+            },
+        ));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(TokioRwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let coordinator = Arc::new(ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue.clone(),
+            Arc::new(EventRouter::new()),
+            Arc::new(
+                crate::runtime_ownership::CoreRuntimeOwnership::embedded_with_facts(
+                    root.path().join(format!("ownership-{}", Uuid::new_v4())),
+                    "bitfun".to_string(),
+                    "test",
+                ),
+            ),
+        ));
+        (coordinator, session_manager, root)
+    }
+
+    /// Asserts the on-disk metadata file for a session exists under the
+    /// resolved workspace's sessions root (the exact file `update_session_metadata`
+    /// loads before patching; a missing file is the "Session metadata not found" bug).
+    async fn assert_session_metadata_on_disk(
+        coordinator: &ConversationCoordinator,
+        session_id: &str,
+        expected_room_id: Option<&str>,
+    ) -> std::path::PathBuf {
+        let resolved_ws = GroupChatTool::resolve_assistant_workspace(coordinator, session_id)
+            .await
+            .expect("member workspace must resolve");
+        let manager = coordinator.get_session_manager();
+        let metadata = manager
+            .persistence_manager()
+            .load_session_metadata(&resolved_ws, session_id)
+            .await
+            .expect("load persisted metadata must not error")
+            .unwrap_or_else(|| {
+                panic!(
+                    "metadata missing on disk for '{session_id}' under {} — create did not persist",
+                    resolved_ws.display()
+                )
+            });
+        assert_eq!(
+            metadata.agent_type, "Claw",
+            "persisted metadata agent_type must be Claw"
+        );
+        if let Some(room_id) = expected_room_id {
+            let rooms =
+                bitfun_services_core::session::group_chats_of(metadata.custom_metadata.as_ref());
+            assert!(
+                rooms.iter().any(|room| room == room_id),
+                "tag did not land in custom_metadata.groupChats: {rooms:?}"
+            );
+        }
+        let sessions_root = manager.path_manager().project_sessions_dir(&resolved_ws);
+        let metadata_file = sessions_root.join(session_id).join("metadata.json");
+        assert!(
+            metadata_file.exists(),
+            "metadata.json must exist on disk: {}",
+            metadata_file.display()
+        );
+        metadata_file
+    }
+
+    #[tokio::test]
+    async fn group_chat_create_to_tag_metadata_available_immediately_8_hex() {
+        // 实测路径形状 1: 8 位 hex assistantId (bd56fce3)。assistant workspace
+        // 目录必须存在（dir 是 "可加入" 的依据），create 绑定该目录。
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness_persistent();
+        let assistant_id = "bd56fce3";
+        let assistant_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(assistant_id, None);
+        std::fs::create_dir_all(&assistant_dir).expect("create assistant workspace dir");
+
+        // create: ensure_claw_member_sessions → create_session_with_workspace
+        GroupChatTool::ensure_claw_member_sessions(&coordinator, &[assistant_id.to_string()])
+            .await
+            .expect("missing member session must be auto-created as Claw");
+
+        // 1) In-memory session visible immediately.
+        let session = session_manager
+            .get_session(assistant_id)
+            .expect("auto-created session must exist in memory");
+        assert_eq!(session.agent_type, "Claw");
+        assert_eq!(
+            session.config.workspace_path.as_deref(),
+            Some(assistant_dir.to_string_lossy().as_ref())
+        );
+
+        // 2) Metadata durably on disk immediately after create (P0 残留疑点实证):
+        //    load_session_metadata under the resolved workspace must succeed.
+        let metadata_file = assert_session_metadata_on_disk(&coordinator, assistant_id, None).await;
+        assert!(
+            metadata_file.to_string_lossy().contains("sessions"),
+            "metadata must live under a sessions root: {}",
+            metadata_file.display()
+        );
+
+        // 3) tag (反标) must not error immediately after create: metadata is
+        //    readable+updatable in the same tick (create→tag 时序无间隙).
+        GroupChatTool::tag_member_group_chat_static(
+            &coordinator,
+            "/group-workspace-path",
+            assistant_id,
+            "group-verify-8hex",
+        )
+        .await
+        .expect("tag must succeed immediately after create (metadata available)");
+
+        // 4) Re-load: the tag landed in the persisted custom_metadata.groupChats.
+        assert_session_metadata_on_disk(&coordinator, assistant_id, Some("group-verify-8hex"))
+            .await;
+
+        // 5) Idempotency: a second ensure (e.g. a second group referencing the
+        //    same member) must not error or re-create; the persisted metadata
+        //    stays intact and a second tag still lands (S-38 防幽灵/重复建).
+        GroupChatTool::ensure_claw_member_sessions(&coordinator, &[assistant_id.to_string()])
+            .await
+            .expect("ensure must be idempotent after create");
+        let second_session = session_manager
+            .get_session(assistant_id)
+            .expect("session must still exist after idempotent ensure");
+        assert_eq!(second_session.agent_type, "Claw");
+        GroupChatTool::tag_member_group_chat_static(
+            &coordinator,
+            "/group-workspace-path",
+            assistant_id,
+            "group-verify-8hex-2",
+        )
+        .await
+        .expect("second tag must succeed on the persisted metadata");
+        assert_session_metadata_on_disk(&coordinator, assistant_id, Some("group-verify-8hex-2"))
+            .await;
+        let _ = root;
+    }
+
+    #[tokio::test]
+    async fn group_chat_create_to_tag_metadata_available_immediately_local_uuid() {
+        // 实测路径形状 2: local_+UUID workspace 稳定 id (默认 Claw 无 assistantId
+        // 时前端 fallback)。legacy assistant dir 存在时走 assistant_workspace_dir。
+        let (coordinator, session_manager, root) = test_group_chat_coordinator_harness_persistent();
+        let member_id = "local_5a1557a8afd417b173d9ce873553e66a";
+        let legacy_dir = coordinator
+            .get_session_manager()
+            .path_manager()
+            .assistant_workspace_dir(member_id, None);
+        std::fs::create_dir_all(&legacy_dir).expect("create legacy assistant dir");
+
+        GroupChatTool::ensure_claw_member_sessions(&coordinator, &[member_id.to_string()])
+            .await
+            .expect("member with existing legacy assistant dir must be auto-created as Claw");
+
+        let session = session_manager
+            .get_session(member_id)
+            .expect("auto-created session must exist in memory");
+        assert_eq!(session.agent_type, "Claw");
+        assert_eq!(
+            session.config.workspace_path.as_deref(),
+            Some(legacy_dir.to_string_lossy().as_ref())
+        );
+
+        // Metadata durably on disk immediately after create.
+        assert_session_metadata_on_disk(&coordinator, member_id, None).await;
+
+        // tag immediately after create must succeed.
+        GroupChatTool::tag_member_group_chat_static(
+            &coordinator,
+            "/group-workspace-path",
+            member_id,
+            "group-verify-local-uuid",
+        )
+        .await
+        .expect("tag must succeed immediately after create (metadata available)");
+        assert_session_metadata_on_disk(&coordinator, member_id, Some("group-verify-local-uuid"))
+            .await;
+        let _ = root;
+    }
+
+    // ── W1 数据归属全局化 (2026-08-13): 旧布局 group-chats 迁移工具 ──────────
+    // 真实路径形状：temp 下模拟 `projects/<slug>/group-chats/<room_id>/` 旧布局
+    // （含真实 room_id 形状 group-<sha256 前 32> + meta.json/members.json/
+    // messages/message-*.json），迁移到全局根；覆盖冲突重命名 + 对账。
+
+    /// 构造一条旧房间目录（真实 room_id 形状 + 完整文件布局）。
+    fn write_legacy_room(
+        legacy_gc: &std::path::Path,
+        room_id: &str,
+        name: &str,
+        message_count: usize,
+    ) {
+        let room_dir = legacy_gc.join(room_id);
+        std::fs::create_dir_all(&room_dir).expect("create room dir");
+        let meta = serde_json::json!({
+            "schema_version": 1,
+            "schemaVersion": 1,
+            "roomId": room_id,
+            "name": name,
+            "owner": { "kind": "master" },
+            "mode": "free",
+            "roundRobinCursor": 0,
+            "createdAt": 1786630720291i64,
+            "lastActiveAt": 1786630720291i64,
+            "status": "active",
+            "memberLimit": 50,
+        });
+        std::fs::write(
+            room_dir.join("meta.json"),
+            serde_json::to_string_pretty(&meta).expect("meta json"),
+        )
+        .expect("write meta");
+        std::fs::write(room_dir.join("members.json"), "[]").expect("write members");
+        if message_count > 0 {
+            let messages_dir = room_dir.join("messages");
+            std::fs::create_dir_all(&messages_dir).expect("create messages dir");
+            for i in 0..message_count {
+                let msg = serde_json::json!({
+                    "messageId": format!("msg-{room_id}-{i}"),
+                    "roomId": room_id,
+                    "content": format!("hello {i}"),
+                });
+                std::fs::write(
+                    messages_dir.join(format!("message-{i:04}.json")),
+                    serde_json::to_string(&msg).expect("msg json"),
+                )
+                .expect("write message");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn group_chat_migration_moves_legacy_rooms_to_global_root() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let projects_root = root.path().join("projects");
+        let global_root = root.path().join("group-chats");
+
+        // 两个 workspace 各一条旧房间（真实 room_id 形状）。
+        let ws_a = projects_root.join("ws-a-slug");
+        let ws_b = projects_root.join("ws-b-slug");
+        let gc_a = ws_a.join("group-chats");
+        let gc_b = ws_b.join("group-chats");
+        std::fs::create_dir_all(&gc_a).expect("gc_a");
+        std::fs::create_dir_all(&gc_b).expect("gc_b");
+        let room_a = "group-2f87080a3a3233b5301e00dcf9423137";
+        let room_b = "group-8b014e07d3deb0c7b22087c55bcd3be1";
+        write_legacy_room(&gc_a, room_a, "Room A", 3);
+        write_legacy_room(&gc_b, room_b, "Room B", 0);
+
+        let report = migrate_legacy_group_chats_with_roots(&projects_root, &global_root)
+            .await
+            .expect("migration succeeds");
+        assert_eq!(report.migrated_rooms, 2);
+        assert_eq!(report.conflict_renamed_rooms, 0);
+        assert_eq!(report.failed_rooms.len(), 0);
+        assert_eq!(report.total_rooms_before, 2);
+        assert_eq!(report.total_rooms_after, 2);
+        assert_eq!(report.total_messages_migrated, 3);
+        // 目标目录存在 + meta.roomId 保持原名。
+        assert!(global_root.join(room_a).join("meta.json").exists());
+        assert!(global_root
+            .join(room_a)
+            .join("messages")
+            .join("message-0000.json")
+            .exists());
+        assert!(global_root.join(room_b).join("meta.json").exists());
+        // 迁移记录落盘。
+        assert!(report.record_path.is_some());
+        assert!(std::path::Path::new(report.record_path.as_deref().unwrap()).exists());
+    }
+
+    #[tokio::test]
+    async fn group_chat_migration_conflict_renames_duplicate_room_id() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let projects_root = root.path().join("projects");
+        let global_root = root.path().join("group-chats");
+
+        // 两个 workspace 有同名 room_id（真实冲突场景）。
+        let gc_a = projects_root.join("ws-a-slug").join("group-chats");
+        let gc_b = projects_root.join("ws-b-slug").join("group-chats");
+        std::fs::create_dir_all(&gc_a).expect("gc_a");
+        std::fs::create_dir_all(&gc_b).expect("gc_b");
+        let shared_room = "group-a03e0a92046f29ec08ac0c0032c996d9";
+        write_legacy_room(&gc_a, shared_room, "Shared A", 1);
+        write_legacy_room(&gc_b, shared_room, "Shared B", 2);
+
+        let report = migrate_legacy_group_chats_with_roots(&projects_root, &global_root)
+            .await
+            .expect("migration succeeds");
+        // 1 个原名 + 1 个冲突重命名。
+        assert_eq!(report.migrated_rooms, 1);
+        assert_eq!(report.conflict_renamed_rooms, 1);
+        assert_eq!(report.total_rooms_before, 2);
+        assert_eq!(report.total_rooms_after, 2);
+        assert_eq!(report.total_messages_migrated, 3);
+        // 原名保留 + 重命名目录存在（meta.roomId 同步改写）。
+        assert!(global_root.join(shared_room).join("meta.json").exists());
+        let renamed: Vec<_> = std::fs::read_dir(&global_root)
+            .expect("read global root")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.starts_with(shared_room) && n != shared_room)
+            .collect();
+        assert_eq!(renamed.len(), 1, "one renamed duplicate expected");
+        let renamed_meta = std::fs::read_to_string(global_root.join(&renamed[0]).join("meta.json"))
+            .expect("read renamed meta");
+        assert!(
+            renamed_meta.contains(&renamed[0]),
+            "renamed meta roomId must match new dir name: {renamed_meta}"
+        );
+    }
+
+    #[tokio::test]
+    async fn group_chat_migration_is_idempotent() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let projects_root = root.path().join("projects");
+        let global_root = root.path().join("group-chats");
+
+        let gc_a = projects_root.join("ws-a-slug").join("group-chats");
+        std::fs::create_dir_all(&gc_a).expect("gc_a");
+        let room_a = "group-2f87080a3a3233b5301e00dcf9423137";
+        write_legacy_room(&gc_a, room_a, "Room A", 2);
+
+        // 第一次迁移。
+        let first = migrate_legacy_group_chats_with_roots(&projects_root, &global_root)
+            .await
+            .expect("first migration");
+        assert_eq!(first.migrated_rooms, 1);
+
+        // 第二次迁移：全局根已有 → 冲突重命名（不覆盖不丢数据）。
+        let second = migrate_legacy_group_chats_with_roots(&projects_root, &global_root)
+            .await
+            .expect("second migration");
+        assert_eq!(second.conflict_renamed_rooms, 1);
+        // 两份数据都在（原名 + 重命名副本），消息总数 = 4。
+        assert_eq!(second.total_messages_migrated, 2);
+        assert_eq!(first.total_messages_migrated, 2);
     }
 }

@@ -596,24 +596,43 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "generate_session_title",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
-    ("group_chat_create", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_delete", RemoteWorkspacePolicy::RemoteRouted),
+    // W1 数据归属全局化（2026-08-13）：12 群聊命令改 WorkspaceAgnostic——
+    // 群聊数据存 `~/.bitfun/group-chats/` 全局根（PathManager 唯一权威源），
+    // 不随 workspace 路由，跨工作区同一视图；scope.workspace_path 仅用于
+    // 成员会话解析（成员数据归成员各自 workspace）。
+    (
+        "group_chat_create",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "group_chat_delete",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     (
         "group_chat_ingest_reply",
-        RemoteWorkspacePolicy::RemoteRouted,
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
-    ("group_chat_join", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_leave", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_list", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_load", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_members", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_messages", RemoteWorkspacePolicy::RemoteRouted),
+    ("group_chat_join", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    ("group_chat_leave", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    ("group_chat_list", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    ("group_chat_load", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    (
+        "group_chat_members",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "group_chat_messages",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     (
         "group_chat_scan_timeouts",
-        RemoteWorkspacePolicy::RemoteRouted,
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
-    ("group_chat_send", RemoteWorkspacePolicy::RemoteRouted),
-    ("group_chat_set_mode", RemoteWorkspacePolicy::RemoteRouted),
+    ("group_chat_send", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    (
+        "group_chat_set_mode",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("get_acp_clients", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "get_acp_session_commands",
@@ -2727,20 +2746,23 @@ mod tests {
     ];
 
     #[test]
-    fn group_chat_commands_are_remote_routed() {
+    fn group_chat_commands_are_workspace_agnostic() {
+        // W1 数据归属全局化（2026-08-13）：群聊数据存 `~/.bitfun/group-chats/`
+        // 全局根（PathManager 唯一权威源），不随 workspace 路由——12 命令
+        // 从 RemoteRouted 改 WorkspaceAgnostic，跨工作区同一视图。
         for command in GROUP_CHAT_REMOTE_ROUTED_COMMANDS {
             assert_eq!(
                 remote_workspace_policy(command),
-                Some(RemoteWorkspacePolicy::RemoteRouted),
-                "{command} must be RemoteRouted: group chats live beside the workspace sessions tree"
+                Some(RemoteWorkspacePolicy::WorkspaceAgnostic),
+                "{command} must be WorkspaceAgnostic: group chats live in the global ~/.bitfun/group-chats root"
             );
         }
     }
 
-    /// Group-chat session roots resolve through `SessionStoragePathRequest` —
-    /// never with a hardcoded `None` connection id.
+    /// Group-chat store resolution converges on the global `~/.bitfun/group-chats/`
+    /// root (PathManager), independent of any workspace / remote connection.
     #[test]
-    fn group_chat_scope_resolution_never_hardcodes_none_connection() {
+    fn group_chat_scope_resolution_uses_global_root() {
         let source = include_str!("session_api.rs");
         for command in GROUP_CHAT_REMOTE_ROUTED_COMMANDS {
             let call = format!("pub async fn {command}(");
@@ -2749,19 +2771,19 @@ mod tests {
                 "{command} must be implemented in session_api.rs"
             );
         }
-        // The store resolution entry point must thread the scope's connection
-        // id through; any `None` literal inside it would defeat F-3.
+        // The store resolution entry point must converge on the global root —
+        // no workspace-path-derived resolution remains.
         let root_impl = source
             .split("async fn group_chats_root")
             .nth(1)
             .expect("session_api.rs must define group_chats_root");
         assert!(
-            root_impl.contains("remote_connection_id: scope.remote_connection_id.clone()"),
-            "group_chats_root must forward the resolved remote_connection_id (F-3)"
+            root_impl.contains("group_chats_root()"),
+            "group_chats_root must resolve the global ~/.bitfun/group-chats root (PathManager)"
         );
         assert!(
-            root_impl.contains("remote_ssh_host: scope.remote_ssh_host.clone()"),
-            "group_chats_root must forward the resolved remote_ssh_host (F-3)"
+            !root_impl.contains("resolve_session_storage_path"),
+            "group_chats_root must not resolve via the workspace sessions tree (W1)"
         );
     }
 

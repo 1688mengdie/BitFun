@@ -2904,23 +2904,14 @@ impl DialogScheduler {
     /// the reply forwarding path stays best-effort.
     async fn resolve_group_chat_store(
         &self,
-        workspace_path: &str,
+        _workspace_path: &str,
     ) -> Result<GroupChatStore, String> {
-        let request = bitfun_runtime_ports::SessionStoragePathRequest {
-            workspace_path: PathBuf::from(workspace_path),
-            remote_connection_id: None,
-            remote_ssh_host: None,
-        };
-        let resolution =
-            crate::agentic::session::session_store_port::CoreSessionStorePort::default()
-                .resolve_session_storage_path(request)
-                .await
-                .map_err(|error| error.to_string())?;
-        let sessions_root = resolution.effective_storage_path;
-        let parent = sessions_root
-            .parent()
-            .ok_or_else(|| "sessions root has no parent".to_string())?;
-        Ok(GroupChatStore::new(parent.join("group-chats")))
+        // W1 数据归属全局化（2026-08-13）：回执侧与派发侧收敛到同一全局根
+        // `~/.bitfun/group-chats/`（PathManager 唯一权威源），消除「房间在
+        // 群主 workspace / 回执找成员 workspace」双轨；workspace_path 仅保留
+        // 兼容调用面，不再决定存储位置。
+        let root = crate::infrastructure::get_path_manager_arc().group_chats_root();
+        Ok(GroupChatStore::new(root))
     }
 
     async fn dispatch_next_if_idle(&self, session_id: &str) -> Result<(), String> {
@@ -3417,9 +3408,8 @@ impl AgentDialogTurnPort for DialogScheduler {
     ) -> PortResult<DialogSteerOutcome> {
         // An empty-but-attachment-free message and a malformed attachment are
         // both bad requests; only a live-turn mismatch means "session in use".
-        let invalid_request =
-            request.content.trim().is_empty() && request.attachments.is_empty()
-                || agent_dialog_turn_image_contexts(&request.attachments).is_err();
+        let invalid_request = request.content.trim().is_empty() && request.attachments.is_empty()
+            || agent_dialog_turn_image_contexts(&request.attachments).is_err();
         DialogScheduler::buffer_steering(
             self,
             request.session_id,
