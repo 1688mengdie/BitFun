@@ -374,15 +374,17 @@ test('website download manifest uses installer while updater manifest keeps setu
   );
 });
 
-test('Linux archives are mirrored before the much larger Desktop packages', () => {
+test('stable Linux archives are mirrored before the much larger Desktop packages', () => {
   const syncScript = fs.readFileSync(
     path.join(repoRoot, 'scripts/openbitfun-release-sync.sh'),
     'utf8'
   );
 
-  const linuxCall = syncScript.indexOf('\n  mirror_linux_binaries\n');
+  const stableBranch = syncScript.indexOf('if [ "$RELEASE_CHANNEL" = "stable" ]; then');
+  const linuxCall = syncScript.indexOf('\n    mirror_linux_binaries\n', stableBranch);
   const desktopLoop = syncScript.indexOf('Mirroring Desktop asset');
-  assert.ok(linuxCall > 0, 'mirror_linux_binaries must be called from main');
+  assert.ok(stableBranch > 0, 'stable channel branch must exist');
+  assert.ok(linuxCall > stableBranch, 'stable main path must call mirror_linux_binaries');
   assert.ok(desktopLoop > 0, 'Desktop asset mirroring must still exist');
   assert.ok(
     linuxCall < desktopLoop,
