@@ -34,7 +34,7 @@ use crate::agentic::round_preempt::{DialogRoundInjectionSource, SessionRoundInje
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::SessionManager;
 use crate::agentic::tools::restrictions::get_session_role;
-use crate::infrastructure::PathManager;
+use crate::infrastructure::{get_path_manager_arc, PathManager};
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::ThreadGoal;
@@ -5370,14 +5370,24 @@ mod tests {
     fn write_bound_plan_file(root: &tempfile::TempDir, file_name: &str) -> (PathBuf, String) {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
-        let plan_path = workspace.join(file_name);
-        let plan_file = plan_path.to_string_lossy().into_owned();
+        // The plan file must live where the binding layer actually resolves it:
+        // `resolve_plan_path_for_backend` resolves bare file names against the
+        // global PathManager's `~/.bitfun/projects/<workspace-slug>/plans/`
+        // directory, and `require_plan_file_exists` only accepts paths inside
+        // that plans dir (PLAN-01 containment fence). Writing the file under
+        // the test tempdir instead made these tests pass only when a stale
+        // slug directory happened to exist in the real home (local machines),
+        // and fail deterministically on clean CI runners. Return the bare file
+        // name so the binding metadata resolves to the exact file we wrote.
+        let plans_dir = get_path_manager_arc().project_plans_dir(&workspace);
+        std::fs::create_dir_all(&plans_dir).expect("plans dir");
+        let plan_path = plans_dir.join(file_name);
         std::fs::write(
             &plan_path,
             "---\nname: My Plan\noverview: An overview\ntodos:\n- id: setup-auth\n  content: Set up auth\n  status: pending\n---\n\n# My Plan\n\nBody text here.\n",
         )
         .expect("write plan file");
-        (plan_path, plan_file)
+        (plan_path, file_name.to_string())
     }
 
     fn plan_todo_status(plan_path: &Path) -> String {
