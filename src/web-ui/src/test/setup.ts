@@ -23,26 +23,38 @@ import { resolve } from 'node:path';
 // immer needs the MapSet plugin enabled explicitly to draft-change Maps.
 enableMapSet();
 
-// W4 生产/测试初始化一致性（2026-08-13，方案 v1.1 §四.1）：任何全局插件/
-// 初始化必须在 main.tsx 与 setup.ts 两端都启用（防分叉复发——曾发生
-// setup 启用了 enableMapSet 但生产入口缺失导致运行时崩）。此断言读 main.tsx
-// 源码核对两端一致，新增全局插件时两端必须同步。
-function assertGlobalPluginInitializationConsistency(): void {
-  const mainSource = readFileSync(resolve(__dirname, '../main.tsx'), 'utf8');
-  const setupHasMapSet = typeof enableMapSet === 'function';
+// W4 生产/测试初始化一致性（2026-08-13，方案 v1.1 §四.1，梦情 P2-1 修正）：
+// 任何全局插件/初始化必须在 main.tsx 与 setup.ts 两端都启用（防分叉复发——
+// 曾发生 setup 启用了 enableMapSet 但生产入口缺失导致运行时崩）。双端都读
+// **源码**核对「调用存在性」（非 typeof——import 后 typeof 恒 function 形同
+// 虚设），反向分支（main 启用 setup 未启用）可达，无死代码。
+
+/** 纯逻辑（可测）：返回分叉错误消息；两端一致返回 null。 */
+export function detectMapSetDivergence(mainSource: string, setupSource: string): string | null {
   const mainHasMapSet = mainSource.includes('enableMapSet()');
+  const setupHasMapSet = setupSource.includes('enableMapSet()');
   if (setupHasMapSet && !mainHasMapSet) {
-    throw new Error(
+    return (
       'Global plugin initialization divergence: test/setup.ts enables enableMapSet() but ' +
-        'production main.tsx does not. Add it to the global-plugin-enablement checklist in main.tsx.',
+      'production main.tsx does not. Add it to the global-plugin-enablement checklist in main.tsx.'
     );
   }
-  // 两端都必须登记（都不启用 = 生产/测试都会崩，也视为分叉）。
+  // 反向分支（main 启用 setup 未启用）——可测，非死代码。
   if (!setupHasMapSet && mainHasMapSet) {
-    throw new Error(
+    return (
       'Global plugin initialization divergence: main.tsx enables enableMapSet() but ' +
-        'test/setup.ts does not. Keep both ends in sync (see main.tsx checklist).',
+      'test/setup.ts does not. Keep both ends in sync (see main.tsx checklist).'
     );
+  }
+  return null;
+}
+
+function assertGlobalPluginInitializationConsistency(): void {
+  const mainSource = readFileSync(resolve(__dirname, '../main.tsx'), 'utf8');
+  const setupSource = readFileSync(resolve(__dirname, 'setup.ts'), 'utf8');
+  const divergence = detectMapSetDivergence(mainSource, setupSource);
+  if (divergence) {
+    throw new Error(divergence);
   }
 }
 assertGlobalPluginInitializationConsistency();
