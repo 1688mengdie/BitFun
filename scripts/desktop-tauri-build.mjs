@@ -75,10 +75,6 @@ async function main() {
     process.exit(1);
   }
 
-  if (r.status === 0 && process.platform === 'darwin') {
-    patchDmgExtras(ROOT);
-  }
-
   // Keep only the latest useful Cargo caches for this build profile after tauri build ends.
   try {
     const { profileFromTauriBuildArgs, runGcBestEffort, targetFromTauriBuildArgs } = await import(
@@ -275,48 +271,6 @@ function bundledFlashgrepResources(primaryBinary) {
 
 function toTauriPath(value) {
   return value.split(sep).join('/');
-}
-
-// Find all .dmg files under target/ and inject the helper TXT files
-// (quarantine removal instructions) into each one.
-function patchDmgExtras(root) {
-  const patchScript = join(root, 'scripts', 'patch-dmg-extras.sh');
-  const targetDir = join(root, 'target');
-
-  const dmgFiles = findDmgFiles(targetDir);
-  if (dmgFiles.length === 0) {
-    console.log('[patch-dmg] No .dmg files found — skipping.');
-    return;
-  }
-
-  for (const dmg of dmgFiles) {
-    console.log(`[patch-dmg] Patching ${dmg}`);
-    const p = spawnSync('bash', [patchScript, dmg], {
-      stdio: 'inherit',
-      shell: false,
-    });
-    if (p.status !== 0) {
-      console.error(`[patch-dmg] Failed to patch ${dmg}`);
-      process.exit(1);
-    }
-  }
-}
-
-function findDmgFiles(dir) {
-  const results = [];
-  try {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        results.push(...findDmgFiles(full));
-      } else if (entry.name.endsWith('.dmg')) {
-        results.push(full);
-      }
-    }
-  } catch {
-    // directory may not exist for some targets
-  }
-  return results;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
