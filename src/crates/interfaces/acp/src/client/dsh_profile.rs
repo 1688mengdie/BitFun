@@ -139,6 +139,28 @@ async fn require_supported_dsh(minimum: &str) -> BitFunResult<()> {
     )))
 }
 
+/// The oldest Node the harness can boot on.
+///
+/// `@deepseek-ai/dsh-app-boot` imports `util.parseEnv` on its very first line,
+/// and Node added that in 20.12. The harness declares no `engines` of its own,
+/// so npm installs it happily onto anything and the mismatch only surfaces as a
+/// `SyntaxError` from inside the launcher — which is not a sentence anyone can
+/// act on. Its toolchain targets Node 22 LTS; this is the floor, not the
+/// recommendation.
+const MIN_NODE_VERSION: &str = "20.12.0";
+
+/// The reported Node version, when it is too old to boot the harness.
+///
+/// Anything unparsable is not a verdict and passes: a host with no `node` on
+/// the login shell's PATH may still resolve one for `dsh` itself, and a launch
+/// that fails now says why on its own.
+fn unsupported_node_version(reported: &str) -> Option<String> {
+    let reported = reported.trim();
+    let version = semver::Version::parse(reported.trim_start_matches('v')).ok()?;
+    let minimum = semver::Version::parse(MIN_NODE_VERSION).ok()?;
+    (version < minimum).then(|| reported.to_string())
+}
+
 /// Whether `installed` is new enough for a build that needs `minimum`.
 ///
 /// Unparsable on either side means "assume yes" — see the caller.
@@ -372,6 +394,16 @@ pub(crate) async fn ensure_bundled_profile_remote(
              the bridge, not the harness."
         )));
     }
+    // The harness is a Node program, and it declares no `engines`, so an old
+    // Node installs it without complaint and then fails to boot it. Say that
+    // here rather than letting the user read a SyntaxError out of a log.
+    if let Some(node) = unsupported_node_version(&probe.node) {
+        return Err(BitFunError::service(format!(
+            "The remote host runs Node {node}, and DeepSeek Harness needs at least \
+             {MIN_NODE_VERSION} to start (its own toolchain targets Node 22 LTS). Install a newer \
+             Node on that host, then start the session again."
+        )));
+    }
     if !version_is_supported(&probe.version, &stamp.min_dsh_version) {
         return Err(BitFunError::service(format!(
             "The remote host runs DeepSeek Harness {}, which is older than {}, the version this \
@@ -474,6 +506,9 @@ struct RemoteProbe {
     /// First line of `dsh --version`, on either stream. Best effort: a launcher
     /// that answers nothing is still a launcher.
     version: String,
+    /// What `node --version` says on that host, or empty. The harness is a Node
+    /// program, so this is half of whether it can start at all.
+    node: String,
     /// The installed build stamp, verbatim, or empty when the profile is new.
     stamp: String,
 }
@@ -500,6 +535,7 @@ fn remote_probe_script(profile: &str, launcher: &str, exports: &str) -> String {
          printf 'profiles=%s\\n' \"$profiles\"\n\
          printf 'launcher=%s\\n' \"$(command -v {launcher} 2>/dev/null | head -n 1 | tr -d '\\r')\"\n\
          printf 'version=%s\\n' \"$({launcher} --version 2>&1 | head -n 1 | tr -d '\\r')\"\n\
+         printf 'node=%s\\n' \"$(node --version 2>/dev/null | head -n 1 | tr -d '\\r')\"\n\
          printf 'stamp=%s\\n' \"$(cat \"$profiles\"/{profile}/{STAMP_FILENAME} 2>/dev/null | tr -d '\\n\\r')\"\n"
     )
 }
@@ -516,6 +552,8 @@ fn parse_remote_probe(stdout: &str) -> RemoteProbe {
             probe.launcher = value.to_string();
         } else if let Some(value) = line.strip_prefix("version=") {
             probe.version = value.to_string();
+        } else if let Some(value) = line.strip_prefix("node=") {
+            probe.node = value.to_string();
         } else if let Some(value) = line.strip_prefix("stamp=") {
             probe.stamp = value.to_string();
         }
@@ -737,6 +775,9 @@ mod tests {
         // Both streams: a launcher that prints its version on stderr is still
         // installed, and treating that as absent blocks a working host.
         assert!(script.contains("dsh --version 2>&1"));
+        // The harness is a Node program; asking in the same round trip costs
+        // nothing and is the difference between a sentence and a stack trace.
+        assert!(script.contains("node --version"));
         assert!(script.contains(STAMP_FILENAME));
 
         let probe = parse_remote_probe(concat!(
@@ -744,12 +785,14 @@ mod tests {
             "profiles=/home/dev/.dsh/profiles\n",
             "launcher=/usr/local/bin/dsh\n",
             "version=0.1.0-rc.6\n",
+            "node=v22.19.0\n",
             r#"stamp={"content":"abc","minDshVersion":"0.1.0-rc.6"}"#,
             "\n",
         ));
         assert_eq!(probe.profiles, "/home/dev/.dsh/profiles");
         assert_eq!(probe.launcher, "/usr/local/bin/dsh");
         assert_eq!(probe.version, "0.1.0-rc.6");
+        assert_eq!(probe.node, "v22.19.0");
         assert_eq!(
             probe.stamp,
             r#"{"content":"abc","minDshVersion":"0.1.0-rc.6"}"#
@@ -768,6 +811,30 @@ mod tests {
         let mute = parse_remote_probe("launcher=/usr/local/bin/dsh\nversion=\nstamp=\n");
         assert!(!mute.launcher.is_empty());
         assert!(version_is_supported(&mute.version, "0.1.0-rc.6"));
+    }
+
+    #[test]
+    fn a_node_too_old_for_the_harness_is_named_before_the_launch() {
+        // The version that sent us here: dsh's first import is `util.parseEnv`,
+        // which this Node does not have, and npm installed it anyway.
+        assert_eq!(
+            unsupported_node_version("v18.19.1").as_deref(),
+            Some("v18.19.1")
+        );
+        assert_eq!(
+            unsupported_node_version("v20.11.1").as_deref(),
+            Some("v20.11.1")
+        );
+
+        // At or above the floor, and anything we cannot read, launches. A host
+        // whose login shell has no `node` may still resolve one for `dsh`.
+        assert_eq!(unsupported_node_version("v20.12.0"), None);
+        assert_eq!(unsupported_node_version("v24.4.0"), None);
+        assert_eq!(unsupported_node_version(""), None);
+        assert_eq!(
+            unsupported_node_version("bash: node: command not found"),
+            None
+        );
     }
 
     #[test]

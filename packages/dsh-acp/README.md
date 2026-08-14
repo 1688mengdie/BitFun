@@ -14,7 +14,11 @@ inside the harness the user already installed.
 Three steps, and BitFun stores none of your DeepSeek configuration:
 
 1. Install the harness — `npm install -g @deepseek-ai/dsh` (BitFun's agent
-   settings page has a one-click button that runs the same thing).
+   settings page has a one-click button that runs the same thing). It is a Node
+   program and needs **Node 20.12 or newer** — its own toolchain targets Node 22
+   LTS. dsh declares no `engines`, so npm installs it onto an older Node without
+   complaint and it then fails to boot with a `SyntaxError` about
+   `util.parseEnv`; BitFun checks the version up front and says so instead.
 2. Configure a model and an API key inside dsh, e.g. through `dsh web`'s Models
    page. That writes `~/.dsh/settings.yaml` and `~/.dsh/.credentials.yaml`.
 3. Pick **DeepSeek Harness** in BitFun and start a session.
@@ -54,8 +58,8 @@ stream and extracts it into `$DSH_HOME/profiles/bitfun-acp/` on that host over
 the session's own transport — no SFTP, so container connections are covered too
 — and skips the upload when the stamp there already matches. `dsh` itself, the
 models, and the key are the remote host's, exactly as they are locally. Steps 1
-and 2 above therefore have to have been done on that host, and BitFun says so if
-they were not.
+and 2 above therefore have to have been done on that host — including the Node
+version, which the same probe checks — and BitFun says so if they were not.
 
 ## Development
 
