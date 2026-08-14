@@ -28,7 +28,7 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join, relative, resolve } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
@@ -103,7 +103,9 @@ function copyTree(from, to) {
     recursive: true,
     dereference: true,
     filter: source => {
-      const base = source.slice(source.lastIndexOf('/') + 1)
+      // `basename`, not a hand-rolled slice on '/': a Windows path separates on
+      // '\', where slicing on '/' yields the whole path and matches nothing.
+      const base = basename(source)
       return base !== 'node_modules' && base !== '.git' && !base.endsWith('.map')
     },
   })
@@ -127,12 +129,26 @@ function vendor(name, version) {
   }
   const staging = mkdtempSync(join(tmpdir(), 'dsh-acp-vendor-'))
   try {
+    // Both commands run IN the staging directory so no argument ever carries an
+    // absolute path. That is not tidiness: `npm` on Windows is a `.cmd` shim,
+    // which Node refuses to spawn without a shell since CVE-2024-27980, and a
+    // shell then re-splits every argument — an unquoted `C:\Users\...` path
+    // would break on its first space. Keeping the arguments to bare package
+    // names and one filename sidesteps quoting altogether, and also keeps a
+    // drive letter away from `tar -f`, which GNU tar reads as a remote host.
     const packed = execFileSync(
       'npm',
-      ['pack', `${name}@${version}`, '--pack-destination', staging, '--silent'],
-      { encoding: 'utf8' },
-    ).trim().split('\n').at(-1)
-    execFileSync('tar', ['-xzf', join(staging, packed), '-C', staging])
+      ['pack', `${name}@${version}`, '--silent'],
+      { cwd: staging, encoding: 'utf8', shell: process.platform === 'win32' },
+    )
+      .split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line !== '')
+      .at(-1)
+    if (packed === undefined) {
+      throw new Error(`npm pack ${name}@${version} named no tarball on stdout`)
+    }
+    execFileSync('tar', ['-xzf', packed], { cwd: staging })
     copyTree(join(staging, 'package'), destination)
   } finally {
     rmSync(staging, { recursive: true, force: true })
@@ -144,23 +160,25 @@ function vendor(name, version) {
  *
  * A version string is not enough: during development the bridge's version
  * stands still while its code changes, and a stale profile on disk would look
- * current. Paths are sorted so the digest does not depend on directory order.
+ * current. Paths are sorted so the digest does not depend on directory order,
+ * and recorded with '/' so the same sources hash the same on every build host
+ * rather than once per path separator.
  * @param root - the output directory, already fully written except the stamp.
  * @returns a hex digest over every path and its bytes.
  */
 function hashTree(root) {
   const files = []
   const walk = (dir) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name)
       if (entry.isDirectory()) walk(path)
-      else files.push(path)
+      else files.push([relative(root, path).split(sep).join('/'), path])
     }
   }
   walk(root)
   const digest = createHash('sha256')
-  for (const path of files.sort()) {
-    digest.update(relative(root, path))
+  for (const [key, path] of files.sort((a, b) => a[0] < b[0] ? -1 : 1)) {
+    digest.update(key)
     digest.update('\0')
     digest.update(readFileSync(path))
   }
