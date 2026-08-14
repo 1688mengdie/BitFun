@@ -604,14 +604,14 @@ interface GroupMemberPickerDialogProps {
   onConfirm: (selectedIds: string[]) => void | Promise<void>;
 }
 
-const GroupMemberPickerDialog: React.FC<GroupMemberPickerDialogProps> = ({
+function GroupMemberPickerDialog({
   title,
   workspacePath,
   isOpen,
   busy,
   onClose,
   onConfirm,
-}) => {
+}: GroupMemberPickerDialogProps) {
   const { t } = useI18n('common');
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -749,14 +749,14 @@ interface GroupForkDialogProps {
   onConfirm: (name: string, memberIds: string[]) => void | Promise<void>;
 }
 
-const GroupForkDialog: React.FC<GroupForkDialogProps> = ({
+function GroupForkDialog({
   groupName,
   workspacePath,
   isOpen,
   busy,
   onClose,
   onConfirm,
-}) => {
+}: GroupForkDialogProps) {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
   const [sessions, setSessions] = useState<SessionMetadata[]>([]);
