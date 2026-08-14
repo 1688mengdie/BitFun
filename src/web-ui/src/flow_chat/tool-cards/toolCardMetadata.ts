@@ -277,6 +277,19 @@ export const TOOL_CARD_CONFIGS: Record<string, ToolCardConfig> = {
     primaryColor: APPEARANCE_DOMAIN_TOKENS.toolIdentity.terminal
   },
 
+  // Code-mode agents (e.g. DeepSeek Harness's PTC preset) answer a step by
+  // writing one program instead of calling one tool per action.
+  'RunCode': {
+    toolName: 'RunCode',
+    displayName: 'Run Code',
+    icon: 'CODE',
+    requiresConfirmation: false,
+    resultDisplayType: 'detailed',
+    description: 'Run a program and show what it printed',
+    displayMode: 'standard',
+    primaryColor: APPEARANCE_DOMAIN_TOKENS.toolIdentity.terminal
+  },
+
   'ExecCommand': {
     toolName: 'ExecCommand',
     displayName: 'Run Command',
@@ -531,6 +544,7 @@ export const DEDICATED_TOOL_CARD_NAMES = new Set([
   'SessionControl',
   'SessionMessage',
   'Bash',
+  'RunCode',
   'ExecCommand',
   'WriteStdin',
   'ExecControl',

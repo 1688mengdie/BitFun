@@ -532,10 +532,19 @@ impl DesktopSessionApplication {
         let scope = self.resolved_scope(request).await;
         self.ensure_runtime_ownership(&scope)?;
         let storage_path = self.storage_path(&scope);
-        self.compatibility
-            .ensure_session_loaded_from_storage_path(&storage_path, &turn.session_id, false)
+        // An externally projected Session has no Runtime state to restore, and
+        // loading one would rewrite its persisted mode to a local fallback.
+        if !self
+            .compatibility
+            .is_externally_projected_session(&storage_path, &turn.session_id)
             .await
-            .map_err(desktop_core_session_error)?;
+            .map_err(desktop_core_session_error)?
+        {
+            self.compatibility
+                .ensure_session_loaded_from_storage_path(&storage_path, &turn.session_id, false)
+                .await
+                .map_err(desktop_core_session_error)?;
+        }
         if let Some(local_command) = local_command_turn_record_request(turn)? {
             return self
                 .agent_runtime

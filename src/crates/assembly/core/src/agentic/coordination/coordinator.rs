@@ -6500,6 +6500,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 user_message_metadata.clone(),
             )
             .await?;
+        if let Some(turn_mode) = permission_mode_from_metadata(user_message_metadata.as_ref()) {
+            // A one-off selection is mutable runtime state for this exact turn,
+            // not a frozen submission property. Each model round reads the
+            // latest value and the turn guard removes it on every exit path.
+            if !self.session_manager.set_active_turn_permission_mode(
+                &session_id,
+                &turn_id,
+                turn_mode,
+            ) {
+                self.session_manager
+                    .reset_session_state_if_processing(&session_id, &turn_id);
+                return Err(BitFunError::Session(format!(
+                    "Failed to install active turn permission mode: session_id={session_id}, turn_id={turn_id}"
+                )));
+            }
+        }
         start_memory_startup_task(MemoryStartupRequest {
             session_id: session_id.clone(),
             session_kind: session.kind,
@@ -6702,19 +6718,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             // still wins via the branch above.
             context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
         }
-        // Resolve the permission mode once per submission. Downstream rounds and
-        // delegated subagents read this value instead of re-resolving the layers
-        // with partial context, so a mid-turn configuration or session change
-        // cannot split one turn across two modes.
-        let submission_permission_mode = resolve_submission_permission_mode(
-            permission_mode_from_metadata(user_message_metadata.as_ref()),
-            session.config.permission_mode,
-            default_permission_mode_from_global_config().await,
-        );
-        context_vars.insert(
-            PERMISSION_MODE_CONTEXT_KEY.to_string(),
-            submission_permission_mode.mode.as_str().to_string(),
-        );
         if needs_computer_links_for_source(submission_policy.trigger_source) {
             context_vars.insert(
                 TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY.to_string(),
@@ -6862,6 +6865,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     // synchronously reset to Idle so the user is never stuck.
                     self.session_manager
                         .reset_session_state_if_processing(&self.session_id, &self.turn_id);
+                    // Clear after the state transition. This ordering prevents
+                    // an overlapping API update from validating Processing
+                    // immediately after cleanup and publishing a stale entry.
+                    self.session_manager
+                        .clear_active_turn_permission_mode(&self.session_id, &self.turn_id);
                 }
             }
 

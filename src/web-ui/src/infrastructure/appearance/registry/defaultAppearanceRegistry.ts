@@ -254,6 +254,7 @@ import { acpPermissionActionsAppearanceDescriptor } from '@/flow_chat/tool-cards
 import { contextCompressionDisplayAppearanceDescriptor } from '@/flow_chat/tool-cards/ContextCompressionDisplay.appearance';
 import { getToolSpecCardAppearanceDescriptor } from '@/flow_chat/tool-cards/GetToolSpecCard.appearance';
 import { viewImageToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/ViewImageToolCard.appearance';
+import { runCodeToolCardAppearanceDescriptor } from '@/flow_chat/tool-cards/RunCodeToolCard.appearance';
 import { acpPlanPanelAppearanceDescriptor } from '@/flow_chat/components/AcpPlanPanel.appearance';
 import { backgroundCommandInputDialogAppearanceDescriptor } from '@/flow_chat/components/background-command/BackgroundCommandInputDialog.appearance';
 import { chatEmptyStateAppearanceDescriptor } from '@/flow_chat/components/ChatEmptyState.appearance';
@@ -523,6 +524,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(contextCompressionDisplayAppearanceDescriptor)
     .registerComponent(getToolSpecCardAppearanceDescriptor)
     .registerComponent(viewImageToolCardAppearanceDescriptor)
+    .registerComponent(runCodeToolCardAppearanceDescriptor)
     .registerComponent(acpPlanPanelAppearanceDescriptor)
     .registerComponent(backgroundCommandInputDialogAppearanceDescriptor)
     .registerComponent(chatEmptyStateAppearanceDescriptor)

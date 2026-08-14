@@ -2,6 +2,7 @@ mod builtin_clients;
 mod cli_detect;
 mod config;
 mod launch_policy;
+mod dsh_profile;
 mod manager;
 mod probe;
 mod remote_capability_store;

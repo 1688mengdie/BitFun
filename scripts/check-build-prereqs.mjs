@@ -57,7 +57,19 @@ export function runChecks(rootDir) {
     });
   }
 
-  // --- Check 3: sherpa-onnx prebuilt libs ---
+  // --- Check 3: dsh bridge profile (also a bitfun-desktop Tauri resource) ---
+  // Only the directory has to exist for code generation; what is inside it is
+  // the bundle's problem, not cargo's.
+  if (!existsSync(join(rootDir, 'packages', 'dsh-acp', 'dist-profile'))) {
+    errors.push({
+      name: 'dsh bridge profile',
+      message:
+        "packages/dsh-acp/dist-profile is missing. The bitfun-desktop Tauri build script references it as a resource, so 'cargo check -p bitfun-desktop' and 'cargo check --workspace' will fail with \"resource path doesn't exist\". Set BITFUN_SKIP_DSH_PROFILE=1 for a placeholder if you do not need the DeepSeek bridge.",
+      fix: ['pnpm', 'run', 'prepare:dsh-profile'],
+    });
+  }
+
+  // --- Check 4: sherpa-onnx prebuilt libs ---
   // sherpa-onnx-sys build.rs auto-detects target/sherpa-onnx-prebuilt/<version>/lib/
   // and returns immediately without downloading. Only warn for the first-build
   // scenario where no prebuilt cache exists yet.

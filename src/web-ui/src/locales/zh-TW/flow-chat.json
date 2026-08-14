@@ -745,9 +745,14 @@
       "noSession": "請先開啟或新建工作階段，再變更其權限模式。",
       "turnScope": "僅下一則訊息",
       "currentTurnOverride": "權限：{{mode}}（僅下一則訊息）",
+      "activeTurnScope": "目前輪次",
+      "currentActiveTurnOverride": "權限：{{mode}}（僅目前輪次）",
       "nextTurnOnly": "僅下一則訊息使用「{{mode}}」",
       "nextTurnOnlyShort": "僅一次",
+      "activeTurnOnly": "目前輪次後續使用「{{mode}}」",
+      "activeTurnOnlyShort": "目前輪次",
       "fullAccessWarningMessageNextTurn": "完全存取會預設放行工具呼叫，不再逐次確認。此設定僅作用於下一則訊息，專案規則與強制規則仍然生效。",
+      "fullAccessWarningMessageActiveTurn": "完全存取會預設放行工具呼叫，不再逐次確認。此設定從目前輪次的後續模型輪次生效，專案規則與強制規則仍然生效。",
       "openDefaultSettings": "開啟權限設定"
     },
     "addModeTooltip": "附加 Plan 或 Debug",
@@ -1673,6 +1678,20 @@
       "commandInterrupted": "命令已被中斷",
       "executionFailed": "命令執行失敗"
     },
+    "runCode": {
+      "title": "執行程式碼",
+      "programLabel": "程式",
+      "outputLabel": "輸出",
+      "writing": "正在撰寫程式…",
+      "running": "正在執行程式…",
+      "completed": "程式已結束",
+      "failed": "程式執行失敗",
+      "cancelled": "程式已取消",
+      "rejected": "程式已拒絕",
+      "copyCode": "複製程式碼",
+      "codeCopied": "程式碼已複製",
+      "copyCodeFailed": "複製程式碼失敗"
+    },
     "approval": {
       "waiting": "等待確認",
       "confirm": "允許",
@@ -2416,6 +2435,9 @@
     "fastModel": "Fast 模型",
     "fastMode": "Fast 模式",
     "fastModeDescription": "1.5 倍速度，消耗更多額度",
+    "acpMode": "模式",
+    "acpModeLocked": "對話已經開始，模式不能再改。",
+    "acpModeFailed": "切換模式失敗",
     "switchFailed": "切換模型失敗",
     "modelNotConfigured": "未設定",
     "contextUsage": {

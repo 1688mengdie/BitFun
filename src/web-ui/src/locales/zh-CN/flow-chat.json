@@ -745,9 +745,14 @@
       "noSession": "请先打开或新建会话，再修改其权限模式。",
       "turnScope": "仅下一条消息",
       "currentTurnOverride": "权限：{{mode}}（仅下一条消息）",
+      "activeTurnScope": "当前轮",
+      "currentActiveTurnOverride": "权限：{{mode}}（仅当前轮）",
       "nextTurnOnly": "仅下一条消息使用「{{mode}}」",
       "nextTurnOnlyShort": "仅一次",
+      "activeTurnOnly": "当前轮后续使用「{{mode}}」",
+      "activeTurnOnlyShort": "当前轮",
       "fullAccessWarningMessageNextTurn": "完全访问会默认放行工具调用，不再逐次确认。该设置仅作用于下一条消息，项目规则与强制规则仍然生效。",
+      "fullAccessWarningMessageActiveTurn": "完全访问会默认放行工具调用，不再逐次确认。该设置从当前轮的后续模型轮次生效，项目规则与强制规则仍然生效。",
       "openDefaultSettings": "打开权限设置"
     },
     "addModeTooltip": "附加 Plan 或 Debug",
@@ -1673,6 +1678,20 @@
       "commandInterrupted": "命令已被中断",
       "executionFailed": "命令执行失败"
     },
+    "runCode": {
+      "title": "运行代码",
+      "programLabel": "程序",
+      "outputLabel": "输出",
+      "writing": "正在编写程序…",
+      "running": "正在运行程序…",
+      "completed": "程序已结束",
+      "failed": "程序执行失败",
+      "cancelled": "程序已取消",
+      "rejected": "程序已拒绝",
+      "copyCode": "复制代码",
+      "codeCopied": "代码已复制",
+      "copyCodeFailed": "复制代码失败"
+    },
     "approval": {
       "waiting": "等待确认",
       "confirm": "允许",
@@ -2416,6 +2435,9 @@
     "fastModel": "Fast 模型",
     "fastMode": "Fast 模式",
     "fastModeDescription": "1.5 倍速度，消耗更多额度",
+    "acpMode": "模式",
+    "acpModeLocked": "会话已经开始，模式不能再改。",
+    "acpModeFailed": "切换模式失败",
     "switchFailed": "切换模型失败",
     "modelNotConfigured": "未配置",
     "contextUsage": {
