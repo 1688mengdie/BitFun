@@ -32,6 +32,8 @@ import {
   type CancelNotification,
   type InitializeRequest,
   type InitializeResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
   type NewSessionRequest,
   type NewSessionResponse,
   type PlanEntry,
@@ -47,10 +49,13 @@ import {
   type ToolCallUpdate,
 } from '@agentclientprotocol/sdk'
 import type { Agent } from '@deepseek-ai/dsh-agent'
-// Type-only: the roster is read through `ctx.get`, and this import also carries
-// the `agent-preset/selected` session-event declaration the switch below logs.
-import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
-import { SessionId, type SessionEvent, type TurnEndReason } from '@deepseek-ai/dsh-session'
+// The roster itself is read through `ctx.get`; only the stored-preset resolver
+// is a value here. This import also carries the `agent-preset/selected`
+// session-event declaration the switch below logs and the resolver reads back.
+import { resolveSessionPreset, type AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+import {
+  SessionId, type SessionEvent, type SessionHeader, type TurnEndReason,
+} from '@deepseek-ai/dsh-session'
 // Side-effect type import: declaration-merges the approval waterfall answered below.
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { acpPromptToText, promptHasUnsupportedContent, turnEndToStopReason } from './codec.ts'
@@ -82,6 +87,24 @@ interface ContinuableDrain {
 interface DefaultModelSource {
   /** The provider/model a new agent should start on, live at call time. */
   currentSelection(): { provider?: string; model?: string }
+}
+
+/**
+ * The stored-session reads `session/load` needs, declared structurally for the
+ * same reason as {@link ContinuableDrain}. A deployment composed without
+ * durable persistence simply has nothing to load, and the bridge answers that
+ * as a protocol error rather than depending on the storage seam to exist.
+ */
+interface SessionArchive {
+  /**
+   * One stored session's header and full event log. This is the authoritative
+   * read rather than a listing: it waits for a just-disposed session's final
+   * drain, which is exactly the session a client reopens first.
+   */
+  inspect(id: SessionId): Promise<{
+    readonly meta: SessionHeader
+    readonly events: readonly SessionEvent[]
+  }>
 }
 
 /** Preserve invalid-parameter detail in the SDK wire error message. */
@@ -459,6 +482,40 @@ export function apply(ctx: Context, config: AcpConfig): void {
     }
   }
 
+  /**
+   * Republish a resumed session's history so the client renders the
+   * conversation it is reopening.
+   *
+   * Replay is the client's only source for a loaded session: `session/load`
+   * returns no transcript, so everything the IDE shows above the composer comes
+   * from these updates. What is withheld is what would double up or lie —
+   * `assistant/chunk` deltas are already committed into `assistant/message`,
+   * and `turn/start` would announce a mode lock the load response itself
+   * carries. Non-user `user/message` entries (plugin reminders, tool feedback)
+   * are agent-internal input, not something the user typed.
+   * @param record - the resumed session, already registered.
+   */
+  const replayHistory = (record: SessionRecord): void => {
+    for (const event of record.agent.session.events) {
+      try {
+        if (event.type === 'user/message') {
+          if (event.data.source.kind !== 'user') continue
+          for (const block of event.data.content) {
+            if (block.type !== 'text' || block.text.length === 0) continue
+            update(record, { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: block.text } })
+          }
+          continue
+        }
+        if (event.type === 'assistant/chunk' || event.type === 'turn/start') continue
+        publishEvent(record, event)
+      } catch (error: unknown) {
+        // One unrenderable historical event costs its card, not the reopened
+        // conversation.
+        logger.warn(`acp: failed to replay ${event.type}: ${String(error)}`)
+      }
+    }
+  }
+
   ctx.on('session/event', (session, event: SessionEvent) => {
     const record = sessions.get(session.header.id)
     if (record === undefined || record.agent.session !== session) return
@@ -542,6 +599,11 @@ export function apply(ctx: Context, config: AcpConfig): void {
           protocolVersion: PROTOCOL_VERSION,
           agentInfo: { name: 'dsh-acp-ide', version: '0.0.1' },
           agentCapabilities: {
+            // Reopening a conversation is the IDE's normal case, and the
+            // harness persists every session it runs: without this, a client
+            // has no way to say "continue that one" and starts a blank session
+            // whose history and mode are gone.
+            loadSession: true,
             promptCapabilities: { image: false, audio: false, embeddedContext: false },
           },
           authMethods: [],
@@ -595,6 +657,83 @@ export function apply(ctx: Context, config: AcpConfig): void {
         // has returned, so anything published before that can be dropped.
         const configOptions = await presetOptions(record, false)
         return { sessionId, ...configOptions.length === 0 ? {} : { configOptions } }
+      },
+
+      /**
+       * Reopen a persisted session: resume its agent and replay its history.
+       *
+       * The session is rebuilt from storage under the preset its turns actually
+       * ran on ({@link resolveSessionPreset} reads the log, not just the
+       * creation header), because a resumed conversation's tool calls have to
+       * stay ones the mounted composition can still make. That also settles the
+       * mode picker: a session with turns comes back locked, exactly as it was
+       * when the client last saw it.
+       *
+       * An unknown id is refused with an invalid-parameter error rather than
+       * silently answered with an empty session, so a client can fall back to
+       * `session/new` and know that is what happened.
+       */
+      async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+        assertOpen()
+        validateSessionParams(params)
+        const sessionId = SessionId(params.sessionId)
+        // Already live — a second load of the same session must not resume a
+        // rival agent on top of the running one. Replaying is still right: the
+        // client asked for the transcript.
+        const live = sessions.get(sessionId)
+        if (live !== undefined) {
+          replayHistory(live)
+          const configOptions = await presetOptions(live)
+          return configOptions.length === 0 ? {} : { configOptions }
+        }
+
+        const archive = ctx.get('sessionPersistence') as SessionArchive | undefined
+        if (archive === undefined) throw invalidParams('this deployment persists no sessions')
+        // Absent, unreadable, and written-by-an-incompatible-format all mean the
+        // same thing to a client — this conversation cannot be reopened — and
+        // saying so as an invalid parameter is what lets it fall back to
+        // `session/new` knowing why.
+        const inspected = await archive.inspect(sessionId).catch((error: unknown) => {
+          throw invalidParams(`cannot load session ${sessionId}: ${errorChain(error)}`)
+        })
+        if (inspected.meta.cwd !== params.cwd) {
+          throw invalidParams(
+            `session ${sessionId} belongs to "${inspected.meta.cwd ?? '(none)'}", not "${params.cwd}"`,
+          )
+        }
+        const composed = presets === undefined
+          ? undefined
+          : resolveSessionPreset({ header: inspected.meta, events: inspected.events })
+        const handle = await agents.resume({
+          resumeSessionId: sessionId,
+          agentOptions: agentOptions(ctx, config),
+          ...presets === undefined || composed === undefined ? {} : {
+            setup: async (agentCtx: Context) => void await presets.mount(agentCtx, composed),
+          },
+        })
+        /* v8 ignore next 4 -- a real stdio close can race an in-flight resume. */
+        if (closed) {
+          await handle.dispose()
+          throw internalError('connection closed during session/load')
+        }
+        const record: SessionRecord = {
+          agent: handle.agent,
+          dispose: () => handle.dispose(),
+          streamedText: new Set(),
+          streamedReasoning: new Set(),
+          published: new Map(),
+          presetId: composed,
+          presetSwitch: undefined,
+          // A session with turns is already locked, and the response below says
+          // so; only a session reopened before its first turn can still be
+          // told, by the `turn/start` that starts it.
+          presetLockPublished: !sessionBlank(handle.agent.session),
+          inflight: undefined,
+        }
+        sessions.set(sessionId, record)
+        replayHistory(record)
+        const configOptions = await presetOptions(record)
+        return configOptions.length === 0 ? {} : { configOptions }
       },
 
       /**
@@ -803,7 +942,7 @@ function agentOptions(ctx: Context, config: AcpConfig): { provider?: string; mod
 }
 
 /** Reject session features outside this bridge's contract. */
-function validateSessionParams(params: NewSessionRequest): void {
+function validateSessionParams(params: NewSessionRequest | LoadSessionRequest): void {
   if (!isAbsolute(params.cwd)) throw invalidParams(`cwd must be an absolute path: ${params.cwd}`)
   if (params.additionalDirectories !== undefined && params.additionalDirectories.length > 0) {
     throw invalidParams('additionalDirectories is not supported')

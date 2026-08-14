@@ -21,7 +21,13 @@
  * switching the agent preset. It stays in the credential-free half: a mode
  * switch is answered by the bridge and never reaches the provider.
  *
- * Usage: `node scripts/smoke.mjs [--mode code] [--prompt "…"] [--reject] [--cancel-after 3000]`
+ * `--load <sessionId>` reopens a stored session instead of starting one, which
+ * is what an IDE does after a restart: the run then prints the replayed history
+ * and the mode the session comes back locked to. The id is a dsh session id —
+ * a directory name under `$DSH_HOME/acp-sessions/<project>/` — and `--cwd` must
+ * name the workspace it was created in.
+ *
+ * Usage: `node scripts/smoke.mjs [--mode code] [--load <id>] [--prompt "…"] [--reject] [--cancel-after 3000]`
  */
 
 import { spawn } from 'node:child_process'
@@ -37,6 +43,7 @@ const { values } = parseArgs({
   args: process.argv.slice(2),
   options: {
     prompt: { type: 'string' },
+    load: { type: 'string' },
     mode: { type: 'string' },
     profile: { type: 'string' },
     cwd: { type: 'string' },
@@ -116,10 +123,16 @@ let failed = false
 try {
   const initialized = await client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
   process.stdout.write(`initialize: ${JSON.stringify(initialized.agentInfo)} v${initialized.protocolVersion}\n`)
+  process.stdout.write(`loadSession capability: ${String(initialized.agentCapabilities?.loadSession === true)}\n`)
 
-  const session = await client.newSession({ cwd: WORKSPACE, mcpServers: [] })
+  // `--load` is the reopen path an IDE takes on restart: the session comes back
+  // from storage with its history replayed as updates and its mode already
+  // fixed, instead of a blank session under the roster default.
+  const session = values.load === undefined
+    ? await client.newSession({ cwd: WORKSPACE, mcpServers: [] })
+    : { sessionId: values.load, ...await client.loadSession({ sessionId: values.load, cwd: WORKSPACE, mcpServers: [] }) }
   const sessionId = session.sessionId
-  process.stdout.write(`newSession: ${sessionId}\n`)
+  process.stdout.write(`${values.load === undefined ? 'newSession' : 'loadSession'}: ${sessionId}\n`)
   process.stdout.write(`modes: ${describeOptions(session.configOptions)}\n`)
 
   if (values.mode !== undefined) {
