@@ -61,6 +61,33 @@ models, and the key are the remote host's, exactly as they are locally. Steps 1
 and 2 above therefore have to have been done on that host — including the Node
 version, which the same probe checks — and BitFun says so if they were not.
 
+## Reopening a conversation
+
+The bridge advertises ACP's `loadSession` capability, so closing a session and
+clicking it again reopens the one that was there instead of quietly starting a
+blank one. Without it a client has only `session/new` to fall back on, and the
+reopened conversation loses its history, its context, and the mode it ran under
+— it comes back under the roster default and switchable again.
+
+`session/load` resumes the stored session out of the harness's own persistence
+(`$DSH_HOME/acp-sessions/<project>/<session-id>/`), replays its events to the
+client as `session/update` notifications, and answers with the session's mode.
+Three consequences worth knowing:
+
+- **The stored mode wins over the roster default.** Which preset a session ran
+  under is read back from its own log, so a conversation started in `minimal`
+  reopens in `minimal` however the default has moved since.
+- **A conversation that has started comes back locked.** The mode picker shrinks
+  to the one mode in force, because the composition is already baked into the
+  transcript — the same rule a live session follows after its first turn.
+- **A session belongs to the directory it was created in.** Loading it against
+  another `cwd` is refused rather than answered with a session whose sandbox
+  boundary points somewhere else.
+
+`node scripts/smoke.mjs --load <session-id>` drives exactly this path against a
+real installation; the id is a directory name under the path above, and `--cwd`
+has to name the workspace the session was created in.
+
 ## Development
 
 ```sh
