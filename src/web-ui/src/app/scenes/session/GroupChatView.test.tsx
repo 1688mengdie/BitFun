@@ -120,8 +120,9 @@ vi.mock('@/component-library', () => {
         {props.children}
       </button>
     ),
-    // R-GC-22: 邀请/裂变成员选择 = component-library Select（原始下拉组件）。
-    // 测试 stub 渲染面：渲染 options 为可点击项，点击后调用 onChange。
+    // R-GC-22/30: 邀请/裂变成员选择 = component-library Select（原始下拉组件，
+    // multiple + searchable + showSelectAll）。测试 stub 渲染面：渲染 options
+    // 为可点击项，点击后调用 onChange。
     Select: (props: {
       options?: Array<{ value: string | number; label: string }>;
       value?: string | number | Array<string | number>;
@@ -425,7 +426,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     expect(rows[1]!.textContent).toContain('Assist C');
   });
 
-  it('invites members through invite_group_member (R-GC-28: count-driven, backend creates fresh members)', async () => {
+  it('invites members through invite_group_member (R-GC-30: owner picks Claw members from a runtime list)', async () => {
     vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
       toolName: string;
     }) => {
@@ -438,7 +439,13 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
+    // R-GC-30: member source = runtime-fetched Claw sessions (listSessions
+    // filtered by agentType === 'Claw'), zero hardcoded.
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('claw-1', 'Claw', 'Assist A'),
+      makeSession('claw-2', 'Claw', 'Assist B'),
+      makeSession('gen-1', 'GeneralPurpose', 'Not a Claw'),
+    ]);
     renderView();
     await flush();
 
@@ -451,17 +458,15 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
 
     const modal = document.querySelector('[data-testid="modal"]');
     expect(modal).not.toBeNull();
-    // R-GC-28: 邀请 = 数量输入（新建 N 个成员，不列已有会话）。
-    const countInput = document.querySelector<HTMLInputElement>('[data-testid="dialog-count-input"]');
-    expect(countInput).not.toBeNull();
-    act(() => {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      nativeSetter?.call(countInput, '2');
-      countInput!.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    // R-GC-30: 邀请 = Claw 成员多选（Select multiple），无数量输入。
+    expect(document.querySelector('[data-testid="dialog-count-input"]')).toBeNull();
+    const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
+    expect(options).toHaveLength(2); // 只列 Claw，非 Claw 不进候选
+
+    // 勾选两个 Claw 成员（Select stub 点击切换选中）。
+    act(() => options[0]!.click());
+    act(() => options[1]!.click());
+    await flush();
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       b => b.textContent?.includes('Confirm invite'),
@@ -470,7 +475,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     act(() => confirmBtn!.click());
     await flush();
 
-    // 每个占位 id 触发一次 invite（后端为每个占位新建唯一 UUID 会话）。
+    // 每个被勾选的成员触发一次 invite（后端按选择新建 Claw 成员会话）。
     const inviteCalls = vi.mocked(toolAPI.executeTool).mock.calls.filter(
       c => c[0].toolName === 'invite_group_member',
     );
@@ -480,12 +485,12 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       parameters: {
         action: 'invite',
         group_id: 'group-1',
-        member_session_id: 'member-1',
+        member_session_id: 'claw-1',
         workspace: '/workspace-a',
       },
       workspacePath: '/workspace-a',
     });
-    expect(inviteCalls[1]![0].parameters.member_session_id).toBe('member-2');
+    expect(inviteCalls[1]![0].parameters.member_session_id).toBe('claw-2');
   });
 
   it('removes a member through remove_group_member', async () => {
@@ -579,7 +584,11 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
+    // R-GC-30: fork 成员 = 运行时 Claw 列表（listSessions 过滤 Claw）。
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('claw-1', 'Claw', 'Assist A'),
+      makeSession('claw-2', 'Claw', 'Assist B'),
+    ]);
     // 注入历史 turn 以提供 fork 的 turn_id（lastTurnId 取自本地 session turns）
     flowChatMocks.getState.mockReturnValue({
       sessions: new Map([['group-1', {
@@ -593,7 +602,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
-    // 打开 fork 弹窗（现成 Modal + Input 数量形态；R-GC-20 裂变
+    // 打开 fork 弹窗（现成 Modal + Select 多选形态；R-GC-20 裂变
     // 为右上角图标按钮，按 aria-label 定位）
     const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
       b => b.getAttribute('aria-label')?.includes('Fork'),
@@ -613,17 +622,13 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       nameInput!.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    // R-GC-28: fork 成员 = 数量输入（新建 N 个成员，不列已有会话）。
-    const countInput = document.querySelector<HTMLInputElement>('[data-testid="dialog-count-input"]');
-    expect(countInput).not.toBeNull();
-    act(() => {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      nativeSetter?.call(countInput, '2');
-      countInput!.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    // R-GC-30: fork 成员 = Claw 多选（Select multiple），无数量输入。
+    expect(document.querySelector('[data-testid="dialog-count-input"]')).toBeNull();
+    const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
+    expect(options).toHaveLength(2);
+    act(() => options[0]!.click());
+    act(() => options[1]!.click());
+    await flush();
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       b => b.textContent?.includes('Confirm fork'),
@@ -643,7 +648,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         group_id: 'group-1',
         name: '子群A',
         turn_id: 'msg-last',
-        members: ['member-1', 'member-2'],
+        members: ['claw-1', 'claw-2'],
       },
       workspacePath: '/workspace-a',
     });

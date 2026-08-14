@@ -1,36 +1,52 @@
 /**
- * CreateGroupChatDialog - group chat create dialog (R-GC-13 / R-GC-28).
+ * CreateGroupChatDialog - group chat create dialog (R-GC-13 / R-GC-28 / R-GC-30).
  *
  * Reuse rules:
- * - Modal / Button / Input all from component-library (existing components).
- * - R-GC-28 (owner directive): members are always CREATED fresh (unique UUID +
- *   default Claw agent type + Claw name + default workspace), never reusing
- *   existing sessions. The picker therefore no longer lists existing Claw
- *   sessions (list_sessions is forbidden as a member source); instead the user
- *   enters the number of members to create. The backend creates N fresh member
- *   sessions (group_room_tools.rs create_member_session).
+ * - Modal / Button / Input / Checkbox all from component-library (existing components).
+ * - R-GC-30 (owner directive, direction corrected 2026-08-14): the owner picks
+ *   group members themselves from a real optional Claw list — NO member-count
+ *   input (R-GC-28 had wrongly added it), NO hardcoded presets. Member source =
+ *   runtime-fetched: real Claw sessions (sessionAPI.listSessions filtered by
+ *   agentType === 'Claw') UNION assistant workspace presets (marked inactive
+ *   when no real session exists). Reuses the R-GC-19 member-source unification
+ *   (ac0987172 CreateGroupChatDialog.tsx) — the same Checkbox multi-select
+ *   shape; no new picker is built.
  * - Create goes through toolAPI.executeTool (camelCase - the only existing
  *   execute_tool wrapper, ToolAPI.ts:49-61); direct invoke('create_group_chat')
  *   is forbidden (the backend command was removed in R-GC-05).
+ * - The backend create still CREATES fresh unique-UUID member sessions
+ *   (group_room_tools.rs create_member_session): the selected ids here are
+ *   "member choice source" only; the backend never reuses them 1:1
+ *   (R-GC-28b keeps members = Claw type + Claw name).
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Input, Modal } from '@/component-library';
+import { Button, Checkbox, Input, Modal } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
+import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import type { SessionMetadata } from '@/shared/types/session-history';
+import type { WorkspaceInfo } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
 import { notificationService } from '@/shared/notification-system';
 import './CreateGroupChatDialog.scss';
 
 const log = createLogger('CreateGroupChatDialog');
 
-const MAX_MEMBER_COUNT = 20;
-
 interface CreateGroupChatDialogProps {
   isOpen: boolean;
   onClose: () => void;
   /** Group workspace rootPath (R-GC-26: Claw default assistant workspace). */
   workspacePath: string;
+  /**
+   * R-GC-19/30: assistant workspaces (Claw presets). Members = real Claw
+   * sessions (listSessions filtered by agentType === 'Claw') UNION assistant
+   * workspace presets (marked inactive when no real session exists). Reuses
+   * the W2 member-source unification (ac0987172) — the picker must see Claw
+   * members living under assistant workspaces, not only the current project
+   * workspace. Zero hardcoded member lists.
+   */
+  assistantWorkspaces?: WorkspaceInfo[];
   onCreated: (groupId: string, name: string) => void | Promise<void>;
 }
 
@@ -38,33 +54,109 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   isOpen,
   onClose,
   workspacePath,
+  assistantWorkspaces = [],
   onCreated,
 }) => {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
-  const [memberCount, setMemberCount] = useState(0);
+  const [members, setMembers] = useState<Array<SessionMetadata & { inactive?: boolean }>>([]);
+  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // R-GC-19: 稳定引用 assistantWorkspaces（父组件传入的数组引用每次 render
+  // 可能变化；若直接进 useCallback deps 会导致 loadMembers 反复重建 →
+  // useEffect 无限触发 loadMembers → 死循环。用 ref 持最新值，deps 只留
+  // workspacePath 与 isOpen 驱动的一次性加载）。
+  const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
+  assistantWorkspacesRef.current = assistantWorkspaces;
+
+  // R-GC-19/30: member source = real Claw sessions (listSessions filtered by
+  // agentType === 'Claw') UNION assistant workspace presets (inactive when no
+  // real session exists). Reuses the W2 unification shape (old MainNav
+  // groupChatAvailableAssistants, 8346a7399) so Claw members that live under
+  // assistant workspaces are always listable, no matter the current project
+  // workspace. Runtime-fetched only — zero hardcoded member lists.
+  const loadMembers = useCallback(async () => {
+    setIsLoadingMembers(true);
+    setLoadFailed(false);
+    try {
+      const list = await sessionAPI.listSessions(workspacePath);
+      const realClaws = list.filter(meta => meta.agentType === 'Claw');
+      const byId = new Map<string, SessionMetadata & { inactive?: boolean }>();
+      for (const meta of realClaws) {
+        byId.set(meta.sessionId, meta);
+      }
+      for (const workspace of assistantWorkspacesRef.current) {
+        const sessionId = workspace.assistantId || workspace.id;
+        if (!sessionId || byId.has(sessionId)) continue;
+        byId.set(sessionId, {
+          sessionId,
+          sessionName: workspace.identity?.name?.trim() || workspace.name,
+          agentType: 'Claw',
+          inactive: true,
+          // SessionMetadata 其余字段：pickup 展示无需真实数据，填类型最小占位。
+          modelName: 'auto',
+          createdAt: 0,
+          lastActiveAt: 0,
+          turnCount: 0,
+          messageCount: 0,
+          toolCallCount: 0,
+          status: 'active',
+          tags: [],
+        } as SessionMetadata & { inactive?: boolean });
+      }
+      setMembers(Array.from(byId.values()));
+    } catch (error) {
+      log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath });
+      setLoadFailed(true);
+    } finally {
+      setIsLoadingMembers(false);
+    }
+  }, [workspacePath]);
 
   useEffect(() => {
     if (!isOpen) {
       setName('');
-      setMemberCount(0);
+      setSelectedMemberIds(new Set());
+      setLoadFailed(false);
       return;
     }
-  }, [isOpen]);
+    void loadMembers();
+  }, [isOpen, loadMembers]);
 
-  const parsedMemberCount = Number.isFinite(memberCount)
-    ? Math.max(0, Math.min(MAX_MEMBER_COUNT, Math.floor(memberCount)))
-    : 0;
+  const toggleMember = useCallback((sessionId: string) => {
+    setSelectedMemberIds(prev => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) {
+        next.delete(sessionId);
+      } else {
+        next.add(sessionId);
+      }
+      return next;
+    });
+  }, []);
+
+  const allMemberIds = members.map(meta => meta.sessionId);
+  const allSelected = allMemberIds.length > 0 && selectedMemberIds.size === allMemberIds.length;
+
+  const toggleSelectAll = useCallback(() => {
+    setSelectedMemberIds(prev => (
+      prev.size === allMemberIds.length ? new Set() : new Set(allMemberIds)
+    ));
+  }, [allMemberIds]);
 
   const handleCreate = useCallback(async () => {
     const trimmedName = name.trim();
     if (!trimmedName || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // R-GC-28: members are placeholders only (count-driven); the backend
-      // creates N fresh unique-UUID member sessions. Never reuse existing ids.
-      const memberIds = Array.from({ length: parsedMemberCount }, (_, i) => `member-${i + 1}`);
+      // R-GC-30: members = the owner's own picks from the optional Claw list.
+      // The backend creates fresh unique-UUID member sessions per pick
+      // (group_room_tools.rs create_member_session); ids here are the choice
+      // source only.
+      const memberIds = Array.from(selectedMemberIds);
       // Contract section 1.4: go through execute_tool (ToolAPI camelCase
       // wrapper); direct invoke('create_group_chat') is forbidden.
       const response = await toolAPI.executeTool({
@@ -81,6 +173,10 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
         notificationService.error(message, { duration: 4000 });
         return;
       }
+      // R-GC-29: single concise success toast — the only creation notice.
+      // The backend welcome turn is a host turn ("群聊「X」已创建。") rendered
+      // as the first group message; it must NOT repeat the redundant "我是群主"
+      // description (removed in R-GC-29).
       notificationService.success(t('nav.groupChats.created', { name: trimmedName }), { duration: 3000 });
       await onCreated(groupId, trimmedName);
       onClose();
@@ -93,7 +189,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [isSubmitting, name, onClose, onCreated, parsedMemberCount, t, workspacePath]);
+  }, [isSubmitting, name, onClose, onCreated, selectedMemberIds, t, workspacePath]);
 
   return (
     <Modal
@@ -115,16 +211,63 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
           />
         </div>
 
-        <div className="group-chat-dialog__field">
-          <Input
-            label={t('nav.groupChats.memberCount')}
-            type="number"
-            min={0}
-            max={MAX_MEMBER_COUNT}
-            value={memberCount}
-            onChange={e => setMemberCount(Number(e.target.value))}
-            inputSize="medium"
-          />
+        {/* R-GC-30: Claw member multi-select (owner picks; runtime-fetched
+            list, zero hardcoded). R-GC-28's member-count input is removed. */}
+        <div className="group-chat-dialog__members">
+          <div className="group-chat-dialog__members-header">
+            <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>
+            {members.length > 0 ? (
+              <Checkbox
+                checked={allSelected}
+                onChange={toggleSelectAll}
+                label={allSelected ? t('actions.deselectAll') : t('actions.selectAll')}
+                size="small"
+              />
+            ) : null}
+          </div>
+
+          {isLoadingMembers ? (
+            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
+          ) : loadFailed ? (
+            <div className="group-chat-dialog__state">
+              {t('nav.groupChats.membersLoadFailed')}
+              <Button type="button" variant="secondary" size="small" onClick={() => { void loadMembers(); }}>
+                {t('actions.retry')}
+              </Button>
+            </div>
+          ) : members.length === 0 ? (
+            <div className="group-chat-dialog__state">{t('nav.groupChats.noClawSessions')}</div>
+          ) : (
+            <div className="group-chat-dialog__member-list">
+              {members.map(meta => {
+                const isSelected = selectedMemberIds.has(meta.sessionId);
+                return (
+                  <label
+                    key={meta.sessionId}
+                    className={`group-chat-dialog__member-row${isSelected ? ' is-selected' : ''}`}
+                  >
+                    <Checkbox
+                      checked={isSelected}
+                      onChange={() => toggleMember(meta.sessionId)}
+                      disabled={isSubmitting}
+                    />
+                    <span className="group-chat-dialog__member-name">
+                      {meta.sessionName || t('nav.sessions.untitled')}
+                    </span>
+                    {meta.inactive ? (
+                      <span
+                        className="group-chat-dialog__inactive-badge"
+                        data-bf-component="create-group-chat-dialog"
+                        data-bf-part="inactiveBadge"
+                      >
+                        {t('nav.groupChats.inactiveBadge')}
+                      </span>
+                    ) : null}
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div className="group-chat-dialog__actions">

@@ -11,7 +11,7 @@ vi.mock('@/component-library', () => {
       isOpen ? <div data-testid="modal">{children}</div> : null,
     Input: (props: { label?: string; value?: string; type?: string; min?: number; max?: number; onChange?: (e: { target: { value: string } }) => void; placeholder?: string; autoFocus?: boolean }) => (
       <input
-        data-testid={String(props.label ?? '').includes('count') || String(props.label ?? '').includes('Count') ? 'member-count-input' : 'group-name-input'}
+        data-testid="group-name-input"
         aria-label={props.label}
         type={props.type ?? 'text'}
         min={props.min}
@@ -20,6 +20,16 @@ vi.mock('@/component-library', () => {
         value={props.value ?? ''}
         onChange={props.onChange}
         autoFocus={props.autoFocus}
+      />
+    ),
+    Checkbox: (props: { checked?: boolean; onChange?: () => void; label?: string; size?: string; disabled?: boolean }) => (
+      <input
+        type="checkbox"
+        data-testid={props.label ? 'member-select-all' : 'member-checkbox'}
+        checked={props.checked}
+        onChange={props.onChange}
+        aria-label={props.label}
+        disabled={props.disabled}
       />
     ),
     Button: (props: { onClick?: () => void; disabled?: boolean; isLoading?: boolean; variant?: string; children?: React.ReactNode; type?: string; size?: string }) => (
@@ -50,6 +60,12 @@ vi.mock('@/infrastructure/api/service-api/ToolAPI', () => ({
   },
 }));
 
+vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
+  sessionAPI: {
+    listSessions: vi.fn(),
+  },
+}));
+
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     success: vi.fn(),
@@ -60,8 +76,24 @@ vi.mock('@/shared/notification-system', () => ({
 
 import CreateGroupChatDialog from './CreateGroupChatDialog';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
+import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import type { SessionMetadata } from '@/shared/types/session-history';
 
-describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
+const makeSession = (id: string, agentType: string, sessionName?: string): SessionMetadata => ({
+  sessionId: id,
+  sessionName: sessionName ?? id,
+  agentType,
+  modelName: 'auto',
+  createdAt: 0,
+  lastActiveAt: 0,
+  turnCount: 0,
+  messageCount: 0,
+  toolCallCount: 0,
+  status: 'active',
+  tags: [],
+});
+
+describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -70,6 +102,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.mocked(toolAPI.executeTool).mockReset();
+    vi.mocked(sessionAPI.listSessions).mockReset();
   });
 
   afterEach(() => {
@@ -77,7 +110,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
     container.remove();
   });
 
-  const renderDialog = (onCreated = vi.fn(), onClose = vi.fn()) => {
+  const renderDialog = (onCreated = vi.fn(), onClose = vi.fn(), props?: Partial<React.ComponentProps<typeof CreateGroupChatDialog>>) => {
     act(() => {
       root.render(
         <CreateGroupChatDialog
@@ -85,6 +118,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
           onClose={onClose}
           workspacePath="/workspace-a"
           onCreated={onCreated}
+          {...props}
         />,
       );
     });
@@ -104,17 +138,10 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
     });
   };
 
-  const setMemberCount = (value: string) => {
-    const input = document.querySelector<HTMLInputElement>('[data-testid="member-count-input"]');
-    expect(input).not.toBeNull();
-    act(() => {
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        'value',
-      )?.set;
-      nativeSetter?.call(input, value);
-      input!.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+  const toggleMember = (index: number) => {
+    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
+    expect(checkboxes[index]).toBeDefined();
+    act(() => checkboxes[index]!.click());
   };
 
   const clickCreate = () => {
@@ -129,6 +156,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
   };
 
   it('creates the group through toolAPI.executeTool with camelCase shape (no direct invoke)', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
@@ -138,6 +166,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
       duration_ms: 1,
     });
     const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
 
     setGroupName(' 项目群 ');
     expect(getSubmitDisabled()).toBe(false);
@@ -153,16 +182,30 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
     expect(onCreated).toHaveBeenCalledWith('group-1', '项目群');
   });
 
-  it('sends count-driven member placeholders (R-GC-28: backend creates fresh UUID sessions)', async () => {
+  it('R-GC-30: members = owner-picked Claw multi-select from the runtime list (no member-count input)', async () => {
+    // 运行时成员源：listSessions 过滤 Claw（R-GC-19 union：real Claw ∪ presets）。
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('claw-1', 'Claw', 'Assist A'),
+      makeSession('claw-2', 'Claw', 'Assist B'),
+      makeSession('gen-1', 'GeneralPurpose', 'Not a Claw'),
+    ]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
       result: { groupId: 'group-9' },
     });
     const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
+
+    // 无数量输入（R-GC-30 删掉 R-GC-28 误加的数量选择）。
+    expect(document.querySelector('[data-testid="member-count-input"]')).toBeNull();
+    // 成员列表 = 真实可选的 Claw 会话（非 Claw 不进候选）。
+    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
+    expect(checkboxes).toHaveLength(2);
 
     setGroupName('群A');
-    setMemberCount('3');
+    toggleMember(0);
+    toggleMember(1);
     clickCreate();
     await act(async () => { await Promise.resolve(); });
 
@@ -170,14 +213,62 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
       parameters: {
         action: 'create',
         name: '群A',
-        members: ['member-1', 'member-2', 'member-3'],
+        members: ['claw-1', 'claw-2'],
         workspace: '/workspace-a',
       },
     }));
     expect(onCreated).toHaveBeenCalledWith('group-9', '群A');
   });
 
+  it('R-GC-19/30: assistant workspace presets appear as inactive members when no real session exists', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([makeSession('claw-1', 'Claw', 'Assist A')]);
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-9' },
+    });
+    const { onCreated } = renderDialog(vi.fn(), vi.fn(), {
+      assistantWorkspaces: [
+        {
+          id: 'ws-preset',
+          name: '姬梦情-审查官',
+          rootPath: '/assistant/ws-preset',
+          workspaceKind: 'assistant',
+          assistantId: 'claw-preset-1',
+          languages: [],
+          openedAt: '',
+          lastAccessed: '',
+          tags: [],
+        },
+      ],
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    // real Claw (claw-1) ∪ preset inactive (claw-preset-1) = 2 个候选。
+    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
+    expect(checkboxes).toHaveLength(2);
+    const names = [...document.querySelectorAll<HTMLElement>('.group-chat-dialog__member-name')]
+      .map(el => el.textContent);
+    expect(names).toContain('姬梦情-审查官');
+
+    setGroupName('预设群');
+    toggleMember(1); // 勾选 inactive preset
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
+      parameters: {
+        action: 'create',
+        name: '预设群',
+        members: ['claw-preset-1'],
+        workspace: '/workspace-a',
+      },
+    }));
+    expect(onCreated).toHaveBeenCalledWith('group-9', '预设群');
+  });
+
   it('omits workspace parameter when workspacePath is empty (backend default fallback, R-GC-17)', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
@@ -193,6 +284,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
         />,
       );
     });
+    await act(async () => { await Promise.resolve(); });
 
     setGroupName('空工作区群');
     clickCreate();
@@ -207,6 +299,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
   });
 
   it('surfaces backend failure without calling onCreated', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: false,
@@ -216,6 +309,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
       duration_ms: 1,
     });
     const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
 
     setGroupName('空');
     clickCreate();

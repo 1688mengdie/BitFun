@@ -367,12 +367,19 @@ impl GroupRoomTool {
         // 欢迎 turn 与 send_message 同构（kind=UserDialog + status=Completed
         // + finish_reason="complete"），前端 NORMAL_FINISH_REASONS 命中，
         // 不再误报横幅。
+        // R-GC-29（2026-08-14 主人实测）：欢迎 turn 文案精简为「群聊「X」
+        // 已创建」——删除「我是群主，成员消息将汇聚于此。」冗余描述。该
+        // 描述与前端创建成功 toast（CreateGroupChatDialog.tsx:84
+        // notificationService.success('群聊「{{name}}」已创建')）文本高度
+        // 相似，且欢迎 turn 会作为群聊首条消息渲染（GroupChatView loadHistory
+        // 读回 user_dialog 气泡），观感 = 建群提示重复两次。宿主 turn 本体
+        // 保留（R-GC-25 结构依赖：群主会话开局必须有真实 turn）。
         Self::write_group_turn(
             coordinator,
             workspace,
             &group_session_id,
             &group_session_id,
-            &format!("群聊「{name}」已创建。我是群主，成员消息将汇聚于此。"),
+            &format!("群聊「{name}」已创建。"),
         )
         .await?;
 
@@ -1789,9 +1796,10 @@ mod tests {
         let workspace_str = workspace.to_string_lossy().to_string();
 
         // create：建群（2 成员）→ 返回 group_id（UUID）；会话列表可见且 agent_type=默认对话类型。
+        let group_name = "测试群";
         let group_id = GroupRoomTool::create_group(
             coordinator,
-            "测试群",
+            group_name,
             &["member-a".to_string(), "member-b".to_string()],
             &workspace_str,
         )
@@ -1842,8 +1850,8 @@ mod tests {
         );
         let welcome = welcome_turns
             .iter()
-            .find(|t| t.user_message.content.contains("已创建"))
-            .expect("welcome turn content must mention group creation");
+            .find(|t| t.user_message.content == format!("群聊「{group_name}」已创建。"))
+            .expect("welcome turn content must mention group creation (R-GC-29 concise wording)");
         assert_eq!(
             welcome.status,
             bitfun_services_core::session::TurnStatus::Completed

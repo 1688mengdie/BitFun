@@ -23,7 +23,15 @@
  *   multiple + searchable + showSelectAll (Select.tsx:87, exported from
  *   component-library index.ts:21) inside the existing Modal (Modal.tsx:65)
  *   with Button (Button.tsx:15) / Input (Input.tsx:20) actions — no custom
- *   list is built (R-GC-22).
+ *   list is built (R-GC-22 / R-GC-30).
+ * - R-GC-30 (owner directive, direction corrected 2026-08-14): the owner
+ *   picks invite/fork members themselves from a real optional Claw list —
+ *   NO member-count input (R-GC-28 had wrongly added it). Member source =
+ *   runtime-fetched Claw sessions (sessionAPI.listSessions filtered by
+ *   agentType === 'Claw'); the group workspace is the Claw default assistant
+ *   workspace (R-GC-26), so listSessions there IS the real Claw candidate
+ *   list. The backend invite/fork still CREATES fresh unique-UUID Claw member
+ *   sessions per pick (group_room_tools.rs create_member_session).
  * - Jump to a forked child group reuses the R-GC-13 handleGroupChatCreated
  *   registration shape: flowChatStore.createSession (FlowChatStore.ts:3744) +
  *   markSessionAsGroupChat (FlowChatStore.ts:7075) + openMainSession
@@ -33,7 +41,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, IconButton, Input, Modal } from '@/component-library';
+import { Button, IconButton, Input, Modal, Select, type SelectOption } from '@/component-library';
 import { UserPlus, GitBranch, Users } from 'lucide-react';
 import { ModernFlowChatContainer as FlowChatContainer } from '../../../flow_chat/components/modern/ModernFlowChatContainer';
 import { ChatInput } from '../../../flow_chat/components/ChatInput';
@@ -52,10 +60,6 @@ import { createLogger } from '@/shared/utils/logger';
 const log = createLogger('GroupChatView');
 
 const HISTORY_LIMIT = 200;
-
-// R-GC-28: max members created per invite/fork (count-driven; members are
-// always fresh unique-UUID sessions, never reused existing ids).
-const MAX_MEMBER_COUNT = 20;
 
 interface GroupChatViewProps {
   /** Group session id (== session id). */
@@ -538,6 +542,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       {isInviteOpen ? (
         <GroupMemberPickerDialog
           title={t('nav.groupChats.inviteTitle')}
+          workspacePath={workspacePath}
           isOpen={isInviteOpen}
           busy={isMutatingMember}
           onClose={() => setIsInviteOpen(false)}
@@ -548,6 +553,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       {isForkOpen ? (
         <GroupForkDialog
           groupName={groupName}
+          workspacePath={workspacePath}
           isOpen={isForkOpen}
           busy={isMutatingMember}
           onClose={() => setIsForkOpen(false)}
@@ -640,13 +646,17 @@ function GroupMembersDialog({
 }
 
 /**
- * R-GC-22/28: member picker dialog (invite). R-GC-28: the invite dialog lets
- * the user enter the number of members to CREATE (fresh unique-UUID Claw
- * sessions); it never lists existing sessions (list_sessions forbidden as a
- * member source). Reuses the component-library Input inside the existing Modal.
+ * R-GC-22/30: member picker dialog (invite). R-GC-30 (owner directive): the
+ * owner picks invite members themselves from a real optional Claw list — NO
+ * member-count input (R-GC-28 had wrongly added it), NO hardcoded presets.
+ * Member source = runtime-fetched Claw sessions (sessionAPI.listSessions
+ * filtered by agentType === 'Claw'). Reuses the component-library Select
+ * (Select.tsx:87) with multiple + searchable + showSelectAll inside the
+ * existing Modal; no custom picker is built.
  */
 interface GroupMemberPickerDialogProps {
   title: string;
+  workspacePath: string;
   isOpen: boolean;
   busy: boolean;
   onClose: () => void;
@@ -655,24 +665,52 @@ interface GroupMemberPickerDialogProps {
 
 function GroupMemberPickerDialog({
   title,
+  workspacePath,
   isOpen,
   busy,
   onClose,
   onConfirm,
 }: GroupMemberPickerDialogProps) {
   const { t } = useI18n('common');
-  const [memberCount, setMemberCount] = useState(0);
+  const [sessions, setSessions] = useState<SessionMetadata[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const loadSessions = useCallback(() => {
+    setIsLoading(true);
+    setLoadFailed(false);
+    return sessionAPI
+      .listSessions(workspacePath)
+      .then(list => setSessions(list.filter(meta => meta.agentType === 'Claw')))
+      .catch(error => {
+        log.warn('Failed to load Claw sessions for member picker', { error, workspacePath });
+        setLoadFailed(true);
+      })
+      .finally(() => setIsLoading(false));
+  }, [workspacePath]);
 
   useEffect(() => {
     if (!isOpen) {
-      setMemberCount(0);
+      setSelectedIds(new Set());
+      setLoadFailed(false);
       return;
     }
-  }, [isOpen]);
+    void loadSessions();
+  }, [isOpen, loadSessions]);
 
-  const parsedMemberCount = Number.isFinite(memberCount)
-    ? Math.max(0, Math.min(MAX_MEMBER_COUNT, Math.floor(memberCount)))
-    : 0;
+  const options = useMemo<SelectOption[]>(
+    () => sessions.map(meta => ({
+      value: meta.sessionId,
+      label: meta.sessionName || t('nav.sessions.untitled'),
+    })),
+    [sessions, t],
+  );
+
+  const selectedValue = useMemo(
+    () => options.filter(option => selectedIds.has(String(option.value))).map(option => option.value),
+    [options, selectedIds],
+  );
 
   return (
     <Modal
@@ -684,17 +722,35 @@ function GroupMemberPickerDialog({
     >
       <div data-bf-component="group-member-picker-dialog" data-bf-part="root" className="group-chat-dialog">
         <div className="group-chat-dialog__field">
-          {/* R-GC-28: invite CREATES fresh member sessions (unique UUID + Claw
-              type + Claw name); the picker never lists existing sessions. */}
-          <Input
-            label={t('nav.groupChats.inviteCount')}
-            type="number"
-            min={0}
-            max={MAX_MEMBER_COUNT}
-            value={memberCount}
-            onChange={e => setMemberCount(Number(e.target.value))}
-            inputSize="medium"
-          />
+          {isLoading ? (
+            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
+          ) : loadFailed ? (
+            <div className="group-chat-dialog__state">
+              {t('nav.groupChats.membersLoadFailed')}
+              <Button type="button" variant="secondary" size="small" onClick={() => { void loadSessions(); }}>
+                {t('actions.retry')}
+              </Button>
+            </div>
+          ) : (
+            <Select
+              multiple
+              searchable
+              showSelectAll
+              loading={isLoading}
+              options={options}
+              value={selectedValue}
+              placeholder={t('nav.groupChats.members')}
+              emptyText={t('nav.groupChats.noClawSessions')}
+              searchPlaceholder={t('nav.groupChats.membersSearch')}
+              onChange={(value) => {
+                const next = Array.isArray(value) ? value : [value];
+                setSelectedIds(new Set(next.map(String)));
+              }}
+              data-testid="group-member-picker-select"
+              triggerTestId="group-member-picker-trigger"
+              dropdownTestId="group-member-picker-dropdown"
+            />
+          )}
         </div>
 
         <div className="group-chat-dialog__actions">
@@ -705,11 +761,9 @@ function GroupMemberPickerDialog({
             type="button"
             variant="primary"
             onClick={() => {
-              // R-GC-28: placeholders only; backend creates N fresh members.
-              const ids = Array.from({ length: parsedMemberCount }, (_, i) => `member-${i + 1}`);
-              void onConfirm(ids);
+              void onConfirm(Array.from(selectedIds));
             }}
-            disabled={busy || parsedMemberCount === 0}
+            disabled={busy || selectedIds.size === 0}
             isLoading={busy}
           >
             {t('nav.groupChats.confirmInvite')}
@@ -721,13 +775,16 @@ function GroupMemberPickerDialog({
 }
 
 /**
- * R-GC-15/28: fork dialog — child group name + member count. R-GC-28: fork
- * members are CREATED fresh (unique-UUID Claw sessions), never selected from
- * existing sessions. Reuses the component-library Input inside the existing
- * Modal; no custom picker is built.
+ * R-GC-15/30: fork dialog — child group name + Claw member multi-select.
+ * R-GC-30 (owner directive): the owner picks fork members themselves from a
+ * real optional Claw list — NO member-count input (R-GC-28 had wrongly added
+ * it). Member source = runtime-fetched Claw sessions (listSessions filtered by
+ * agentType === 'Claw'). Reuses the component-library Select (Select.tsx:87)
+ * with multiple + searchable + showSelectAll inside the existing Modal.
  */
 interface GroupForkDialogProps {
   groupName?: string;
+  workspacePath: string;
   isOpen: boolean;
   busy: boolean;
   onClose: () => void;
@@ -736,6 +793,7 @@ interface GroupForkDialogProps {
 
 function GroupForkDialog({
   groupName,
+  workspacePath,
   isOpen,
   busy,
   onClose,
@@ -743,7 +801,23 @@ function GroupForkDialog({
 }: GroupForkDialogProps) {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
-  const [memberCount, setMemberCount] = useState(0);
+  const [sessions, setSessions] = useState<SessionMetadata[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const loadSessions = useCallback(() => {
+    setIsLoading(true);
+    setLoadFailed(false);
+    return sessionAPI
+      .listSessions(workspacePath)
+      .then(list => setSessions(list.filter(meta => meta.agentType === 'Claw')))
+      .catch(error => {
+        log.warn('Failed to load Claw sessions for fork member picker', { error, workspacePath });
+        setLoadFailed(true);
+      })
+      .finally(() => setIsLoading(false));
+  }, [workspacePath]);
 
   // Only seed the default child-group name when the dialog opens; never reset
   // the user's typed name on unrelated re-renders (t/groupName excluded from
@@ -753,19 +827,30 @@ function GroupForkDialog({
     if (!isOpen) {
       forkOpenedRef.current = false;
       setName('');
-      setMemberCount(0);
+      setSelectedIds(new Set());
+      setLoadFailed(false);
       return;
     }
     if (!forkOpenedRef.current) {
       forkOpenedRef.current = true;
       setName(`${groupName || t('nav.groupChats.untitled')} ${t('nav.groupChats.forkSuffix')}`);
+      void loadSessions();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]);
 
-  const parsedMemberCount = Number.isFinite(memberCount)
-    ? Math.max(0, Math.min(MAX_MEMBER_COUNT, Math.floor(memberCount)))
-    : 0;
+  const options = useMemo<SelectOption[]>(
+    () => sessions.map(meta => ({
+      value: meta.sessionId,
+      label: meta.sessionName || t('nav.sessions.untitled'),
+    })),
+    [sessions, t],
+  );
+
+  const selectedValue = useMemo(
+    () => options.filter(option => selectedIds.has(String(option.value))).map(option => option.value),
+    [options, selectedIds],
+  );
 
   const trimmedName = name.trim();
 
@@ -790,17 +875,35 @@ function GroupForkDialog({
         </div>
 
         <div className="group-chat-dialog__field">
-          {/* R-GC-28: fork members are CREATED fresh (unique UUID + Claw type
-              + Claw name); the picker never lists existing sessions. */}
-          <Input
-            label={t('nav.groupChats.forkMemberCount')}
-            type="number"
-            min={0}
-            max={MAX_MEMBER_COUNT}
-            value={memberCount}
-            onChange={e => setMemberCount(Number(e.target.value))}
-            inputSize="medium"
-          />
+          {isLoading ? (
+            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
+          ) : loadFailed ? (
+            <div className="group-chat-dialog__state">
+              {t('nav.groupChats.membersLoadFailed')}
+              <Button type="button" variant="secondary" size="small" onClick={() => { void loadSessions(); }}>
+                {t('actions.retry')}
+              </Button>
+            </div>
+          ) : (
+            <Select
+              multiple
+              searchable
+              showSelectAll
+              loading={isLoading}
+              options={options}
+              value={selectedValue}
+              placeholder={t('nav.groupChats.members')}
+              emptyText={t('nav.groupChats.noClawSessions')}
+              searchPlaceholder={t('nav.groupChats.membersSearch')}
+              onChange={(value) => {
+                const next = Array.isArray(value) ? value : [value];
+                setSelectedIds(new Set(next.map(String)));
+              }}
+              data-testid="group-fork-picker-select"
+              triggerTestId="group-fork-picker-trigger"
+              dropdownTestId="group-fork-picker-dropdown"
+            />
+          )}
         </div>
 
         <div className="group-chat-dialog__actions">
@@ -811,9 +914,7 @@ function GroupForkDialog({
             type="button"
             variant="primary"
             onClick={() => {
-              // R-GC-28: placeholders only; backend creates N fresh members.
-              const ids = Array.from({ length: parsedMemberCount }, (_, i) => `member-${i + 1}`);
-              void onConfirm(trimmedName, ids);
+              void onConfirm(trimmedName, Array.from(selectedIds));
             }}
             disabled={busy || !trimmedName}
             isLoading={busy}
