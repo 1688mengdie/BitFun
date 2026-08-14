@@ -9374,6 +9374,7 @@ impl SessionManager {
             // cleanup path), and Arc clones share the same underlying maps.
             let manager = Self {
                 sessions: sessions.clone(),
+                active_turn_permission_modes: active_turn_permission_modes.clone(),
                 transient_session_ids: transient_session_ids.clone(),
                 active_session_capacity: active_session_capacity.clone(),
                 active_session_permits: active_session_permits.clone(),
@@ -9522,6 +9523,7 @@ impl SessionManager {
     fn clone_for_tombstone_test(&self) -> Self {
         Self {
             sessions: self.sessions.clone(),
+            active_turn_permission_modes: self.active_turn_permission_modes.clone(),
             transient_session_ids: self.transient_session_ids.clone(),
             active_session_capacity: self.active_session_capacity.clone(),
             active_session_permits: self.active_session_permits.clone(),
