@@ -67,11 +67,12 @@ const SessionScene: React.FC<SessionSceneProps> = ({
   } = useApp();
   const auxPaneRef = useRef<AuxPaneRef>(null);
 
-  // R-GC-32 (2026-08-14, 主人实测 P0): 邀请/裂变成员源必须与建群一致（real
-  // Claw ∪ assistant workspace presets）。assistantWorkspacesList 来自
-  // useWorkspaceContext（MainNav assistantWorkspacesList 同源，
-  // WorkspaceProvider.tsx WorkspaceKind.Assistant 过滤），传给 GroupChatView
-  // 再注入 invite/fork picker（GroupMemberPickerDialog / GroupForkDialog）。
+  // R-GC-32 (2026-08-14, owner-verified P0): invite/fork member source must
+  // match create-group (real Claw sessions). assistantWorkspacesList comes from
+  // useWorkspaceContext (same source as MainNav assistantWorkspacesList,
+  // WorkspaceProvider.tsx WorkspaceKind.Assistant filter), passed to GroupChatView
+  // then injected into invite/fork pickers (GroupMemberPickerDialog /
+  // GroupForkDialog).
   const { assistantWorkspacesList } = useWorkspaceContext();
 
   const [isDraggingRight, setIsDraggingRight] = useState(false);

@@ -72,7 +72,7 @@ interface GroupChatViewProps {
   /** Whether the view is the active scene (passed to FlowChatContainer for virtualization/scroll). */
   isSceneActive?: boolean;
   /**
-   * R-GC-32/33 (2026-08-14, 主人实测 P0): assistant workspaces — each
+   * R-GC-32/33 (2026-08-14, owner-verified P0): assistant workspaces — each
    * workspace's rootPath is queried with sessionAPI.listSessions so invite/fork
    * show the REAL persisted Claw sessions living there (opened or not), exactly
    * matching the create-group member source. R-GC-33 removes R-GC-19's
@@ -663,7 +663,7 @@ function GroupMembersDialog({
  * R-GC-22/30/32/33: member picker dialog (invite). R-GC-30 (owner directive): the
  * owner picks invite members themselves from a real optional Claw list — NO
  * member-count input (R-GC-28 had wrongly added it), NO hardcoded presets.
- * R-GC-33 (2026-08-14, 主人实测 P0, CEO 裁决): member source = REAL Claw
+ * R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL Claw
  * sessions across ALL assistant workspaces — for each assistant workspace
  * rootPath, sessionAPI.listSessions(thatRoot) returns the persisted sessions
  * that actually live on disk (opened or not, because the backend
@@ -700,8 +700,9 @@ function GroupMemberPickerDialog({
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // R-GC-19 同款稳定引用：workspaces 数组引用每次 render 可能变化，直接进 deps
-  // 会导致 loadSessions 反复重建 → useEffect 无限重载。
+  // R-GC-19 same stable-reference pattern: the workspaces array reference may
+  // change every render; putting it directly in deps would rebuild loadSessions
+  // repeatedly -> useEffect infinite reload.
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
@@ -830,7 +831,7 @@ function GroupMemberPickerDialog({
  * R-GC-15/30/32/33: fork dialog — child group name + Claw member multi-select.
  * R-GC-30 (owner directive): the owner picks fork members themselves from a
  * real optional Claw list — NO member-count input (R-GC-28 had wrongly added
- * it). R-GC-33 (2026-08-14, 主人实测 P0, CEO 裁决): member source = REAL Claw
+ * it). R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL Claw
  * sessions across ALL assistant workspace roots (same loader as invite/create),
  * no fabricated presets. Reuses the component-library Select (Select.tsx:87)
  * with multiple + searchable + showSelectAll inside the existing Modal.
@@ -861,12 +862,12 @@ function GroupForkDialog({
   const [loadFailed, setLoadFailed] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // R-GC-19 同款稳定引用（同 GroupMemberPickerDialog）。
+  // R-GC-19 same stable-reference pattern (same as GroupMemberPickerDialog).
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
-  // R-GC-33: 与 create/invite 同源 — 遍历全部 assistant workspace 根拉真实
-  // Claw 会话，零伪造 presets。
+  // R-GC-33: same source as create/invite — walk every assistant workspace root
+  // to load REAL Claw sessions, zero fabricated presets.
   const loadSessions = useCallback(() => {
     setIsLoading(true);
     setLoadFailed(false);

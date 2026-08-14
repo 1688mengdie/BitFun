@@ -9,8 +9,8 @@
  *   input (R-GC-28 had wrongly added it), NO hardcoded presets. Member source =
  *   runtime-fetched real Claw sessions across ALL assistant workspace roots
  *   (sessionAPI.listSessions per root, filtered by agentType === 'Claw').
- * - R-GC-33 (2026-08-14, 主人实测 P0, CEO 裁决): R-GC-19's preset fabrication is
- *   REMOVED — previously assistantWorkspaces were faked into SessionMetadata
+ * - R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): R-GC-19's preset fabrication
+ *   is REMOVED — previously assistantWorkspaces were faked into SessionMetadata
  *   rows (sessionId = workspace.id, hardcoded agentType 'Claw', fake values).
  *   Now each assistant workspace rootPath is queried with listSessions and the
  *   real persisted sessions (opened or not) are shown; agentType comes from
@@ -67,10 +67,11 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   const [loadFailed, setLoadFailed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // R-GC-19: 稳定引用 assistantWorkspaces（父组件传入的数组引用每次 render
-  // 可能变化；若直接进 useCallback deps 会导致 loadMembers 反复重建 →
-  // useEffect 无限触发 loadMembers → 死循环。用 ref 持最新值，deps 只留
-  // workspacePath 与 isOpen 驱动的一次性加载）。
+  // R-GC-19: keep a stable reference to assistantWorkspaces (the array reference
+  // passed by the parent may change every render; using it directly in useCallback
+  // deps would rebuild loadMembers repeatedly -> useEffect would loop loadMembers
+  // forever). A ref holds the latest value; deps keep only workspacePath and
+  // isOpen to drive the one-shot load.
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
@@ -170,11 +171,14 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
         notificationService.error(message, { duration: 4000 });
         return;
       }
-      // R-GC-31 (2026-08-14, 主人实测 P0): 前端建群 toast 已删除 — 建群提示
-      // 单条 = 后端 welcome turn 气泡（group_room_tools.rs:382 "群聊「X」已创建。"，
-      // R-GC-25 群主会话结构依赖，开局必须有真实宿主 turn）。此前前端 toast 与
-      // welcome turn 双通道文案相同 = 真重复（R-GC-29 只精简了后端文案未实测，
-      // 验收断言必须实测验证非改完自封）。
+      // R-GC-31 (2026-08-14, owner-verified P0): the frontend create toast was
+      // REMOVED — the single creation notice is the backend welcome turn bubble
+      // (group_room_tools.rs:382 "group chat created" message; R-GC-25
+      // group-owner session structure dependency, the group session must open with
+      // a real host turn). Before, the frontend toast and the welcome turn showed
+      // identical text = real duplication (R-GC-29 only slimmed the backend text
+      // without owner testing; acceptance assertions must be verified at runtime,
+      // not self-declared after editing).
       await onCreated(groupId, trimmedName);
       onClose();
     } catch (error) {
