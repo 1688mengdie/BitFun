@@ -97,6 +97,17 @@ vi.mock('@/component-library', () => {
         {props.children}
       </button>
     ),
+    // R-GC-20: invite/fork 图标按钮（复用现成 IconButton；测试 stub 渲染面）。
+    IconButton: (props: { onClick?: () => void; 'aria-label'?: string; variant?: string; size?: string; children?: React.ReactNode }) => (
+      <button
+        type="button"
+        data-testid={`icon-btn-${props.variant ?? 'default'}`}
+        aria-label={props['aria-label']}
+        onClick={props.onClick}
+      >
+        {props.children}
+      </button>
+    ),
   };
 });
 
@@ -363,9 +374,10 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
-    // 打开邀请弹窗（现成 Modal + Checkbox 多选形态）
-    const inviteBtns = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
-      b => b.textContent?.includes('Invite'),
+    // 打开邀请弹窗（现成 Modal + Checkbox 多选形态；R-GC-20 邀请为右上角
+    // 图标按钮，按 aria-label 定位）
+    const inviteBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
+      b => b.getAttribute('aria-label')?.includes('Invite'),
     );
     act(() => inviteBtns[0]!.click());
     await flush();
@@ -498,9 +510,10 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
-    // 打开 fork 弹窗（现成 Modal + Input + Checkbox 多选形态）
-    const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
-      b => b.textContent?.includes('Fork'),
+    // 打开 fork 弹窗（现成 Modal + Input + Checkbox 多选形态；R-GC-20 裂变
+    // 为右上角图标按钮，按 aria-label 定位）
+    const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
+      b => b.getAttribute('aria-label')?.includes('Fork'),
     );
     act(() => forkBtns[0]!.click());
     await flush();
@@ -567,8 +580,8 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
-    const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button')].filter(
-      b => b.textContent?.includes('Fork'),
+    const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
+      b => b.getAttribute('aria-label')?.includes('Fork'),
     );
     act(() => forkBtns[0]!.click());
     await flush();

@@ -18,6 +18,7 @@ import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 import type { SessionMetadata } from '@/shared/types/session-history';
+import type { WorkspaceInfo } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
 import { notificationService } from '@/shared/notification-system';
 import './CreateGroupChatDialog.scss';
@@ -29,6 +30,14 @@ interface CreateGroupChatDialogProps {
   onClose: () => void;
   /** Current workspace rootPath (contract section 1.2a: workspace_path = workspaceManager rootPath). */
   workspacePath: string;
+  /**
+   * R-GC-19: assistant workspaces (Claw presets). Members = real Claw sessions
+   * (listSessions filtered by agentType === 'Claw') UNION assistant workspace
+   * presets (marked inactive when no real session exists). Reuses the old W2
+   * member-source unification (8346a7399) — the picker must see Claw members
+   * living under assistant workspaces, not only the current project workspace.
+   */
+  assistantWorkspaces?: WorkspaceInfo[];
   onCreated: (groupId: string, name: string) => void | Promise<void>;
 }
 
@@ -36,24 +45,60 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   isOpen,
   onClose,
   workspacePath,
+  assistantWorkspaces = [],
   onCreated,
 }) => {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
-  const [members, setMembers] = useState<SessionMetadata[]>([]);
+  const [members, setMembers] = useState<Array<SessionMetadata & { inactive?: boolean }>>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Member data source = existing session list (listSessions), filtered by
-  // agentType === 'Claw' (contract section 1.2).
+  // R-GC-19: 稳定引用 assistantWorkspaces（父组件传入的数组引用每次 render
+  // 可能变化；若直接进 useCallback deps 会导致 loadMembers 反复重建 →
+  // useEffect 无限触发 loadMembers → 死循环。用 ref 持最新值，deps 只留
+  // workspacePath 与 isOpen 驱动的一次性加载）。
+  const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
+  assistantWorkspacesRef.current = assistantWorkspaces;
+
+  // R-GC-19: member source = real Claw sessions (listSessions filtered by
+  // agentType === 'Claw') UNION assistant workspace presets (inactive when no
+  // real session exists). Reuses the W2 unification shape (old MainNav
+  // groupChatAvailableAssistants, 8346a7399) so Claw members that live under
+  // assistant workspaces are always listable, no matter the current project
+  // workspace.
   const loadMembers = useCallback(async () => {
     setIsLoadingMembers(true);
     setLoadFailed(false);
     try {
       const list = await sessionAPI.listSessions(workspacePath);
-      setMembers(list.filter(meta => meta.agentType === 'Claw'));
+      const realClaws = list.filter(meta => meta.agentType === 'Claw');
+      const byId = new Map<string, SessionMetadata & { inactive?: boolean }>();
+      for (const meta of realClaws) {
+        byId.set(meta.sessionId, meta);
+      }
+      for (const workspace of assistantWorkspacesRef.current) {
+        const sessionId = workspace.assistantId || workspace.id;
+        if (!sessionId || byId.has(sessionId)) continue;
+        byId.set(sessionId, {
+          sessionId,
+          sessionName: workspace.identity?.name?.trim() || workspace.name,
+          agentType: 'Claw',
+          inactive: true,
+          // SessionMetadata 其余字段：pickup 展示无需真实数据，填类型最小占位。
+          modelName: 'auto',
+          createdAt: 0,
+          lastActiveAt: 0,
+          turnCount: 0,
+          messageCount: 0,
+          toolCallCount: 0,
+          status: 'active',
+          tags: [],
+        } as SessionMetadata & { inactive?: boolean });
+      }
+      setMembers(Array.from(byId.values()));
     } catch (error) {
       log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath });
       setLoadFailed(true);
@@ -103,7 +148,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
       // wrapper); direct invoke('create_group_chat') is forbidden.
       const response = await toolAPI.executeTool({
         toolName: 'create_group_chat',
-        parameters: { action: 'create', name: trimmedName, members: memberIds },
+        parameters: { action: 'create', name: trimmedName, members: memberIds, workspace: workspacePath || undefined },
         workspacePath,
       });
       const groupId = response?.result?.groupId;
@@ -190,6 +235,15 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
                     <span className="group-chat-dialog__member-name">
                       {meta.sessionName || t('nav.sessions.untitled')}
                     </span>
+                    {meta.inactive ? (
+                      <span
+                        className="group-chat-dialog__inactive-badge"
+                        data-bf-component="create-group-chat-dialog"
+                        data-bf-part="inactiveBadge"
+                      >
+                        {t('nav.groupChats.inactiveBadge')}
+                      </span>
+                    ) : null}
                   </label>
                 );
               })}

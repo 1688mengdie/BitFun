@@ -109,6 +109,7 @@
       "membersLabel": "成員（{{count}}）",
       "membersLoadFailed": "載入會話列表失敗。",
       "noClawSessions": "尚無 Claw 助理會話，可先建群後再邀請成員。",
+      "inactiveBadge": "未啟動",
       "noMembers": "暫無成員，點擊邀請加入。",
       "create": "建立",
       "createFailed": "建立群聊失敗",

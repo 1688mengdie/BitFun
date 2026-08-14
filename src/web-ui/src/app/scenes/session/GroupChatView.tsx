@@ -26,7 +26,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Input, Modal } from '@/component-library';
+import { Button, Checkbox, IconButton, Input, Modal } from '@/component-library';
+import { UserPlus, GitBranch } from 'lucide-react';
 import { ModernFlowChatContainer as FlowChatContainer } from '../../../flow_chat/components/modern/ModernFlowChatContainer';
 import { ChatInput } from '../../../flow_chat/components/ChatInput';
 import type { ChatInputRegistration, ChatInputSubmission } from '../../../flow_chat/components/chatInputRegistration';
@@ -477,12 +478,26 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
               {t('nav.groupChats.membersLabel', { count: memberRows.length })}
             </span>
             <div className="group-chat-view__members-actions">
-              <Button type="button" variant="secondary" size="small" onClick={() => setIsInviteOpen(true)}>
-                {t('nav.groupChats.invite')}
-              </Button>
-              <Button type="button" variant="ghost" size="small" onClick={() => setIsForkOpen(true)}>
-                {t('nav.groupChats.fork')}
-              </Button>
+              {/* R-GC-20: invite/fork 改为右上角图标按钮（复用现成 IconButton +
+                  lucide UserPlus/GitBranch，MainNav.tsx:17-18 同款图标库）。 */}
+              <IconButton
+                variant="default"
+                size="small"
+                aria-label={t('nav.groupChats.invite')}
+                tooltip={t('nav.groupChats.invite')}
+                onClick={() => setIsInviteOpen(true)}
+              >
+                <UserPlus size={14} aria-hidden="true" />
+              </IconButton>
+              <IconButton
+                variant="ghost"
+                size="small"
+                aria-label={t('nav.groupChats.fork')}
+                tooltip={t('nav.groupChats.fork')}
+                onClick={() => setIsForkOpen(true)}
+              >
+                <GitBranch size={14} aria-hidden="true" />
+              </IconButton>
             </div>
           </div>
 

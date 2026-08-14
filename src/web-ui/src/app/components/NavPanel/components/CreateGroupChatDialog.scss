@@ -85,6 +85,17 @@
     white-space: nowrap;
   }
 
+  &__inactive-badge {
+    flex: 0 0 auto;
+    margin-left: $size-gap-2;
+    padding: 0 $size-gap-1;
+    border-radius: $size-radius-sm;
+    background: var(--bf-appearance-token-element-bg-soft);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-xs);
+    white-space: nowrap;
+  }
+
   &__state {
     display: flex;
     align-items: center;

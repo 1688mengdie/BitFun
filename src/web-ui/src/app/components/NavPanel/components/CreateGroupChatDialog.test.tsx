@@ -162,6 +162,35 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     expect(rows[1]!.textContent).toContain('Assist C');
   });
 
+  it('unions assistant workspace presets as inactive Claw members (R-GC-19)', async () => {
+    // 当前项目工作区没有 Claw 会话；assistant workspace 预设兜底（未激活标记）。
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('code-1', 'agentic', 'Code B'),
+    ]);
+    const assistantWorkspaces = [
+      { id: 'local_aaa', name: '姬码锋', rootPath: '/ws/a', workspaceKind: 'assistant', assistantId: 'bd56fce3', workspaceType: 'other', languages: [], openedAt: '', lastAccessed: '', tags: [] },
+      { id: 'local_bbb', name: '姬梦情', rootPath: '/ws/b', workspaceKind: 'assistant', workspaceType: 'other', languages: [], openedAt: '', lastAccessed: '', tags: [] },
+    ];
+    act(() => {
+      root.render(
+        <CreateGroupChatDialog
+          isOpen
+          onClose={() => {}}
+          workspacePath="/workspace-a"
+          assistantWorkspaces={assistantWorkspaces as any}
+          onCreated={() => {}}
+        />,
+      );
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    const rows = [...document.querySelectorAll('label.group-chat-dialog__member-row')];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.textContent).toContain('姬码锋');
+    expect(rows[0]!.querySelector('[data-bf-part="inactiveBadge"]')).not.toBeNull();
+    expect(rows[1]!.textContent).toContain('姬梦情');
+  });
+
   it('creates the group through toolAPI.executeTool with camelCase shape (no direct invoke)', async () => {
     vi.mocked(sessionAPI.listSessions).mockResolvedValue([
       makeSession('claw-1', 'Claw', 'Assist A'),
@@ -186,10 +215,43 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     expect(toolAPI.executeTool).toHaveBeenCalledTimes(1);
     expect(toolAPI.executeTool).toHaveBeenCalledWith({
       toolName: 'create_group_chat',
-      parameters: { action: 'create', name: '项目群', members: [] },
+      parameters: { action: 'create', name: '项目群', members: [], workspace: '/workspace-a' },
       workspacePath: '/workspace-a',
     });
     expect(onCreated).toHaveBeenCalledWith('group-1', '项目群');
+  });
+
+  it('omits workspace parameter when workspacePath is empty (backend default fallback, R-GC-17)', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('claw-1', 'Claw', 'Assist A'),
+    ]);
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-empty-ws' },
+    });
+    act(() => {
+      root.render(
+        <CreateGroupChatDialog
+          isOpen
+          onClose={() => {}}
+          workspacePath=""
+          onCreated={() => {}}
+        />,
+      );
+    });
+    await act(async () => { await Promise.resolve(); });
+
+    setGroupName('空工作区群');
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    expect(toolAPI.executeTool).toHaveBeenCalledTimes(1);
+    expect(toolAPI.executeTool).toHaveBeenCalledWith({
+      toolName: 'create_group_chat',
+      parameters: { action: 'create', name: '空工作区群', members: [], workspace: undefined },
+      workspacePath: '',
+    });
   });
 
   it('passes selected member ids and navigates on success', async () => {
@@ -213,7 +275,7 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     await act(async () => { await Promise.resolve(); });
 
     expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
-      parameters: { action: 'create', name: '群A', members: ['claw-1'] },
+      parameters: { action: 'create', name: '群A', members: ['claw-1'], workspace: '/workspace-a' },
     }));
     expect(onCreated).toHaveBeenCalledWith('group-9', '群A');
   });

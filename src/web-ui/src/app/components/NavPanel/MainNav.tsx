@@ -116,14 +116,24 @@ const MainNav: React.FC<MainNavProps> = ({
   const [groupChats, setGroupChats] = useState<Array<{ groupId: string; name: string; memberCount: number }>>([]);
   const [isGroupChatsLoading, setIsGroupChatsLoading] = useState(false);
 
+  // R-GC-17: when current workspace is empty, group chats fall back to the
+  // default assistant workspace (backend create applies the same fallback).
+  const groupChatFallbackWorkspace = useMemo(
+    () => assistantWorkspacesList[0] ?? null,
+    [assistantWorkspacesList]
+  );
+
   const loadGroupChats = useCallback(async () => {
-    if (!currentWorkspace?.rootPath) return;
+    // R-GC-17: when current workspace is empty, fall back to the default
+    // assistant workspace list (matching the create fallback).
+    const workspacePath = currentWorkspace?.rootPath || groupChatFallbackWorkspace?.rootPath;
+    if (!workspacePath) return;
     setIsGroupChatsLoading(true);
     try {
       const response = await toolAPI.executeTool({
         toolName: 'list_group_chats',
-        parameters: { action: 'list', workspace: currentWorkspace.rootPath },
-        workspacePath: currentWorkspace.rootPath,
+        parameters: { action: 'list', workspace: workspacePath },
+        workspacePath,
       });
       const groups = response?.result?.groups;
       if (response?.success === true && Array.isArray(groups)) {
@@ -141,15 +151,18 @@ const MainNav: React.FC<MainNavProps> = ({
     } finally {
       setIsGroupChatsLoading(false);
     }
-  }, [currentWorkspace?.rootPath]);
+  }, [currentWorkspace?.rootPath, groupChatFallbackWorkspace?.rootPath]);
 
   useEffect(() => {
     void loadGroupChats();
   }, [loadGroupChats]);
 
   const handleGroupChatCreated = useCallback(async (groupId: string, name: string) => {
-    const workspacePath = currentWorkspace?.rootPath;
-    const workspaceId = currentWorkspace?.id;
+    // R-GC-17: backend create already falls back to the default Claw workspace
+    // when the current workspace is empty; register with the fallback path so
+    // the group session can open locally.
+    const workspacePath = currentWorkspace?.rootPath || groupChatFallbackWorkspace?.rootPath || '';
+    const workspaceId = currentWorkspace?.id || groupChatFallbackWorkspace?.id || undefined;
     if (!workspacePath) return;
     // Group = Claw session (backend group_room_tools.rs create_group builds a
     // Claw session); registering it locally into flowChatStore lets the
@@ -175,7 +188,7 @@ const MainNav: React.FC<MainNavProps> = ({
       activateWorkspace: workspaceId ? setActiveWorkspace : undefined,
     });
     await loadGroupChats();
-  }, [currentWorkspace?.id, currentWorkspace?.rootPath, loadGroupChats, setActiveWorkspace]);
+  }, [currentWorkspace?.id, currentWorkspace?.rootPath, groupChatFallbackWorkspace?.id, groupChatFallbackWorkspace?.rootPath, loadGroupChats, setActiveWorkspace]);
 
   const handleOpenGroupChat = useCallback(async (groupId: string) => {
     const workspaceId = currentWorkspace?.id;
@@ -971,15 +984,14 @@ const MainNav: React.FC<MainNavProps> = ({
 
       {workspaceMenuPortal}
 
-      {/* Group chat create dialog (R-GC-13) */}
-      {currentWorkspace?.rootPath ? (
-        <CreateGroupChatDialog
-          isOpen={isGroupChatDialogOpen}
-          onClose={() => setIsGroupChatDialogOpen(false)}
-          workspacePath={currentWorkspace.rootPath}
-          onCreated={handleGroupChatCreated}
-        />
-      ) : null}
+      {/* Group chat create dialog (R-GC-13 / R-GC-17: workspace empty -> backend default fallback) */}
+      <CreateGroupChatDialog
+        isOpen={isGroupChatDialogOpen}
+        onClose={() => setIsGroupChatDialogOpen(false)}
+        workspacePath={currentWorkspace?.rootPath ?? ''}
+        assistantWorkspaces={assistantWorkspacesList}
+        onCreated={handleGroupChatCreated}
+      />
 
       {/* SSH Remote Dialogs */}
       <SSHConnectionDialog

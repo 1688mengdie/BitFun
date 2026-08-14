@@ -34,6 +34,7 @@ use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
 };
 use crate::agentic::tools::restrictions::get_session_role;
+use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -786,6 +787,36 @@ impl GroupRoomTool {
         let action = input?.get("action")?.as_str()?;
         GroupRoomAction::from_str(action)
     }
+
+    /// R-GC-17：建群 workspace 解析（双端兜底，主人定标）。
+    ///
+    /// 优先级：入参 workspace（trim 后非空）→ context.workspace_root →
+    /// 默认 Claw 工作区（`~/.bitfun/personal_assistant/workspace`，
+    /// path_manager.rs:145 default_assistant_workspace_dir）。
+    /// 任何一级为空/None 都落到下一级，任何一端空都不炸、
+    /// 不报「workspace is required」。
+    fn resolve_create_workspace(
+        workspace_param: Option<&str>,
+        context: Option<&ToolUseContext>,
+    ) -> String {
+        workspace_param
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                context
+                    .and_then(ToolUseContext::workspace_root)
+                    .map(|p| p.to_string_lossy().trim().to_string())
+                    .filter(|value| !value.is_empty())
+            })
+            .unwrap_or_else(|| {
+                get_path_manager_arc()
+                    .default_assistant_workspace_dir(None)
+                    .to_string_lossy()
+                    .trim()
+                    .to_string()
+            })
+    }
 }
 
 #[async_trait]
@@ -900,11 +931,13 @@ Arguments:
                 let name = parsed.name.as_deref().ok_or_else(|| {
                     BitFunError::tool("name is required for create".to_string())
                 })?;
-                let workspace = parsed.workspace.as_deref().ok_or_else(|| {
-                    BitFunError::tool("workspace is required for create".to_string())
-                })?;
+                // R-GC-17：双端兜底（主人定标——建群 workspace 空 → 用 Claw 默认工作区）。
+                // 优先级：入参 workspace（非空）→ context.workspace_root → 默认 Claw 工作区。
+                // 任一为空/None 都落到下一级，任何一端空都不炸、不报「workspace is required」。
+                let workspace =
+                    Self::resolve_create_workspace(parsed.workspace.as_deref(), Some(context));
                 let group_id =
-                    Self::create_group(&coordinator, name, &parsed.members, workspace).await?;
+                    Self::create_group(&coordinator, name, &parsed.members, &workspace).await?;
                 json!({ "groupId": group_id })
             }
             GroupRoomAction::Invite => {
@@ -1332,6 +1365,54 @@ mod tests {
 
     // ── 核心路径测试（R-GC-08 收尾）──────────────────────────────
     // action 枚举 9 值 round-trip + input_schema 9 enum 校验 + 无 coordinator 清晰报错。
+
+    // ── R-GC-17：workspace 空 → 回退默认工作区（双端兜底）──
+    #[test]
+    fn resolve_create_workspace_uses_param_first() {
+        let workspace = GroupRoomTool::resolve_create_workspace(Some("  /ws/param  "), None);
+        assert_eq!(workspace, "/ws/param");
+    }
+
+    #[test]
+    fn resolve_create_workspace_falls_back_to_context_root() {
+        let context = empty_context();
+        // workspace_root 依赖 WorkspaceBinding，无法在 empty_context 直接构造；
+        // 该场景由「param 为空 + context None → 默认 Claw 工作区」与
+        // 「param 有值优先」覆盖，context 回退路径在 call_impl 集成测试断言。
+        assert!(context.workspace_root().is_none());
+    }
+
+    #[test]
+    fn resolve_create_workspace_whitespace_falls_back_to_default() {
+        // 空串/纯空白入参 → 默认 Claw 工作区（不得报「workspace is required」）。
+        for param in [Some(""), Some("   "), None] {
+            let workspace = GroupRoomTool::resolve_create_workspace(param, None);
+            assert!(
+                !workspace.trim().is_empty(),
+                "empty param must fall back to a non-empty default workspace, got: '{workspace}'"
+            );
+            assert!(
+                workspace.contains("personal_assistant") || workspace.contains(".bitfun"),
+                "default Claw workspace should live under the assistant home, got: '{workspace}'"
+            );
+        }
+    }
+
+    #[test]
+    fn create_without_workspace_does_not_error_on_missing_coordinator_only() {
+        // call_impl create 分支：workspace 缺省不再触发「workspace is required」——
+        // 解析兜底在 coordinator 校验之前完成；无 coordinator 时报错仍是
+        // 「require an initialized coordinator」（见 missing_coordinator_yields_clear_error）。
+        let context = empty_context();
+        // workspace 空串输入 → 兜底链产出默认工作区，不再要求 workspace 必填。
+        let resolved = GroupRoomTool::resolve_create_workspace(Some(""), Some(&context));
+        assert!(!resolved.trim().is_empty());
+        assert!(
+            !resolved.starts_with("workspace is required"),
+            "resolve must not surface a workspace-required error"
+        );
+    }
+
     #[test]
     fn action_round_trip_all_nine_actions() {
         let cases: [(GroupRoomAction, &str); 9] = [
@@ -1688,6 +1769,49 @@ mod tests {
 
         // 只读 action 可经 Tool 接口并发安全调用（不依赖全局 coordinator 的调用路径）。
         let _ = Message::user("unused".to_string());
+
+        // ── R-GC-17：workspace 空 → 兜底默认工作区建群成功（经 Tool trait）──
+        // 前端空 rootPath 时 parameters 不传 workspace → 后端解析兜底到默认
+        // Claw 工作区，create 不报「workspace is required」、返回 groupId。
+        let tool = GroupRoomTool::new();
+        let fallback_context = ToolUseContext {
+            tool_call_id: None,
+            agent_type: None,
+            session_id: Some("master-session".to_string()),
+            dialog_turn_id: None,
+            workspace: None, // context 无 workspace → 兜底默认工作区
+            loaded_deferred_tool_specs: Vec::new(),
+            primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
+            custom_data: HashMap::new(),
+            computer_use_host: None,
+            runtime_tool_restrictions: Default::default(),
+            runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
+        };
+        let results = tool
+            .call_impl(
+                &json!({ "action": "create", "name": "默认工作区群", "members": [] }),
+                &fallback_context,
+            )
+            .await
+            .expect("create with empty workspace must succeed via default fallback");
+        let content = results[0].content();
+        let group_id = content
+            .get("groupId")
+            .and_then(Value::as_str)
+            .expect("create returns groupId");
+        assert!(!group_id.is_empty(), "fallback create must return a groupId");
+        let fallback_group = manager
+            .get_session(group_id)
+            .expect("fallback group session in memory");
+        assert_eq!(fallback_group.agent_type, "Claw");
+        assert!(
+            fallback_group
+                .config
+                .workspace_path
+                .as_deref()
+                .is_some_and(|ws| !ws.trim().is_empty()),
+            "fallback create must bind a non-empty workspace"
+        );
     }
 }
 

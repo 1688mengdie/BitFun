@@ -109,6 +109,7 @@
       "membersLabel": "Members ({{count}})",
       "membersLoadFailed": "Failed to load sessions. ",
       "noClawSessions": "No assistant (Claw) sessions yet. Create the group now and invite members later.",
+      "inactiveBadge": "Inactive",
       "noMembers": "No members yet. Invite someone to get started.",
       "create": "Create",
       "createFailed": "Failed to create group chat",
