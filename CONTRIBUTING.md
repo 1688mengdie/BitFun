@@ -42,6 +42,10 @@ The check detects:
   bitfun-desktop Tauri build script references this directory as a resource,
   so `cargo check -p bitfun-desktop` and `cargo check --workspace` fail
   without it)
+- Missing `packages/dsh-acp/dist-profile` (fix: `pnpm run prepare:dsh-profile`
+  — the DeepSeek Harness bridge, referenced as a Tauri resource the same way;
+  `BITFUN_SKIP_DSH_PROFILE=1` writes a placeholder instead if you do not need
+  the bridge)
 - Missing sherpa-onnx prebuilt libs (the sherpa-onnx-sys build script
   downloads from GitHub at build time; if the download fails on poor
   connectivity, set `SHERPA_ONNX_LIB_DIR` to the prebuilt lib directory
