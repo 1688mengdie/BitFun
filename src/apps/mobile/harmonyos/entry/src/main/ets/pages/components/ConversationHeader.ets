@@ -85,7 +85,7 @@ export struct ConversationHeader {
     if (this.showSidebarRestoreButton) {
       SidebarToggleButton({
         restore: true,
-        controlSize: 48,
+        controlSize: 44,
         onToggle: this.onRestoreSidebar
       })
     } else if (this.showBackButton) {
