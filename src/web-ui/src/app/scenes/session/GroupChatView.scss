@@ -9,7 +9,7 @@
  * real SCSS source so the group chat view has its layout styles.
  */
 
-@use '../../../../component-library/styles/tokens.scss' as *;
+@use '../../../component-library/styles/tokens' as *;
 
 .group-chat-view {
   display: flex;
