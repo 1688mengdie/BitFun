@@ -3313,4 +3313,15 @@ mod tests {
             Some(&serde_json::Value::Array(vec![]))
         );
     }
+
+    #[test]
+    fn resolves_builtin_dsh_config_for_remote_workspace() {
+        let resolved =
+            resolve_config_for_client(&AcpClientConfigFile::default(), "dsh", Some("remote-host"))
+                .expect("built-in DSH config");
+
+        assert_eq!(resolved.command, "dsh-acp-demo");
+        assert!(resolved.args.is_empty());
+        assert!(resolved.enabled);
+    }
 }

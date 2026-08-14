@@ -64,10 +64,13 @@ export function runManifestParserSelfTest({
   const explicitTestManifest = [
     '[package]',
     'autotests = false',
-    ...agentRuntimeIntegrationTestTargets.flatMap(({ name, path }) => [
+    ...agentRuntimeIntegrationTestTargets.flatMap(({ name, path, requiredFeatures }) => [
       '[[test]]',
       `name = "${name}"`,
       `path = "${path}"`,
+      ...(requiredFeatures === undefined
+        ? []
+        : [`required-features = [${requiredFeatures.map((feature) => `"${feature}"`).join(', ')}]`]),
     ]),
     '[lints]',
   ].join('\n');
@@ -161,7 +164,6 @@ export function runManifestParserSelfTest({
       ? {
           ...target,
           leaves: ['tests/agent_definition_contracts/prompt_contracts.rs'],
-          forbidRequiredFeatures: true,
         }
       : target
   ));
@@ -182,8 +184,8 @@ export function runManifestParserSelfTest({
       ...explicitTestFixture,
       expectedTargets: reviewedLeafTargets,
       manifestText: explicitTestManifest.replace(
-        'path = "tests/agent_definition_contracts.rs"',
-        `path = "tests/agent_definition_contracts.rs"\n${requiredFeaturesDeclaration}`,
+        'required-features = ["agent-runtime"]',
+        requiredFeaturesDeclaration,
       ),
     });
     if (!unexpectedRequiredFeaturesErrors.some((error) => error.includes('required-features'))) {
@@ -192,10 +194,14 @@ export function runManifestParserSelfTest({
   }
   const independentRequiredFeaturesErrors = validateExplicitIntegrationTestTopology({
     ...explicitTestFixture,
-    expectedTargets: reviewedLeafTargets,
+    expectedTargets: reviewedLeafTargets.map((target) => (
+      target.path === 'tests/native_hook_execution_contracts.rs'
+        ? { ...target, requiredFeatures: ['native-hooks'] }
+        : target
+    )),
     manifestText: explicitTestManifest.replace(
-      'path = "tests/native_hook_execution_contracts.rs"',
-      'path = "tests/native_hook_execution_contracts.rs"\nrequired-features = ["native-hooks"]',
+      'required-features = ["native-hook-runtime"]',
+      'required-features = ["native-hooks"]',
     ),
   });
   if (independentRequiredFeaturesErrors.length > 0) {
@@ -618,6 +624,7 @@ export function runManifestParserSelfTest({
       [
         'dep:bitfun-agent-tools',
         'dep:bitfun-agent-runtime',
+        'bitfun-agent-runtime/agent-runtime',
         'dep:bitfun-core-types',
         'dep:bitfun-core',
         'dep:sha2',
@@ -1437,6 +1444,9 @@ export function runManifestParserSelfTest({
   const pluginPublicApiRule = publicApiAllowlistRules.find(
     (rule) => rule.path === 'src/crates/contracts/runtime-ports/src/plugin.rs',
   );
+  const agentRuntimePublicApiRule = publicApiAllowlistRules.find(
+    (rule) => rule.path === 'src/crates/execution/agent-runtime/src/lib.rs',
+  );
   const pluginRootReexportRule = publicApiAllowlistRules.find(
     (rule) => rule.path === 'src/crates/contracts/runtime-ports/src/lib.rs',
   );
@@ -1531,6 +1541,20 @@ export function runManifestParserSelfTest({
     'TopLevelEnum,PluginDispatchEnvelope,HiddenType,PublicName,MultiLineType,PublicMultiLine,host,CONTRACT_VERSION'
   ) {
     throw new Error('public API parser must collect top-level items and re-exports without impl methods');
+  }
+  const parsedAgentRuntimeModules = collectTopLevelRustPublicSymbols(`
+    #[cfg(feature = "agent-runtime")]
+    pub mod agents;
+    pub mod accidental_feature_free_api;
+  `);
+  if (!agentRuntimePublicApiRule?.allowedSymbols?.includes('agents')) {
+    throw new Error('Agent Runtime public API allowlist must include reviewed owner modules');
+  }
+  if (
+    !parsedAgentRuntimeModules.includes('accidental_feature_free_api') ||
+    agentRuntimePublicApiRule.allowedSymbols.includes('accidental_feature_free_api')
+  ) {
+    throw new Error('Agent Runtime public API allowlist must reject an unreviewed feature-free module');
   }
   const parsedExternalSubagentIds = collectTopLevelRustPublicSymbols(`
     external_subagent_id!(ExternalSubagentLocalId, "local");
@@ -4356,7 +4380,7 @@ export function runManifestParserSelfTest({
       contracts: ['renumber_research_report', 'ResearchCitationRenumberOutput', 'ResearchCitationDisplayMapEntry', 'rejected_index_rows_dropped', 'should_post_process_research_report'],
     },
     {
-      path: 'src/crates/execution/agent-runtime/tests/agent_long_horizon_contracts/deep_research_contracts.rs',
+      path: 'src/crates/execution/agent-runtime/tests/deep_research_contracts.rs',
       contracts: ['deep_research_citation_renumber_owner_preserves_report_and_display_map_contracts', 'deep_research_citation_renumber_owner_is_idempotent_without_citations'],
     },
     {

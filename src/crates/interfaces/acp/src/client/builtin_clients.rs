@@ -8,6 +8,7 @@ const LEGACY_CLAUDE_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/claude-code-
 const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp";
 const CODEX_ACP_ARGS: &[&str] = &["--yes", "@agentclientprotocol/codex-acp@latest"];
 const LEGACY_CODEX_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/codex-acp@latest"];
+const DSH_ACP_PACKAGE: &str = "@deepseek-ai/dsh-acp-demo@next";
 
 pub(crate) struct BuiltinAcpClientPreset {
     pub(crate) id: &'static str,
@@ -29,6 +30,19 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         args: &["acp"],
         tool_command: "opencode",
         install_package: Some("opencode-ai"),
+        adapter_package: None,
+        adapter_bin: None,
+    },
+    // DeepSeek Harness exposes its automation surface as a native ACP server
+    // through the `dsh-acp-demo` bin. The server reads `./cordis.yml` by
+    // default; users can override that path in the preset arguments. The ACP
+    // package follows DSH's developer-preview `next` release channel.
+    BuiltinAcpClientPreset {
+        id: "dsh",
+        command: "dsh-acp-demo",
+        args: &[],
+        tool_command: "dsh-acp-demo",
+        install_package: Some(DSH_ACP_PACKAGE),
         adapter_package: None,
         adapter_bin: None,
     },
@@ -166,6 +180,22 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.command, "omp");
         assert_eq!(config.args, vec!["acp"]);
+    }
+
+    #[test]
+    fn dsh_is_a_native_acp_preset() {
+        let preset = builtin_acp_client_preset("dsh").expect("DSH preset registered");
+        assert_eq!(preset.command, "dsh-acp-demo");
+        assert!(preset.args.is_empty());
+        assert_eq!(preset.tool_command, "dsh-acp-demo");
+        assert_eq!(preset.install_package, Some(DSH_ACP_PACKAGE));
+        assert!(preset.adapter_package.is_none());
+        assert!(preset.adapter_bin.is_none());
+
+        let config = default_config_for_builtin_client("dsh").expect("DSH config");
+        assert!(config.enabled);
+        assert_eq!(config.command, "dsh-acp-demo");
+        assert!(config.args.is_empty());
     }
 
     #[test]

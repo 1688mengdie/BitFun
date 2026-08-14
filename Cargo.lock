@@ -1093,6 +1093,7 @@ dependencies = [
  "bitfun-claude-code-adapter",
  "bitfun-codex-adapter",
  "bitfun-core-types",
+ "bitfun-dsh-adapter",
  "bitfun-events",
  "bitfun-external-sources",
  "bitfun-harness",
@@ -1236,6 +1237,23 @@ dependencies = [
  "xz2",
  "zip 4.6.1",
  "zstd",
+]
+
+[[package]]
+name = "bitfun-dsh-adapter"
+version = "0.2.17"
+dependencies = [
+ "async-trait",
+ "bitfun-plugin-runtime-client",
+ "bitfun-product-domains",
+ "bitfun-runtime-ports",
+ "hex",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tokio",
+ "urlencoding",
 ]
 
 [[package]]
