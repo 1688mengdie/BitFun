@@ -1,6 +1,6 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
 import { ThinkingPresentationPolicy } from '../policy/ThinkingPresentationPolicy';
-import { INK, MUTED, SOFT } from './Theme';
+import { MUTED } from './Theme';
 
 @ComponentV2
 export struct ThinkingBlock {
@@ -9,12 +9,13 @@ export struct ThinkingBlock {
   @Param keepExpandedWhenDone: boolean = false;
   @Param streaming: boolean = false;
   @Param streamKey: string = '';
-  @Event onCopyText: (text: string) => void = (_text: string) => {};
   @Local dotPhase: number = 0;
   @Local expanded: boolean = false;
+  @Local userToggled: boolean = false;
   private dotTimerId: number = 0;
 
   aboutToAppear(): void {
+    this.userToggled = false;
     this.expanded = ThinkingPresentationPolicy.defaultExpanded(this.isRunning(), this.keepExpandedWhenDone);
     this.syncDotTimer();
   }
@@ -25,7 +26,15 @@ export struct ThinkingBlock {
 
   @Monitor('status')
   onStatusChanged(): void {
-    this.expanded = ThinkingPresentationPolicy.defaultExpanded(this.isRunning(), this.keepExpandedWhenDone);
+    this.expanded = ThinkingPresentationPolicy.expandedForStatus(
+      this.isRunning(),
+      this.keepExpandedWhenDone,
+      this.userToggled,
+      this.expanded
+    );
+    if (!this.isRunning()) {
+      this.userToggled = false;
+    }
     this.syncDotTimer();
   }
 
@@ -75,25 +84,15 @@ export struct ThinkingBlock {
       .height(32)
       .alignItems(VerticalAlign.Center)
       .onClick(() => {
-        if (!this.isRunning() && this.hasBody()) {
-          this.expanded = !this.expanded;
+        if (!ThinkingPresentationPolicy.allowsToggle(this.hasBody())) {
+          return;
         }
+        this.userToggled = this.isRunning();
+        this.expanded = !this.expanded;
       })
       .accessibilityText(this.isRunning() ?
         RemoteI18n.t('chat.thinkingInProgress') :
         RemoteI18n.t('chat.thinkingComplete'))
-      if (this.hasBody() && !this.isRunning()) {
-        Text(RemoteI18n.t('common.copy'))
-          .fontSize(13)
-          .fontColor(INK)
-          .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-          .backgroundColor(SOFT)
-          .borderRadius(8)
-          .accessibilityText(RemoteI18n.t('common.copy'))
-          .onClick(() => {
-            this.onCopyText(this.text);
-          })
-      }
     }
     .width('100%')
     .height(32)

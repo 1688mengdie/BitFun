@@ -14,6 +14,11 @@ import { RemotePageState } from '../main/ets/pages/state/RemotePageState';
 import { AppRoute } from '../main/ets/pages/navigation/AppRouteContract';
 import { ConversationHeaderPolicy } from '../main/ets/pages/policy/ConversationHeaderPolicy';
 import { ThinkingPresentationPolicy } from '../main/ets/pages/policy/ThinkingPresentationPolicy';
+import { ActivityGroupPolicy } from '../main/ets/pages/policy/ActivityGroupPolicy';
+import { AssistantProcessLayoutPolicy } from '../main/ets/pages/policy/AssistantProcessLayoutPolicy';
+import { ConversationMessageRenderPolicy } from '../main/ets/pages/policy/ConversationMessageRenderPolicy';
+import { ToolCollapsePolicy } from '../main/ets/pages/policy/ToolCollapsePolicy';
+import { ConversationUiMessage, ConversationUiToolStatus } from '../main/ets/pages/state/ConversationUiModels';
 import {
   ConnectSheetLandingPolicy,
   ConnectSheetStatusPolicy,
@@ -70,6 +75,183 @@ export default function conversationPresentationUnitTest() {
       expect(ThinkingPresentationPolicy.defaultExpanded(true, false)).assertTrue();
       expect(ThinkingPresentationPolicy.defaultExpanded(false, false)).assertFalse();
       expect(ThinkingPresentationPolicy.defaultExpanded(false, true)).assertTrue();
+    });
+
+    it('lets the user collapse live thinking and folds it when the turn moves on', 0, () => {
+      expect(ThinkingPresentationPolicy.allowsToggle(true)).assertTrue();
+      expect(ThinkingPresentationPolicy.allowsToggle(false)).assertFalse();
+      expect(ThinkingPresentationPolicy.expandedForStatus(true, false, false, false)).assertTrue();
+      expect(ThinkingPresentationPolicy.expandedForStatus(true, false, true, false)).assertFalse();
+      expect(ThinkingPresentationPolicy.expandedForStatus(false, false, true, true)).assertFalse();
+      expect(ThinkingPresentationPolicy.expandedForStatus(false, true, false, true)).assertTrue();
+    });
+
+    it('marks leading thinking done once tools or answer text have started', 0, () => {
+      expect(ThinkingPresentationPolicy.liveThinkingStatus('active', false)).assertEqual('active');
+      expect(ThinkingPresentationPolicy.liveThinkingStatus('active', true)).assertEqual('done');
+      expect(ThinkingPresentationPolicy.liveThinkingStatus('running', true)).assertEqual('done');
+    });
+
+    it('folds consecutive thinking segments into one body', 0, () => {
+      expect(ThinkingPresentationPolicy.mergedText(['先看结构', '', '再跑工具'])).assertEqual('先看结构\n\n再跑工具');
+      expect(ThinkingPresentationPolicy.mergedStatusValue(['done', 'done'], [false, false])).assertEqual('done');
+      expect(ThinkingPresentationPolicy.mergedStatusValue(['done', 'active'], [false, true])).assertEqual('active');
+      expect(ThinkingPresentationPolicy.mergedStreaming([false, false, true])).assertTrue();
+      expect(ThinkingPresentationPolicy.mergedStreaming([false, false])).assertFalse();
+    });
+  });
+
+  describe('ActivityGroupPolicy', () => {
+    it('keeps consecutive thinking and completed tools in one foldable group', 0, () => {
+      expect(ActivityGroupPolicy.shouldFoldEntry(true, false)).assertTrue();
+      expect(ActivityGroupPolicy.shouldFoldEntry(false, false, toolStatus('1', 'Grep', 'completed'))).assertTrue();
+      expect(ActivityGroupPolicy.shouldFoldEntry(false, false, toolStatus('2', 'ExecCommand', 'done'))).assertTrue();
+      expect(ActivityGroupPolicy.thinkingHeaderCount(4)).assertEqual(1);
+    });
+
+    it('does not swallow Task cards, questions, or live tools into the thinking group', 0, () => {
+      expect(ActivityGroupPolicy.shouldFoldEntry(false, true, toolStatus('1', 'Task', 'completed'))).assertFalse();
+      expect(ActivityGroupPolicy.shouldFoldEntry(false, false, toolStatus('2', 'AskUserQuestion', 'completed'))).assertFalse();
+      expect(ActivityGroupPolicy.shouldFoldEntry(false, false, toolStatus('3', 'Grep', 'running'))).assertFalse();
+      expect(ActivityGroupPolicy.thinkingHeaderCount(0)).assertEqual(0);
+    });
+  });
+
+  describe('ConversationMessageRenderPolicy', () => {
+    it('does not throw when assistant text is missing and still shows structured content', 0, () => {
+      expect(ConversationMessageRenderPolicy.visibleText(undefined)).assertEqual('');
+      expect(ConversationMessageRenderPolicy.visibleText('(空消息)')).assertEqual('');
+      const item: ConversationUiMessage = {
+        id: 'a1',
+        role: 'assistant',
+        text: '',
+        status: 'done',
+        items: [{ type: 'thinking', content: '先看仓库结构' }]
+      };
+      expect(ConversationMessageRenderPolicy.shouldRender(item)).assertTrue();
+    });
+
+    it('hides an assistant row that has no text, thinking, tools, or items', 0, () => {
+      const item: ConversationUiMessage = {
+        id: 'a2',
+        role: 'assistant',
+        text: '',
+        status: 'done'
+      };
+      expect(ConversationMessageRenderPolicy.shouldRender(item)).assertFalse();
+    });
+  });
+
+  describe('AssistantProcessLayoutPolicy', () => {
+    it('does not pin thinking below tools or omit in-flow thinking while streaming', 0, () => {
+      expect(AssistantProcessLayoutPolicy.pinsThinkingAfterTools()).assertFalse();
+      expect(AssistantProcessLayoutPolicy.omitsInFlowThinkingWhileStreaming()).assertFalse();
+    });
+
+    it('keeps a live Task card below the thinking that produced it', 0, () => {
+      const order = AssistantProcessLayoutPolicy.processBlockOrder(
+        '先看现有会话结构',
+        false,
+        '',
+        false,
+        1
+      );
+      expect(order.length).assertEqual(2);
+      expect(order[0]).assertEqual('thinking');
+      expect(order[1]).assertEqual('tools');
+    });
+
+    it('keeps thinking above tools when assistant text has also started', 0, () => {
+      const order = AssistantProcessLayoutPolicy.processBlockOrder(
+        '先看现有会话结构',
+        true,
+        '已经开始改布局',
+        false,
+        1
+      );
+      expect(order[0]).assertEqual('thinking');
+      expect(order[1]).assertEqual('tools');
+      expect(order[2]).assertEqual('text');
+    });
+
+    it('renders activity-group thinking before folded read or search cards', 0, () => {
+      const order = AssistantProcessLayoutPolicy.activityGroupBlockOrder(true, 2);
+      expect(order.length).assertEqual(2);
+      expect(order[0]).assertEqual('thinking');
+      expect(order[1]).assertEqual('tools');
+    });
+
+    it('still renders completed thinking inside an activity group', 0, () => {
+      expect(AssistantProcessLayoutPolicy.shouldRenderActivityThinking(true)).assertTrue();
+      expect(AssistantProcessLayoutPolicy.shouldRenderActivityThinking(false)).assertFalse();
+    });
+
+    it('shows typing dots only when the live turn has no thinking or tools yet', 0, () => {
+      const order = AssistantProcessLayoutPolicy.processBlockOrder('', false, '', true, 0);
+      expect(order.length).assertEqual(1);
+      expect(order[0]).assertEqual('typing');
+    });
+
+    it('keeps a tool-only activity group without inventing a thinking block', 0, () => {
+      const order = AssistantProcessLayoutPolicy.activityGroupBlockOrder(false, 1);
+      expect(order.length).assertEqual(1);
+      expect(order[0]).assertEqual('tools');
+    });
+  });
+
+  describe('ToolCollapsePolicy', () => {
+    it('folds consecutive completed tools of any kind into one summary', 0, () => {
+      const groups = ToolCollapsePolicy.collapsedGroups([
+        toolStatus('1', 'Grep', 'completed'),
+        toolStatus('2', 'ExecCommand', 'done'),
+        toolStatus('3', 'Task', 'success')
+      ]);
+      expect(groups.length).assertEqual(1);
+      expect(groups[0].type).assertEqual('summary');
+      expect(groups[0].tools.length).assertEqual(3);
+    });
+
+    it('keeps a single completed tool as its own row', 0, () => {
+      const groups = ToolCollapsePolicy.collapsedGroups([
+        toolStatus('1', 'ExecCommand', 'completed')
+      ]);
+      expect(groups.length).assertEqual(1);
+      expect(groups[0].type).assertEqual('tool');
+    });
+
+    it('does not fold running, failed, or blocking tools into the summary', 0, () => {
+      const groups = ToolCollapsePolicy.collapsedGroups([
+        toolStatus('1', 'Grep', 'completed'),
+        toolStatus('2', 'Read', 'completed'),
+        toolStatus('3', 'ExecCommand', 'running'),
+        toolStatus('4', 'AskUserQuestion', 'pending'),
+        toolStatus('5', 'Write', 'failed')
+      ]);
+      expect(groups.length).assertEqual(4);
+      expect(groups[0].type).assertEqual('summary');
+      expect(groups[0].tools.length).assertEqual(2);
+      expect(groups[1].type).assertEqual('tool');
+      expect(groups[1].tools[0].name).assertEqual('ExecCommand');
+      expect(groups[2].tools[0].name).assertEqual('AskUserQuestion');
+      expect(groups[3].tools[0].name).assertEqual('Write');
+    });
+
+    it('expands a subagent card only while that task is running', 0, () => {
+      expect(ToolCollapsePolicy.defaultSubagentExpanded(true)).assertTrue();
+      expect(ToolCollapsePolicy.defaultSubagentExpanded(false)).assertFalse();
+      expect(ToolCollapsePolicy.subagentExpandedForStatus(true, true, false)).assertFalse();
+      expect(ToolCollapsePolicy.subagentExpandedForStatus(false, true, true)).assertFalse();
+    });
+
+    it('keeps the summary row and lists members when the group is expanded', 0, () => {
+      const groups = ToolCollapsePolicy.expandedGroups([
+        toolStatus('1', 'Grep', 'completed'),
+        toolStatus('2', 'ExecCommand', 'completed')
+      ]);
+      expect(groups.length).assertEqual(3);
+      expect(groups[0].type).assertEqual('summary');
+      expect(groups[1].type).assertEqual('tool');
+      expect(groups[2].type).assertEqual('tool');
     });
   });
 
@@ -294,4 +476,12 @@ export default function conversationPresentationUnitTest() {
       expect(projection.desktopName).assertEqual('Studio');
     });
   });
+}
+
+function toolStatus(id: string, name: string, status: string): ConversationUiToolStatus {
+  return {
+    id,
+    name,
+    status
+  };
 }

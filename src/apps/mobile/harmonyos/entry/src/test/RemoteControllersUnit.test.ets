@@ -1544,6 +1544,61 @@ export default function remoteControllersUnitTest() {
       expect(statuses[statuses.length - 1]).assertEqual(RemoteI18n.t('status.messagesRestored'));
     });
 
+    it('refetches when a cached assistant has no body', 0, async () => {
+      const client = new FakeRemoteChatCommandClient();
+      const store = new FakeRemoteChatCacheStore();
+      const projection = new RemoteChatMessagesProjectionRecord();
+      const cache = await readyRemoteChatCache(store);
+      const hollow = chatMessage('message-2', 'assistant', '');
+      hollow.thinking = '';
+      hollow.tools = [];
+      hollow.items = [];
+      await cache.sync('session-1', [
+        chatMessage('message-1', 'user', 'Hello'),
+        hollow
+      ]);
+      client.messageResults = [{
+        messages: [
+          chatMessage('message-1', 'user', 'Hello'),
+          chatMessage('message-2', 'assistant', 'Recovered reply')
+        ],
+        hasMore: false
+      }];
+      const controller = new RemoteChatCommandController(client, {
+        onMessagesLoaded: (messages: ChatMessage[], hasMoreMessages: boolean) => {
+          projection.messages = messages;
+          projection.hasMoreMessages = hasMoreMessages;
+        },
+        onMessageCountKnown: (pollVersion: number, knownMessageCount: number) => {
+          projection.pollVersion = pollVersion;
+          projection.knownMessageCount = knownMessageCount;
+        },
+        onTimelineReady: () => {},
+        onSendSucceeded: (_turnId: string, _pendingActiveId: string) => {},
+        onSendFailed: (
+          _rawText: string,
+          _images: SelectedImageAttachment[],
+          _localMessageId: string,
+          _pendingActiveId: string
+        ) => {},
+        onActiveSession: (_session: SessionSummary) => {},
+        onSessionTitleChanged: (_sessionId: string, _title: string) => {},
+        onStatusText: (_statusText: string) => {},
+        onToast: (_message: string) => {},
+        onBusy: (_isBusy: boolean) => {},
+        onPollRequested: () => {}
+      }, cache);
+
+      await controller.loadMessages('session-1', (_sessionId: string) => true);
+
+      expect(client.messageRequests.length).assertEqual(1);
+      expect(projection.messages.length).assertEqual(2);
+      expect(projection.messages[1].text).assertEqual('Recovered reply');
+
+      await controller.loadMessages('session-1', (_sessionId: string) => true);
+      expect(client.messageRequests.length).assertEqual(1);
+    });
+
     it('caches a transcript the user switched away from before it arrived', 0, async () => {
       const client = new FakeRemoteChatCommandClient();
       const store = new FakeRemoteChatCacheStore();
@@ -2422,69 +2477,57 @@ export default function remoteControllersUnitTest() {
   });
 
   describe('ConversationLayoutPolicy', () => {
-    it('keeps folded and narrow surfaces compact', 0, () => {
-      expect(ConversationLayoutPolicy.useMasterDetail(480, false, false, 'tablet', [])).assertFalse();
-      expect(ConversationLayoutPolicy.useMasterDetail(900, true, true, 'tablet', [])).assertFalse();
-      expect(ConversationLayoutPolicy.useMasterDetail(900, false, true, 'phone', [
+    it('keeps folded, hover and narrow surfaces compact', 0, () => {
+      expect(ConversationLayoutPolicy.useMasterDetail(480, false, false, [])).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(900, true, true, [])).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(900, false, true, [
         new ConversationLayoutCrease(300, 8),
         new ConversationLayoutCrease(600, 8)
       ])).assertFalse();
-    });
-
-    it('uses master-detail for width-qualified tablets', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.WIDE_LAYOUT_MIN_WIDTH,
-        false,
-        false,
-        'tablet',
-        []
-      )).assertTrue();
-      expect(ConversationLayoutPolicy.useMasterDetail(
-        480,
+        2210,
         true,
         false,
-        'tablet',
-        []
-      )).assertTrue();
-    });
-
-    it('keeps crease-less phones compact even when the viewport is extra-wide', 0, () => {
-      expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
+        [new ConversationLayoutCrease(1100, 16)],
         true,
-        false,
-        'phone',
-        []
+        true
       )).assertFalse();
+    });
+
+    it('uses official md width rather than device type for master-detail', 0, () => {
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        ConversationLayoutPolicy.MD_MIN_WIDTH +
+          ConversationLayoutPolicy.MIN_DETAIL_PANE_WIDTH,
+        false,
+        false,
+        []
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.useMasterDetail(480, true, false, [])).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        ConversationLayoutPolicy.LG_MIN_WIDTH,
+        true,
+        false,
+        []
+      )).assertTrue();
     });
 
     it('uses master-detail for unfolded dual-fold surfaces', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
+        ConversationLayoutPolicy.LG_MIN_WIDTH,
         true,
         false,
-        'phone',
         [new ConversationLayoutCrease(520, 8)]
       )).assertTrue();
       expect(ConversationLayoutPolicy.useMasterDetail(
         2210,
         false,
         false,
-        'phone',
         [new ConversationLayoutCrease(1100, 16)]
       )).assertTrue();
       expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
-        true,
-        false,
-        'tablet',
-        [new ConversationLayoutCrease(520, 8)]
-      )).assertTrue();
-      expect(ConversationLayoutPolicy.useMasterDetail(
         2210,
         false,
         false,
-        'phone',
         [],
         true
       )).assertTrue();
@@ -2495,41 +2538,56 @@ export default function remoteControllersUnitTest() {
         500,
         true,
         false,
-        'phone',
         [new ConversationLayoutCrease(200, 8)]
       )).assertFalse();
     });
 
     it('uses master-detail for unfolded tri-fold surfaces', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
+        ConversationLayoutPolicy.LG_MIN_WIDTH,
         false,
         false,
-        'phone',
         [new ConversationLayoutCrease(352, 8), new ConversationLayoutCrease(712, 8)]
       )).assertTrue();
       expect(ConversationLayoutPolicy.useMasterDetail(
-        ConversationLayoutPolicy.WIDE_LAYOUT_MIN_WIDTH,
+        720,
         false,
         false,
-        'phone',
         [new ConversationLayoutCrease(230, 8), new ConversationLayoutCrease(480, 8)]
       )).assertTrue();
     });
 
+    it('synthesizes a centered hinge when expanded foldables omit crease data', 0, () => {
+      const synthetic = ConversationLayoutPolicy.syntheticCenterCrease(2210);
+      expect(synthetic !== undefined).assertTrue();
+      expect(synthetic ? synthetic.left : 0).assertEqual(1097);
+      expect(synthetic ? synthetic.width : 0).assertEqual(ConversationLayoutPolicy.SYNTHETIC_HINGE_WIDTH);
+      expect(ConversationLayoutPolicy.syntheticCenterCrease(500) === undefined).assertTrue();
+      expect(ConversationLayoutPolicy.effectiveVerticalCreases(500, [], true).length).assertEqual(0);
+      const creases = ConversationLayoutPolicy.effectiveVerticalCreases(2210, [], true);
+      expect(creases.length).assertEqual(1);
+      expect(creases[0].left).assertEqual(1097);
+      const realCrease = ConversationLayoutPolicy.effectiveVerticalCreases(
+        2210,
+        [new ConversationLayoutCrease(1100, 16)],
+        true
+      );
+      expect(realCrease[0].left).assertEqual(1100);
+    });
+
     it('keeps the existing master width when no usable crease is available', 0, () => {
-      const geometry = ConversationLayoutPolicy.resolveWideGeometry(860, []);
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(820, []);
       const invalidCrease = ConversationLayoutPolicy.resolveWideGeometry(
-        860,
+        820,
         [new ConversationLayoutCrease(120, 10)]
       );
       expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
       expect(geometry.masterDetailGap).assertEqual(0);
       expect(geometry.isExtraWide).assertFalse();
       expect(geometry.detailContentOffset).assertEqual(0);
-      expect(geometry.detailContentWidth).assertEqual(516);
+      expect(geometry.detailContentWidth).assertEqual(476);
       expect(geometry.collapsedDetailContentOffset).assertEqual(0);
-      expect(geometry.collapsedDetailContentWidth).assertEqual(860);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(820);
       expect(invalidCrease.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
     });
 
@@ -2540,6 +2598,9 @@ export default function remoteControllersUnitTest() {
       expect(geometry.detailContentWidth).assertEqual(0);
       expect(geometry.collapsedDetailContentOffset).assertEqual(0);
       expect(geometry.collapsedDetailContentWidth).assertEqual(300);
+      const emptyViewport = ConversationLayoutPolicy.resolveWideGeometry(0, []);
+      expect(emptyViewport.detailContentWidth).assertEqual(0);
+      expect(emptyViewport.collapsedDetailContentWidth).assertEqual(0);
     });
 
     it('aligns the master boundary with the first usable fold crease', 0, () => {
@@ -2552,6 +2613,17 @@ export default function remoteControllersUnitTest() {
       expect(geometry.isExtraWide).assertFalse();
       expect(geometry.detailContentOffset).assertEqual(0);
       expect(geometry.detailContentWidth).assertEqual(430);
+      expect(geometry.collapsedDetailContentOffset).assertEqual(0);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(820);
+    });
+
+    it('keeps collapsed dual-fold content full-width so restore stays at the window origin', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        2210,
+        [new ConversationLayoutCrease(1097, 16)]
+      );
+      expect(geometry.collapsedDetailContentOffset).assertEqual(0);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(2210);
     });
 
     it('accepts a zero-width crease without creating an empty detail segment', 0, () => {
@@ -2592,12 +2664,12 @@ export default function remoteControllersUnitTest() {
 
     it('uses width as the extra-wide fallback when crease data is missing', 0, () => {
       const geometry = ConversationLayoutPolicy.resolveWideGeometry(
-        ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
+        ConversationLayoutPolicy.LG_MIN_WIDTH,
         []
       );
       expect(geometry.isExtraWide).assertTrue();
       expect(geometry.detailContentOffset).assertEqual(0);
-      expect(geometry.detailContentWidth).assertEqual(736);
+      expect(geometry.detailContentWidth).assertEqual(496);
     });
 
     it('ignores crease regions outside the application viewport', 0, () => {
