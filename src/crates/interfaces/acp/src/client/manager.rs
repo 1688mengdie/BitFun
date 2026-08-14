@@ -36,12 +36,14 @@ use tokio::sync::{oneshot, Mutex, RwLock};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::builtin_clients::{
-    builtin_client_ids, default_config_for_builtin_client, migrate_legacy_builtin_client_configs,
+    builtin_acp_client_preset, builtin_client_ids, default_config_for_builtin_client,
+    migrate_legacy_builtin_client_configs,
 };
 use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
+use super::dsh_profile::ensure_bundled_profile;
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
 use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
@@ -1717,6 +1719,13 @@ impl AcpClientService {
         connection_id: &str,
         config: &AcpClientConfig,
     ) -> BitFunResult<(ByteStreams<AcpOutgoingStream, AcpIncomingStream>, Child)> {
+        // An agent whose runtime BitFun ships (dsh) needs it in place before the
+        // command runs, because the command's only job is to boot it.
+        if let Some(profile) = builtin_acp_client_preset(client_id).and_then(|p| p.bundled_profile)
+        {
+            ensure_bundled_profile(profile).await?;
+        }
+
         let program = resolve_configured_command(&config.command, &config.env);
         let mut command = bitfun_core::util::process_manager::create_tokio_command(&program);
         command
@@ -2728,8 +2737,11 @@ mod tests {
             resolve_config_for_client(&AcpClientConfigFile::default(), "dsh", Some("remote-host"))
                 .expect("built-in DSH config");
 
-        assert_eq!(resolved.command, "dsh-acp-demo");
-        assert!(resolved.args.is_empty());
+        assert_eq!(resolved.command, "dsh");
+        // A remote workspace resolves the same launch as a local one. Note that
+        // materialization only runs in `start_local_transport`, so a remote host
+        // needs the profile put there by hand until that is wired up too.
+        assert_eq!(resolved.args, vec!["--profile", "bitfun-acp"]);
         assert!(resolved.enabled);
     }
 }

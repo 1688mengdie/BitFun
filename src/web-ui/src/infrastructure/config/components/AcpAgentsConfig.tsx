@@ -105,12 +105,15 @@ const PRESETS: AcpClientPreset[] = [
     command: 'opencode',
     args: ['acp'],
   },
+  // BitFun ships the ACP bridge for DeepSeek Harness and installs it into the
+  // user's own dsh as a profile on first launch, so the only setup left is the
+  // harness itself and the model the user picks inside it.
   {
     id: 'dsh',
     name: 'DeepSeek Harness',
-    description: 'Native ACP server (dsh-acp-demo); add --config with an absolute DSH cordis.yml path.',
-    command: 'dsh-acp-demo',
-    args: [],
+    description: 'DeepSeek Harness with BitFun\'s bundled ACP bridge. Uses the model and API key configured in dsh.',
+    command: 'dsh',
+    args: ['--profile', 'bitfun-acp'],
   },
   {
     id: 'omp',
