@@ -1831,10 +1831,20 @@ impl AcpClientService {
                     client_id, error
                 ))
             })?;
-        let (writer, reader, mut stderr, _control, _completion) = transport.into_parts();
+        let (writer, reader, stderr, _control, _completion) = transport.into_parts();
+        // Whatever the remote agent says on its way out is the only explanation
+        // a user gets when it dies at startup; sinking it leaves nothing behind
+        // but an unexplained broken pipe.
+        let stderr_client_id = client_id.to_string();
         tokio::spawn(async move {
-            let mut sink = tokio::io::sink();
-            let _ = tokio::io::copy(&mut stderr, &mut sink).await;
+            use tokio::io::AsyncBufReadExt;
+            let mut lines = tokio::io::BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                log::warn!("Remote ACP client stderr: id={stderr_client_id} {line}");
+            }
         });
         Ok(ByteStreams::new(
             Box::pin(writer.compat_write()),
