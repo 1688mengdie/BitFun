@@ -83,6 +83,35 @@ export function resolveStorageTurnIndex(
     : undefined;
 }
 
+/**
+ * Storage slot for the next Turn of a Session the frontend persists itself.
+ *
+ * The local runtime hands out that slot through `DialogTurnStarted`, but an
+ * ACP agent runs outside it: nothing on the backend counts those Turns, so the
+ * projection allocates the slot from what it already knows. Returns undefined
+ * when the Session has persisted Turns none of which are projected yet —
+ * guessing there would overwrite history.
+ */
+export function nextStorageTurnIndex(
+  session: TurnIdentitySession,
+): StorageTurnIndex | undefined {
+  let highest = -1;
+  for (const turn of session.dialogTurns) {
+    const storageIndex = turn.storageTurnIndex ?? turn.backendTurnIndex;
+    if (typeof storageIndex === 'number') {
+      highest = Math.max(highest, storageIndex);
+    }
+  }
+  for (const entry of validSessionTurnCatalog(session)?.entries ?? []) {
+    highest = Math.max(highest, entry.storageTurnIndex);
+  }
+
+  if (highest < 0 && projectedSessionTurnCount(session) > 0) {
+    return undefined;
+  }
+  return asStorageTurnIndex(highest + 1);
+}
+
 function buildCatalogOrdinalMaps(session: TurnIdentitySession): {
   ordinalByTurnId: Map<string, TurnOrdinal>;
   ordinalByStorageIndex: Map<number, TurnOrdinal>;
