@@ -1638,6 +1638,20 @@
       "commandInterrupted": "命令已被中斷",
       "executionFailed": "命令執行失敗"
     },
+    "runCode": {
+      "title": "執行程式碼",
+      "programLabel": "程式",
+      "outputLabel": "輸出",
+      "writing": "正在撰寫程式…",
+      "running": "正在執行程式…",
+      "completed": "程式已結束",
+      "failed": "程式執行失敗",
+      "cancelled": "程式已取消",
+      "rejected": "程式已拒絕",
+      "copyCode": "複製程式碼",
+      "codeCopied": "程式碼已複製",
+      "copyCodeFailed": "複製程式碼失敗"
+    },
     "approval": {
       "waiting": "等待確認",
       "confirm": "允許",

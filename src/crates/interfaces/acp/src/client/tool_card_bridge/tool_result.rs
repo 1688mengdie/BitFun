@@ -19,8 +19,28 @@ pub(super) fn normalize_tool_result(tool_name: &str, result: Value) -> Value {
     match tool_name {
         "Grep" => normalize_grep_result(result),
         "Glob" => normalize_glob_result(result),
+        "Bash" | "RunCode" => normalize_output_result(result),
         _ => result,
     }
+}
+
+/// The terminal and run-code cards show `output` (or `stdout`), while an ACP
+/// result carries its text in content blocks. Without this the card renders the
+/// command it ran and nothing underneath it.
+fn normalize_output_result(result: Value) -> Value {
+    if result.get("output").is_some() || result.get("stdout").is_some() {
+        return result;
+    }
+    let Some(text) = result_text(&result) else {
+        return result;
+    };
+
+    let mut object = match result {
+        Value::Object(object) => object,
+        _ => Map::new(),
+    };
+    object.insert("output".to_string(), Value::String(text));
+    Value::Object(object)
 }
 
 /// The grep card reads `total_matches` / `file_count`, and shows `result` as the
@@ -302,8 +322,30 @@ mod tests {
         let prose = harness_result("I looked around the repository.\n\n  Nothing matched.");
         assert_eq!(normalize_tool_result("Glob", prose.clone()), prose);
         assert_eq!(normalize_tool_result("Grep", prose.clone()), prose);
-        // A tool with no search card is passed straight through.
-        assert_eq!(normalize_tool_result("Bash", prose.clone()), prose);
+        // A tool whose card reads the result as-is is passed straight through.
+        assert_eq!(normalize_tool_result("Read", prose.clone()), prose);
+    }
+
+    #[test]
+    fn lifts_command_and_program_output_to_the_field_those_cards_read() {
+        let bash = normalize_tool_result("Bash", harness_result("total 0\ndrwxr-xr-x  4 user"));
+        assert_eq!(bash["output"], "total 0\ndrwxr-xr-x  4 user");
+        // The envelope stays intact for the raw view.
+        assert_eq!(bash["role"], "user");
+
+        let code = normalize_tool_result("RunCode", harness_result("42"));
+        assert_eq!(code["output"], "42");
+
+        // An agent that already speaks the card's shape is left alone.
+        let native = json!({ "output": "done", "exit_code": 0 });
+        assert_eq!(normalize_tool_result("Bash", native.clone()), native);
+        let piped = json!({ "stdout": "done", "stderr": "" });
+        assert_eq!(normalize_tool_result("Bash", piped.clone()), piped);
+
+        // Nothing to lift: a result with no text is untouched rather than
+        // given an empty output that reads as "the command printed nothing".
+        let empty = json!({ "locations": [] });
+        assert_eq!(normalize_tool_result("RunCode", empty.clone()), empty);
     }
 
     #[test]

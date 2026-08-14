@@ -1638,6 +1638,20 @@
       "commandInterrupted": "Command interrupted",
       "executionFailed": "Command execution failed"
     },
+    "runCode": {
+      "title": "Run Code",
+      "programLabel": "Program",
+      "outputLabel": "Output",
+      "writing": "Writing the program...",
+      "running": "Running the program...",
+      "completed": "Program finished",
+      "failed": "Program failed",
+      "cancelled": "Program cancelled",
+      "rejected": "Program rejected",
+      "copyCode": "Copy code",
+      "codeCopied": "Code copied",
+      "copyCodeFailed": "Failed to copy code"
+    },
     "approval": {
       "waiting": "Waiting for confirmation",
       "confirm": "Allow",

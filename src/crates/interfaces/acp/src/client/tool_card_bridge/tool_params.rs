@@ -21,6 +21,18 @@ pub(super) fn normalize_tool_params(
                 );
             }
         }
+        "RunCode" => {
+            if !normalized.contains_key("code") {
+                if let Some(value) = normalized
+                    .get("source")
+                    .or_else(|| normalized.get("script"))
+                    .or_else(|| normalized.get("program"))
+                    .cloned()
+                {
+                    normalized.insert("code".to_string(), value);
+                }
+            }
+        }
         "Read" | "Write" | "Edit" | "Delete" => {
             if !normalized.contains_key("file_path") {
                 if let Some(value) = normalized

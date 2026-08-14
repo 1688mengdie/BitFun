@@ -96,6 +96,17 @@ fn normalize_tool_name(
     let haystack = format!("{} {}", candidate_lower, title_lower);
     let input = raw_input.and_then(|value| value.as_object());
     if let Some(input) = input {
+        // A tool that executes and whose whole argument is a `code` blob runs a
+        // program, not a shell line. DeepSeek Harness's Code Mode (PTC) preset
+        // is one: it replaces every per-action tool with a single `run_code`.
+        // Left to the `Execute` fallback below it would draw a terminal card
+        // whose command is empty, because there is no command.
+        if matches!(kind, Some(ToolKind::Execute))
+            && has_any_key(input, &["code"])
+            && !has_any_key(input, &["command", "cmd"])
+        {
+            return "RunCode".to_string();
+        }
         if has_any_key(input, &["command", "cmd"]) {
             return "Bash".to_string();
         }
@@ -237,6 +248,7 @@ fn normalize_known_tool_alias(name: &str) -> String {
         "write" | "write_file" | "create" => "Write".to_string(),
         "edit" | "patch" | "replace" | "update" => "Edit".to_string(),
         "delete" | "remove" | "rm" => "Delete".to_string(),
+        "run_code" | "runcode" | "execute_code" | "code_execute" => "RunCode".to_string(),
         "todowrite" | "todo_write" | "todo" => "TodoWrite".to_string(),
         "websearch" | "web_search" | "search_web" => "WebSearch".to_string(),
         _ => name.to_string(),
@@ -254,6 +266,7 @@ fn is_native_tool_name(name: &str) -> bool {
             | "Grep"
             | "Glob"
             | "Bash"
+            | "RunCode"
             | "TodoWrite"
             | "WebSearch"
     )
