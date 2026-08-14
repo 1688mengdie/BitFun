@@ -1,43 +1,36 @@
 /**
- * CreateGroupChatDialog — group chat create dialog (R-GC-13).
+ * CreateGroupChatDialog - group chat create dialog (R-GC-13 / R-GC-28).
  *
  * Reuse rules:
- * - Modal / Button / Input / Checkbox all from component-library (existing components).
- * - Member multi-select reuses the WorkspaceSessionBatchModal "session list +
- *   Checkbox multi-select" shape
- *   (src/web-ui/src/app/components/NavPanel/sections/workspaces/WorkspaceSessionBatchModal.tsx:305-459);
- *   no new picker is built.
- * - Create goes through toolAPI.executeTool (camelCase — the only existing
+ * - Modal / Button / Input all from component-library (existing components).
+ * - R-GC-28 (owner directive): members are always CREATED fresh (unique UUID +
+ *   default Claw agent type + Claw name + default workspace), never reusing
+ *   existing sessions. The picker therefore no longer lists existing Claw
+ *   sessions (list_sessions is forbidden as a member source); instead the user
+ *   enters the number of members to create. The backend creates N fresh member
+ *   sessions (group_room_tools.rs create_member_session).
+ * - Create goes through toolAPI.executeTool (camelCase - the only existing
  *   execute_tool wrapper, ToolAPI.ts:49-61); direct invoke('create_group_chat')
  *   is forbidden (the backend command was removed in R-GC-05).
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Checkbox, Input, Modal } from '@/component-library';
+import { Button, Input, Modal } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
-import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
-import type { SessionMetadata } from '@/shared/types/session-history';
-import type { WorkspaceInfo } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
 import { notificationService } from '@/shared/notification-system';
 import './CreateGroupChatDialog.scss';
 
 const log = createLogger('CreateGroupChatDialog');
 
+const MAX_MEMBER_COUNT = 20;
+
 interface CreateGroupChatDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Current workspace rootPath (contract section 1.2a: workspace_path = workspaceManager rootPath). */
+  /** Group workspace rootPath (R-GC-26: Claw default assistant workspace). */
   workspacePath: string;
-  /**
-   * R-GC-19: assistant workspaces (Claw presets). Members = real Claw sessions
-   * (listSessions filtered by agentType === 'Claw') UNION assistant workspace
-   * presets (marked inactive when no real session exists). Reuses the old W2
-   * member-source unification (8346a7399) — the picker must see Claw members
-   * living under assistant workspaces, not only the current project workspace.
-   */
-  assistantWorkspaces?: WorkspaceInfo[];
   onCreated: (groupId: string, name: string) => void | Promise<void>;
 }
 
@@ -45,107 +38,33 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   isOpen,
   onClose,
   workspacePath,
-  assistantWorkspaces = [],
   onCreated,
 }) => {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
-  const [members, setMembers] = useState<Array<SessionMetadata & { inactive?: boolean }>>([]);
-  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
-  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [memberCount, setMemberCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  // R-GC-19: keep a stable ref to assistantWorkspaces (the array reference
-  // passed by the parent may change every render; putting it directly into
-  // useCallback deps would rebuild loadMembers repeatedly -> useEffect would
-  // trigger loadMembers forever -> infinite loop. Hold the latest value in a
-  // ref so deps only contain workspacePath and isOpen for the one-shot load).
-  const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
-  assistantWorkspacesRef.current = assistantWorkspaces;
-
-  // R-GC-19: member source = real Claw sessions (listSessions filtered by
-  // agentType === 'Claw') UNION assistant workspace presets (inactive when no
-  // real session exists). Reuses the W2 unification shape (old MainNav
-  // groupChatAvailableAssistants, 8346a7399) so Claw members that live under
-  // assistant workspaces are always listable, no matter the current project
-  // workspace.
-  const loadMembers = useCallback(async () => {
-    setIsLoadingMembers(true);
-    setLoadFailed(false);
-    try {
-      const list = await sessionAPI.listSessions(workspacePath);
-      const realClaws = list.filter(meta => meta.agentType === 'Claw');
-      const byId = new Map<string, SessionMetadata & { inactive?: boolean }>();
-      for (const meta of realClaws) {
-        byId.set(meta.sessionId, meta);
-      }
-      for (const workspace of assistantWorkspacesRef.current) {
-        const sessionId = workspace.assistantId || workspace.id;
-        if (!sessionId || byId.has(sessionId)) continue;
-        byId.set(sessionId, {
-          sessionId,
-          sessionName: workspace.identity?.name?.trim() || workspace.name,
-          agentType: 'Claw',
-          inactive: true,
-          // Remaining SessionMetadata fields: the picker only renders what is
-          // needed, so fill the minimal type placeholders.
-          modelName: 'auto',
-          createdAt: 0,
-          lastActiveAt: 0,
-          turnCount: 0,
-          messageCount: 0,
-          toolCallCount: 0,
-          status: 'active',
-          tags: [],
-        } as SessionMetadata & { inactive?: boolean });
-      }
-      setMembers(Array.from(byId.values()));
-    } catch (error) {
-      log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath });
-      setLoadFailed(true);
-    } finally {
-      setIsLoadingMembers(false);
-    }
-  }, [workspacePath]);
 
   useEffect(() => {
     if (!isOpen) {
       setName('');
-      setSelectedMemberIds(new Set());
-      setLoadFailed(false);
+      setMemberCount(0);
       return;
     }
-    void loadMembers();
-  }, [isOpen, loadMembers]);
+  }, [isOpen]);
 
-  const toggleMember = useCallback((sessionId: string) => {
-    setSelectedMemberIds(prev => {
-      const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
-      } else {
-        next.add(sessionId);
-      }
-      return next;
-    });
-  }, []);
-
-  const allMemberIds = members.map(meta => meta.sessionId);
-  const allSelected = allMemberIds.length > 0 && selectedMemberIds.size === allMemberIds.length;
-
-  const toggleSelectAll = useCallback(() => {
-    setSelectedMemberIds(prev => (
-      prev.size === allMemberIds.length ? new Set() : new Set(allMemberIds)
-    ));
-  }, [allMemberIds]);
+  const parsedMemberCount = Number.isFinite(memberCount)
+    ? Math.max(0, Math.min(MAX_MEMBER_COUNT, Math.floor(memberCount)))
+    : 0;
 
   const handleCreate = useCallback(async () => {
     const trimmedName = name.trim();
     if (!trimmedName || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      const memberIds = Array.from(selectedMemberIds);
+      // R-GC-28: members are placeholders only (count-driven); the backend
+      // creates N fresh unique-UUID member sessions. Never reuse existing ids.
+      const memberIds = Array.from({ length: parsedMemberCount }, (_, i) => `member-${i + 1}`);
       // Contract section 1.4: go through execute_tool (ToolAPI camelCase
       // wrapper); direct invoke('create_group_chat') is forbidden.
       const response = await toolAPI.executeTool({
@@ -174,7 +93,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [isSubmitting, name, onClose, onCreated, selectedMemberIds, t, workspacePath]);
+  }, [isSubmitting, name, onClose, onCreated, parsedMemberCount, t, workspacePath]);
 
   return (
     <Modal
@@ -196,61 +115,16 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
           />
         </div>
 
-        <div className="group-chat-dialog__members">
-          <div className="group-chat-dialog__members-header">
-            <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>
-            {members.length > 0 ? (
-              <Checkbox
-                checked={allSelected}
-                onChange={toggleSelectAll}
-                label={allSelected ? t('actions.deselectAll') : t('actions.selectAll')}
-                size="small"
-              />
-            ) : null}
-          </div>
-
-          {isLoadingMembers ? (
-            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
-          ) : loadFailed ? (
-            <div className="group-chat-dialog__state">
-              {t('nav.groupChats.membersLoadFailed')}
-              <Button type="button" variant="secondary" size="small" onClick={() => { void loadMembers(); }}>
-                {t('actions.retry')}
-              </Button>
-            </div>
-          ) : members.length === 0 ? (
-            <div className="group-chat-dialog__state">{t('nav.groupChats.noClawSessions')}</div>
-          ) : (
-            <div className="group-chat-dialog__member-list">
-              {members.map(meta => {
-                const isSelected = selectedMemberIds.has(meta.sessionId);
-                return (
-                  <label
-                    key={meta.sessionId}
-                    className={`group-chat-dialog__member-row${isSelected ? ' is-selected' : ''}`}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onChange={() => toggleMember(meta.sessionId)}
-                      disabled={isSubmitting}
-                    />
-                    <span className="group-chat-dialog__member-name">
-                      {meta.sessionName || t('nav.sessions.untitled')}
-                    </span>
-                    {meta.inactive ? (
-                      <span
-                        className="group-chat-dialog__inactive-badge"
-                        data-bf-component="create-group-chat-dialog"
-                        data-bf-part="inactiveBadge"
-                      >
-                        {t('nav.groupChats.inactiveBadge')}
-                      </span>
-                    ) : null}
-                  </label>
-                );
-              })}
-            </div>
-          )}
+        <div className="group-chat-dialog__field">
+          <Input
+            label={t('nav.groupChats.memberCount')}
+            type="number"
+            min={0}
+            max={MAX_MEMBER_COUNT}
+            value={memberCount}
+            onChange={e => setMemberCount(Number(e.target.value))}
+            inputSize="medium"
+          />
         </div>
 
         <div className="group-chat-dialog__actions">

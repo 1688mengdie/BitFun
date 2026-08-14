@@ -138,7 +138,10 @@
       "forked": "子群「{{name}}」已创建",
       "forkNeedsMessage": "请先发送至少一条消息后再裂变。",
       "confirmFork": "确认裂变",
-      "membersSearch": "搜索成员..."
+      "membersSearch": "搜索成员...",
+      "memberCount": "成员数量",
+      "inviteCount": "邀请成员数量",
+      "forkMemberCount": "子群成员数量"
     },
     "search": {
       "triggerPlaceholder": "搜索",

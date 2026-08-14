@@ -76,10 +76,13 @@ vi.mock('@/component-library', () => {
   return {
     Modal: ({ isOpen, children }: { isOpen: boolean; children: React.ReactNode }) =>
       isOpen ? <div data-testid="modal">{children}</div> : null,
-    Input: (props: { label?: string; value?: string; onChange?: (e: { target: { value: string } }) => void; placeholder?: string; autoFocus?: boolean }) => (
+    Input: (props: { label?: string; value?: string; type?: string; min?: number; max?: number; onChange?: (e: { target: { value: string } }) => void; placeholder?: string; autoFocus?: boolean }) => (
       <input
-        data-testid="dialog-name-input"
+        data-testid={String(props.label ?? '').includes('count') || String(props.label ?? '').includes('Count') ? 'dialog-count-input' : 'dialog-name-input'}
         aria-label={props.label}
+        type={props.type ?? 'text'}
+        min={props.min}
+        max={props.max}
         placeholder={props.placeholder}
         value={props.value ?? ''}
         onChange={props.onChange}
@@ -422,7 +425,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     expect(rows[1]!.textContent).toContain('Assist C');
   });
 
-  it('invites members through invite_group_member (camelCase, workspace passed)', async () => {
+  it('invites members through invite_group_member (R-GC-28: count-driven, backend creates fresh members)', async () => {
     vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
       toolName: string;
     }) => {
@@ -435,15 +438,11 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-      makeSession('claw-2', 'Claw', 'Assist C'),
-    ]);
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     renderView();
     await flush();
 
-    // 打开邀请弹窗（现成 Modal + Checkbox 多选形态；R-GC-20 邀请为右上角
-    // 图标按钮，按 aria-label 定位）
+    // 打开邀请弹窗（现成 Modal；R-GC-20 邀请为右上角图标按钮，按 aria-label 定位）
     const inviteBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
       b => b.getAttribute('aria-label')?.includes('Invite'),
     );
@@ -452,10 +451,17 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
 
     const modal = document.querySelector('[data-testid="modal"]');
     expect(modal).not.toBeNull();
-    // R-GC-22: 成员选择 = component-library Select 多选（member-select-option）。
-    const optionBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
-    expect(optionBtns.length).toBeGreaterThan(0);
-    act(() => optionBtns[0]!.click());
+    // R-GC-28: 邀请 = 数量输入（新建 N 个成员，不列已有会话）。
+    const countInput = document.querySelector<HTMLInputElement>('[data-testid="dialog-count-input"]');
+    expect(countInput).not.toBeNull();
+    act(() => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      nativeSetter?.call(countInput, '2');
+      countInput!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       b => b.textContent?.includes('Confirm invite'),
@@ -464,20 +470,22 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     act(() => confirmBtn!.click());
     await flush();
 
-    const inviteCall = vi.mocked(toolAPI.executeTool).mock.calls.find(
+    // 每个占位 id 触发一次 invite（后端为每个占位新建唯一 UUID 会话）。
+    const inviteCalls = vi.mocked(toolAPI.executeTool).mock.calls.filter(
       c => c[0].toolName === 'invite_group_member',
     );
-    expect(inviteCall).toBeDefined();
-    expect(inviteCall![0]).toEqual({
+    expect(inviteCalls).toHaveLength(2);
+    expect(inviteCalls[0]![0]).toEqual({
       toolName: 'invite_group_member',
       parameters: {
         action: 'invite',
         group_id: 'group-1',
-        member_session_id: 'claw-1',
+        member_session_id: 'member-1',
         workspace: '/workspace-a',
       },
       workspacePath: '/workspace-a',
     });
+    expect(inviteCalls[1]![0].parameters.member_session_id).toBe('member-2');
   });
 
   it('removes a member through remove_group_member', async () => {
@@ -571,9 +579,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-    ]);
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     // 注入历史 turn 以提供 fork 的 turn_id（lastTurnId 取自本地 session turns）
     flowChatMocks.getState.mockReturnValue({
       sessions: new Map([['group-1', {
@@ -587,7 +593,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
-    // 打开 fork 弹窗（现成 Modal + Input + Checkbox 多选形态；R-GC-20 裂变
+    // 打开 fork 弹窗（现成 Modal + Input 数量形态；R-GC-20 裂变
     // 为右上角图标按钮，按 aria-label 定位）
     const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
       b => b.getAttribute('aria-label')?.includes('Fork'),
@@ -605,6 +611,18 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       )?.set;
       nativeSetter?.call(nameInput, '子群A');
       nameInput!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    // R-GC-28: fork 成员 = 数量输入（新建 N 个成员，不列已有会话）。
+    const countInput = document.querySelector<HTMLInputElement>('[data-testid="dialog-count-input"]');
+    expect(countInput).not.toBeNull();
+    act(() => {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      nativeSetter?.call(countInput, '2');
+      countInput!.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -625,7 +643,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         group_id: 'group-1',
         name: '子群A',
         turn_id: 'msg-last',
-        members: [],
+        members: ['member-1', 'member-2'],
       },
       workspacePath: '/workspace-a',
     });

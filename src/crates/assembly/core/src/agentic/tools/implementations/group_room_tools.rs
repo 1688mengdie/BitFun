@@ -288,6 +288,48 @@ impl GroupRoomTool {
         get_agent_registry().default_agent_type().to_string()
     }
 
+    /// 群主默认对话显示名（R-GC-28，零硬编码）：从 AgentRegistry 取默认
+    /// 对话类型 agent 的 name()（如默认对话类型为 Claw 则返回 "Claw"）。
+    /// 复用现成 `get_agent(agent_type, None)`（registry/mod.rs:177）→
+    /// `Agent::name()`；缺失时回退 agent_type 本身（不炸）。
+    fn default_group_agent_name() -> String {
+        get_agent_registry()
+            .get_agent(Self::default_group_agent_type().as_str(), None)
+            .map(|agent| agent.name().to_string())
+            .unwrap_or_else(Self::default_group_agent_type)
+    }
+
+    /// 新建成员会话（R-GC-28 主人定标：成员全部新建，零复用已有 ID）。
+    ///
+    /// 每个成员 = 全新会话：唯一 UUID + 默认对话类型（配置驱动，
+    /// default_group_agent_type）+ 默认对话显示名（Claw 名称，
+    /// default_group_agent_name）+ 群 workspace。调用方传的 member_session_id
+    /// 只是「成员选择来源/数量占位」，后端一律生成新 UUID——自然消除
+    /// "Session ID already exists"（create_session_with_workspace 撞磁盘已
+    /// 存在 ID，session_manager.rs:513）。
+    async fn create_member_session(
+        coordinator: &ConversationCoordinator,
+        workspace: &str,
+    ) -> BitFunResult<String> {
+        let member_id = uuid::Uuid::new_v4().to_string();
+        let member_config = SessionConfig {
+            workspace_path: Some(workspace.to_string()),
+            project_workspace_path: Some(workspace.to_string()),
+            ..Default::default()
+        };
+        coordinator
+            .create_session_with_workspace(
+                Some(member_id.clone()),
+                Self::default_group_agent_name(),
+                Self::default_group_agent_type(),
+                member_config,
+                workspace.to_string(),
+            )
+            .await
+            .map_err(BitFunError::tool)?;
+        Ok(member_id)
+    }
+
     /// 建群 = 建默认对话类型会话（type-contract §二.1；R-GC-25 群主对话
     /// 模型 + 零硬编码：agent_type 取默认对话类型，workspace 取入参兜底链）。
     async fn create_group(
@@ -330,58 +372,32 @@ impl GroupRoomTool {
         )
         .await?;
 
-        // 建成员会话（成员各自 workspace——v3 不解析成员 workspace，
-        // 由调用方传入；此处统一用群 workspace 绑定）。
-        for member_id in members {
-            let member_config = SessionConfig {
-                workspace_path: Some(workspace.to_string()),
-                project_workspace_path: Some(workspace.to_string()),
-                ..Default::default()
-            };
-            coordinator
-                .create_session_with_workspace(
-                    Some(member_id.clone()),
-                    format!("Group member {member_id}"),
-                    Self::default_group_agent_type(),
-                    member_config,
-                    workspace.to_string(),
-                )
-                .await
-                .map_err(BitFunError::tool)?;
+        // 建成员会话（R-GC-28：成员全部新建唯一 UUID 会话，零复用已有 ID，
+        // 一律默认对话类型 + Claw 名称 + 群 workspace）。
+        for _member_id in members {
+            let member_id = Self::create_member_session(coordinator, workspace).await?;
             // 记入群成员表。
-            Self::add_group_member(coordinator, workspace, &group_session_id, member_id).await?;
+            Self::add_group_member(coordinator, workspace, &group_session_id, &member_id).await?;
         }
 
         Ok(group_session_id)
     }
 
-    /// 拉成员 = 建/确认成员默认对话类型会话 + 记入群成员表。
+    /// 拉成员 = 新建默认对话类型成员会话（R-GC-28 主人定标）+ 记入群成员表。
+    ///
+    /// member_session_id 入参仅作「成员选择来源/数量占位」，后端一律新建
+    /// 唯一 UUID 会话（create_member_session）——零复用已有 ID，消除
+    /// "Session ID already exists"（旧实现把调用方传的已存在 ID 直接建会话，
+    /// create_session_with_workspace 撞磁盘已存在 ID 报错）。
     async fn invite_member(
         coordinator: &ConversationCoordinator,
         group_id: &str,
-        member_session_id: &str,
+        _member_session_id: &str,
         workspace: &str,
     ) -> BitFunResult<()> {
         let group_workspace = Self::group_workspace(coordinator, group_id)?;
-        let manager = coordinator.get_session_manager();
-        if manager.get_session(member_session_id).is_none() {
-            let member_config = SessionConfig {
-                workspace_path: Some(workspace.to_string()),
-                project_workspace_path: Some(workspace.to_string()),
-                ..Default::default()
-            };
-            coordinator
-                .create_session_with_workspace(
-                    Some(member_session_id.to_string()),
-                    format!("Group member {member_session_id}"),
-                    Self::default_group_agent_type(),
-                    member_config,
-                    workspace.to_string(),
-                )
-                .await
-                .map_err(BitFunError::tool)?;
-        }
-        Self::add_group_member(coordinator, &group_workspace, group_id, member_session_id).await
+        let member_id = Self::create_member_session(coordinator, workspace).await?;
+        Self::add_group_member(coordinator, &group_workspace, group_id, &member_id).await
     }
 
     /// 移除成员 = 从群会话 custom_metadata.groupChats 移除。
@@ -775,24 +791,11 @@ impl GroupRoomTool {
             .map_err(BitFunError::tool)?;
         let child_session_id = branch.session_id.clone();
 
-        // 子群成员建会话 + 记成员表。
-        for member_id in members {
-            let member_config = SessionConfig {
-                workspace_path: Some(group_workspace.clone()),
-                project_workspace_path: Some(group_workspace.clone()),
-                ..Default::default()
-            };
-            coordinator
-                .create_session_with_workspace(
-                    Some(member_id.clone()),
-                    format!("Group member {member_id}"),
-                    Self::default_group_agent_type(),
-                    member_config,
-                    group_workspace.clone(),
-                )
-                .await
-                .map_err(BitFunError::tool)?;
-            Self::add_group_member(coordinator, &group_workspace, &child_session_id, member_id)
+        // 子群成员新建（R-GC-28：成员全部新建唯一 UUID 会话，零复用已有 ID，
+        // 与 create/invite 一致）+ 记成员表。
+        for _member_id in members {
+            let member_id = Self::create_member_session(coordinator, &group_workspace).await?;
+            Self::add_group_member(coordinator, &group_workspace, &child_session_id, &member_id)
                 .await?;
         }
 
@@ -1291,6 +1294,40 @@ mod tests {
         let actual = GroupRoomTool::default_group_agent_type();
         assert_eq!(actual, expected);
         assert!(!actual.trim().is_empty(), "default agent type must be non-empty");
+    }
+
+    // ── R-GC-28 零硬编码（主人定标 2026-08-14）：成员名称 = 默认对话类型
+    // agent 的显示名（Claw 名称），来自 AgentRegistry 单一事实源 ──
+    #[test]
+    fn default_group_agent_name_comes_from_agent_registry() {
+        let agent_type = GroupRoomTool::default_group_agent_type();
+        let expected = crate::agentic::agents::get_agent_registry()
+            .get_agent(agent_type.as_str(), None)
+            .map(|agent| agent.name().to_string())
+            .unwrap_or_else(|| agent_type.clone());
+        let actual = GroupRoomTool::default_group_agent_name();
+        assert_eq!(actual, expected);
+        assert!(
+            !actual.trim().is_empty(),
+            "default group agent name must be non-empty"
+        );
+    }
+
+    // ── R-GC-28：成员会话全部新建唯一 UUID（零复用已有 ID）──
+    #[test]
+    fn member_session_name_is_registry_agent_name() {
+        // create_member_session 使用的名称 = 默认对话类型 agent 的显示名
+        //（零硬编码：禁散落 "Group member" 字符串；名称来自 registry）。
+        let agent_type = GroupRoomTool::default_group_agent_type();
+        let registry_name = crate::agentic::agents::get_agent_registry()
+            .get_agent(agent_type.as_str(), None)
+            .map(|agent| agent.name().to_string())
+            .unwrap_or_else(|| agent_type.clone());
+        assert_eq!(GroupRoomTool::default_group_agent_name(), registry_name);
+        assert!(
+            !GroupRoomTool::default_group_agent_name().trim().is_empty(),
+            "member session name must be non-empty"
+        );
     }
 
     // ── B-2（契约 §三）：send metadata 五字段 + senderName 回退 ──
@@ -1881,14 +1918,24 @@ mod tests {
         );
 
         // ── 三形态之②：成员会话（create 拉入的成员为默认对话类型会话）──
-        // 成员会话 = 独立默认对话类型会话（契约 §一），可作 sender 写入群 turns。
+        // R-GC-28：成员全部新建唯一 UUID 会话（零复用已有 ID），成员 ID 从
+        // 群成员表读取；成员会话 = 默认对话类型 + Claw 名称 + 群 workspace。
+        let member_id = members
+            .iter()
+            .find_map(Value::as_str)
+            .expect("first member id from groupChats");
         let member_session = manager
-            .get_session("member-a")
+            .get_session(member_id)
             .expect("member session in memory");
         assert_eq!(
             member_session.agent_type,
             GroupRoomTool::default_group_agent_type(),
-            "R-GC-25: member session uses the config-driven default agent type"
+            "R-GC-28: member session uses the config-driven default agent type"
+        );
+        assert_eq!(
+            member_session.session_name,
+            GroupRoomTool::default_group_agent_name(),
+            "R-GC-28: member session auto-named with the Claw default name"
         );
 
         // ── 三形态之①：默认 BuiltIn 群主（assistant_id 空）──
@@ -1950,7 +1997,9 @@ mod tests {
             "child forkOrigin.parentGroupId must reference the parent group"
         );
 
-        // 子群自带成员表（fork 携带的 members）。
+        // 子群自带成员表（fork 继承主群成员 + 新增 fork 成员；R-GC-28：
+        // fork 新增成员全部新建唯一 UUID，数量 = 传入 members 数，
+        // 不匹配原占位 id）。
         let child_members = child_metadata
             .custom_metadata
             .as_ref()
@@ -1959,8 +2008,21 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(
-            child_members.iter().any(|v| v.as_str() == Some("member-c")),
-            "fork child must carry its own member list"
+            child_members.len() >= 3,
+            "fork child must inherit parent members (2) plus one new fork member, got {}",
+            child_members.len()
+        );
+        let child_member_id = child_members
+            .iter()
+            .find_map(Value::as_str)
+            .expect("child member id");
+        assert_ne!(
+            child_member_id, "member-c",
+            "R-GC-28: fork member must be a fresh UUID, never the caller-provided placeholder"
+        );
+        assert!(
+            manager.get_session(child_member_id).is_some(),
+            "R-GC-28: fork child member session must exist in memory"
         );
 
         // 子群继承主群 turns（branch 复制群消息 → 子群历史可读）。

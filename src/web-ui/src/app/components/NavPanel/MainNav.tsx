@@ -869,12 +869,12 @@ const MainNav: React.FC<MainNavProps> = ({
       {workspaceMenuPortal}
 
       {/* Group chat create dialog (R-GC-13 / R-GC-26: workspace = Claw default
-           assistant workspace, never the current project workspace) */}
+           assistant workspace, never the current project workspace; R-GC-28:
+           members are count-driven, no existing-session listing) */}
       <CreateGroupChatDialog
         isOpen={isGroupChatDialogOpen}
         onClose={() => setIsGroupChatDialogOpen(false)}
         workspacePath={defaultAssistantWorkspace?.rootPath ?? ''}
-        assistantWorkspaces={assistantWorkspacesList}
         onCreated={handleGroupChatCreated}
       />
 

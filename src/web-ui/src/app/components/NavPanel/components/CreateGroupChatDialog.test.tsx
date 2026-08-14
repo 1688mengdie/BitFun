@@ -3,31 +3,23 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionMetadata } from '@/shared/types/session-history';
 
 vi.mock('@/component-library', () => {
   const React = require('react');
   return {
     Modal: ({ isOpen, children }: { isOpen: boolean; children: React.ReactNode }) =>
       isOpen ? <div data-testid="modal">{children}</div> : null,
-    Input: (props: { label?: string; value?: string; onChange?: (e: { target: { value: string } }) => void; placeholder?: string; autoFocus?: boolean }) => (
+    Input: (props: { label?: string; value?: string; type?: string; min?: number; max?: number; onChange?: (e: { target: { value: string } }) => void; placeholder?: string; autoFocus?: boolean }) => (
       <input
-        data-testid="group-name-input"
+        data-testid={String(props.label ?? '').includes('count') || String(props.label ?? '').includes('Count') ? 'member-count-input' : 'group-name-input'}
         aria-label={props.label}
+        type={props.type ?? 'text'}
+        min={props.min}
+        max={props.max}
         placeholder={props.placeholder}
         value={props.value ?? ''}
         onChange={props.onChange}
         autoFocus={props.autoFocus}
-      />
-    ),
-    Checkbox: (props: { checked?: boolean; onChange?: () => void; label?: string; size?: string; disabled?: boolean }) => (
-      <input
-        type="checkbox"
-        data-testid={props.label ? 'member-select-all' : 'member-checkbox'}
-        checked={props.checked}
-        onChange={props.onChange}
-        aria-label={props.label}
-        disabled={props.disabled}
       />
     ),
     Button: (props: { onClick?: () => void; disabled?: boolean; isLoading?: boolean; variant?: string; children?: React.ReactNode; type?: string; size?: string }) => (
@@ -58,12 +50,6 @@ vi.mock('@/infrastructure/api/service-api/ToolAPI', () => ({
   },
 }));
 
-vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
-  sessionAPI: {
-    listSessions: vi.fn(),
-  },
-}));
-
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     success: vi.fn(),
@@ -74,23 +60,8 @@ vi.mock('@/shared/notification-system', () => ({
 
 import CreateGroupChatDialog from './CreateGroupChatDialog';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
-import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 
-const makeSession = (id: string, agentType: string, sessionName?: string): SessionMetadata => ({
-  sessionId: id,
-  sessionName: sessionName ?? id,
-  agentType,
-  modelName: 'auto',
-  createdAt: 0,
-  lastActiveAt: 0,
-  turnCount: 0,
-  messageCount: 0,
-  toolCallCount: 0,
-  status: 'active',
-  tags: [],
-});
-
-describe('CreateGroupChatDialog (R-GC-13)', () => {
+describe('CreateGroupChatDialog (R-GC-13 / R-GC-28)', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -99,7 +70,6 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     vi.mocked(toolAPI.executeTool).mockReset();
-    vi.mocked(sessionAPI.listSessions).mockReset();
   });
 
   afterEach(() => {
@@ -125,7 +95,19 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     const input = document.querySelector<HTMLInputElement>('[data-testid="group-name-input"]');
     expect(input).not.toBeNull();
     act(() => {
-      // React 受控组件：必须用原生 value setter 绕过 React 的 value 锁定，再派发 input 事件。
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      nativeSetter?.call(input, value);
+      input!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  };
+
+  const setMemberCount = (value: string) => {
+    const input = document.querySelector<HTMLInputElement>('[data-testid="member-count-input"]');
+    expect(input).not.toBeNull();
+    act(() => {
       const nativeSetter = Object.getOwnPropertyDescriptor(
         window.HTMLInputElement.prototype,
         'value',
@@ -146,56 +128,7 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     return button?.disabled ?? true;
   };
 
-  it('filters member picker to Claw sessions only', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-      makeSession('code-1', 'agentic', 'Code B'),
-      makeSession('claw-2', 'Claw', 'Assist C'),
-    ]);
-    renderDialog();
-
-    await act(async () => { await Promise.resolve(); });
-    // 成员行渲染 label；代码只渲染 agentType === 'Claw' 的会话
-    const rows = [...document.querySelectorAll('label.group-chat-dialog__member-row')];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.textContent).toContain('Assist A');
-    expect(rows[1]!.textContent).toContain('Assist C');
-  });
-
-  it('unions assistant workspace presets as inactive Claw members (R-GC-19)', async () => {
-    // 当前项目工作区没有 Claw 会话；assistant workspace 预设兜底（未激活标记）。
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('code-1', 'agentic', 'Code B'),
-    ]);
-    const assistantWorkspaces = [
-      { id: 'local_aaa', name: '姬码锋', rootPath: '/ws/a', workspaceKind: 'assistant', assistantId: 'bd56fce3', workspaceType: 'other', languages: [], openedAt: '', lastAccessed: '', tags: [] },
-      { id: 'local_bbb', name: '姬梦情', rootPath: '/ws/b', workspaceKind: 'assistant', workspaceType: 'other', languages: [], openedAt: '', lastAccessed: '', tags: [] },
-    ];
-    act(() => {
-      root.render(
-        <CreateGroupChatDialog
-          isOpen
-          onClose={() => {}}
-          workspacePath="/workspace-a"
-          assistantWorkspaces={assistantWorkspaces as any}
-          onCreated={() => {}}
-        />,
-      );
-    });
-    await act(async () => { await Promise.resolve(); });
-
-    const rows = [...document.querySelectorAll('label.group-chat-dialog__member-row')];
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.textContent).toContain('姬码锋');
-    expect(rows[0]!.querySelector('[data-bf-part="inactiveBadge"]')).not.toBeNull();
-    expect(rows[1]!.textContent).toContain('姬梦情');
-  });
-
   it('creates the group through toolAPI.executeTool with camelCase shape (no direct invoke)', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-      makeSession('claw-2', 'Claw', 'Assist C'),
-    ]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
@@ -205,7 +138,6 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
       duration_ms: 1,
     });
     const { onCreated } = renderDialog();
-    await act(async () => { await Promise.resolve(); });
 
     setGroupName(' 项目群 ');
     expect(getSubmitDisabled()).toBe(false);
@@ -221,10 +153,31 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     expect(onCreated).toHaveBeenCalledWith('group-1', '项目群');
   });
 
+  it('sends count-driven member placeholders (R-GC-28: backend creates fresh UUID sessions)', async () => {
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-9' },
+    });
+    const { onCreated } = renderDialog();
+
+    setGroupName('群A');
+    setMemberCount('3');
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
+      parameters: {
+        action: 'create',
+        name: '群A',
+        members: ['member-1', 'member-2', 'member-3'],
+        workspace: '/workspace-a',
+      },
+    }));
+    expect(onCreated).toHaveBeenCalledWith('group-9', '群A');
+  });
+
   it('omits workspace parameter when workspacePath is empty (backend default fallback, R-GC-17)', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-    ]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
@@ -240,7 +193,6 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
         />,
       );
     });
-    await act(async () => { await Promise.resolve(); });
 
     setGroupName('空工作区群');
     clickCreate();
@@ -254,34 +206,7 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
     });
   });
 
-  it('passes selected member ids and navigates on success', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
-      makeSession('claw-1', 'Claw', 'Assist A'),
-      makeSession('claw-2', 'Claw', 'Assist C'),
-    ]);
-    vi.mocked(toolAPI.executeTool).mockResolvedValue({
-      toolName: 'create_group_chat',
-      success: true,
-      result: { groupId: 'group-9' },
-    });
-    const { onCreated } = renderDialog();
-    await act(async () => { await Promise.resolve(); });
-
-    // 勾选第一个成员（排除 header 的全选 Checkbox，data-testid 为 member-checkbox）
-    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
-    act(() => checkboxes[0]!.click());
-    setGroupName('群A');
-    clickCreate();
-    await act(async () => { await Promise.resolve(); });
-
-    expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
-      parameters: { action: 'create', name: '群A', members: ['claw-1'], workspace: '/workspace-a' },
-    }));
-    expect(onCreated).toHaveBeenCalledWith('group-9', '群A');
-  });
-
   it('surfaces backend failure without calling onCreated', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: false,
@@ -291,7 +216,6 @@ describe('CreateGroupChatDialog (R-GC-13)', () => {
       duration_ms: 1,
     });
     const { onCreated } = renderDialog();
-    await act(async () => { await Promise.resolve(); });
 
     setGroupName('空');
     clickCreate();

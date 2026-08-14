@@ -138,7 +138,10 @@
       "forked": "Child group \"{{name}}\" created",
       "forkNeedsMessage": "Send at least one message before forking.",
       "confirmFork": "Confirm fork",
-      "membersSearch": "Search members..."
+      "membersSearch": "Search members...",
+      "memberCount": "Member count",
+      "inviteCount": "Invite member count",
+      "forkMemberCount": "Child member count"
     },
     "search": {
       "triggerPlaceholder": "Search",

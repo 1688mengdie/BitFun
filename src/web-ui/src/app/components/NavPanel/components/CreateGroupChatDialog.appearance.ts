@@ -4,6 +4,5 @@ export const createGroupChatDialogAppearanceDescriptor: AppearanceSurfaceDescrip
   id: 'create-group-chat-dialog',
   parts: [
     { id: 'root' },
-    { id: 'inactiveBadge' },
   ],
 };
