@@ -320,7 +320,8 @@ export struct AppRootPresentation {
       this.wideLayoutMatched,
       this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED,
       this.deviceType,
-      verticalCreases
+      verticalCreases,
+      this.isExpandedFoldable()
     );
     const geometry = ConversationLayoutPolicy.resolveWideGeometry(
       this.viewportWidth,
@@ -338,13 +339,22 @@ export struct AppRootPresentation {
     }
   }
 
+  private isExpandedFoldable(): boolean {
+    return this.foldStatus === display.FoldStatus.FOLD_STATUS_EXPANDED ||
+      this.foldStatus === display.FoldStatus.FOLD_STATUS_HALF_FOLDED;
+  }
+
   private currentVerticalCreases(): ConversationLayoutCrease[] {
     if (this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED) {
       return [];
     }
     try {
       const region = display.getCurrentFoldCreaseRegion();
-      return region.creaseRects
+      const creaseRects = region.creaseRects;
+      if (!creaseRects) {
+        return [];
+      }
+      return creaseRects
         .filter((rect: display.Rect): boolean => rect.height > rect.width)
         .map((rect: display.Rect): ConversationLayoutCrease => {
           return new ConversationLayoutCrease(

@@ -10,7 +10,7 @@ import { RemoteCreateSessionState } from '../state/RemoteCreateSessionState';
 import { RemotePageState } from '../state/RemotePageState';
 import { ComposerPresentation } from './ComposerBar';
 import { ConversationViewHost } from './ConversationViewHost';
-import { toConversationUiModelCatalog } from './ConversationUiModels';
+import { toConversationUiModelCatalog } from '../state/ConversationUiModels';
 import { RemoteCreateSessionView } from './RemoteCreateSessionView';
 import {
   RemoteSurfaceHost,
@@ -71,7 +71,8 @@ export struct ConversationRouteSurface {
             this.route,
             this.remotePageState,
             this.generalPageState,
-            this.actions.generalStatus()
+            this.actions.generalStatus(),
+            this.remoteCreateState
           ),
           activeFilePreviewPath: this.route === AppRoute.RemoteChat && this.filePreviewState.visible ?
             this.filePreviewState.target.remotePath : '',

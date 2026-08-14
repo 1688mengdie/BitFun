@@ -89,8 +89,8 @@ import { ConversationController } from '../main/ets/pages/viewmodel/Conversation
 import {
   GENERAL_CHAT_COMPOSER_CAPABILITIES,
   REMOTE_CHAT_COMPOSER_CAPABILITIES
-} from '../main/ets/pages/components/ChatComposerCapabilities';
-import { ChatSurface } from '../main/ets/pages/components/ChatSurface';
+} from '../main/ets/pages/state/ChatComposerCapabilities';
+import { ChatSurface } from '../main/ets/pages/state/ChatSurface';
 import { ConversationViewContract } from '../main/ets/pages/components/ConversationViewContract';
 import {
   AppNavigationBackAction,
@@ -1094,6 +1094,9 @@ export default function conversationStateUnitTest() {
       expect(generalProjection.surface).assertEqual(ChatSurface.General);
       expect(generalProjection.chatInput).assertEqual('general draft');
       expect(generalProjection.inlineStatusText).assertEqual('Configure model');
+      expect(generalProjection.showSuggestionsWhenEmpty).assertFalse();
+      expect(generalProjection.composerCapabilities.supportsAttachments).assertTrue();
+      expect(generalProjection.composerCapabilities.showAddButton).assertTrue();
     });
   });
 
