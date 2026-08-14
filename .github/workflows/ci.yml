@@ -160,7 +160,7 @@ jobs:
       # exist during check/test; distributable assets remain frontend-build's owner.
       - name: Create Tauri resource directories
         shell: bash
-        run: mkdir -p dist src/mobile-web/dist
+        run: mkdir -p dist src/mobile-web/dist packages/dsh-acp/dist-profile
 
       - name: Install Linux system dependencies (Tauri)
         if: runner.os == 'Linux'

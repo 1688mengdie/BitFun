@@ -31,6 +31,7 @@ import {
   resolveReasoningPresetForSessionCreation,
 } from '../../utils/modelResolution';
 import { syncSessionModelSelection } from '../../utils/modelSync';
+import { nextStorageTurnIndex } from '../../utils/flowChatTurnIdentity';
 import { markCurrentTurnItemsAsCancelled } from '../../utils/turnCancellation';
 import {
   requireSessionProjectWorkspacePath,
@@ -297,6 +298,20 @@ export const localSessionDriver: SessionDriver = {
       `dialog_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const hasImages = (options?.imageContexts?.length ?? 0) > 0;
 
+    // An ACP agent runs outside the local runtime, so no backend
+    // DialogTurnStarted arrives with a storage slot for this Turn. Without one
+    // every save of the Turn is deferred and the Session never reaches disk, so
+    // the projection — the only writer of these Turns — allocates it here.
+    const acpStorageTurnIndex = acpClientId
+      ? nextStorageTurnIndex(readySession)
+      : undefined;
+    if (acpClientId && acpStorageTurnIndex === undefined) {
+      log.warn('ACP turn starts without a storage slot; its saves stay deferred', {
+        sessionId,
+        dialogTurnId,
+      });
+    }
+
     const dialogTurn: DialogTurn = {
       id: dialogTurnId,
       sessionId: sessionId,
@@ -313,7 +328,8 @@ export const localSessionDriver: SessionDriver = {
       // Images are attached for multimodal primary models or reduced to text placeholders for text-only models.
       // We don't run a separate frontend "image pre-analysis" phase here.
       status: 'pending',
-      startTime: Date.now()
+      startTime: Date.now(),
+      storageTurnIndex: acpStorageTurnIndex,
     };
 
     context.flowChatStore.addDialogTurn(sessionId, dialogTurn);

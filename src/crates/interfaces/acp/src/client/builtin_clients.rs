@@ -8,7 +8,6 @@ const LEGACY_CLAUDE_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/claude-code-
 const CODEX_ACP_PACKAGE: &str = "@agentclientprotocol/codex-acp";
 const CODEX_ACP_ARGS: &[&str] = &["--yes", "@agentclientprotocol/codex-acp@latest"];
 const LEGACY_CODEX_ACP_ARGS: &[&str] = &["--yes", "@zed-industries/codex-acp@latest"];
-const DSH_ACP_PACKAGE: &str = "@deepseek-ai/dsh-acp-demo@next";
 
 pub(crate) struct BuiltinAcpClientPreset {
     pub(crate) id: &'static str,
@@ -21,7 +20,15 @@ pub(crate) struct BuiltinAcpClientPreset {
     pub(crate) install_package: Option<&'static str>,
     pub(crate) adapter_package: Option<&'static str>,
     pub(crate) adapter_bin: Option<&'static str>,
+    /// A profile directory BitFun ships and copies into the agent's own home
+    /// before launching it. `None` — every preset but dsh — means the CLI is
+    /// self-contained and the command runs as-is.
+    pub(crate) bundled_profile: Option<&'static str>,
 }
+
+/// The profile directory BitFun materializes for DeepSeek Harness. See
+/// `dsh_profile.rs`: the bridge ships with BitFun, the harness does not.
+pub(crate) const DSH_BUNDLED_PROFILE: &str = "bitfun-acp";
 
 const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
     BuiltinAcpClientPreset {
@@ -32,19 +39,22 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         install_package: Some("opencode-ai"),
         adapter_package: None,
         adapter_bin: None,
+        bundled_profile: None,
     },
-    // DeepSeek Harness exposes its automation surface as a native ACP server
-    // through the `dsh-acp-demo` bin. The server reads `./cordis.yml` by
-    // default; users can override that path in the preset arguments. The ACP
-    // package follows DSH's developer-preview `next` release channel.
+    // DeepSeek Harness (dsh) — the harness has no ACP entry point of its own,
+    // so BitFun ships one as a dsh PROFILE (packages/dsh-acp) and launches it
+    // through the user's own installation. The model and the API key stay in
+    // dsh, where the user configured them; BitFun stores neither. Installable
+    // from npm like codex, hence install_package; native ACP, hence no adapter.
     BuiltinAcpClientPreset {
         id: "dsh",
-        command: "dsh-acp-demo",
-        args: &[],
-        tool_command: "dsh-acp-demo",
-        install_package: Some(DSH_ACP_PACKAGE),
+        command: "dsh",
+        args: &["--profile", DSH_BUNDLED_PROFILE],
+        tool_command: "dsh",
+        install_package: Some("@deepseek-ai/dsh"),
         adapter_package: None,
         adapter_bin: None,
+        bundled_profile: Some(DSH_BUNDLED_PROFILE),
     },
     // Oh My Pi (omp) — a terminal coding agent that speaks ACP natively via
     // `omp acp` (no adapter needed, like opencode). User-managed: omp targets
@@ -60,6 +70,7 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         install_package: None,
         adapter_package: None,
         adapter_bin: None,
+        bundled_profile: None,
     },
     BuiltinAcpClientPreset {
         id: "claude-code",
@@ -69,6 +80,7 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         install_package: Some("@anthropic-ai/claude-code"),
         adapter_package: Some(CLAUDE_ACP_PACKAGE),
         adapter_bin: Some("claude-agent-acp"),
+        bundled_profile: None,
     },
     BuiltinAcpClientPreset {
         id: "codex",
@@ -78,6 +90,7 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         install_package: Some("@openai/codex"),
         adapter_package: Some(CODEX_ACP_PACKAGE),
         adapter_bin: Some("codex-acp"),
+        bundled_profile: None,
     },
 ];
 
@@ -167,19 +180,27 @@ mod tests {
     }
 
     #[test]
-    fn dsh_is_a_native_acp_preset() {
-        let preset = builtin_acp_client_preset("dsh").expect("DSH preset registered");
-        assert_eq!(preset.command, "dsh-acp-demo");
-        assert!(preset.args.is_empty());
-        assert_eq!(preset.tool_command, "dsh-acp-demo");
-        assert_eq!(preset.install_package, Some(DSH_ACP_PACKAGE));
+    fn dsh_preset_launches_the_bitfun_profile() {
+        let preset = builtin_acp_client_preset("dsh").expect("dsh preset registered");
+        assert_eq!(preset.command, "dsh");
+        assert_eq!(preset.tool_command, "dsh");
+        // The launch IS the profile: BitFun ships the bridge, dsh runs it.
+        assert_eq!(preset.args, &["--profile", DSH_BUNDLED_PROFILE]);
+        assert_eq!(preset.bundled_profile, Some(DSH_BUNDLED_PROFILE));
+        // Native ACP — the bridge is the profile, not a separate adapter.
         assert!(preset.adapter_package.is_none());
         assert!(preset.adapter_bin.is_none());
+        // The harness itself is a plain npm global, so the installer applies.
+        assert_eq!(preset.install_package, Some("@deepseek-ai/dsh"));
 
-        let config = default_config_for_builtin_client("dsh").expect("DSH config");
-        assert!(config.enabled);
-        assert_eq!(config.command, "dsh-acp-demo");
-        assert!(config.args.is_empty());
+        // Every other preset is self-contained: nothing to materialize.
+        for preset in BUILTIN_ACP_CLIENT_PRESETS.iter().filter(|p| p.id != "dsh") {
+            assert!(
+                preset.bundled_profile.is_none(),
+                "{} needs no profile",
+                preset.id
+            );
+        }
     }
 
     #[test]
