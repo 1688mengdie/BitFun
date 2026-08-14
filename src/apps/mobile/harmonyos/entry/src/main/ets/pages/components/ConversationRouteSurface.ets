@@ -33,6 +33,7 @@ export struct ConversationRouteSurface {
   @Param showBackButton: boolean = false;
   @Param showSidebarRestoreButton: boolean = false;
   @Param useWidePresentation: boolean = false;
+  @Param hoverOperateMode: boolean = false;
   @Param contentHorizontalOffset: number = 0;
   @Event onRestoreSidebar: () => void = () => {};
 
@@ -54,6 +55,7 @@ export struct ConversationRouteSurface {
           modelCatalog: toConversationUiModelCatalog(this.remotePageState.conversation.modelCatalog),
           selectedModelId: this.remoteCreateState.selectedModelId,
           showSidebarRestoreButton: this.showSidebarRestoreButton,
+          hoverOperateMode: this.hoverOperateMode,
           onRestoreSidebar: this.onRestoreSidebar,
           onBack: this.actions.onRemoteCreate.back,
           onToggleDeviceMenu: this.actions.onRemoteCreate.toggleDevices,
@@ -83,6 +85,7 @@ export struct ConversationRouteSurface {
           showSidebarRestoreButton: this.showSidebarRestoreButton,
           composerPresentation: this.useWidePresentation ? ComposerPresentation.Floating : ComposerPresentation.Compact,
           contentHorizontalOffset: this.contentHorizontalOffset,
+          hoverOperateMode: this.hoverOperateMode,
           onRestoreSidebar: this.onRestoreSidebar,
           onIntent: (intent: ConversationIntent) => this.actions.onConversationIntent(this.route, intent)
         })
