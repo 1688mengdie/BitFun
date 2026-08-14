@@ -6771,7 +6771,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .unwrap_or_default();
             tokio::spawn(async move {
                 let allow_ai = is_ai_session_title_generation_enabled().await;
-                let resolved = sm.resolve_session_title(&msg, Some(20), allow_ai).await;
+                let resolved = sm
+                    .resolve_session_title(&sid, &msg, Some(20), allow_ai)
+                    .await;
 
                 match sm
                     .update_session_title_if_current(&sid, &expected_title, &resolved.title)
@@ -13027,7 +13029,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let allow_ai = is_ai_session_title_generation_enabled().await;
         let resolved = self
             .session_manager
-            .resolve_session_title(user_message, max_length, allow_ai)
+            .resolve_session_title(session_id, user_message, max_length, allow_ai)
             .await;
 
         self.session_manager

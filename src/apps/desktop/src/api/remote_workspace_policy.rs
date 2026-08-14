@@ -192,7 +192,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("add_skill", RemoteWorkspacePolicy::LegacyUnaudited),
-    ("analyze_work_state", RemoteWorkspacePolicy::LegacyUnaudited),
     (
         "apply_external_mcp_import_command",
         RemoteWorkspacePolicy::RemoteUnsupported,
@@ -499,10 +498,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "generate_commit_message",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
-    (
-        "generate_greeting_only",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
     ("generate_insights", RemoteWorkspacePolicy::RemoteRouted),
     (
         "generate_session_title",
@@ -783,10 +778,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("get_tool_info", RemoteWorkspacePolicy::LegacyUnaudited),
     ("get_turn_files", RemoteWorkspacePolicy::LegacyUnaudited),
     ("get_watched_paths", RemoteWorkspacePolicy::LegacyUnaudited),
-    (
-        "get_work_state_summary",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
     ("git_add_files", RemoteWorkspacePolicy::RemoteRouted),
     ("git_add_worktree", RemoteWorkspacePolicy::RemoteUnsupported),
     ("git_checkout_branch", RemoteWorkspacePolicy::RemoteRouted),
@@ -1375,10 +1366,6 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "probe_acp_client_requirements",
-        RemoteWorkspacePolicy::LegacyUnaudited,
-    ),
-    (
-        "quick_analyze_work_state",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     (
@@ -2260,7 +2247,6 @@ mod tests {
         "accept_session",
         "activate_session_goal",
         "add_skill",
-        "analyze_work_state",
         "apply_patch",
         "archive_all_sessions",
         "archive_session",
@@ -2323,7 +2309,6 @@ mod tests {
         "fetch_mcp_app_resource",
         "fork_session",
         "generate_commit_message",
-        "generate_greeting_only",
         "generate_session_title",
         "get_acp_clients",
         "get_acp_session_commands",
@@ -2387,7 +2372,6 @@ mod tests {
         "get_tool_info",
         "get_turn_files",
         "get_watched_paths",
-        "get_work_state_summary",
         "grant_miniapp_path",
         "grant_miniapp_workspace",
         "import_agent_companion_pet_package",
@@ -2501,7 +2485,6 @@ mod tests {
         "predownload_acp_client_adapter",
         "preview_commit_message",
         "probe_acp_client_requirements",
-        "quick_analyze_work_state",
         "quick_commit_message",
         "read_background_command_output",
         "read_file_content",
