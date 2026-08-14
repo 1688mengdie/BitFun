@@ -159,6 +159,8 @@ export const SETTINGS_TAB_SEARCH_CONTENT: Record<ConfigTab, readonly SettingsTab
     { ns: 'settings/thresholds', key: 'fields.deep_review.max_parallel_instances' },
     { ns: 'settings/thresholds', key: 'fields.memories.summary_token_limit' },
     { ns: 'settings/thresholds', key: 'fields.goal.idle_wakeup_delay_ms' },
+    { ns: 'settings/thresholds', key: 'fields.execution.max_rounds' },
+    { ns: 'settings/thresholds', key: 'fields.execution.empty_input_guard' },
   ],
 
   'mcp-tools': [

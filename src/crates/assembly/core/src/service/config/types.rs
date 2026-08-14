@@ -954,6 +954,9 @@ pub struct AiThresholdsConfig {
     /// Goal idle-wakeup and auto-continuation budgets.
     #[serde(default)]
     pub goal: GoalThresholds,
+    /// Execution-domain thresholds (R-MR-07 配置域扩展：读取/搜索重复拦截).
+    #[serde(default)]
+    pub execution: ExecutionThresholds,
 }
 
 impl Default for AiThresholdsConfig {
@@ -970,6 +973,7 @@ impl Default for AiThresholdsConfig {
             memories: MemoryThresholds::default(),
             output_tokens: OutputTokensThresholds::default(),
             goal: GoalThresholds::default(),
+            execution: ExecutionThresholds::default(),
         }
     }
 }
@@ -1005,6 +1009,44 @@ pub struct SubagentThresholds {
     /// over. `0` disables the cooldown (rejection is instantaneous).
     #[serde(default = "default_subagent_dispatch_cooldown_secs")]
     pub dispatch_cooldown_secs: u64,
+    /// Sliding-window cap on how many `send_input` continuations a single
+    /// subagent session may accept per window
+    /// (`ai.thresholds.subagent.max_send_input_per_session_window`).
+    ///
+    /// A persistent subagent session has no per-turn ceiling today: a runaway
+    /// caller can re-issue `send_input` against the same session id without
+    /// bound (observed: 509 continuations / 1.33 亿 token / 1 hour,
+    /// 487 turns/h). This per-session frequency gate rejects a continuation
+    /// once the window cap is reached. `0` disables the limit (legacy
+    /// behavior, not the default).
+    #[serde(default = "default_subagent_max_send_input_per_session_window")]
+    pub max_send_input_per_session_window: usize,
+    /// Sliding window length (seconds) for the per-session continuation cap.
+    #[serde(default = "default_subagent_send_input_window_secs")]
+    pub send_input_window_secs: u64,
+    /// Cumulative 24h token ceiling per subagent session
+    /// (`ai.thresholds.subagent.max_tokens_per_session_24h`).
+    ///
+    /// Token 黑洞 R-MR-12: a single continued subagent session burned
+    /// 1.33 亿 tokens in one hour. This gate rejects a continuation once the
+    /// session's cumulative billed tokens cross the ceiling (the session
+    /// itself remains readable). `0` disables the limit (legacy behavior, not
+    /// the default).
+    #[serde(default = "default_subagent_max_tokens_per_session_24h")]
+    pub max_tokens_per_session_24h: usize,
+    /// Cumulative 24h continuation-turn ceiling per subagent session
+    /// (`ai.thresholds.subagent.max_send_input_per_session_24h`).
+    ///
+    /// Belt-and-suspenders behind the frequency window: a session that slowly
+    /// but relentlessly accumulates continuations (at or just under the
+    /// window rate) still trips this daily turn ceiling. `0` disables the
+    /// limit (legacy behavior, not the default).
+    #[serde(default = "default_subagent_max_send_input_per_session_24h")]
+    pub max_send_input_per_session_24h: usize,
+    /// Cumulative window length (seconds) for the per-session token and turn
+    /// ceilings. Defaults to 24 hours.
+    #[serde(default = "default_subagent_session_24h_window_secs")]
+    pub session_24h_window_secs: u64,
 }
 
 impl Default for SubagentThresholds {
@@ -1016,6 +1058,11 @@ impl Default for SubagentThresholds {
             max_dispatch_per_parent_window: default_subagent_max_dispatch_per_parent_window(),
             dispatch_window_secs: default_subagent_dispatch_window_secs(),
             dispatch_cooldown_secs: default_subagent_dispatch_cooldown_secs(),
+            max_send_input_per_session_window: default_subagent_max_send_input_per_session_window(),
+            send_input_window_secs: default_subagent_send_input_window_secs(),
+            max_tokens_per_session_24h: default_subagent_max_tokens_per_session_24h(),
+            max_send_input_per_session_24h: default_subagent_max_send_input_per_session_24h(),
+            session_24h_window_secs: default_subagent_session_24h_window_secs(),
         }
     }
 }
@@ -1042,6 +1089,37 @@ fn default_subagent_dispatch_window_secs() -> u64 {
 
 fn default_subagent_dispatch_cooldown_secs() -> u64 {
     300
+}
+
+/// Default per-session `send_input` frequency cap (turns per sliding window).
+/// Mirrors `SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_WINDOW` in
+/// coordinator.rs. `0` disables the frequency gate.
+fn default_subagent_max_send_input_per_session_window() -> usize {
+    60
+}
+
+/// Default continuation frequency window length (seconds).
+fn default_subagent_send_input_window_secs() -> u64 {
+    3600
+}
+
+/// Default cumulative 24h token ceiling per subagent session. Conservative
+/// value chosen from the observed token 黑洞 (1.33 亿 tokens/hour); `0`
+/// disables the ceiling.
+fn default_subagent_max_tokens_per_session_24h() -> usize {
+    30_000_000
+}
+
+/// Default cumulative 24h continuation-turn ceiling per subagent session.
+/// Conservative value chosen from the observed runaway (487 turns/h).
+fn default_subagent_max_send_input_per_session_24h() -> usize {
+    300
+}
+
+/// Default cumulative window length (seconds) for the per-session token and
+/// turn ceilings (24h).
+fn default_subagent_session_24h_window_secs() -> u64 {
+    24 * 3600
 }
 
 /// Context-compression budgets and recovery counts (`ai.thresholds.compression.*`).
@@ -1697,6 +1775,136 @@ fn default_goal_max_auto_continuations() -> u32 {
     10
 }
 
+/// Execution-domain thresholds (`ai.thresholds.execution.*`).
+///
+/// R-MR-11 读取/搜索重复拦截配置域（R-MR-07 配置域扩展）。
+/// 读取/搜索类工具（Read/Grep/Glob/LS/WebSearch/WebFetch）连续操作同一
+/// 目标指纹达 `repeated_read_limit` 次时，第 N 次调用被本地拦截（不执行
+/// 工具、不发起 LLM 请求），并把引导正确做法的提示作为 tool result 返回。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ExecutionThresholds {
+    /// 读取/搜索重复拦截总开关。默认 true（R-MR-11 主人定标）。
+    #[serde(default = "default_execution_repeated_read_enabled")]
+    pub repeated_read_enabled: bool,
+    /// 连续同目标指纹的拦截阈值（第 N 次拦截）。默认 3。
+    #[serde(default = "default_execution_repeated_read_limit")]
+    pub repeated_read_limit: usize,
+    /// 小文件特判阈值（行数）。连续分段读行数小于该值的文件时，拦截提示
+    /// 直接引导「文件较小，建议一次读全文」。默认 200。
+    #[serde(default = "default_execution_small_file_line_threshold")]
+    pub small_file_line_threshold: usize,
+    /// 单 turn 总轮数上限（R-MR-01，主人定标 2026-08-14：200 → 50）。
+    ///
+    /// 工具轮黑洞防御层 1：任何轮次（工具/thinking/finalize）打满即截断并
+    /// 本地合成 final response（finalization_reason = "max_rounds"）。与顶层
+    /// `ai.max_rounds`（桌面装配 legacy 键）语义一致，R-MR-07 统一入口为
+    /// `ai.thresholds.execution.max_rounds`，消费方 R-MR-02~06 优先读此域。
+    #[serde(default = "default_execution_max_rounds")]
+    pub max_rounds: usize,
+    /// 连续纯工具轮预算（R-MR-02，层 2）。连续 N 轮都是纯工具调用（无模型
+    /// 文本产出）→ 强制收敛本地合成；成功轮（有文本产出/最终回复）计数归零。
+    #[serde(default = "default_execution_consecutive_tool_rounds")]
+    pub consecutive_tool_rounds: usize,
+    /// 连续搜索无思考轮预算（R-MR-05b，层 5b）。连续 N 轮都是搜索类工具
+    /// 且无模型思考/文本产出 → 强制收敛。搜索是积分大头，比通用层 2 更严。
+    #[serde(default = "default_execution_consecutive_search_rounds")]
+    pub consecutive_search_rounds: usize,
+    /// 重复工具调用指纹去重阈值（R-MR-03，层 3）。同一工具 + 同一参数签名
+    /// 连续出现 N 次 → 判定死循环 → 强制收敛（覆盖搜索工具疯狗成功重复场景）。
+    #[serde(default = "default_execution_duplicate_tool_calls")]
+    pub duplicate_tool_calls: usize,
+    /// 无进展检测阈值（R-MR-04，层 4）。工具结果内容 hash 连续相同 N 次
+    /// → 判定假进展 → 强制收敛（覆盖「同工具不同参数但结果一样」场景）。
+    #[serde(default = "default_execution_no_progress_results")]
+    pub no_progress_results: usize,
+    /// 单 turn 工具调用总次数上限（R-MR-05，层 5）。覆盖「不同工具轮流转但
+    /// 总量爆炸」场景（实测疯狗单轮近 250 次搜索）。
+    #[serde(default = "default_execution_tool_calls_per_turn")]
+    pub tool_calls_per_turn: usize,
+    /// 空输入轮拦截开关（R-MR-06，层 6 最根本防线）。模型请求发出前检查：
+    /// 无用户输入 + 非首次轮 + 无进展 → 本地合成不调 API。默认 true（守卫
+    /// 开启，防御默认开，CEO 定标 2026-08-14）。
+    #[serde(default = "default_execution_empty_input_guard")]
+    pub empty_input_guard: bool,
+    /// 消息序列重复闸门开关（R-MR-10）。请求发出前比对本轮与最近 N 轮的
+    /// messages 序列指纹（hash 全部消息内容 + 工具调用 + 工具结果），窗口内
+    /// 相同 → 判定死循环 → 不调 API、本地合成 final response。默认 true。
+    #[serde(default = "default_execution_duplicate_message_enabled")]
+    pub duplicate_message_enabled: bool,
+    /// 消息序列重复闸门窗口 N（R-MR-10）。与最近 N 轮指纹比对（默认 3），
+    /// 窗口内任一相同即拦；正常轮指纹变化 → 窗口滑动。
+    #[serde(default = "default_execution_duplicate_message_window")]
+    pub duplicate_message_window: usize,
+}
+
+impl Default for ExecutionThresholds {
+    fn default() -> Self {
+        Self {
+            repeated_read_enabled: default_execution_repeated_read_enabled(),
+            repeated_read_limit: default_execution_repeated_read_limit(),
+            small_file_line_threshold: default_execution_small_file_line_threshold(),
+            max_rounds: default_execution_max_rounds(),
+            consecutive_tool_rounds: default_execution_consecutive_tool_rounds(),
+            consecutive_search_rounds: default_execution_consecutive_search_rounds(),
+            duplicate_tool_calls: default_execution_duplicate_tool_calls(),
+            no_progress_results: default_execution_no_progress_results(),
+            tool_calls_per_turn: default_execution_tool_calls_per_turn(),
+            empty_input_guard: default_execution_empty_input_guard(),
+            duplicate_message_enabled: default_execution_duplicate_message_enabled(),
+            duplicate_message_window: default_execution_duplicate_message_window(),
+        }
+    }
+}
+
+fn default_execution_repeated_read_enabled() -> bool {
+    true
+}
+
+fn default_execution_repeated_read_limit() -> usize {
+    3
+}
+
+fn default_execution_small_file_line_threshold() -> usize {
+    200
+}
+
+fn default_execution_max_rounds() -> usize {
+    50
+}
+
+fn default_execution_consecutive_tool_rounds() -> usize {
+    20
+}
+
+fn default_execution_consecutive_search_rounds() -> usize {
+    3
+}
+
+fn default_execution_duplicate_tool_calls() -> usize {
+    5
+}
+
+fn default_execution_no_progress_results() -> usize {
+    5
+}
+
+fn default_execution_tool_calls_per_turn() -> usize {
+    30
+}
+
+fn default_execution_empty_input_guard() -> bool {
+    true
+}
+
+fn default_execution_duplicate_message_enabled() -> bool {
+    true
+}
+
+fn default_execution_duplicate_message_window() -> usize {
+    3
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SubagentBatchExecutionPolicy {
@@ -1987,7 +2195,12 @@ pub fn default_legion_deploy_frequency_per_hour() -> usize {
     10
 }
 
-pub const DEFAULT_MAX_ROUNDS: usize = 200;
+/// 工具轮预算上限（主人定标，type-contract 2026-08-14：200 → 50）。
+///
+/// P0 积分止损：搜索工具疯狗连续两轮近 500 次工具轮 + 凌晨 2000 条空请求，
+/// 原 200 上限导致工具轮无限续轮。收缩至 50 后正常任务（开局工具 1-5 轮 +
+/// 消化 1-2 轮）远低于此值，行为零变化。
+pub const DEFAULT_MAX_ROUNDS: usize = 50;
 
 fn default_max_rounds() -> usize {
     DEFAULT_MAX_ROUNDS
@@ -4015,5 +4228,167 @@ mod tests {
         assert_eq!(serialized["legion_max_nodes"], 5);
         assert_eq!(serialized["legion_max_total_nodes"], 30);
         assert_eq!(serialized["legion_deploy_frequency_per_hour"], 0);
+    }
+
+    #[test]
+    fn subagent_continuation_thresholds_default_to_legacy_safe_values() {
+        let config = AIConfig::default();
+        let subagent = &config.thresholds.subagent;
+        assert_eq!(subagent.max_send_input_per_session_window, 60);
+        assert_eq!(subagent.send_input_window_secs, 3600);
+        assert_eq!(subagent.max_tokens_per_session_24h, 30_000_000);
+        assert_eq!(subagent.max_send_input_per_session_24h, 300);
+        assert_eq!(subagent.session_24h_window_secs, 24 * 3600);
+
+        // Unset config must deserialize to the same defaults (零回归).
+        let empty: AIConfig =
+            serde_json::from_value(serde_json::json!({})).expect("empty ai config should default");
+        let subagent = &empty.thresholds.subagent;
+        assert_eq!(subagent.max_send_input_per_session_window, 60);
+        assert_eq!(subagent.send_input_window_secs, 3600);
+        assert_eq!(subagent.max_tokens_per_session_24h, 30_000_000);
+        assert_eq!(subagent.max_send_input_per_session_24h, 300);
+        assert_eq!(subagent.session_24h_window_secs, 24 * 3600);
+    }
+
+    #[test]
+    fn subagent_continuation_thresholds_round_trip_explicit_values() {
+        let config: AIConfig = serde_json::from_value(serde_json::json!({
+            "models": [],
+            "thresholds": {
+                "subagent": {
+                    "max_send_input_per_session_window": 10,
+                    "send_input_window_secs": 60,
+                    "max_tokens_per_session_24h": 1_000_000,
+                    "max_send_input_per_session_24h": 5,
+                    "session_24h_window_secs": 3600
+                }
+            }
+        }))
+        .expect("subagent continuation thresholds should deserialize");
+
+        let subagent = &config.thresholds.subagent;
+        assert_eq!(subagent.max_send_input_per_session_window, 10);
+        assert_eq!(subagent.send_input_window_secs, 60);
+        assert_eq!(subagent.max_tokens_per_session_24h, 1_000_000);
+        assert_eq!(subagent.max_send_input_per_session_24h, 5);
+        assert_eq!(subagent.session_24h_window_secs, 3600);
+
+        let serialized = serde_json::to_value(&config).expect("config should serialize");
+        let subagent_json = &serialized["thresholds"]["subagent"];
+        assert_eq!(subagent_json["max_send_input_per_session_window"], 10);
+        assert_eq!(subagent_json["send_input_window_secs"], 60);
+        assert_eq!(subagent_json["max_tokens_per_session_24h"], 1_000_000);
+        assert_eq!(subagent_json["max_send_input_per_session_24h"], 5);
+        assert_eq!(subagent_json["session_24h_window_secs"], 3600);
+    }
+
+    #[test]
+    fn execution_thresholds_default_to_owner_specified_values() {
+        // R-MR-07 验收断言：9 项阈值默认值 = 50/20/3/5/5/30/true/true/3
+        // （max_rounds/consecutive_tool_rounds/consecutive_search_rounds/
+        //  duplicate_tool_calls/no_progress_results/tool_calls_per_turn/
+        //  empty_input_guard/duplicate_message_enabled/duplicate_message_window；
+        //  empty_input_guard=true CEO 定标 2026-08-14；
+        //  duplicate_message_enabled/window R-MR-10 主人定标 2026-08-14）。
+        let config = AIConfig::default();
+        let execution = &config.thresholds.execution;
+        assert_eq!(execution.max_rounds, 50);
+        assert_eq!(execution.consecutive_tool_rounds, 20);
+        assert_eq!(execution.consecutive_search_rounds, 3);
+        assert_eq!(execution.duplicate_tool_calls, 5);
+        assert_eq!(execution.no_progress_results, 5);
+        assert_eq!(execution.tool_calls_per_turn, 30);
+        assert!(execution.empty_input_guard, "empty_input_guard 默认开启（CEO 定标）");
+        assert!(
+            execution.duplicate_message_enabled,
+            "duplicate_message_enabled 默认开启（R-MR-10 主人定标）"
+        );
+        assert_eq!(execution.duplicate_message_window, 3, "窗口默认 3（R-MR-10）");
+
+        // Unset config（空 AIConfig）反序列化得到相同默认值（零回归）。
+        let empty: AIConfig =
+            serde_json::from_value(serde_json::json!({})).expect("empty ai config should default");
+        let execution = &empty.thresholds.execution;
+        assert_eq!(execution.max_rounds, 50);
+        assert_eq!(execution.consecutive_tool_rounds, 20);
+        assert_eq!(execution.consecutive_search_rounds, 3);
+        assert_eq!(execution.duplicate_tool_calls, 5);
+        assert_eq!(execution.no_progress_results, 5);
+        assert_eq!(execution.tool_calls_per_turn, 30);
+        assert!(execution.empty_input_guard);
+        assert!(execution.duplicate_message_enabled);
+        assert_eq!(execution.duplicate_message_window, 3);
+    }
+
+    #[test]
+    fn execution_thresholds_round_trip_explicit_values() {
+        // R-MR-07 验收断言：改值生效（经配置服务同一反序列化路径读回一致）。
+        let config: AIConfig = serde_json::from_value(serde_json::json!({
+            "models": [],
+            "thresholds": {
+                "execution": {
+                    "max_rounds": 25,
+                    "consecutive_tool_rounds": 10,
+                    "consecutive_search_rounds": 2,
+                    "duplicate_tool_calls": 3,
+                    "no_progress_results": 4,
+                    "tool_calls_per_turn": 15,
+                    "empty_input_guard": false,
+                    "duplicate_message_enabled": false,
+                    "duplicate_message_window": 5
+                }
+            }
+        }))
+        .expect("execution thresholds should deserialize");
+
+        let execution = &config.thresholds.execution;
+        assert_eq!(execution.max_rounds, 25);
+        assert_eq!(execution.consecutive_tool_rounds, 10);
+        assert_eq!(execution.consecutive_search_rounds, 2);
+        assert_eq!(execution.duplicate_tool_calls, 3);
+        assert_eq!(execution.no_progress_results, 4);
+        assert_eq!(execution.tool_calls_per_turn, 15);
+        assert!(!execution.empty_input_guard);
+        assert!(!execution.duplicate_message_enabled);
+        assert_eq!(execution.duplicate_message_window, 5);
+
+        let serialized = serde_json::to_value(&config).expect("config should serialize");
+        let execution_json = &serialized["thresholds"]["execution"];
+        assert_eq!(execution_json["max_rounds"], 25);
+        assert_eq!(execution_json["consecutive_tool_rounds"], 10);
+        assert_eq!(execution_json["consecutive_search_rounds"], 2);
+        assert_eq!(execution_json["duplicate_tool_calls"], 3);
+        assert_eq!(execution_json["no_progress_results"], 4);
+        assert_eq!(execution_json["tool_calls_per_turn"], 15);
+        assert_eq!(execution_json["empty_input_guard"], false);
+        assert_eq!(execution_json["duplicate_message_enabled"], false);
+        assert_eq!(execution_json["duplicate_message_window"], 5);
+    }
+
+    #[test]
+    fn execution_thresholds_partial_overrides_keep_remaining_defaults() {
+        // R-MR-07 验收断言：边界——只改 1 项，其余 8 项保持默认（serde(default)
+        // 逐字段合并，部分配置不吞默认值）。
+        let config: AIConfig = serde_json::from_value(serde_json::json!({
+            "models": [],
+            "thresholds": {
+                "execution": {
+                    "max_rounds": 10
+                }
+            }
+        }))
+        .expect("partial execution thresholds should deserialize");
+
+        let execution = &config.thresholds.execution;
+        assert_eq!(execution.max_rounds, 10);
+        assert_eq!(execution.consecutive_tool_rounds, 20);
+        assert_eq!(execution.consecutive_search_rounds, 3);
+        assert_eq!(execution.duplicate_tool_calls, 5);
+        assert_eq!(execution.no_progress_results, 5);
+        assert_eq!(execution.tool_calls_per_turn, 30);
+        assert!(execution.empty_input_guard);
+        assert!(execution.duplicate_message_enabled);
+        assert_eq!(execution.duplicate_message_window, 3);
     }
 }

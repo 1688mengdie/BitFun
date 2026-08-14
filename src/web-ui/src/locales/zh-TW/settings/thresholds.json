@@ -116,6 +116,16 @@
       "__title": "目標續接",
       "idle_wakeup_delay_ms": "目標閒置喚醒延遲（毫秒）",
       "max_auto_continuations": "目標自動續接上限"
+    },
+    "execution": {
+      "__title": "工具輪執行",
+      "max_rounds": "單輪對話最大輪數",
+      "consecutive_tool_rounds": "連續純工具輪上限",
+      "consecutive_search_rounds": "連續無思考搜尋輪上限",
+      "duplicate_tool_calls": "重複工具呼叫指紋閾值",
+      "no_progress_results": "工具結果無變化輪閾值",
+      "tool_calls_per_turn": "單輪對話工具呼叫總數上限",
+      "empty_input_guard": "攔截空輸入輪"
     }
   }
 }

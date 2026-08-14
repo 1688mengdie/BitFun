@@ -167,6 +167,24 @@ const SUBAGENT_DEFAULT_MAX_DISPATCH_PER_PARENT_WINDOW: usize = 20;
 const SUBAGENT_DEFAULT_DISPATCH_WINDOW_SECS: u64 = 3600;
 /// Default cooldown (seconds) after the dispatch cap is hit. `0` disables.
 const SUBAGENT_DEFAULT_DISPATCH_COOLDOWN_SECS: u64 = 300;
+/// Default per-session `send_input` frequency cap (turns per sliding window)
+/// (`ai.thresholds.subagent.max_send_input_per_session_window`). A single
+/// subagent session has no per-turn ceiling today; a runaway caller can
+/// re-issue `send_input` without bound (token 黑洞 R-MR-12: 509
+/// continuations / 1.33 亿 token / 1h, 487 turns/h). `0` disables.
+const SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_WINDOW: usize = 60;
+/// Default continuation frequency window length (seconds).
+const SUBAGENT_DEFAULT_SEND_INPUT_WINDOW_SECS: u64 = 3600;
+/// Default cumulative 24h token ceiling per subagent session
+/// (`ai.thresholds.subagent.max_tokens_per_session_24h`). Conservative value
+/// chosen from the observed token 黑洞 (1.33 亿 tokens/hour). `0` disables.
+const SUBAGENT_DEFAULT_MAX_TOKENS_PER_SESSION_24H: usize = 30_000_000;
+/// Default cumulative 24h continuation-turn ceiling per subagent session
+/// (`ai.thresholds.subagent.max_send_input_per_session_24h`). `0` disables.
+const SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_24H: usize = 300;
+/// Default cumulative window length (seconds) for the per-session token and
+/// turn ceilings (24h).
+const SUBAGENT_DEFAULT_SESSION_24H_WINDOW_SECS: u64 = 24 * 3600;
 const SUBAGENT_TIMEOUT_GRACE_PERIOD: Duration = Duration::from_secs(10);
 const SESSION_REFERENCES_METADATA_KEY: &str = "sessionReferences";
 const MAX_SESSION_REFERENCES_PER_TURN: usize = 5;
@@ -1311,6 +1329,17 @@ pub struct ConversationCoordinator {
     /// = dispatch timestamp. Identical tasks re-dispatched inside the window
     /// are rejected as duplicates.
     subagent_dispatch_fingerprints: Arc<RwLock<HashMap<String, i64>>>,
+    /// Per-subagent-session continuation ledger (token 黑洞 R-MR-12): key =
+    /// subagent session id, value = monotonically increasing Unix timestamps
+    /// of every `send_input` continuation. Both the sliding-window frequency
+    /// gate (`max_send_input_per_session_window`) and the 24h cumulative turn
+    /// ceiling (`max_send_input_per_session_24h`) read this ledger.
+    subagent_send_input_ledger: Arc<RwLock<HashMap<String, Vec<i64>>>>,
+    /// Per-subagent-session cumulative billed token ledger (token 黑洞
+    /// R-MR-12): key = subagent session id, value = (cumulative tokens, first
+    /// billing timestamp). The 24h cumulative token ceiling
+    /// (`max_tokens_per_session_24h`) reads this ledger.
+    subagent_session_token_ledger: Arc<RwLock<HashMap<String, (u64, i64)>>>,
     /// Registry for dynamically adjusting subagent timeouts.
     subagent_timeout_registry: Arc<RwLock<HashMap<String, Arc<SubagentTimeoutHandle>>>>,
     /// Active subagent executions keyed by subagent session id.
@@ -2378,6 +2407,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             subagent_profile_concurrency_limiters: Arc::new(RwLock::new(HashMap::new())),
             subagent_dispatch_ledger: Arc::new(RwLock::new(HashMap::new())),
             subagent_dispatch_fingerprints: Arc::new(RwLock::new(HashMap::new())),
+            subagent_send_input_ledger: Arc::new(RwLock::new(HashMap::new())),
+            subagent_session_token_ledger: Arc::new(RwLock::new(HashMap::new())),
             subagent_timeout_registry: Arc::new(RwLock::new(HashMap::new())),
             active_subagent_executions: Arc::new(DashMap::new()),
             background_subagent_tasks: Arc::new(DashMap::new()),
@@ -3229,6 +3260,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await
             .remove(session_id);
         self.active_subagent_executions.remove(session_id);
+        // token 黑洞 R-MR-12: a recycled session id must not inherit the
+        // previous incarnation's continuation/token budgets.
+        self.subagent_send_input_ledger
+            .write()
+            .await
+            .remove(session_id);
+        self.subagent_session_token_ledger
+            .write()
+            .await
+            .remove(session_id);
         if let Some(scheduler) = get_global_scheduler() {
             scheduler.cleanup_session_state(session_id).await;
         }
@@ -9277,6 +9318,83 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         thresholds.subagent.dispatch_cooldown_secs
     }
 
+    /// Resolve the per-session `send_input` frequency cap
+    /// (`ai.thresholds.subagent.max_send_input_per_session_window`), falling
+    /// back to `SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_WINDOW` when
+    /// unset. `0` disables the frequency gate.
+    async fn configured_subagent_max_send_input_per_session_window(&self) -> usize {
+        let Ok(config_service) = GlobalConfigManager::get_service().await else {
+            return SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_WINDOW;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_WINDOW;
+        };
+        thresholds.subagent.max_send_input_per_session_window
+    }
+
+    /// Resolve the per-session `send_input` frequency window (seconds).
+    async fn configured_subagent_send_input_window_secs(&self) -> u64 {
+        let Ok(config_service) = GlobalConfigManager::get_service().await else {
+            return SUBAGENT_DEFAULT_SEND_INPUT_WINDOW_SECS;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return SUBAGENT_DEFAULT_SEND_INPUT_WINDOW_SECS;
+        };
+        thresholds.subagent.send_input_window_secs
+    }
+
+    /// Resolve the per-session cumulative 24h token ceiling
+    /// (`ai.thresholds.subagent.max_tokens_per_session_24h`). `0` disables.
+    async fn configured_subagent_max_tokens_per_session_24h(&self) -> usize {
+        let Ok(config_service) = GlobalConfigManager::get_service().await else {
+            return SUBAGENT_DEFAULT_MAX_TOKENS_PER_SESSION_24H;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return SUBAGENT_DEFAULT_MAX_TOKENS_PER_SESSION_24H;
+        };
+        thresholds.subagent.max_tokens_per_session_24h
+    }
+
+    /// Resolve the per-session cumulative 24h continuation-turn ceiling
+    /// (`ai.thresholds.subagent.max_send_input_per_session_24h`). `0`
+    /// disables.
+    async fn configured_subagent_max_send_input_per_session_24h(&self) -> usize {
+        let Ok(config_service) = GlobalConfigManager::get_service().await else {
+            return SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_24H;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return SUBAGENT_DEFAULT_MAX_SEND_INPUT_PER_SESSION_24H;
+        };
+        thresholds.subagent.max_send_input_per_session_24h
+    }
+
+    /// Resolve the per-session cumulative window length (seconds) for the
+    /// token and turn ceilings (defaults to 24h).
+    async fn configured_subagent_session_24h_window_secs(&self) -> u64 {
+        let Ok(config_service) = GlobalConfigManager::get_service().await else {
+            return SUBAGENT_DEFAULT_SESSION_24H_WINDOW_SECS;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return SUBAGENT_DEFAULT_SESSION_24H_WINDOW_SECS;
+        };
+        thresholds.subagent.session_24h_window_secs
+    }
+
     /// Cumulative per-parent subagent dispatch gate (token 黑洞批次2).
     ///
     /// The concurrency limiter only bounds simultaneously running subagents;
@@ -9370,6 +9488,150 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 parent_session_id,
                 agent_type,
                 task_text.trim().chars().take(40).collect::<String>()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Per-session `send_input` continuation gate (token 黑洞 R-MR-12).
+    ///
+    /// A persistent subagent session previously had no per-turn ceiling: a
+    /// runaway caller could re-issue `send_input` against the same session id
+    /// without bound (observed: 509 continuations / 1.33 亿 token / 1 hour,
+    /// 487 turns/h). This gate enforces, per subagent session id:
+    ///
+    /// 1. a sliding-window frequency cap
+    ///    (`ai.thresholds.subagent.max_send_input_per_session_window` turns
+    ///    per `send_input_window_secs`), and
+    /// 2. a cumulative 24h continuation-turn ceiling
+    ///    (`ai.thresholds.subagent.max_send_input_per_session_24h`).
+    ///
+    /// The cumulative 24h token ceiling is enforced separately in
+    /// [`Self::check_subagent_session_token_budget`] because token usage is
+    /// only known after a turn settles. `0` on either cap disables that gate
+    /// (legacy behavior).
+    ///
+    /// A continuation is recorded here when it passes the gate (same eager
+    /// ledger semantics as the dispatch gate): a rejected attempt never
+    /// consumes budget. Token usage is additionally recorded per successful
+    /// model round in `record_subagent_send_input_usage`.
+    async fn check_and_record_subagent_send_input(
+        &self,
+        subagent_session_id: &str,
+    ) -> BitFunResult<()> {
+        let window_secs = self.configured_subagent_send_input_window_secs().await;
+        let freq_cap = self
+            .configured_subagent_max_send_input_per_session_window()
+            .await;
+        let daily_cap = self
+            .configured_subagent_max_send_input_per_session_24h()
+            .await;
+        if freq_cap == 0 && daily_cap == 0 {
+            return Ok(());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+        let mut ledger = self.subagent_send_input_ledger.write().await;
+        let entries = ledger.entry(subagent_session_id.to_string()).or_default();
+        let window_secs_i64 = window_secs as i64;
+        let daily_window_secs = self.configured_subagent_session_24h_window_secs().await as i64;
+        let window_floor = now - window_secs_i64.max(1);
+        let daily_floor = now - daily_window_secs.max(1);
+        // Retain entries inside the frequency window (also covers the daily
+        // ceiling, which only needs a count over the last 24h).
+        entries.retain(|timestamp| *timestamp >= daily_floor);
+        let window_count = entries.iter().filter(|timestamp| **timestamp >= window_floor).count();
+        let daily_count = entries.len();
+        if freq_cap > 0 && window_count >= freq_cap {
+            return Err(BitFunError::tool(format!(
+                "Subagent continuation limit reached: subagent session {} was continued {} times within the last {}s (cap {} per {}s). Wait for the window to roll over before sending another send_input.",
+                subagent_session_id,
+                window_count,
+                window_secs,
+                freq_cap,
+                window_secs
+            )));
+        }
+        if daily_cap > 0 && daily_count >= daily_cap {
+            return Err(BitFunError::tool(format!(
+                "Subagent continuation budget exhausted: subagent session {} reached {} send_input turns within the last {}s (24h cap {}). Further continuations are rejected; start a fresh subagent instead.",
+                subagent_session_id,
+                daily_count,
+                daily_window_secs,
+                daily_cap
+            )));
+        }
+        // Record the continuation eagerly (same semantics as the dispatch
+        // ledger): a rejected attempt never consumes budget, and the entry
+        // ages out of the sliding window on its own.
+        entries.push(now);
+        Ok(())
+    }
+
+    /// Commit the billed token usage of a settled continuation into the
+    /// per-session 24h token ledger. Turns that failed before any provider
+    /// request report `total_tokens == 0` and are skipped, so only real model
+    /// usage counts against the token ceiling.
+    async fn record_subagent_send_input_usage(
+        &self,
+        subagent_session_id: &str,
+        tokens_used: usize,
+    ) {
+        if tokens_used == 0 {
+            return;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+        let daily_window_secs = self.configured_subagent_session_24h_window_secs().await as i64;
+        let mut token_ledger = self.subagent_session_token_ledger.write().await;
+        let entry = token_ledger
+            .entry(subagent_session_id.to_string())
+            .or_insert_with(|| (0, now));
+        // The cumulative ceiling uses a rolling 24h window: an old billing
+        // entry that fell out of the window restarts the accounting so a
+        // long-lived (but not runaway) session can keep working.
+        if now - entry.1 >= daily_window_secs.max(1) {
+            *entry = (0, now);
+        }
+        entry.0 = entry.0.saturating_add(tokens_used as u64);
+    }
+
+    /// Per-session cumulative 24h token budget gate (token 黑洞 R-MR-12).
+    ///
+    /// Rejects a `send_input` continuation once the session's cumulative
+    /// billed tokens over the last 24h cross
+    /// `ai.thresholds.subagent.max_tokens_per_session_24h`. `0` disables.
+    async fn check_subagent_session_token_budget(
+        &self,
+        subagent_session_id: &str,
+    ) -> BitFunResult<()> {
+        let cap = self.configured_subagent_max_tokens_per_session_24h().await;
+        if cap == 0 {
+            return Ok(());
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs() as i64)
+            .unwrap_or(0);
+        let daily_window_secs = self.configured_subagent_session_24h_window_secs().await as i64;
+        let token_ledger = self.subagent_session_token_ledger.read().await;
+        let Some(&(cumulative, window_started_at)) = token_ledger.get(subagent_session_id) else {
+            return Ok(());
+        };
+        if now - window_started_at >= daily_window_secs.max(1) {
+            return Ok(());
+        }
+        if cumulative >= cap as u64 {
+            return Err(BitFunError::tool(format!(
+                "Subagent token budget exhausted: subagent session {} consumed {} tokens within the last {}s (24h cap {}). Further continuations are rejected; start a fresh subagent instead.",
+                subagent_session_id,
+                cumulative,
+                daily_window_secs,
+                cap
             )));
         }
         Ok(())
@@ -10277,6 +10539,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                             &exec_result,
                         )
                         .await;
+                        // token 黑洞 R-MR-12: bill the settled continuation's
+                        // token usage into the per-session 24h ledger.
+                        self.record_subagent_send_input_usage(&session_id, exec_result.total_tokens)
+                            .await;
                         Self::finalize_persisted_turn_in_workspace_if_needed(
                             self.session_manager.as_ref(),
                             &session_id,
@@ -10396,6 +10662,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
         let (workspace_turn_status, response_text) = match result {
             Ok(exec_result) => {
+                // token 黑洞 R-MR-12: bill the settled continuation's token
+                // usage into the per-session 24h ledger.
+                self.record_subagent_send_input_usage(&session_id, exec_result.total_tokens)
+                    .await;
                 Self::persist_completed_dialog_turn(
                     self.session_manager.as_ref(),
                     None,
@@ -11178,6 +11448,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 &task_description,
             )
             .await?;
+        } else if let Some(target_session_id) = request.target_session_id.as_deref() {
+            // token 黑洞 R-MR-12: 单子代理会话续接熔断。A persistent subagent
+            // session previously had no per-turn ceiling — send_input against
+            // the same session id could run without bound (observed: 509
+            // continuations / 1.33 亿 token / 1 hour). Enforce the
+            // per-session frequency window and the cumulative 24h turn/token
+            // budgets BEFORE any continuation is prepared or executed.
+            self.check_subagent_session_token_budget(target_session_id)
+                .await?;
+            self.check_and_record_subagent_send_input(target_session_id)
+                .await?;
         }
 
         let model_id = request
@@ -16866,6 +17147,158 @@ mod tests {
             .check_subagent_dispatch_fingerprint("parent-2", "executor", "do the same thing")
             .await
             .expect("a different parent is allowed");
+    }
+
+    #[tokio::test]
+    async fn subagent_send_input_frequency_gate_rejects_continuation_storm() {
+        let (coordinator, _session_manager) = test_coordinator();
+
+        // Default frequency cap is 60 continuations per 3600s window. Fire
+        // 70 continuations and assert the 61st onward are rejected (R-MR-12
+        // root-cause regression: a single subagent session had no per-turn
+        // ceiling — observed 509 continuations / 1.33 亿 token / 1h).
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        for _ in 0..70 {
+            match coordinator
+                .check_and_record_subagent_send_input("subagent-storm")
+                .await
+            {
+                Ok(()) => accepted += 1,
+                Err(error) => {
+                    rejected += 1;
+                    let message = error.to_string();
+                    assert!(
+                        message.contains("Subagent continuation limit reached"),
+                        "unexpected rejection: {message}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            accepted, 60,
+            "frequency gate must allow exactly the configured window cap"
+        );
+        assert_eq!(rejected, 10, "storm continuations must be rejected");
+    }
+
+    #[tokio::test]
+    async fn subagent_send_input_gate_allows_low_frequency_continuations() {
+        let (coordinator, _session_manager) = test_coordinator();
+
+        // Normal usage: a handful of continuations far below the caps must
+        // never be rejected (零误伤).
+        for _ in 0..5 {
+            coordinator
+                .check_and_record_subagent_send_input("normal-subagent")
+                .await
+                .expect("low-frequency continuations must be accepted");
+        }
+        coordinator
+            .check_subagent_session_token_budget("normal-subagent")
+            .await
+            .expect("a session with no recorded token usage must pass the budget gate");
+    }
+
+    #[tokio::test]
+    async fn subagent_send_input_token_budget_rejects_after_24h_ceiling() {
+        let (coordinator, _session_manager) = test_coordinator();
+        let session_id = "token-heavy-subagent";
+
+        // The default 24h token ceiling is 30M. Bill tokens just under the
+        // cap and confirm the gate passes; bill past the cap and confirm the
+        // next continuation is rejected with an explicit message.
+        coordinator
+            .record_subagent_send_input_usage(session_id, 29_000_000)
+            .await;
+        coordinator
+            .check_subagent_session_token_budget(session_id)
+            .await
+            .expect("under-cap cumulative tokens must pass");
+
+        coordinator
+            .record_subagent_send_input_usage(session_id, 2_000_000)
+            .await;
+        let error = coordinator
+            .check_subagent_session_token_budget(session_id)
+            .await
+            .expect_err("cumulative tokens past the 24h cap must be rejected");
+        assert!(
+            error.to_string().contains("Subagent token budget exhausted"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_send_input_24h_turn_budget_rejects_after_cap() {
+        let (coordinator, _session_manager) = test_coordinator();
+        let session_id = "turn-heavy-subagent";
+
+        // Default 24h turn cap is 300; the frequency cap is 60 per hour. Seed
+        // the ledger with 301 historical timestamps spread 62s apart (≈5.2h
+        // span): 3600/62 = 58, so no single 1h window holds 60 entries
+        // (frequency gate stays quiet) while the 24h cumulative count crosses
+        // 300.
+        {
+            let mut ledger = coordinator.subagent_send_input_ledger.write().await;
+            let entries = ledger.entry(session_id.to_string()).or_default();
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            for i in 0..301i64 {
+                entries.push(now - i * 62);
+            }
+        }
+
+        // The 301st entry should exceed the daily cap → rejected.
+        let error = coordinator
+            .check_and_record_subagent_send_input(session_id)
+            .await
+            .expect_err("301 recorded continuations must trip the 24h turn ceiling");
+        assert!(
+            error.to_string().contains("continuation budget exhausted"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn subagent_send_input_session_end_cleanup_drops_budgets() {
+        let (coordinator, _session_manager) = test_coordinator();
+        let session_id = "cleanup-me";
+
+        coordinator
+            .check_and_record_subagent_send_input(session_id)
+            .await
+            .expect("first continuation accepted");
+        coordinator
+            .record_subagent_send_input_usage(session_id, 1234)
+            .await;
+
+        coordinator.session_end_cleanup(session_id).await;
+
+        assert!(
+            coordinator
+                .subagent_send_input_ledger
+                .read()
+                .await
+                .contains_key(session_id)
+                == false,
+            "send_input ledger must be dropped on session end"
+        );
+        assert!(
+            coordinator
+                .subagent_session_token_ledger
+                .read()
+                .await
+                .contains_key(session_id)
+                == false,
+            "token ledger must be dropped on session end"
+        );
+        coordinator
+            .check_subagent_session_token_budget(session_id)
+            .await
+            .expect("a cleaned-up session id must start with a fresh budget");
     }
 
     #[test]

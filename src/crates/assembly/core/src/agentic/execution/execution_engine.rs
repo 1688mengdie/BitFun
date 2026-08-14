@@ -682,6 +682,44 @@ impl ExecutionEngine {
         count
     }
 
+    /// 消息序列重复闸门开关（`ai.thresholds.execution.duplicate_message_enabled`）。
+    ///
+    /// R-MR-10：请求发出前比对本轮与最近 N 轮的 messages 序列指纹，窗口内相同
+    /// 即判定死循环 → 不调 API、本地合成 final response。0 硬编码铁律：默认值
+    /// 由配置域承载（未配置时回退本常量 true）。当前 `ai.thresholds.execution.*`
+    /// 配置域尚未落库（R-MR-07 层 7 未完成），暂用常量 + 注释，R-MR-07 完成后迁入。
+    async fn configured_duplicate_message_enabled() -> bool {
+        let Ok(config_service) = get_global_config_service().await else {
+            return true;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return true;
+        };
+        let enabled = thresholds.execution.duplicate_message_enabled;
+        enabled
+    }
+
+    /// 消息序列重复闸门窗口 N（`ai.thresholds.execution.duplicate_message_window`）。
+    ///
+    /// 默认 3：与最近 3 轮指纹比对，窗口内任一相同即拦。窗口 0 视为 1（至少保留
+    /// 相邻轮比对，避免配置 0 使闸门静默失效）。
+    async fn configured_duplicate_message_window() -> usize {
+        let Ok(config_service) = get_global_config_service().await else {
+            return 3;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return 3;
+        };
+        let window = thresholds.execution.duplicate_message_window;
+        window.max(1)
+    }
+
     /// Estimate request pressure for compression decisions.
     ///
     /// `total_tokens` tracks the whole provider request input. The snapshot also
@@ -966,6 +1004,138 @@ impl ExecutionEngine {
         Some(signatures.join("|"))
     }
 
+    /// 计算一轮待发送 messages 序列的指纹（R-MR-10 消息重复闸门）。
+    ///
+    /// hash 全部消息内容（文本/多模态/工具调用参数 + 工具结果），逐字节稳定：
+    /// - 正常轮消息序列必变（模型输出/工具结果不同）→ 指纹必不同 → 永不误拦。
+    /// - 死循环轮消息序列完全相同 → 指纹相同 → 判定重复 → 不调 API 本地合成。
+    ///
+    /// 消息组装零改动（缓存前缀保护铁律）：本函数只读 `messages`，不触碰
+    /// `build_ai_messages_for_send` 的任何组装逻辑。
+    fn messages_sequence_fingerprint(messages: &[Message]) -> String {
+        let mut hasher = Sha256::new();
+        for msg in messages {
+            let role_label = match msg.role {
+                MessageRole::User => "user",
+                MessageRole::Assistant => "assistant",
+                MessageRole::Tool => "tool",
+                MessageRole::System => "system",
+            };
+            hasher.update(role_label.as_bytes());
+            hasher.update([0u8]);
+            match &msg.content {
+                MessageContent::Text(text) => {
+                    hasher.update(b"T");
+                    hasher.update(text.as_bytes());
+                }
+                MessageContent::Multimodal { text, images } => {
+                    hasher.update(b"M");
+                    hasher.update(text.as_bytes());
+                    hasher.update([0u8]);
+                    for image in images {
+                        hasher.update(image.id.as_bytes());
+                        hasher.update([0u8]);
+                        if let Some(path) = image.image_path.as_deref() {
+                            hasher.update(path.as_bytes());
+                        }
+                        hasher.update([0u8]);
+                        if let Some(data_url) = image.data_url.as_deref() {
+                            hasher.update(data_url.as_bytes());
+                        }
+                        hasher.update([0u8]);
+                        hasher.update(image.mime_type.as_bytes());
+                        if let Some(meta) = image.metadata.as_ref() {
+                            hasher.update([0u8]);
+                            hasher.update(meta.to_string().as_bytes());
+                        }
+                    }
+                }
+                MessageContent::ToolResult {
+                    tool_id,
+                    tool_name,
+                    effective_tool_name,
+                    result,
+                    result_for_assistant,
+                    is_error,
+                    image_attachments,
+                } => {
+                    hasher.update(b"R");
+                    hasher.update(tool_id.as_bytes());
+                    hasher.update([0u8]);
+                    hasher.update(tool_name.as_bytes());
+                    hasher.update([0u8]);
+                    if let Some(effective) = effective_tool_name.as_deref() {
+                        hasher.update(effective.as_bytes());
+                    }
+                    hasher.update([0u8]);
+                    hasher.update(result.to_string().as_bytes());
+                    hasher.update([0u8]);
+                    if let Some(result_text) = result_for_assistant.as_deref() {
+                        hasher.update(result_text.as_bytes());
+                    }
+                    hasher.update([0u8]);
+                    hasher.update([u8::from(*is_error)]);
+                    if let Some(attachments) = image_attachments.as_ref() {
+                        hasher.update([0u8]);
+                        hasher.update(attachments.len().to_le_bytes());
+                        for attachment in attachments {
+                            hasher.update(attachment.mime_type.as_bytes());
+                            hasher.update([0u8]);
+                            hasher.update(attachment.data_base64.as_bytes());
+                        }
+                    }
+                }
+                MessageContent::Mixed {
+                    reasoning_content,
+                    text,
+                    tool_calls,
+                } => {
+                    hasher.update(b"A");
+                    if let Some(reasoning) = reasoning_content.as_deref() {
+                        hasher.update(reasoning.as_bytes());
+                    }
+                    hasher.update([0u8]);
+                    hasher.update(text.as_bytes());
+                    hasher.update([0u8]);
+                    hasher.update(tool_calls.len().to_le_bytes());
+                    for tool_call in tool_calls {
+                        hasher.update(tool_call.tool_id.as_bytes());
+                        hasher.update([0u8]);
+                        hasher.update(tool_call.tool_name.as_bytes());
+                        hasher.update([0u8]);
+                        hasher.update(tool_call.arguments.to_string().as_bytes());
+                        if let Some(raw) = tool_call.raw_arguments.as_deref() {
+                            hasher.update([0u8]);
+                            hasher.update(raw.as_bytes());
+                        }
+                        hasher.update([u8::from(tool_call.is_error)]);
+                    }
+                }
+            }
+            hasher.update([0xffu8]);
+        }
+        hex::encode(hasher.finalize())
+    }
+
+    /// R-MR-10 消息重复闸门：本轮指纹是否与最近 N 轮窗口中任一指纹相同。
+    ///
+    /// `window == 0` 视为 1（配置侧已 clamp，此处再防御一次：至少保留相邻轮
+    /// 比对，避免配置 0 使闸门静默失效）。
+    fn is_duplicate_message_fingerprint(
+        current_fingerprint: &str,
+        recent_fingerprints: &[String],
+        window: usize,
+    ) -> bool {
+        let window = window.max(1);
+        let tail_len = recent_fingerprints.len().min(window);
+        if tail_len == 0 {
+            return false;
+        }
+        recent_fingerprints[recent_fingerprints.len() - tail_len..]
+            .iter()
+            .any(|fingerprint| fingerprint == current_fingerprint)
+    }
+
     fn failed_tool_round_signature(
         tool_calls: &[crate::agentic::core::ToolCall],
         tool_result_messages: &[Message],
@@ -1083,6 +1253,9 @@ impl ExecutionEngine {
             }
             "thinking_only_budget" => {
                 "I'm stopping here because repeated reasoning-only rounds produced no action and the automatic continuation budget was exhausted.".to_string()
+            }
+            "duplicate_messages" => {
+                "I'm stopping here because the outgoing message sequence repeated itself without any new information, which indicates the turn is stuck in a loop; no further model requests were issued.".to_string()
             }
             _ => "I'm stopping here because this turn could not be completed successfully.".to_string(),
         }
@@ -4148,6 +4321,25 @@ impl ExecutionEngine {
         let max_partial_continuation_attempts: usize = 3;
         let mut full_compression_count = 0usize;
         let mut compression_failure_count = 0u32;
+        // R-MR-10 消息重复闸门：最近 N 轮（默认 3）已发送「新增消息序列」指纹窗口。
+        // 正常流程每轮：模型输出 → 工具结果 → 追加新消息 → 下一轮发送的新增消息
+        // 序列必然变化（指纹必不同，永不误拦）；死循环轮：模型输出 + 工具结果与
+        // 上一轮完全相同 → 新增消息序列指纹相同 → 判定重复 → 不调 API、本地合成
+        // final response；正常轮指纹变化 → 窗口滑动。
+        // 说明：主循环 messages 为追加式增长（每轮 push assistant + 工具结果），
+        // 全量序列指纹永远不重复；真正可比的「消息序列」是自上次发送以来新增的
+        // 消息段（= 本轮模型输出 + 工具结果），契约「hash 全部消息内容 + 工具调用
+        // + 工具结果」按此语义落地（见实现说明落盘）。
+        let mut recent_message_fingerprints: Vec<String> = Vec::new();
+        let mut last_sent_messages_len = messages.len();
+        let duplicate_message_enabled = Self::configured_duplicate_message_enabled().await;
+        let duplicate_message_window = Self::configured_duplicate_message_window().await;
+        if duplicate_message_enabled {
+            debug!(
+                "R-MR-10 duplicate-message gate enabled: session_id={}, turn_id={}, window={}",
+                context.session_id, context.dialog_turn_id, duplicate_message_window
+            );
+        }
 
         // Save the last token usage statistics
         let mut last_usage: Option<crate::util::types::ai::GeminiUsage> = None;
@@ -4620,6 +4812,47 @@ impl ExecutionEngine {
                 round_index,
                 messages.len()
             );
+
+            // R-MR-10 消息重复校验闸门：请求发出前（build_ai_messages_for_send /
+            // 实际调 API 之前）比对新增消息序列指纹。
+            //
+            // 正常流程：每轮模型输出 + 工具结果追加进 messages → 新增序列指纹必变
+            // → 永不误拦；死循环：模型重复同工具同参数、工具结果相同 → 新增序列
+            // 指纹与窗口内最近 N 轮（默认 3）某一轮相同 → 判定重复 → 不调 API，
+            // 本地合成 final response（同 max_rounds 路径）。
+            if duplicate_message_enabled {
+                let new_start = last_sent_messages_len.min(messages.len());
+                let new_messages = &messages[new_start..];
+                // 防御：本轮无新增消息（理论上主循环每轮必追加 assistant + 工具
+                // 结果）时不判定——空序列指纹恒定，避免任何空切片误拦。
+                if !new_messages.is_empty() {
+                    let current_fingerprint =
+                        Self::messages_sequence_fingerprint(new_messages);
+                    if Self::is_duplicate_message_fingerprint(
+                        &current_fingerprint,
+                        &recent_message_fingerprints,
+                        duplicate_message_window,
+                    ) {
+                        warn!(
+                            "R-MR-10 duplicate message sequence detected; stopping turn without a model request: session_id={}, turn_id={}, round_index={}, duplicate_fingerprint={}, recent_fingerprints={}",
+                            context.session_id,
+                            context.dialog_turn_id,
+                            round_index,
+                            &current_fingerprint,
+                            recent_message_fingerprints.len()
+                        );
+                        finalization_reason = Some("duplicate_messages");
+                        break;
+                    }
+                    recent_message_fingerprints.push(current_fingerprint);
+                    if recent_message_fingerprints.len() > duplicate_message_window {
+                        recent_message_fingerprints.drain(
+                            0..recent_message_fingerprints.len() - duplicate_message_window,
+                        );
+                    }
+                }
+            }
+            last_sent_messages_len = messages.len();
 
             let ai_messages = Self::build_ai_messages_for_send(
                 &messages,
@@ -5525,6 +5758,26 @@ impl ExecutionEngine {
                 // Both paths deliver a user-visible final response: the partial
                 // answer streamed earlier, and the thinking-only budget path
                 // synthesized a local assistant message.
+                has_final_response = true;
+            } else if reason == "duplicate_messages" {
+                // R-MR-10 消息重复闸门拦截：不调 API，本地合成 final response。
+                // 与 max_rounds / thinking_only_budget 同为「本地收尾」路径——不
+                // 再发起任何模型请求（拦截即停），把本地合成的终止说明写入会话。
+                let local_msg = Message::assistant(
+                    Self::build_local_final_response_message("duplicate_messages"),
+                )
+                .with_turn_id(context.dialog_turn_id.clone());
+                messages.push(local_msg.clone());
+                if let Err(e) = self
+                    .session_manager
+                    .add_message(&context.session_id, local_msg)
+                    .await
+                {
+                    warn!(
+                        "Failed to persist duplicate-message final response: {}",
+                        e
+                    );
+                }
                 has_final_response = true;
             }
         }
@@ -8031,5 +8284,212 @@ mod tests {
         assert!(ExecutionEngine::should_allow_finalize_round(0, 2)); // 首请求
         assert!(ExecutionEngine::should_allow_finalize_round(1, 2)); // 一次重试
         assert!(!ExecutionEngine::should_allow_finalize_round(2, 2)); // 修复前无第 3 次
+    }
+
+    // ================= R-MR-10 消息重复校验闸门 =================
+
+    fn tool_result_message(tool_name: &str, result_value: serde_json::Value) -> Message {
+        Message::tool_result(ToolResult {
+            tool_id: format!("call-{}", tool_name),
+            tool_name: tool_name.to_string(),
+            effective_tool_name: None,
+            result: result_value,
+            result_for_assistant: None,
+            is_error: false,
+            duration_ms: Some(1),
+            image_attachments: None,
+        })
+    }
+
+    /// 模拟一轮「模型输出 + 工具结果」追加进 messages 后的新增序列。
+    fn appended_round_messages(assistant_text: &str, tool_name: &str, result_value: serde_json::Value) -> Vec<Message> {
+        vec![
+            Message::assistant_with_tools(
+                assistant_text.to_string(),
+                vec![crate::agentic::core::ToolCall {
+                    tool_id: format!("call-{}", tool_name),
+                    tool_name: tool_name.to_string(),
+                    arguments: json!({ "query": format!("{}", tool_name) }),
+                    raw_arguments: None,
+                    is_error: false,
+                    parse_error: None,
+                    recovered_from_truncation: false,
+                    repair_kind: bitfun_agent_stream::ToolArgumentRepairKind::None,
+                }],
+            ),
+            tool_result_message(tool_name, result_value),
+        ]
+    }
+
+    #[test]
+    fn duplicate_message_gate_intercepts_dead_loop_on_first_repeat() {
+        // 验收断言 1（R-MR-10 §四.1）：死循环——第 1 轮发送正常，第 2 轮新增
+        // 消息序列与第 1 轮完全相同 → 第一次重复即拦（0 请求，本地合成）。
+        let round_1 = appended_round_messages("call Bash", "Bash", json!({ "stdout": "same" }));
+        let round_2 = appended_round_messages("call Bash", "Bash", json!({ "stdout": "same" }));
+
+        let fingerprint_1 = ExecutionEngine::messages_sequence_fingerprint(&round_1);
+        let fingerprint_2 = ExecutionEngine::messages_sequence_fingerprint(&round_2);
+        assert_eq!(fingerprint_1, fingerprint_2, "死循环两轮指纹应相同");
+
+        let mut window: Vec<String> = Vec::new();
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_1, &window, 3));
+        window.push(fingerprint_1.clone());
+        // 第二次出现相同指纹 → 窗口内重复 → 拦
+        assert!(
+            ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_2, &window, 3),
+            "窗口内重复应判定拦截"
+        );
+    }
+
+    #[test]
+    fn duplicate_message_gate_never_intercepts_normal_rounds() {
+        // 验收断言 2（R-MR-10 §四.2）：正常轮（工具结果变化）→ 零误拦。
+        // 正常轮语义：每一轮的新指纹互不相同，且不与窗口内已发送指纹重复
+        // → 逐轮放行。
+        let round_1 = appended_round_messages("call Bash", "Bash", json!({ "stdout": "a" }));
+        let round_2 = appended_round_messages("call Grep", "Grep", json!({ "matches": 1 }));
+        let round_3 = appended_round_messages("call Read", "Read", json!({ "path": "x" }));
+
+        let fingerprint_1 = ExecutionEngine::messages_sequence_fingerprint(&round_1);
+        let fingerprint_2 = ExecutionEngine::messages_sequence_fingerprint(&round_2);
+        let fingerprint_3 = ExecutionEngine::messages_sequence_fingerprint(&round_3);
+        assert_ne!(fingerprint_1, fingerprint_2, "工具结果变化 → 指纹必不同");
+        assert_ne!(fingerprint_2, fingerprint_3);
+
+        let mut window: Vec<String> = Vec::new();
+        // 第 1 轮：空窗口 → 放行，入窗
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_1, &window, 3));
+        window.push(fingerprint_1.clone());
+        // 第 2 轮：新指纹不在窗口内 → 放行，入窗
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_2, &window, 3));
+        window.push(fingerprint_2.clone());
+        // 第 3 轮：新指纹不在窗口内 → 放行
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_3, &window, 3));
+    }
+
+    #[test]
+    fn duplicate_message_gate_window_three_catches_round_three_repeating_round_one() {
+        // 验收断言 3（R-MR-10 §四.3）：窗口 3——第 1/2 轮不同，第 3 轮重复第 1 轮
+        // → 拦（窗口内任一相同即判定重复，不要求相邻）。
+        let round_1 = appended_round_messages("call Bash", "Bash", json!({ "stdout": "a" }));
+        let round_2 = appended_round_messages("call Grep", "Grep", json!({ "matches": 1 }));
+        let round_3 = appended_round_messages("call Bash", "Bash", json!({ "stdout": "a" }));
+
+        let fingerprint_1 = ExecutionEngine::messages_sequence_fingerprint(&round_1);
+        let fingerprint_2 = ExecutionEngine::messages_sequence_fingerprint(&round_2);
+        let fingerprint_3 = ExecutionEngine::messages_sequence_fingerprint(&round_3);
+        assert_ne!(fingerprint_1, fingerprint_2);
+        assert_eq!(fingerprint_1, fingerprint_3, "第 3 轮重复第 1 轮");
+
+        let mut window: Vec<String> = Vec::new();
+        window.push(fingerprint_1.clone());
+        window.push(fingerprint_2.clone());
+        // 窗口内（含第 1 轮）出现相同指纹 → 拦
+        assert!(
+            ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_3, &window, 3),
+            "窗口 3 内第 3 轮重复第 1 轮应拦截"
+        );
+    }
+
+    #[test]
+    fn duplicate_message_gate_window_slides_past_old_fingerprints() {
+        // 边界：窗口滑动——窗口 3 保留最近 3 个指纹，第 1 轮指纹滑出后再次
+        // 出现不再参与比对（不误伤跨窗口的正常重复内容）。
+        let round_1 = appended_round_messages("a", "Bash", json!({ "i": 1 }));
+        let round_2 = appended_round_messages("b", "Grep", json!({ "i": 2 }));
+        let round_3 = appended_round_messages("c", "Read", json!({ "i": 3 }));
+        let round_4 = appended_round_messages("d", "Glob", json!({ "i": 4 }));
+
+        let fingerprint_1 = ExecutionEngine::messages_sequence_fingerprint(&round_1);
+        let fingerprint_2 = ExecutionEngine::messages_sequence_fingerprint(&round_2);
+        let fingerprint_3 = ExecutionEngine::messages_sequence_fingerprint(&round_3);
+        let fingerprint_4 = ExecutionEngine::messages_sequence_fingerprint(&round_4);
+
+        // 模拟主循环滑窗：每轮放行后入窗，窗口上限 3。
+        let mut window: Vec<String> = Vec::new();
+        for fp in [&fingerprint_1, &fingerprint_2, &fingerprint_3] {
+            assert!(!ExecutionEngine::is_duplicate_message_fingerprint(fp, &window, 3));
+            window.push(fp.clone());
+        }
+        assert_eq!(window.len(), 3);
+        // 第 4 轮：f4 不在窗口内 → 放行；入窗前先滑动（丢弃最旧 f1）。
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_4, &window, 3));
+        window.push(fingerprint_4.clone());
+        if window.len() > 3 {
+            window.drain(0..window.len() - 3);
+        }
+        assert_eq!(window.len(), 3);
+        assert_eq!(window, vec![fingerprint_2, fingerprint_3, fingerprint_4]);
+        // f1 已滑出窗口 3 → 再次出现不拦（跨窗口的正常内容复用）。
+        assert!(
+            !ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_1, &window, 3),
+            "窗口 3 外的旧指纹不应拦截"
+        );
+    }
+
+    #[test]
+    fn duplicate_message_gate_zero_window_still_compares_adjacent_rounds() {
+        // 边界：窗口 0 视为 1（至少保留相邻轮比对，配置 0 不使闸门静默失效）。
+        let round = appended_round_messages("call Bash", "Bash", json!({ "stdout": "x" }));
+        let fingerprint = ExecutionEngine::messages_sequence_fingerprint(&round);
+        let window = vec![fingerprint.clone()];
+        assert!(
+            ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint, &window, 0),
+            "窗口 0 退化为相邻轮比对"
+        );
+    }
+
+    #[test]
+    fn duplicate_message_fingerprint_covers_tool_calls_and_results() {
+        // 契约 §二.1：指纹 hash 全部消息内容 + 工具调用 + 工具结果，逐字节。
+        let assistant_only =
+            Message::assistant("call Bash".to_string());
+        let assistant_with_tools = Message::assistant_with_tools(
+            "call Bash".to_string(),
+            vec![crate::agentic::core::ToolCall {
+                tool_id: "call-Bash".to_string(),
+                tool_name: "Bash".to_string(),
+                arguments: json!({ "cmd": "ls" }),
+                raw_arguments: None,
+                is_error: false,
+                parse_error: None,
+                recovered_from_truncation: false,
+                repair_kind: bitfun_agent_stream::ToolArgumentRepairKind::None,
+            }],
+        );
+        let result_a = tool_result_message("Bash", json!({ "stdout": "a" }));
+        let result_b = tool_result_message("Bash", json!({ "stdout": "b" }));
+
+        let fp_no_tools = ExecutionEngine::messages_sequence_fingerprint(&[assistant_only]);
+        let fp_with_tools = ExecutionEngine::messages_sequence_fingerprint(&[assistant_with_tools]);
+        assert_ne!(fp_no_tools, fp_with_tools, "工具调用参与指纹");
+
+        let fp_result_a = ExecutionEngine::messages_sequence_fingerprint(&[result_a.clone()]);
+        let fp_result_b = ExecutionEngine::messages_sequence_fingerprint(&[result_b]);
+        assert_ne!(fp_result_a, fp_result_b, "工具结果参与指纹");
+
+        // 相同内容序列指纹稳定（逐字节等价）。
+        let fp_result_a2 = ExecutionEngine::messages_sequence_fingerprint(&[result_a]);
+        assert_eq!(fp_result_a, fp_result_a2);
+    }
+
+    #[test]
+    fn duplicate_message_local_final_response_mentions_loop() {
+        // 拦截动作：本地合成 final response 文案说明死循环（不调 API）。
+        let message = ExecutionEngine::build_local_final_response_message("duplicate_messages");
+        assert!(message.contains("loop"), "duplicate_messages 文案应说明循环");
+        assert!(!message.is_empty());
+    }
+
+    #[test]
+    fn duplicate_message_fingerprint_differentiates_message_roles() {
+        // 角色参与指纹：同文本不同 role 不得视为同一序列。
+        let user = Message::user("hello".to_string());
+        let assistant = Message::assistant("hello".to_string());
+        assert_ne!(
+            ExecutionEngine::messages_sequence_fingerprint(&[user]),
+            ExecutionEngine::messages_sequence_fingerprint(&[assistant])
+        );
     }
 }

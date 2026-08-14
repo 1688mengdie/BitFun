@@ -65,6 +65,22 @@ vi.mock('@/component-library', () => ({
       onChange={(event) => onChange(Number(event.target.value))}
     />
   ),
+  Switch: ({
+    checked,
+    onChange,
+    disabled,
+  }: {
+    checked: boolean;
+    onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    disabled?: boolean;
+  }) => (
+    <input
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      onChange={onChange}
+    />
+  ),
 }));
 
 vi.mock('./common', () => ({
@@ -231,5 +247,76 @@ describe('ThresholdsConfig', () => {
 
     expect(resetConfigMock).toHaveBeenCalledWith('ai.thresholds');
     expect(notificationSuccessMock).toHaveBeenCalled();
+  });
+
+  it('renders the execution section with owner-specified defaults (R-MR-07)', async () => {
+    getConfigMock.mockResolvedValue(undefined);
+    await renderConfig();
+
+    // Section header + all 7 i18n label keys are rendered.
+    expect(container.textContent).toContain('fields.execution.__title');
+    expect(container.textContent).toContain('fields.execution.max_rounds');
+    expect(container.textContent).toContain('fields.execution.consecutive_tool_rounds');
+    expect(container.textContent).toContain('fields.execution.consecutive_search_rounds');
+    expect(container.textContent).toContain('fields.execution.duplicate_tool_calls');
+    expect(container.textContent).toContain('fields.execution.no_progress_results');
+    expect(container.textContent).toContain('fields.execution.tool_calls_per_turn');
+    expect(container.textContent).toContain('fields.execution.empty_input_guard');
+
+    // 6 numeric fields + the empty_input_guard switch = 6 number inputs + 1 checkbox.
+    const numberInputs = [...container.querySelectorAll('input[type="number"]')] as HTMLInputElement[];
+    const switchInputs = [...container.querySelectorAll('input[type="checkbox"]')] as HTMLInputElement[];
+    expect(numberInputs.length).toBeGreaterThanOrEqual(6);
+    expect(switchInputs.length).toBeGreaterThanOrEqual(1);
+    // Defaults from DEFAULT_THRESHOLDS.execution are rendered.
+    expect(numberInputs.map((input) => input.value)).toContain('50');
+    expect(numberInputs.map((input) => input.value)).toContain('20');
+    expect(numberInputs.map((input) => input.value)).toContain('3');
+    expect(numberInputs.map((input) => input.value)).toContain('5');
+    expect(numberInputs.map((input) => input.value)).toContain('30');
+    expect(switchInputs[0].checked).toBe(true);
+  });
+
+  it('persists execution numeric and switch changes through the ai.thresholds.execution path (R-MR-07)', async () => {
+    getConfigMock.mockResolvedValue(undefined);
+    setConfigMock.mockResolvedValue(undefined);
+    await renderConfig();
+
+    // Persist max_rounds change: the execution section is the last section, and
+    // max_rounds is its first numeric field. Locate it by walking the rendered
+    // section titles: the input whose preceding section is fields.execution.__title
+    // is the first execution field. Simpler: take the last input whose value is 50
+    // (execution.max_rounds renders after knowledge_search.default_max_results, so
+    // among the two "50" inputs the execution one comes later).
+    const fiftyInputs = [...container.querySelectorAll('input[type="number"]')].filter(
+      (input) => input.value === '50'
+    ) as HTMLInputElement[];
+    expect(fiftyInputs.length).toBeGreaterThanOrEqual(2);
+    const maxRoundsInput = fiftyInputs[fiftyInputs.length - 1];
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value'
+      )!.set!;
+      setter.call(maxRoundsInput, '45');
+      maxRoundsInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(setConfigMock).toHaveBeenCalledWith(
+      expect.stringContaining('ai.thresholds.execution.max_rounds'),
+      45,
+    );
+
+    // Persist empty_input_guard toggle.
+    const guardSwitch = [...container.querySelectorAll('input[type="checkbox"]')][0] as HTMLInputElement;
+    expect(guardSwitch).not.toBeUndefined();
+    await act(async () => {
+      guardSwitch.click();
+      await Promise.resolve();
+    });
+    expect(setConfigMock).toHaveBeenCalledWith(
+      expect.stringContaining('ai.thresholds.execution.empty_input_guard'),
+      false,
+    );
   });
 });

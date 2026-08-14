@@ -20,6 +20,7 @@ use crate::agentic::tools::tool_result_storage;
 use crate::native_hooks::{self, NativeHookSessionFacts};
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
+use crate::service::config::types::ExecutionThresholds;
 use bitfun_agent_runtime::permission::{
     plan_permission_intents, PendingPermissionReceiver, PermissionIntentPlan,
     PermissionRequestManager, PermissionWaitOutcome,
@@ -80,6 +81,144 @@ fn persisted_effective_tool_name(
     effective_tool_name: &str,
 ) -> Option<String> {
     (wire_tool_name != effective_tool_name).then(|| effective_tool_name.to_string())
+}
+
+/// R-MR-11 读取/搜索类工具集合（工具注册名）。
+const REPEATED_READ_TOOL_NAMES: &[&str] = &["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"];
+
+/// R-MR-11 目标指纹归一化。
+///
+/// - Read：文件路径（忽略 offset/limit/tail/render 等分段参数 → 十行读同文件 = 同目标）
+/// - Grep：关键词 pattern + path（未提供 path 归一为 "."，同关键词同路径 = 同目标）
+/// - Glob：pattern（忽略 path 变化，pattern 即目标）
+/// - WebSearch：query
+/// - WebFetch：url
+/// - LS：path（未提供归一为 "."）
+///
+/// 非读取/搜索类工具返回 None。
+fn repeated_read_target_fingerprint(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+    if !REPEATED_READ_TOOL_NAMES.contains(&tool_name) {
+        return None;
+    }
+    let target = match tool_name {
+        "Read" => arguments
+            .get("file_path")
+            .and_then(serde_json::Value::as_str)?
+            .trim()
+            .to_string(),
+        "Grep" => {
+            let pattern = arguments
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)?
+                .trim();
+            let path = arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(".");
+            format!("{pattern}@{}", path.trim())
+        }
+        "Glob" => arguments
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)?
+            .trim()
+            .to_string(),
+        "WebSearch" => arguments
+            .get("query")
+            .and_then(serde_json::Value::as_str)?
+            .trim()
+            .to_string(),
+        "WebFetch" => arguments
+            .get("url")
+            .and_then(serde_json::Value::as_str)?
+            .trim()
+            .to_string(),
+        "LS" => {
+            let path = arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(".");
+            path.trim().to_string()
+        }
+        _ => return None,
+    };
+    if target.is_empty() {
+        return None;
+    }
+    Some(target)
+}
+
+/// 小文件特判的裸函数版（供单元测试直接验证）。
+fn repeated_read_small_file_hint_impl(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    small_file_line_threshold: usize,
+) -> Option<String> {
+    if tool_name != "Read" {
+        return None;
+    }
+    let file_path = arguments.get("file_path").and_then(serde_json::Value::as_str)?;
+    if file_path.is_empty() || arguments.get("offset").is_none() {
+        return None;
+    }
+    let small = std::fs::read_to_string(file_path)
+        .map(|content| content.lines().count() < small_file_line_threshold)
+        .unwrap_or(false);
+    small.then(|| format!("文件较小（<{} 行），建议一次读全文", small_file_line_threshold))
+}
+
+/// R-MR-11 纯判定：给定会话级连续状态，返回是否拦截（及提示）。
+///
+/// - 目标与当前连续目标一致 → 计数 +1；达到 limit 时拦截（第 N 次）。
+/// - 目标变化 → 重置为 1（交叉引用 A→B→A 不误伤）。
+/// - 拦截后计数保持，同目标后续调用继续拦截。
+fn repeated_read_decide(
+    thresholds: &ExecutionThresholds,
+    tool_name: &str,
+    target: &str,
+    arguments: &serde_json::Value,
+    state: &mut RepeatedReadSessionState,
+) -> Option<String> {
+    if !thresholds.repeated_read_enabled {
+        return None;
+    }
+    let limit = thresholds.repeated_read_limit.max(2);
+
+    if state.current_target.as_deref() != Some(target) {
+        state.current_target = Some(target.to_string());
+        state.consecutive_count = 1;
+        return None;
+    }
+
+    state.consecutive_count += 1;
+    if state.consecutive_count < limit {
+        return None;
+    }
+
+    // 第 N 次：拦截。构造引导正确做法的提示。
+    let message = if tool_name == "Read" && arguments.get("offset").is_some() {
+        let small_hint = repeated_read_small_file_hint_impl(
+            tool_name,
+            arguments,
+            thresholds.small_file_line_threshold,
+        );
+        match small_hint {
+            Some(hint) => format!(
+                "重复读取拦截（R-MR-11）：{tool_name} 目标 `{target}` 已连续调用 {} 次，本次未执行（零请求）。检测到碎片化读取（连续分段读同一目标 {} 次）。{}。正确做法：读全文（小文件）或搜索关键词定位（大文件），不要再逐行/逐段反复读取。",
+                state.consecutive_count, state.consecutive_count, hint
+            ),
+            None => format!(
+                "重复读取拦截（R-MR-11）：{tool_name} 目标 `{target}` 已连续调用 {} 次，本次未执行（零请求）。检测到碎片化读取（连续分段读同一目标 {} 次）。正确做法：读全文（小文件）或搜索关键词定位（大文件），不要再逐行/逐段反复读取。",
+                state.consecutive_count, state.consecutive_count
+            ),
+        }
+    } else {
+        format!(
+            "重复读取拦截（R-MR-11）：{tool_name} 目标 `{target}` 已连续调用 {} 次，本次未执行（零请求）。该目标已连续读取 {} 次，请基于已有内容继续，或明确新目标。正确做法：读全文（小文件）或搜索关键词定位（大文件），不要再重复读取同一目标。",
+            state.consecutive_count, state.consecutive_count
+        )
+    };
+    state.last_intercepted_message = Some(message.clone());
+    Some(message)
 }
 
 /// Resolve the effective tool runtime restrictions for a session.
@@ -675,6 +814,36 @@ pub struct ToolPipeline {
     /// conversation) can merge the refreshed generation back instead of
     /// re-triggering the reload every round.
     session_loaded_deferred_specs: Arc<TokioMutex<HashMap<String, Vec<LoadedDeferredToolSpec>>>>,
+    /// R-MR-11 读取/搜索重复拦截：会话级「连续同目标指纹」追踪。
+    ///
+    /// 读取/搜索类工具（Read/Grep/Glob/LS/WebSearch/WebFetch）连续操作同一
+    /// 目标（同文件路径 / 同关键词+路径 / 同 pattern / 同 query / 同 URL /
+    /// 同路径）达 `repeated_read_limit` 次时，第 N 次调用被本地拦截——不执行
+    /// 工具、不发起 LLM 请求（零请求），并把引导正确做法的提示作为 tool
+    /// result 返回。中间插入其他工具调用 / 其他目标 / 文本产出 → 计数重置
+    /// （交叉引用 A→B→A 不误伤）。配置：`ai.thresholds.execution.*`。
+    repeated_read_states: Arc<TokioMutex<HashMap<String, RepeatedReadSessionState>>>,
+}
+
+/// R-MR-11 会话级重复读取拦截的连续计数状态。
+#[derive(Debug, Clone)]
+struct RepeatedReadSessionState {
+    /// 当前连续同目标指纹（None = 无连续目标，下个读取类调用直接建立）。
+    current_target: Option<String>,
+    /// 当前目标已连续出现的次数（含本次）。
+    consecutive_count: usize,
+    /// 最近一次被拦截提示的摘要（用于避免连续重复刷屏）。
+    last_intercepted_message: Option<String>,
+}
+
+impl Default for RepeatedReadSessionState {
+    fn default() -> Self {
+        Self {
+            current_target: None,
+            consecutive_count: 0,
+            last_intercepted_message: None,
+        }
+    }
 }
 
 impl ToolPipeline {
@@ -693,6 +862,7 @@ impl ToolPipeline {
             hook_preapprovals: Arc::new(TokioMutex::new(HashSet::new())),
             admission_rejected_tasks: Arc::new(TokioMutex::new(HashSet::new())),
             session_loaded_deferred_specs: Arc::new(TokioMutex::new(HashMap::new())),
+            repeated_read_states: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 
@@ -1815,6 +1985,65 @@ impl ToolPipeline {
             .unwrap_or_default()
     }
 
+    /// R-MR-11 读取/搜索重复拦截判定。
+    ///
+    /// 命中「连续同目标 N 次」时返回拦截提示，否则返回 None（正常执行）。
+    /// 副作用：更新会话级连续计数状态；中间有产出（写入类工具 / 其他工具 /
+    /// 不同目标）时自动重置计数。
+    async fn repeated_read_interception(
+        &self,
+        session_id: &str,
+        tool_name: &str,
+        arguments: &serde_json::Value,
+    ) -> Option<String> {
+        let thresholds = Self::execution_thresholds().await;
+        if !thresholds.repeated_read_enabled {
+            return None;
+        }
+
+        let Some(target) = repeated_read_target_fingerprint(tool_name, arguments) else {
+            // 非读取/搜索类工具：重置连续计数（中间有产出/其他工具 → 重置）。
+            self.reset_repeated_read_state(session_id).await;
+            return None;
+        };
+
+        let mut states = self.repeated_read_states.lock().await;
+        let state = states
+            .entry(session_id.to_string())
+            .or_insert_with(RepeatedReadSessionState::default);
+
+        repeated_read_decide(
+            &thresholds,
+            tool_name,
+            &target,
+            arguments,
+            state,
+        )
+    }
+
+    async fn reset_repeated_read_state(&self, session_id: &str) {
+        if let Some(state) = self.repeated_read_states.lock().await.get_mut(session_id) {
+            state.current_target = None;
+            state.consecutive_count = 0;
+            state.last_intercepted_message = None;
+        }
+    }
+
+    /// 读取 `ai.thresholds.execution.*` 配置（R-MR-07 配置域扩展）。
+    ///
+    /// R-MR-07 未完成时按契约回退到常量默认值（enabled=true, limit=3,
+    /// small_file_line_threshold=200），配置服务不可用/加载失败不影响拦截
+    /// 可用性。
+    async fn execution_thresholds() -> ExecutionThresholds {
+        match crate::service::config::get_global_config_service().await {
+            Ok(service) => service
+                .get_config::<ExecutionThresholds>(Some("ai.thresholds.execution"))
+                .await
+                .unwrap_or_default(),
+            Err(_) => ExecutionThresholds::default(),
+        }
+    }
+
     /// Execute single tool
     async fn execute_single_tool(&self, tool_id: String) -> BitFunResult<ToolExecutionResult> {
         let start_time = Instant::now();
@@ -1898,6 +2127,56 @@ impl ToolPipeline {
                 tool_name, tool_id, task.context.session_id
             ),
             ToolArgumentRepairKind::None => {}
+        }
+
+        // R-MR-11 读取/搜索重复拦截：连续同目标 N 次 → 拦截不执行。
+        // 拦截 = 不调工具 + 不调 LLM（零请求）：本地构造提示并作为
+        // tool result 返回，随消息历史回到模型侧。
+        if let Some(block_message) = self
+            .repeated_read_interception(&task.context.session_id, &tool_name, &tool_args)
+            .await
+        {
+            warn!(
+                "Repeated read intercepted (R-MR-11): session_id={}, tool_name={}, tool_id={}, message={}",
+                task.context.session_id, tool_name, tool_id, block_message
+            );
+            self.state_manager
+                .update_state(
+                    &tool_id,
+                    ToolExecutionState::Failed {
+                        error: block_message.clone(),
+                        is_retryable: false,
+                        duration_ms: None,
+                        queue_wait_ms: Some(queue_wait_ms),
+                        preflight_ms: None,
+                        confirmation_wait_ms: Some(confirmation_wait_ms),
+                        execution_ms: None,
+                    },
+                )
+                .await;
+            return Ok(ToolExecutionResult {
+                tool_id: tool_id.clone(),
+                tool_name: wire_tool_name.clone(),
+                effective_tool_name: tool_name.clone(),
+                result: ModelToolResult {
+                    tool_id,
+                    tool_name: wire_tool_name.clone(),
+                    effective_tool_name: persisted_effective_tool_name(
+                        &wire_tool_name,
+                        &tool_name,
+                    ),
+                    result: serde_json::json!({
+                        "category": "repeated_read_blocked",
+                        "status": "skipped",
+                        "message": block_message,
+                    }),
+                    result_for_assistant: Some(block_message),
+                    is_error: false,
+                    duration_ms: Some(elapsed_ms_u64(start_time)),
+                    image_attachments: None,
+                },
+                execution_time_ms: elapsed_ms_u64(start_time),
+            });
         }
 
         // Repetition alone is not execution failure: polling and status checks
@@ -5402,5 +5681,379 @@ mod tests {
             message.contains("cannot be called directly"),
             "unexpected error: {message}"
         );
+    }
+
+    // ---- R-MR-11 读取/搜索重复拦截测试 ----
+
+    /// 构造一个 Read 工具调用（同文件不同 offset = 同目标指纹）。
+    fn repeated_read_call(tool_id: &str, file_path: &str, offset: u64) -> ToolCall {
+        ToolCall {
+            tool_id: tool_id.to_string(),
+            tool_name: "Read".to_string(),
+            arguments: json!({ "file_path": file_path, "offset": offset, "limit": 10 }),
+            raw_arguments: None,
+            is_error: false,
+            parse_error: None,
+            recovered_from_truncation: false,
+            repair_kind: Default::default(),
+        }
+    }
+
+    fn repeated_read_task(tool_id: &str, file_path: &str, offset: u64) -> ToolTask {
+        ToolTask::new(
+            repeated_read_call(tool_id, file_path, offset),
+            test_tool_execution_context(),
+            ToolExecutionOptions::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn repeated_read_same_file_three_offsets_blocks_third() {
+        // type-contract §四.1：连续 3 次读同文件（不同 offset 分段）→ 第 3 次拦截。
+        let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 0).await;
+        let file_path = std::env::temp_dir()
+            .join("r-mr-11-same-file.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&file_path, "line1\nline2\nline3\n").expect("write test file");
+
+        for (index, offset) in [0u64, 10u64, 20u64].into_iter().enumerate() {
+            let tool_id = format!("same-file-{index}");
+            let task = repeated_read_task(&tool_id, &file_path, offset);
+            pipeline.insert_tool_task_for_test(task).await;
+            let result = pipeline
+                .execute_single_tool(tool_id.clone())
+                .await
+                .expect("execute single tool must not fail at pipeline level");
+
+            if index < 2 {
+                // 前 2 次：正常执行（工具返回 ok）。
+                assert_eq!(
+                    result.result.result["ok"], json!(true),
+                    "call {index} must execute normally"
+                );
+            } else {
+                // 第 3 次：拦截，返回提示，零请求
+                assert_eq!(
+                    result.result.result["category"],
+                    json!("repeated_read_blocked"),
+                    "third consecutive same-file read must be blocked"
+                );
+                assert_eq!(result.result.result["status"], json!("skipped"));
+                let message = result
+                    .result
+                    .result_for_assistant
+                    .as_deref()
+                    .expect("block message must be present");
+                assert!(message.contains("已连续调用 3 次"));
+                assert!(message.contains("检测到碎片化读取"));
+                assert!(!result.result.is_error, "block is not an execution failure");
+            }
+        }
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[tokio::test]
+    async fn repeated_grep_same_keyword_blocks_third() {
+        // type-contract §四.2：连续 3 次 grep 同关键词 → 第 3 次拦截。
+        let mut state = RepeatedReadSessionState::default();
+        let thresholds = ExecutionThresholds::default();
+
+        // 连续 3 次同一关键词：前 2 次放行，第 3 次拦截。
+        let grep_args = json!({ "pattern": "log.*Error", "path": "src" });
+        for index in 0..3 {
+            let block = repeated_read_decide(
+                &thresholds,
+                "Grep",
+                "log.*Error@src",
+                &grep_args,
+                &mut state,
+            );
+            if index < 2 {
+                assert!(block.is_none(), "grep call {index} must pass");
+            } else {
+                let message = block.expect("third grep must be blocked");
+                assert!(message.contains("已连续调用 3 次"));
+                assert!(message.contains("请基于已有内容继续"));
+            }
+        }
+
+        // 目标变化 → 重置：A→B→A 不误伤。
+        let mut state = RepeatedReadSessionState::default();
+        assert!(repeated_read_decide(
+            &thresholds,
+            "Grep",
+            "log.*Error@src",
+            &json!({ "pattern": "log.*Error", "path": "src" }),
+            &mut state,
+        )
+        .is_none());
+        assert!(repeated_read_decide(
+            &thresholds,
+            "Grep",
+            "other@src",
+            &json!({ "pattern": "other", "path": "src" }),
+            &mut state,
+        )
+        .is_none());
+        // A→B→A：目标回到 A，重新计数为 1，不拦。
+        assert!(repeated_read_decide(
+            &thresholds,
+            "Grep",
+            "log.*Error@src",
+            &json!({ "pattern": "log.*Error", "path": "src" }),
+            &mut state,
+        )
+        .is_none());
+    }
+
+    #[tokio::test]
+    async fn repeated_read_cross_reference_a_b_a_not_blocked() {
+        // type-contract §四.3：读 A → 读 B → 读 A（交叉引用）→ 不拦。
+        let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 0).await;
+        let file_a = std::env::temp_dir()
+            .join("r-mr-11-cross-a.txt")
+            .to_string_lossy()
+            .to_string();
+        let file_b = std::env::temp_dir()
+            .join("r-mr-11-cross-b.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&file_a, "a\n").ok();
+        std::fs::write(&file_b, "b\n").ok();
+
+        for (tool_id, path) in [
+            ("cross-a1", file_a.as_str()),
+            ("cross-b", file_b.as_str()),
+            ("cross-a2", file_a.as_str()),
+        ] {
+            let task = repeated_read_task(tool_id, path, 0);
+            pipeline.insert_tool_task_for_test(task).await;
+            let result = pipeline
+                .execute_single_tool(tool_id.to_string())
+                .await
+                .expect("execute single tool");
+            assert_ne!(
+                result.result.result["category"],
+                json!("repeated_read_blocked"),
+                "cross-reference {tool_id} must not be blocked"
+            );
+        }
+        std::fs::remove_file(&file_a).ok();
+        std::fs::remove_file(&file_b).ok();
+    }
+
+    #[tokio::test]
+    async fn repeated_read_interleaved_production_resets() {
+        // type-contract §四.4：读 A → 读 A(offset 10) → 写文件 → 读 A → 不拦
+        // （中间有产出重置）。
+        let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 0).await;
+        register_static_test_tool(&pipeline, "Write", json!({ "written": true }), 0).await;
+        let file_path = std::env::temp_dir()
+            .join("r-mr-11-reset.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&file_path, "x\n").ok();
+
+        // 前 2 次连续读 A（不同 offset）。
+        for (index, offset) in [0u64, 10u64].into_iter().enumerate() {
+            let tool_id = format!("reset-read-{index}");
+            let task = repeated_read_task(&tool_id, &file_path, offset);
+            pipeline.insert_tool_task_for_test(task).await;
+            let result = pipeline
+                .execute_single_tool(tool_id)
+                .await
+                .expect("execute single tool");
+            assert_ne!(
+                result.result.result["category"],
+                json!("repeated_read_blocked"),
+                "pre-write read {index} must not be blocked"
+            );
+        }
+
+        // 中间写文件（非读取类工具 → 重置计数）。
+        let mut write_call = test_tool_call("reset-write", "Write");
+        write_call.arguments = json!({ "payload": "+++ /tmp/reset.txt\nnew" });
+        let write_task = ToolTask::new(
+            write_call,
+            test_tool_execution_context(),
+            ToolExecutionOptions::default(),
+        );
+        pipeline.insert_tool_task_for_test(write_task).await;
+        let result = pipeline
+            .execute_single_tool("reset-write".to_string())
+            .await
+            .expect("write tool executes");
+        assert_ne!(
+            result.result.result["category"],
+            json!("repeated_read_blocked"),
+            "write must not be blocked"
+        );
+
+        // 再读 A：重置后重新计数为 1，不拦。
+        let task = repeated_read_task("reset-read-after", &file_path, 20);
+        pipeline.insert_tool_task_for_test(task).await;
+        let result = pipeline
+            .execute_single_tool("reset-read-after".to_string())
+            .await
+            .expect("execute single tool");
+        assert_ne!(
+            result.result.result["category"],
+            json!("repeated_read_blocked"),
+            "post-write read must not be blocked"
+        );
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[tokio::test]
+    async fn repeated_read_disabled_via_thresholds_config() {
+        // type-contract §四.5：配置开关 enabled=false 不拦。
+        let file_path = std::env::temp_dir()
+            .join("r-mr-11-disabled.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&file_path, "d\n").ok();
+
+        // 直接构造纯函数判定验证开关：enabled=false → 永不拦截。
+        let disabled = ExecutionThresholds {
+            repeated_read_enabled: false,
+            ..ExecutionThresholds::default()
+        };
+        let mut state = RepeatedReadSessionState::default();
+        for _ in 0..5 {
+            assert!(
+                repeated_read_decide(
+                    &disabled,
+                    "Read",
+                    &file_path,
+                    &json!({ "file_path": file_path, "offset": 0 }),
+                    &mut state,
+                )
+                .is_none(),
+                "disabled threshold must never block"
+            );
+        }
+
+        // 端到端：通过 pipeline 连读 3 次同一文件（enabled 默认 true 会拦第 3 次，
+        // 但这里验证的是阈值配置关闭时的纯函数语义，故仅验证 pipeline 端到端拦截
+        // 在开启时生效已在 repeated_read_same_file_three_offsets_blocks_third 覆盖）。
+        // 本测试仅覆盖开关语义（纯函数层面，避免依赖全局配置注入）。
+        std::fs::remove_file(&file_path).ok();
+    }
+
+    #[tokio::test]
+    async fn repeated_read_offset_increment_fragment_blocks_with_guidance() {
+        // 强化：连续分段读同文件（offset 递增十行读）→ 按同目标计数，3 次即拦；
+        // 拦截提示含「碎片化读取」引导；小文件（<200 行）→ 提示一次读全文。
+        // 小文件：<200 行。
+        let small_path = std::env::temp_dir()
+            .join("r-mr-11-small.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&small_path, "small\n").ok();
+
+        let mut state = RepeatedReadSessionState::default();
+        let thresholds = ExecutionThresholds::default();
+
+        // offset 递增的十行读同一小文件：第 3 次拦截 + 碎片化 + 小文件提示。
+        let mut block_message = None;
+        for (index, offset) in [0u64, 10u64, 20u64].into_iter().enumerate() {
+            let arguments = json!({ "file_path": small_path, "offset": offset, "limit": 10 });
+            let block = repeated_read_decide(&thresholds, "Read", &small_path, &arguments, &mut state);
+            if index == 2 {
+                block_message = block;
+            }
+        }
+        let message = block_message.expect("third fragmented read must be blocked");
+        assert!(
+            message.contains("碎片化读取"),
+            "fragment guidance must mention 碎片化读取, got: {message}"
+        );
+        assert!(
+            message.contains("文件较小（<200 行），建议一次读全文"),
+            "small-file hint must be present, got: {message}"
+        );
+        assert!(
+            message.contains("正确做法：读全文（小文件）或搜索关键词定位（大文件）"),
+            "correct-practice guidance must be present, got: {message}"
+        );
+
+        // 大文件（>=200 行）：有碎片化引导但无小文件提示。
+        let big_path = std::env::temp_dir()
+            .join("r-mr-11-big.txt")
+            .to_string_lossy()
+            .to_string();
+        std::fs::write(&big_path, "line\n".repeat(300)).ok();
+        let mut state = RepeatedReadSessionState::default();
+        let mut big_block_message = None;
+        for (index, offset) in [0u64, 10u64, 20u64].into_iter().enumerate() {
+            let arguments = json!({ "file_path": big_path, "offset": offset, "limit": 10 });
+            let block = repeated_read_decide(&thresholds, "Read", &big_path, &arguments, &mut state);
+            if index == 2 {
+                big_block_message = block;
+            }
+        }
+        let message = big_block_message.expect("third fragmented big-file read must be blocked");
+        assert!(message.contains("碎片化读取"));
+        assert!(
+            !message.contains("建议一次读全文"),
+            "big file must not get the small-file hint, got: {message}"
+        );
+
+        std::fs::remove_file(&small_path).ok();
+        std::fs::remove_file(&big_path).ok();
+    }
+
+    #[test]
+    fn repeated_read_target_fingerprint_normalization() {
+        // 目标指纹归一化：Read 忽略 offset/limit 分段；Grep 关键词+路径；Glob pattern；
+        // WebSearch query；WebFetch url；LS path；非读取类工具 None。
+        assert_eq!(
+            repeated_read_target_fingerprint(
+                "Read",
+                &json!({ "file_path": "src/main.rs", "offset": 10, "limit": 10 }),
+            )
+            .as_deref(),
+            Some("src/main.rs")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("Grep", &json!({ "pattern": "foo", "path": "src" }))
+                .as_deref(),
+            Some("foo@src")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("Grep", &json!({ "pattern": "foo" })).as_deref(),
+            Some("foo@.")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("Glob", &json!({ "pattern": "**/*.ts" })).as_deref(),
+            Some("**/*.ts")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("WebSearch", &json!({ "query": "rust async" }))
+                .as_deref(),
+            Some("rust async")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint(
+                "WebFetch",
+                &json!({ "url": "https://example.com" }),
+            )
+            .as_deref(),
+            Some("https://example.com")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("LS", &json!({ "path": "src" })).as_deref(),
+            Some("src")
+        );
+        assert_eq!(
+            repeated_read_target_fingerprint("LS", &json!({})).as_deref(),
+            Some(".")
+        );
+        assert!(repeated_read_target_fingerprint("Write", &json!({})).is_none());
+        assert!(repeated_read_target_fingerprint("Read", &json!({})).is_none());
     }
 }

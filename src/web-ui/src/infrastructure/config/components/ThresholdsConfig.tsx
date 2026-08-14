@@ -5,6 +5,7 @@ import {
   Button,
   ConfigPageLoading,
   NumberInput,
+  Switch,
 } from '@/component-library';
 import { useNotification } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
@@ -115,6 +116,15 @@ interface ThresholdsShape {
   };
   output_tokens: { automatic_tiers: number[]; ratio_percent: number };
   goal: { idle_wakeup_delay_ms: number; max_auto_continuations: number };
+  execution: {
+    max_rounds: number;
+    consecutive_tool_rounds: number;
+    consecutive_search_rounds: number;
+    duplicate_tool_calls: number;
+    no_progress_results: number;
+    tool_calls_per_turn: number;
+    empty_input_guard: boolean;
+  };
 }
 
 const DEFAULT_THRESHOLDS: ThresholdsShape = {
@@ -204,6 +214,15 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
   },
   output_tokens: { automatic_tiers: [8_000, 16_000, 24_000, 32_000, 64_000], ratio_percent: 40 },
   goal: { idle_wakeup_delay_ms: 600_000, max_auto_continuations: 10 },
+  execution: {
+    max_rounds: 50,
+    consecutive_tool_rounds: 20,
+    consecutive_search_rounds: 3,
+    duplicate_tool_calls: 5,
+    no_progress_results: 5,
+    tool_calls_per_turn: 30,
+    empty_input_guard: true,
+  },
 };
 
 function deepMerge(base: ThresholdsShape, patch: Partial<ThresholdsShape> | null | undefined): ThresholdsShape {
@@ -250,9 +269,9 @@ export default function ThresholdsConfig() {
   const updateField = useCallback(async <D extends DomainKey>(
     domain: D,
     field: DomainField<D>,
-    value: number,
+    value: number | boolean,
   ) => {
-    if (Number.isNaN(value) || value < 0) return;
+    if (typeof value === 'number' && (Number.isNaN(value) || value < 0)) return;
     const key = `ai.thresholds.${domain}.${String(field)}`;
     const previous = config;
     setConfig((prev) => ({
@@ -304,6 +323,23 @@ export default function ThresholdsConfig() {
           precision={precision}
           disabled={savingKey === `ai.thresholds.${domain}.${String(field)}`}
           onChange={(next) => void updateField(domain, field, Number(next))}
+        />
+      </ConfigPageRow>
+    );
+  }, [config, savingKey, updateField, t]);
+
+  const renderToggle = useCallback(<D extends DomainKey>(
+    domain: D,
+    field: DomainField<D>,
+  ) => {
+    const checked = Boolean((config[domain] as Record<string, unknown>)[field as string]);
+    const labelKey = `fields.${domain}.${String(field)}`;
+    return (
+      <ConfigPageRow key={`${domain}.${String(field)}`} label={t(labelKey)} align="center">
+        <Switch
+          checked={checked}
+          disabled={savingKey === `ai.thresholds.${domain}.${String(field)}`}
+          onChange={(event) => void updateField(domain, field, event.target.checked)}
         />
       </ConfigPageRow>
     );
@@ -418,9 +454,18 @@ export default function ThresholdsConfig() {
       renderField('goal', 'idle_wakeup_delay_ms', 1, 1000),
       renderField('goal', 'max_auto_continuations', 1),
     ]);
+    add('execution', [
+      renderField('execution', 'max_rounds', 1),
+      renderField('execution', 'consecutive_tool_rounds', 1),
+      renderField('execution', 'consecutive_search_rounds', 1),
+      renderField('execution', 'duplicate_tool_calls', 1),
+      renderField('execution', 'no_progress_results', 1),
+      renderField('execution', 'tool_calls_per_turn', 1),
+      renderToggle('execution', 'empty_input_guard'),
+    ]);
 
     return sections;
-  }, [renderField, t, config]);
+  }, [renderField, renderToggle, t, config]);
 
   if (loading) {
     return <ConfigPageLoading text={t('messages.loading')} />;

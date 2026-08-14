@@ -116,6 +116,16 @@
       "__title": "Goal continuation",
       "idle_wakeup_delay_ms": "Goal idle-wakeup delay (ms)",
       "max_auto_continuations": "Max goal auto-continuations"
+    },
+    "execution": {
+      "__title": "Tool-round execution",
+      "max_rounds": "Max rounds per turn",
+      "consecutive_tool_rounds": "Consecutive tool-only rounds",
+      "consecutive_search_rounds": "Consecutive search rounds without reasoning",
+      "duplicate_tool_calls": "Duplicate tool-call fingerprint",
+      "no_progress_results": "Unchanged tool-result rounds",
+      "tool_calls_per_turn": "Max tool calls per turn",
+      "empty_input_guard": "Block empty-input rounds"
     }
   }
 }

@@ -116,6 +116,16 @@
       "__title": "目标续接",
       "idle_wakeup_delay_ms": "目标空闲唤醒延迟（毫秒）",
       "max_auto_continuations": "目标自动续接上限"
+    },
+    "execution": {
+      "__title": "工具轮执行",
+      "max_rounds": "单轮对话最大轮数",
+      "consecutive_tool_rounds": "连续纯工具轮上限",
+      "consecutive_search_rounds": "连续无思考搜索轮上限",
+      "duplicate_tool_calls": "重复工具调用指纹阈值",
+      "no_progress_results": "工具结果无变化轮阈值",
+      "tool_calls_per_turn": "单轮对话工具调用总数上限",
+      "empty_input_guard": "拦截空输入轮"
     }
   }
 }
