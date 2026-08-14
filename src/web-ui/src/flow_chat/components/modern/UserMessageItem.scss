@@ -73,6 +73,15 @@
     margin-left: var(--bf-appearance-token-flowchat-content-inline-pad-mobile);
     margin-right: var(--bf-appearance-token-flowchat-content-inline-pad-mobile);
   }
+
+  // R-GC-14: group chat left/right indent offset (type-contract section 1.3/2)
+  // grouped by senderSessionId, using existing tokens only. Member messages
+  // (senderSessionId !== group session id) offset right; owner senders keep
+  // the default alignment.
+  &.user-message-item--group-other {
+    margin-left: calc(var(--bf-appearance-token-flowchat-content-inline-pad) * 2.2);
+    margin-right: var(--bf-appearance-token-flowchat-content-inline-pad);
+  }
 }
 
 .user-message-item__timestamp {

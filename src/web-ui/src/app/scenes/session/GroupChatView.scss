@@ -1,0 +1,99 @@
+@charset "UTF-8";
+/**
+ * CreateGroupChatDialog styles — existing appearance tokens and size tokens
+ * only (no new style system). Layout reuses the WorkspaceSessionBatchModal
+ * row/state/actions semantics (existing shape).
+ */
+/**
+ * Sass bindings for the runtime-owned Appearance token contract.
+ * This module intentionally owns no visual values.
+ */
+.group-chat-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bf-appearance-token-size-gap-4);
+  min-width: 0;
+  color: var(--bf-appearance-token-color-text-primary);
+}
+.group-chat-dialog__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+}
+.group-chat-dialog__members {
+  display: flex;
+  flex-direction: column;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+}
+.group-chat-dialog__members-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+}
+.group-chat-dialog__members-label {
+  font-size: var(--bf-appearance-token-font-size-xs);
+  font-weight: 600;
+  color: var(--bf-appearance-token-color-text-secondary);
+}
+.group-chat-dialog__member-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--bf-appearance-token-border-subtle);
+  border-radius: var(--bf-appearance-token-size-radius-base);
+  padding: var(--bf-appearance-token-size-gap-1);
+  gap: 2px;
+}
+.group-chat-dialog__member-row {
+  display: flex;
+  align-items: center;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+  padding: 4px var(--bf-appearance-token-size-gap-2);
+  border-radius: var(--bf-appearance-token-size-radius-sm);
+  cursor: pointer;
+  color: var(--bf-appearance-token-color-text-secondary);
+  font-size: var(--bf-appearance-token-font-size-sm);
+  transition: color var(--bf-appearance-token-motion-fast) var(--bf-appearance-token-easing-standard), background var(--bf-appearance-token-motion-fast) var(--bf-appearance-token-easing-standard);
+}
+.group-chat-dialog__member-row:hover {
+  color: var(--bf-appearance-token-color-text-primary);
+  background: var(--bf-appearance-token-element-bg-soft);
+}
+.group-chat-dialog__member-row.is-selected {
+  color: var(--bf-appearance-token-color-text-primary);
+  background: var(--bf-appearance-token-element-bg-soft);
+}
+.group-chat-dialog__member-name {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-chat-dialog__state {
+  display: flex;
+  align-items: center;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+  padding: var(--bf-appearance-token-size-gap-3) var(--bf-appearance-token-size-gap-2);
+  border: 1px dashed var(--bf-appearance-token-border-subtle);
+  border-radius: var(--bf-appearance-token-size-radius-base);
+  color: var(--bf-appearance-token-color-text-muted);
+  font-size: var(--bf-appearance-token-font-size-xs);
+}
+.group-chat-dialog__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--bf-appearance-token-size-gap-2);
+  min-width: 0;
+}
+
+/*# sourceMappingURL=GroupChatView.scss.map */

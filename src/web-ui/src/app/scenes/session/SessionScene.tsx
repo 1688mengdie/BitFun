@@ -13,8 +13,10 @@ import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMe
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../../hooks/useApp';
 import ChatPane from './ChatPane';
+import GroupChatView from './GroupChatView';
 import AuxPane, { type AuxPaneRef } from './AuxPane';
 import BottomTerminalPane from './BottomTerminalPane';
+import { useActiveSession } from '../../../flow_chat/store/modernFlowChatStore';
 import {
   getCachedTerminalPanelPosition,
   onTerminalPanelPositionChange,
@@ -139,6 +141,13 @@ const SessionScene: React.FC<SessionSceneProps> = ({
   }, [state.layout.rightPanelCollapsed, currentRightWidth]);
 
   const isChatFullWidth = state.layout.chatFullWidth;
+
+  // R-GC-14: group chat detection (UI-local isGroupChat marker set by MainNav
+  // when creating/opening a group). GroupChatView needs groupId + workspacePath:
+  // a group session is itself an ordinary session (v3 decision).
+  const activeSession = useActiveSession();
+  const activeSessionId = activeSession?.sessionId ?? '';
+  const isGroupChatActive = activeSessionId !== '' && activeSession?.isGroupChat === true;
 
   const bottomTerminalPanelMode: PanelDisplayMode = useMemo(() => {
     if (state.layout.bottomTerminalPanelCollapsed) return 'collapsed';
@@ -557,7 +566,7 @@ const SessionScene: React.FC<SessionSceneProps> = ({
       ].filter(Boolean).join(' ') || undefined}
     >
       <div className="bitfun-session-scene__main-row" data-bf-scene="session" data-bf-part="main">
-        {/* ChatPane — FlowChat conversation */}
+        {/* ChatPane — FlowChat conversation (GroupChatView for group chats, R-GC-14) */}
         {!isChatHidden && (
           <div
             className={`bitfun-session-scene__chat-pane ${isDragging ? 'bitfun-session-scene__chat-pane--dragging' : ''}`}
@@ -565,14 +574,23 @@ const SessionScene: React.FC<SessionSceneProps> = ({
             data-bf-scene="session"
             data-bf-part="chat"
           >
-            <ChatPane
-              width={0}
-              isFullscreen={false}
-              isSceneActive={isActive}
-              isDragging={false}
-              workspacePath={workspacePath}
-              showChatInput
-            />
+            {isGroupChatActive ? (
+              <GroupChatView
+                groupId={activeSessionId}
+                workspacePath={workspacePath || activeSession?.workspacePath || ''}
+                groupName={activeSession?.title}
+                isSceneActive={isActive}
+              />
+            ) : (
+              <ChatPane
+                width={0}
+                isFullscreen={false}
+                isSceneActive={isActive}
+                isDragging={false}
+                workspacePath={workspacePath}
+                showChatInput
+              />
+            )}
           </div>
         )}
 

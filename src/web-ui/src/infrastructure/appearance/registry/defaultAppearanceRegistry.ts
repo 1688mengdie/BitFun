@@ -205,6 +205,12 @@ import { gitGraphViewAppearanceDescriptor } from '@/app/scenes/git/views/GraphVi
 import { navBarAppearanceDescriptor } from '@/app/components/NavBar/NavBar.appearance';
 import { splashScreenAppearanceDescriptor } from '@/app/components/SplashScreen/SplashScreen.appearance';
 import { chatPaneAppearanceDescriptor } from '@/app/scenes/session/ChatPane.appearance';
+import { groupChatViewAppearanceDescriptor } from '@/app/scenes/session/GroupChatView.appearance';
+import {
+  groupMemberPickerDialogAppearanceDescriptor,
+  groupForkDialogAppearanceDescriptor,
+} from '@/app/scenes/session/GroupChatViewDialogs.appearance';
+import { createGroupChatDialogAppearanceDescriptor } from '@/app/components/NavPanel/components/CreateGroupChatDialog.appearance';
 import { auxPaneAppearanceDescriptor } from '@/app/scenes/session/AuxPane.appearance';
 import { bottomTerminalPaneAppearanceDescriptor } from '@/app/scenes/session/BottomTerminalPane.appearance';
 import { scheduledJobsModalAppearanceDescriptor } from '@/app/components/scheduled-jobs/ScheduledJobsModal.appearance';
@@ -383,6 +389,10 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(navBarAppearanceDescriptor)
     .registerComponent(splashScreenAppearanceDescriptor)
     .registerComponent(chatPaneAppearanceDescriptor)
+    .registerComponent(groupChatViewAppearanceDescriptor)
+    .registerComponent(createGroupChatDialogAppearanceDescriptor)
+    .registerComponent(groupMemberPickerDialogAppearanceDescriptor)
+    .registerComponent(groupForkDialogAppearanceDescriptor)
     .registerComponent(auxPaneAppearanceDescriptor)
     .registerComponent(bottomTerminalPaneAppearanceDescriptor)
     .registerComponent(scheduledJobsModalAppearanceDescriptor)

@@ -7066,6 +7066,32 @@ config: {
     });
   }
 
+  /**
+   * R-GC-14: mark a session as a group chat (group chat = ordinary session,
+   * v3 decision). UI-local marker used by SessionScene to render
+   * GroupChatView. Never persisted; derived from the group chat create flow
+   * (MainNav), not the backend session metadata.
+   */
+  public markSessionAsGroupChat(sessionId: string): void {
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session || session.isGroupChat === true) {
+        return prev;
+      }
+
+      const newSessions = new Map(prev.sessions);
+      newSessions.set(sessionId, {
+        ...session,
+        isGroupChat: true,
+      });
+
+      return {
+        ...prev,
+        sessions: newSessions,
+      };
+    });
+  }
+
   public setSessionContextRestoreState(
     sessionId: string,
     contextRestoreState: SessionContextRestoreState

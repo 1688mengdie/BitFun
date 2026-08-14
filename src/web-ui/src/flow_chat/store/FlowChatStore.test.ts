@@ -269,6 +269,37 @@ describe('FlowChatStore lazy worktree preference', () => {
   });
 });
 
+describe('FlowChatStore group chat marker (R-GC-14)', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('marks a session as a group chat and stays idempotent', () => {
+    const session = createSession({
+      config: { workspacePath: '/repo', projectWorkspacePath: '/repo' },
+      workspacePath: '/repo',
+      projectWorkspacePath: '/repo',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.markSessionAsGroupChat(session.sessionId);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.isGroupChat).toBe(true);
+
+    // 幂等：重复调用不产生新 state 提交（isGroupChat 已为 true）。
+    const before = flowChatStore.getState().sessions.get(session.sessionId);
+    flowChatStore.markSessionAsGroupChat(session.sessionId);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(before);
+  });
+
+  it('is a no-op for a session that does not exist', () => {
+    flowChatStore.markSessionAsGroupChat('missing-session');
+    expect(flowChatStore.getState().sessions.has('missing-session')).toBe(false);
+  });
+});
+
 describe('FlowChatStore dispatch observer boundaries', () => {
   beforeEach(() => {
     vi.clearAllMocks();

@@ -211,6 +211,16 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
       return `[${role}${depth}]${name}`;
     }, [message?.metadata]);
 
+    // R-GC-14: group chat left/right indent offset (type-contract section 1.3 + 2).
+    // Group message = user_message.metadata.groupId present; "self" = current
+    // session id (in a group session the owner sessionId === groupId). Member
+    // messages (senderSessionId !== resolvedSessionId) offset right; owner /
+    // unknown senders keep the default left alignment.
+    const isGroupMessage = Boolean(message?.metadata?.groupId);
+    const isGroupSenderSelf =
+      typeof message?.metadata?.senderSessionId === 'string' &&
+      message.metadata.senderSessionId === resolvedSessionId;
+
     const { displayText, reproductionSteps } = useMemo(() => {
       const reproductionRegex = /<reproduction_steps>([\s\S]*?)<\/reproduction_steps\s*>?/g;
       const reproductionMatch = reproductionRegex.exec(messageContent);
@@ -548,7 +558,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
         data-bf-part="root"
         data-bf-state={[expanded && 'expanded', isFailed && 'failed'].filter(Boolean).join(' ') || undefined}
         ref={containerRef}
-        className={`user-message-item ${expanded ? 'user-message-item--expanded' : ''}${isFailed ? ' user-message-item--failed' : ''}`}
+        className={`user-message-item ${expanded ? 'user-message-item--expanded' : ''}${isFailed ? ' user-message-item--failed' : ''}${isGroupMessage && !isGroupSenderSelf ? ' user-message-item--group-other' : ''}${isGroupMessage && isGroupSenderSelf ? ' user-message-item--group-self' : ''}`}
         data-testid="chat-user-message"
         data-turn-id={turnId}
         data-status={resolvedTurnStatus || ''}

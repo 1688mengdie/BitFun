@@ -484,6 +484,15 @@ export interface Session {
   sessionKind: SessionKind;
 
   /**
+   * R-GC-14: true when this session is a group chat (group chat = ordinary
+   * session, v3 decision). UI-local marker set by the group chat flow (MainNav
+   * handleGroupChatCreated); group sessions render GroupChatView instead of the
+   * plain agent chat surface. Never persisted — derived from the group chat
+   * create flow, not the backend.
+   */
+  isGroupChat?: boolean;
+
+  /**
    * R-AD-08: when true this session's parent is missing from the loaded set
    * (backend orphan classification). The nav groups such sessions under the
    * orphan section instead of pretending they are normal top-level rows.

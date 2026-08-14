@@ -788,4 +788,60 @@ describe('UserMessageItem steering tag', () => {
 
     expect(container.querySelector('.user-message-item__sender-badge')).toBeNull();
   });
+
+  it('applies group-chat indent classes by senderSessionId (R-GC-14)', () => {
+    const previous = activeSessionRef.current;
+    activeSessionRef.current = { sessionId: 'group-1', dialogTurns: [] };
+    try {
+      // 群主消息（senderSessionId === 群会话 id）：--group-self，无右侧错位。
+      act(() => {
+        root.render(
+          <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+            <UserMessageItem
+              message={{
+                id: 'group-owner-1',
+                content: 'owner message',
+                timestamp: 1000,
+                metadata: {
+                  groupId: 'group-1',
+                  senderSessionId: 'group-1',
+                  senderName: '群主',
+                },
+              }}
+              turnId="turn-g1"
+            />
+          </FlowChatContext.Provider>,
+        );
+      });
+      let item = container.querySelector('.user-message-item');
+      expect(item?.classList.contains('user-message-item--group-self')).toBe(true);
+      expect(item?.classList.contains('user-message-item--group-other')).toBe(false);
+
+      // 成员消息（senderSessionId !== 群会话 id）：--group-other（右侧缩进错位）。
+      act(() => {
+        root.render(
+          <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+            <UserMessageItem
+              message={{
+                id: 'group-member-1',
+                content: 'member reply',
+                timestamp: 1000,
+                metadata: {
+                  groupId: 'group-1',
+                  senderSessionId: 'member-2',
+                  senderName: '二号',
+                },
+              }}
+              turnId="turn-g2"
+            />
+          </FlowChatContext.Provider>,
+        );
+      });
+      item = container.querySelector('.user-message-item');
+      expect(item?.classList.contains('user-message-item--group-other')).toBe(true);
+      expect(item?.classList.contains('user-message-item--group-self')).toBe(false);
+    } finally {
+      activeSessionRef.current = previous;
+    }
+  });
 });
