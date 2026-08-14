@@ -34,7 +34,6 @@ import { flowChatManager } from '@/flow_chat/services/FlowChatManager';
 import { resolveAgentTypeForSessionCreation } from '@/flow_chat/services/flow-chat-manager';
 import { openMainSession } from '@/flow_chat/services/sessionActivation';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
-import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { workspaceManager } from '@/infrastructure/services/business/workspaceManager';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { createLogger } from '@/shared/utils/logger';
@@ -111,10 +110,9 @@ const MainNav: React.FC<MainNavProps> = ({
     () => new Set(['assistant-sessions', 'workspace'])
   );
 
-  // Group chats (R-GC-13): list (execute_tool list_group_chats) + create dialog.
+  // Group chats (R-GC-27): entry merged into the assistant session create
+  // menu; the create dialog stays the existing CreateGroupChatDialog.
   const [isGroupChatDialogOpen, setIsGroupChatDialogOpen] = useState(false);
-  const [groupChats, setGroupChats] = useState<Array<{ groupId: string; name: string; memberCount: number }>>([]);
-  const [isGroupChatsLoading, setIsGroupChatsLoading] = useState(false);
 
   // R-GC-17: when current workspace is empty, group chats fall back to the
   // default assistant workspace (backend create applies the same fallback).
@@ -122,40 +120,6 @@ const MainNav: React.FC<MainNavProps> = ({
     () => assistantWorkspacesList[0] ?? null,
     [assistantWorkspacesList]
   );
-
-  const loadGroupChats = useCallback(async () => {
-    // R-GC-17: when current workspace is empty, fall back to the default
-    // assistant workspace list (matching the create fallback).
-    const workspacePath = currentWorkspace?.rootPath || groupChatFallbackWorkspace?.rootPath;
-    if (!workspacePath) return;
-    setIsGroupChatsLoading(true);
-    try {
-      const response = await toolAPI.executeTool({
-        toolName: 'list_group_chats',
-        parameters: { action: 'list', workspace: workspacePath },
-        workspacePath,
-      });
-      const groups = response?.result?.groups;
-      if (response?.success === true && Array.isArray(groups)) {
-        setGroupChats(groups);
-      } else {
-        log.warn('list_group_chats returned an unexpected response', {
-          success: response?.success,
-          error: response?.error || response?.validation_error,
-        });
-        setGroupChats([]);
-      }
-    } catch (error) {
-      log.warn('Failed to load group chats', { error });
-      setGroupChats([]);
-    } finally {
-      setIsGroupChatsLoading(false);
-    }
-  }, [currentWorkspace?.rootPath, groupChatFallbackWorkspace?.rootPath]);
-
-  useEffect(() => {
-    void loadGroupChats();
-  }, [loadGroupChats]);
 
   const handleGroupChatCreated = useCallback(async (groupId: string, name: string) => {
     // R-GC-17: backend create already falls back to the default Claw workspace
@@ -166,7 +130,7 @@ const MainNav: React.FC<MainNavProps> = ({
     if (!workspacePath) return;
     // Group = Claw session (backend group_room_tools.rs create_group builds a
     // Claw session); registering it locally into flowChatStore lets the
-    // existing SessionScene open it (pre-R-GC-14 entry navigation).
+    // existing SessionScene open it.
     flowChatStore.createSession(
       groupId,
       {
@@ -187,25 +151,7 @@ const MainNav: React.FC<MainNavProps> = ({
       workspaceId,
       activateWorkspace: workspaceId ? setActiveWorkspace : undefined,
     });
-    await loadGroupChats();
-  }, [currentWorkspace?.id, currentWorkspace?.rootPath, groupChatFallbackWorkspace?.id, groupChatFallbackWorkspace?.rootPath, loadGroupChats, setActiveWorkspace]);
-
-  const handleOpenGroupChat = useCallback(async (groupId: string) => {
-    const workspaceId = currentWorkspace?.id;
-    const session = flowChatStore.getState().sessions.get(groupId);
-    if (!session) {
-      // Group session exists on disk but is not loaded yet: trigger one
-      // metadata refresh before opening.
-      await loadGroupChats();
-    }
-    // R-GC-14: mark both disk/new group sessions (UI-local, used by the
-    // group chat view).
-    flowChatStore.markSessionAsGroupChat(groupId);
-    await openMainSession(groupId, {
-      workspaceId,
-      activateWorkspace: workspaceId ? setActiveWorkspace : undefined,
-    });
-  }, [currentWorkspace?.id, loadGroupChats, setActiveWorkspace]);
+  }, [currentWorkspace?.id, currentWorkspace?.rootPath, groupChatFallbackWorkspace?.id, groupChatFallbackWorkspace?.rootPath, setActiveWorkspace]);
 
   const workspaceMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -827,6 +773,7 @@ const MainNav: React.FC<MainNavProps> = ({
                 primaryAssistant={primaryAssistantWorkspace}
                 onCreatePrimary={handleCreatePrimaryAssistantSession}
                 onCreateAssistant={handleCreateAssistantSession}
+                onCreateGroupChat={() => setIsGroupChatDialogOpen(true)}
               />
             }
           />
@@ -850,73 +797,6 @@ const MainNav: React.FC<MainNavProps> = ({
                     />
                   );
                 })}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Group chats (R-GC-13) */}
-        <div className="bitfun-nav-panel__section" data-bf-component="nav-panel" data-bf-part="section" data-bf-section="group-chats">
-          <SectionHeader
-            label={t('nav.groupChats.sectionLabel')}
-            collapsible
-            isOpen={expandedSections.has('group-chats')}
-            onToggle={() => toggleSection('group-chats')}
-            actions={
-              <Tooltip content={t('nav.groupChats.newGroupChat')} placement="right" followCursor>
-                <button
-                  type="button"
-                  className="bitfun-nav-panel__section-action"
-                  aria-label={t('nav.groupChats.newGroupChat')}
-                  onClick={() => setIsGroupChatDialogOpen(true)}
-                  data-testid="nav-group-chat-add-btn"
-                >
-                  <Plus size={13} />
-                </button>
-              </Tooltip>
-            }
-          />
-          <div className={`bitfun-nav-panel__collapsible${expandedSections.has('group-chats') ? '' : ' is-collapsed'}`} data-bf-component="nav-panel" data-bf-part="sectionContent" data-bf-state={expandedSections.has('group-chats') ? 'open' : ''}>
-            <div className="bitfun-nav-panel__collapsible-inner">
-              <div className="bitfun-nav-panel__inline-list" data-testid="nav-group-chat-list">
-                {isGroupChatsLoading ? (
-                  <div className="bitfun-nav-panel__inline-loading">
-                    <span>{t('nav.sessions.loading')}</span>
-                  </div>
-                ) : groupChats.length === 0 ? (
-                  <div className="bitfun-nav-panel__inline-empty">
-                    {t('nav.groupChats.empty')}
-                  </div>
-                ) : (
-                  groupChats.map(group => {
-                    const isActive =
-                      activeTabId === 'session' &&
-                      flowChatStore.getState().activeSessionId === group.groupId;
-                    return (
-                      <button
-                        key={group.groupId}
-                        type="button"
-                        className={[
-                          'bitfun-nav-panel__inline-item',
-                          isActive && 'is-active',
-                        ].filter(Boolean).join(' ')}
-                        data-testid="nav-group-chat-item"
-                        data-group-id={group.groupId}
-                        onClick={() => { void handleOpenGroupChat(group.groupId); }}
-                      >
-                        <span className="bitfun-nav-panel__inline-item-icon-slot">
-                          <Users size={14} className="bitfun-nav-panel__inline-item-icon" aria-hidden="true" />
-                        </span>
-                        <span className="bitfun-nav-panel__inline-item-main">
-                          <span className="bitfun-nav-panel__inline-item-label">{group.name || t('nav.groupChats.untitled')}</span>
-                          {group.memberCount > 0 ? (
-                            <span className="bitfun-nav-panel__inline-item-badge">{group.memberCount}</span>
-                          ) : null}
-                        </span>
-                      </button>
-                    );
-                  })
-                )}
               </div>
             </div>
           </div>
