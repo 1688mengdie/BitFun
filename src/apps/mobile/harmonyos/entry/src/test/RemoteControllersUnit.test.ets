@@ -128,13 +128,13 @@ import { ConversationModelPresentationPolicy } from '../main/ets/pages/policy/Co
 import {
   GENERAL_CHAT_COMPOSER_CAPABILITIES,
   REMOTE_CHAT_COMPOSER_CAPABILITIES
-} from '../main/ets/pages/components/ChatComposerCapabilities';
-import { ChatSurface } from '../main/ets/pages/components/ChatSurface';
+} from '../main/ets/pages/state/ChatComposerCapabilities';
+import { ChatSurface } from '../main/ets/pages/state/ChatSurface';
 import { ConversationViewContract } from '../main/ets/pages/components/ConversationViewContract';
 import {
   ConversationUiModel,
   ConversationUiModelCatalog
-} from '../main/ets/pages/components/ConversationUiModels';
+} from '../main/ets/pages/state/ConversationUiModels';
 import {
   AppNavigationBackAction,
   AppNavigationPathSpec,
@@ -776,6 +776,27 @@ export default function remoteControllersUnitTest() {
       expect(threshold.placement).assertEqual(FilePreviewPlacement.WideFocusSplit);
       expect(threshold.conversationPaneWidth).assertEqual(360);
       expect(threshold.previewPaneWidth).assertEqual(360);
+    });
+
+    it('aligns dual-fold preview focus to the single vertical crease', 0, () => {
+      const layout = FilePreviewPlacementPolicy.resolveLayout(true, true, 2210, [
+        new ConversationLayoutCrease(1100, 16)
+      ]);
+      expect(layout.placement).assertEqual(FilePreviewPlacement.WideFocusSplit);
+      expect(layout.masterPaneWidth).assertEqual(0);
+      expect(layout.conversationPaneWidth).assertEqual(1100);
+      expect(layout.conversationPreviewGap).assertEqual(16);
+      expect(layout.previewPaneWidth).assertEqual(1094);
+    });
+
+    it('falls back from crease-aligned focus when one side is too narrow', 0, () => {
+      const layout = FilePreviewPlacementPolicy.resolveLayout(true, true, 900, [
+        new ConversationLayoutCrease(200, 8)
+      ]);
+      expect(layout.placement).assertEqual(FilePreviewPlacement.WideFocusSplit);
+      expect(layout.conversationPaneWidth).assertEqual(449);
+      expect(layout.conversationPreviewGap).assertEqual(1);
+      expect(layout.previewPaneWidth).assertEqual(450);
     });
   });
 
@@ -1989,7 +2010,7 @@ export default function remoteControllersUnitTest() {
 
     it('keeps general chat independent from remote-only composer requirements', 0, () => {
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.surface).assertEqual(ChatSurface.General);
-      expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertFalse();
+      expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.supportsAttachments).assertTrue();
       expect(GENERAL_CHAT_COMPOSER_CAPABILITIES.requiresRemoteConnection).assertFalse();
       // Nothing queues a message on this surface, so a draft written mid-reply
       // has nowhere to go until the reply finishes.
@@ -2427,7 +2448,7 @@ export default function remoteControllersUnitTest() {
       )).assertTrue();
     });
 
-    it('keeps phone, single-fold, and dual-screen foldables compact', 0, () => {
+    it('keeps crease-less phones compact even when the viewport is extra-wide', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(
         ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
         true,
@@ -2435,19 +2456,47 @@ export default function remoteControllersUnitTest() {
         'phone',
         []
       )).assertFalse();
+    });
+
+    it('uses master-detail for unfolded dual-fold surfaces', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(
         ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
         true,
         false,
         'phone',
         [new ConversationLayoutCrease(520, 8)]
-      )).assertFalse();
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        2210,
+        false,
+        false,
+        'phone',
+        [new ConversationLayoutCrease(1100, 16)]
+      )).assertTrue();
       expect(ConversationLayoutPolicy.useMasterDetail(
         ConversationLayoutPolicy.EXTRA_WIDE_MIN_WIDTH,
         true,
         false,
         'tablet',
         [new ConversationLayoutCrease(520, 8)]
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        2210,
+        false,
+        false,
+        'phone',
+        [],
+        true
+      )).assertTrue();
+    });
+
+    it('keeps an unfolded crease compact when master-detail cannot fit', 0, () => {
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        500,
+        true,
+        false,
+        'phone',
+        [new ConversationLayoutCrease(200, 8)]
       )).assertFalse();
     });
 

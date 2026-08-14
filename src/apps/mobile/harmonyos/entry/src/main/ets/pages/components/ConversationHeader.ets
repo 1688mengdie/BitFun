@@ -1,28 +1,24 @@
 import { RemoteI18n } from '../../i18n/RemoteI18n';
-import { ConversationUiSession } from './ConversationUiModels';
 import { ACCENT, CARD, INK, LINE, MUTED, PAGE_BG, PRIMARY_ACTION_TEXT, SOFT } from './Theme';
 import { CompactMenuButton } from './CompactMenuButton';
 import { TemplateIcon } from './TemplateIcon';
 import { SidebarToggleButton } from './SidebarToggleButton';
 
 @ComponentV2
-export struct RemoteChatHeader {
-  @Param activeSession: ConversationUiSession = {
-    sessionId: '',
-    title: '',
-    workspacePath: '',
-    agentType: 'code'
-  };
-  @Param workspaceBranch: string = '';
-  @Param desktopName: string = '';
-  @Param showBackButton: boolean = true;
-  @Param showSidebarButton: boolean = false;
+export struct ConversationHeader {
+  @Param title: string = '';
+  @Param subtitle: string = '';
+  @Param titleFallback: string = '';
+  @Param allowRename: boolean = false;
+  @Param showActions: boolean = false;
+  @Param showSidebarButton: boolean = true;
+  @Param showBackButton: boolean = false;
   @Param showSidebarRestoreButton: boolean = false;
   @Param showActionsMenu: boolean = false;
   @BuilderParam actionsMenu: () => void = this.EmptyBuilder;
-  @Event onBack: () => void = () => {};
   @Event onOpenSidebar: () => void = () => {};
   @Event onRestoreSidebar: () => void = () => {};
+  @Event onBack: () => void = () => {};
   @Event onOpenActions: () => void = () => {};
   @Event onActionsMenuStateChange: (visible: boolean) => void = (_visible: boolean) => {};
   @Event onRenameSession: (title: string) => void = (_title: string) => {};
@@ -41,40 +37,47 @@ export struct RemoteChatHeader {
   }
 
   @Builder
-  HeaderRow() {
+  private HeaderRow() {
     Row({ space: 8 }) {
       this.LeadingControl()
-      Column({ space: 3 }) {
-        Text(this.activeSession.title || RemoteI18n.t('chat.remoteSession'))
-          .fontSize(18)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(INK)
-          .textAlign(TextAlign.Center)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .onClick(() => {
-            this.renameTitle = this.activeSession.title || '';
-            this.showTitleEditor = true;
-          })
-        Row({ space: 6 }) {
-          Text(this.headerContextTitle())
-            .fontSize(14)
-            .fontColor(MUTED)
-            .textAlign(TextAlign.Center)
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .width('100%')
-        .justifyContent(FlexAlign.Center)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Center)
-      this.ActionsControl()
+      this.TitleBlock()
+      this.TrailingControl()
     }
     .width('100%')
+    .height(this.hasSubtitle() ? 76 : 64)
     .alignItems(VerticalAlign.Center)
-    .padding({ left: 18, right: 18, top: 14, bottom: 16 })
+    .padding({ left: 16, right: 16, top: 8, bottom: 8 })
     .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  private TitleBlock() {
+    Column({ space: 3 }) {
+      Text(this.resolvedTitle())
+        .fontSize(this.hasSubtitle() ? 18 : 17)
+        .fontWeight(FontWeight.Medium)
+        .fontColor(INK)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .textAlign(TextAlign.Center)
+        .onClick(() => {
+          if (!this.allowRename) {
+            return;
+          }
+          this.renameTitle = this.title;
+          this.showTitleEditor = true;
+        })
+      if (this.hasSubtitle()) {
+        Text(this.subtitle)
+          .fontSize(14)
+          .fontColor(MUTED)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .textAlign(TextAlign.Center)
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(HorizontalAlign.Center)
   }
 
   @Builder
@@ -116,43 +119,47 @@ export struct RemoteChatHeader {
   }
 
   @Builder
-  private ActionsControl() {
-    Stack({ alignContent: Alignment.Center }) {
+  private TrailingControl() {
+    if (this.showActions) {
+      Stack({ alignContent: Alignment.Center }) {
         TemplateIcon({
           src: $r('app.media.remote_ref_more'),
           iconWidth: 23,
           iconHeight: 7
         })
-    }
-    .width(44)
-    .height(44)
-    .backgroundColor(CARD)
-    .borderRadius(22)
-    .border({ width: 1, color: LINE })
-    .shadow({ radius: 10, color: LINE, offsetY: 3 })
-    .accessibilityText(RemoteI18n.t('sidebar.more'))
-    .bindPopup(this.showActionsMenu, {
-      builder: () => {
-        this.actionsMenu();
-      },
-      placement: Placement.BottomRight,
-      popupColor: '#00000000',
-      enableArrow: false,
-      autoCancel: true,
-      mask: false,
-      targetSpace: 8,
-      onStateChange: (event) => {
-        this.onActionsMenuStateChange(event.isVisible);
       }
-    })
-    .onClick(() => {
-      this.showTitleEditor = false;
-      this.onOpenActions();
-    })
+      .width(44)
+      .height(44)
+      .backgroundColor(CARD)
+      .border({ width: 1, color: LINE })
+      .borderRadius(22)
+      .shadow({ radius: 10, color: LINE, offsetY: 3 })
+      .accessibilityText(RemoteI18n.t('sidebar.more'))
+      .bindPopup(this.showActionsMenu, {
+        builder: () => {
+          this.actionsMenu();
+        },
+        placement: Placement.BottomRight,
+        popupColor: '#00000000',
+        enableArrow: false,
+        autoCancel: true,
+        mask: false,
+        targetSpace: 8,
+        onStateChange: (event) => {
+          this.onActionsMenuStateChange(event.isVisible);
+        }
+      })
+      .onClick(() => {
+        this.showTitleEditor = false;
+        this.onOpenActions();
+      })
+    } else {
+      Blank().width(44).height(44)
+    }
   }
 
   @Builder
-  TitleEditor() {
+  private TitleEditor() {
     Row({ space: 8 }) {
       TextInput({ placeholder: RemoteI18n.t('chat.sessionTitle'), text: this.renameTitle })
         .layoutWeight(1)
@@ -193,20 +200,22 @@ export struct RemoteChatHeader {
         })
     }
     .width('100%')
-    .padding({ left: 18, right: 18, top: 10, bottom: 8 })
+    .padding({ left: 16, right: 16, top: 10, bottom: 8 })
     .backgroundColor(PAGE_BG)
   }
 
-  private headerContextTitle(): string {
-    if (this.desktopName.length > 0) {
-      return this.desktopName;
+  private resolvedTitle(): string {
+    if (this.title.length > 0) {
+      return this.title;
     }
-    const brand = 'BitFun';
-    return this.workspaceBranch.length > 0 ? `${brand} · ${this.workspaceBranch}` : brand;
+    return this.titleFallback;
+  }
+
+  private hasSubtitle(): boolean {
+    return this.subtitle.length > 0;
   }
 
   @Builder
   private EmptyBuilder() {
   }
-
 }
