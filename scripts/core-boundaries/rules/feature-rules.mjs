@@ -124,6 +124,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'bitfun-external-sources', ownerFeatures: ['external-sources'] },
       { depName: 'bitfun-harness', ownerFeatures: ['agent-runtime'] },
       { depName: 'bitfun-opencode-adapter', ownerFeatures: ['external-sources'] },
+      { depName: 'bitfun-dsh-adapter', ownerFeatures: ['external-sources'] },
       { depName: 'bitfun-plugin-runtime-client', ownerFeatures: ['plugin-runtime'] },
       { depName: 'bitfun-product-capabilities', ownerFeatures: ['product-capabilities'] },
       {
@@ -389,6 +390,9 @@ export const capabilityContractDependencyRules = [
       ['bitfun-opencode-adapter', capabilityConsumer([
         capabilityEdge(['plugin-runtime']),
         capabilityEdge(['script-tool-runtime'], { kind: 'dev' }),
+      ])],
+      ['bitfun-dsh-adapter', capabilityConsumer([
+        capabilityEdge(['plugin-runtime']),
       ])],
       ['bitfun-plugin-runtime-client', capabilityConsumer([
         capabilityEdge(['plugin-runtime']),
@@ -712,6 +716,7 @@ export const coreClosedFeatureProfileRules = [
       'mcp-runtime',
       'script-tool-runtime',
       'dep:bitfun-opencode-adapter',
+      'dep:bitfun-dsh-adapter',
       'dep:bitfun-claude-code-adapter',
       'dep:bitfun-codex-adapter',
       'dep:bitfun-external-sources',
