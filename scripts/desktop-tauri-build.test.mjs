@@ -27,9 +27,9 @@ test('Desktop DMG uses the branded installer layout', () => {
   );
   assert.deepEqual(config.bundle.macOS.dmg, {
     background: 'dmg/background.png',
-    windowSize: { width: 800, height: 563 },
-    appPosition: { x: 235, y: 240 },
-    applicationFolderPosition: { x: 565, y: 240 },
+    windowSize: { width: 660, height: 400 },
+    appPosition: { x: 180, y: 170 },
+    applicationFolderPosition: { x: 480, y: 170 },
   });
 });
 
