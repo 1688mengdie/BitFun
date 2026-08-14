@@ -3,20 +3,27 @@
  * management & fork).
  *
  * Reuse rules (type-contract section 4, top red line):
- * - Bubble list = existing ModernFlowChatContainer
- *   (flow_chat/components/modern/ModernFlowChatContainer.tsx:123). History
- *   turns are injected via flowChatStore.addDialogTurn (FlowChatStore.ts:5071)
- *   and rendered by the existing UserMessageItem (senderBadge reads
- *   metadata.senderName/senderSessionId automatically, UserMessageItem.tsx:202).
- * - Input = existing ChatInput + ChatInputRegistration.onSubmit host contract
- *   (chatInputRegistration.ts:34-60; ChatInput.tsx:4178-4201 explicitly names
- *   the "group chat pane" scenario). onSubmit calls
- *   toolAPI.executeTool({ toolName: 'send_group_message', ... })
- *   (ToolAPI.ts:49-61 — the single camelCase execute_tool wrapper).
- * - Member list / invite / fork dialogs reuse existing components only:
- *   Modal (Modal.tsx:65), Button (Button.tsx:15), Checkbox (Checkbox.tsx:19),
- *   Input (Input.tsx:20) and the session-list + Checkbox multi-select shape of
- *   WorkspaceSessionBatchModal.tsx:305-459 / CreateGroupChatDialog.tsx:177-196.
+ * - Layout = the original session pane (zero hand-rolled bars, R-GC-24):
+ *   - Top bar = the existing FlowChatHeader inside ModernFlowChatContainer
+ *     (flow_chat/components/modern/ModernFlowChatContainer.tsx:2462-2488).
+ *     The group-chat menu (members / invite / fork) is injected into the
+ *     existing left action group via `headerLeftActionsContent`
+ *     (FlowChatHeader.tsx:490-497), which already hosts SessionFilesBadge.
+ *   - Bubble list = existing ModernFlowChatContainer
+ *     (flow_chat/components/modern/ModernFlowChatContainer.tsx). History
+ *     turns are injected via flowChatStore.addDialogTurn (FlowChatStore.ts:5084)
+ *     and rendered by the existing UserMessageItem (senderBadge reads
+ *     metadata.senderName/senderSessionId automatically, UserMessageItem.tsx:219).
+ *   - Input = existing ChatInput + ChatInputRegistration.onSubmit host contract
+ *     (chatInputRegistration.ts:34-60; ChatInput.tsx:5266-5282 explicitly names
+ *     the registered-host send button). onSubmit calls
+ *     toolAPI.executeTool({ toolName: 'send_group_message', ... })
+ *     (ToolAPI.ts:49-61 — the single camelCase execute_tool wrapper).
+ * - Member picker (invite/fork) reuses the component-library Select with
+ *   multiple + searchable + showSelectAll (Select.tsx:87, exported from
+ *   component-library index.ts:21) inside the existing Modal (Modal.tsx:65)
+ *   with Button (Button.tsx:15) / Input (Input.tsx:20) actions — no custom
+ *   list is built (R-GC-22).
  * - Jump to a forked child group reuses the R-GC-13 handleGroupChatCreated
  *   registration shape: flowChatStore.createSession (FlowChatStore.ts:3744) +
  *   markSessionAsGroupChat (FlowChatStore.ts:7075) + openMainSession
@@ -26,8 +33,8 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, IconButton, Input, Modal } from '@/component-library';
-import { UserPlus, GitBranch } from 'lucide-react';
+import { Button, IconButton, Input, Modal, Select, type SelectOption } from '@/component-library';
+import { UserPlus, GitBranch, Users } from 'lucide-react';
 import { ModernFlowChatContainer as FlowChatContainer } from '../../../flow_chat/components/modern/ModernFlowChatContainer';
 import { ChatInput } from '../../../flow_chat/components/ChatInput';
 import type { ChatInputRegistration, ChatInputSubmission } from '../../../flow_chat/components/chatInputRegistration';
@@ -41,7 +48,6 @@ import type { SessionMetadata } from '@/shared/types/session-history';
 import { useI18n } from '@/infrastructure/i18n';
 import { notificationService } from '@/shared/notification-system';
 import { createLogger } from '@/shared/utils/logger';
-import './GroupChatView.scss';
 
 const log = createLogger('GroupChatView');
 
@@ -132,8 +138,8 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
   const [isSending, setIsSending] = useState(false);
   const [, forceRender] = useState(0);
 
-  // R-GC-15: member management state.
-  const [isMembersOpen, setIsMembersOpen] = useState(true);
+  // R-GC-15: member management state (dialogs only; no custom bars, R-GC-24).
+  const [isMembersOpen, setIsMembersOpen] = useState(false);
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [memberMetaById, setMemberMetaById] = useState<Map<string, SessionMetadata>>(new Map());
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
@@ -224,10 +230,8 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
   useEffect(() => {
     if (membersInitRef.current) return;
     membersInitRef.current = true;
-    if (isMembersOpen) {
-      void loadMembers();
-    }
-  }, [isMembersOpen, loadMembers]);
+    void loadMembers();
+  }, [loadMembers]);
 
   // R-GC-15: invite — invite_group_member (contract section 1.4, camelCase
   // execute_tool wrapper). workspace passed to the backend = current
@@ -425,7 +429,51 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
     [groupId, handleSubmit, t, workspacePath],
   );
 
-  const lastSession = flowChatStore.getState().sessions.get(groupId);
+  // R-GC-15: member rows — name from listSessions metadata, fallback raw id.
+  const memberRows = useMemo(
+    () => memberIds.map(id => ({ id, name: memberMetaById.get(id)?.sessionName || id })),
+    [memberIds, memberMetaById],
+  );
+
+  // R-GC-24: group chat menu rendered inside the original FlowChatHeader left
+  // action group (reuses IconButton + Modal + Select; no custom top bar).
+  const headerLeftActionsContent = useMemo(() => (
+    <div
+      className="group-chat-view__header-actions"
+      data-bf-component="group-chat-view"
+      data-bf-part="headerActions"
+    >
+      <IconButton
+        variant="ghost"
+        size="xs"
+        aria-label={t('nav.groupChats.membersLabel', { count: memberRows.length })}
+        tooltip={t('nav.groupChats.membersLabel', { count: memberRows.length })}
+        data-testid="group-chat-members-toggle"
+        onClick={() => setIsMembersOpen(true)}
+      >
+        <Users size={14} aria-hidden="true" />
+      </IconButton>
+      <IconButton
+        variant="ghost"
+        size="xs"
+        aria-label={t('nav.groupChats.invite')}
+        tooltip={t('nav.groupChats.invite')}
+        onClick={() => setIsInviteOpen(true)}
+      >
+        <UserPlus size={14} aria-hidden="true" />
+      </IconButton>
+      <IconButton
+        variant="ghost"
+        size="xs"
+        aria-label={t('nav.groupChats.fork')}
+        tooltip={t('nav.groupChats.fork')}
+        onClick={() => setIsForkOpen(true)}
+      >
+        <GitBranch size={14} aria-hidden="true" />
+      </IconButton>
+    </div>
+  ), [memberRows.length, t]);
+
   const emptyState = useMemo(
     () => (
       <div className="group-chat-view__empty" data-bf-component="group-chat-view" data-bf-part="emptyState">
@@ -433,12 +481,6 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       </div>
     ),
     [t],
-  );
-
-  // R-GC-15: member rows — name from listSessions metadata, fallback raw id.
-  const memberRows = useMemo(
-    () => memberIds.map(id => ({ id, name: memberMetaById.get(id)?.sessionName || id })),
-    [memberIds, memberMetaById],
   );
 
   return (
@@ -449,104 +491,10 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       data-testid="group-chat-view"
       data-group-id={groupId}
     >
-      <div className="group-chat-view__header" data-bf-component="group-chat-view" data-bf-part="header">
-        <span className="group-chat-view__title">{groupName || t('nav.groupChats.untitled')}</span>
-        <span className="group-chat-view__member-badge" data-bf-component="group-chat-view" data-bf-part="memberBadge">
-          {t('nav.groupChats.group')}
-        </span>
-        <button
-          type="button"
-          className="group-chat-view__members-toggle"
-          data-bf-component="group-chat-view"
-          data-bf-part="membersToggle"
-          aria-expanded={isMembersOpen}
-          onClick={() => setIsMembersOpen(v => !v)}
-        >
-          {isMembersOpen ? t('nav.groupChats.hideMembers') : t('nav.groupChats.showMembers')}
-        </button>
-      </div>
-
-      {isMembersOpen ? (
-        <div
-          className="group-chat-view__members"
-          data-bf-component="group-chat-view"
-          data-bf-part="members"
-          data-testid="group-chat-members"
-        >
-          <div className="group-chat-view__members-toolbar">
-            <span className="group-chat-view__members-label">
-              {t('nav.groupChats.membersLabel', { count: memberRows.length })}
-            </span>
-            <div className="group-chat-view__members-actions">
-              {/* R-GC-20: invite/fork 改为右上角图标按钮（复用现成 IconButton +
-                  lucide UserPlus/GitBranch，MainNav.tsx:17-18 同款图标库）。 */}
-              <IconButton
-                variant="default"
-                size="small"
-                aria-label={t('nav.groupChats.invite')}
-                tooltip={t('nav.groupChats.invite')}
-                onClick={() => setIsInviteOpen(true)}
-              >
-                <UserPlus size={14} aria-hidden="true" />
-              </IconButton>
-              <IconButton
-                variant="ghost"
-                size="small"
-                aria-label={t('nav.groupChats.fork')}
-                tooltip={t('nav.groupChats.fork')}
-                onClick={() => setIsForkOpen(true)}
-              >
-                <GitBranch size={14} aria-hidden="true" />
-              </IconButton>
-            </div>
-          </div>
-
-          {isLoadingMembers ? (
-            <div className="group-chat-view__state">{t('nav.sessions.loading')}</div>
-          ) : membersLoadFailed ? (
-            <div className="group-chat-view__state">
-              {t('nav.groupChats.membersLoadFailed')}
-              <button
-                type="button"
-                className="group-chat-view__retry"
-                onClick={() => { void loadMembers(); }}
-              >
-                {t('actions.retry')}
-              </button>
-            </div>
-          ) : memberRows.length === 0 ? (
-            <div className="group-chat-view__state">{t('nav.groupChats.noMembers')}</div>
-          ) : (
-            <div className="group-chat-view__member-list" data-testid="group-chat-member-list">
-              {memberRows.map(member => (
-                <div
-                  key={member.id}
-                  className="group-chat-view__member-row"
-                  data-bf-component="group-chat-view"
-                  data-bf-part="memberRow"
-                  data-member-id={member.id}
-                >
-                  <span className="group-chat-view__member-name">{member.name}</span>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="small"
-                    disabled={isMutatingMember}
-                    onClick={() => { void handleRemove(member.id); }}
-                  >
-                    {t('nav.groupChats.remove')}
-                  </Button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : null}
-
       <div className="group-chat-view__body" data-bf-component="group-chat-view" data-bf-part="body">
-        {isLoadingHistory && !lastSession?.dialogTurns.length ? (
+        {isLoadingHistory && !flowChatStore.getState().sessions.get(groupId)?.dialogTurns.length ? (
           <div className="group-chat-view__state">{t('nav.sessions.loading')}</div>
-        ) : historyFailed && !lastSession?.dialogTurns.length ? (
+        ) : historyFailed && !flowChatStore.getState().sessions.get(groupId)?.dialogTurns.length ? (
           <div className="group-chat-view__state">
             {t('nav.groupChats.historyLoadFailed')}
             <button
@@ -562,6 +510,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
             className="group-chat-view__chat-container"
             isViewportActive={isSceneActive}
             emptyState={emptyState}
+            headerLeftActionsContent={headerLeftActionsContent}
             onOpenVisualization={() => {}}
             onFileViewRequest={() => {}}
             onTabOpen={() => {}}
@@ -578,6 +527,19 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
           registration={registration}
         />
       </div>
+
+      {isMembersOpen ? (
+        <GroupMembersDialog
+          groupName={groupName}
+          memberRows={memberRows}
+          isLoading={isLoadingMembers}
+          loadFailed={membersLoadFailed}
+          busy={isMutatingMember}
+          onRetry={() => { void loadMembers(); }}
+          onClose={() => setIsMembersOpen(false)}
+          onRemove={handleRemove}
+        />
+      ) : null}
 
       {isInviteOpen ? (
         <GroupMemberPickerDialog
@@ -605,10 +567,91 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
 };
 
 /**
- * R-GC-15: member picker dialog (invite). Reuses the existing session-list +
- * Checkbox multi-select shape (WorkspaceSessionBatchModal.tsx:305-459 and
- * CreateGroupChatDialog.tsx:177-196) — the same member picker shape the
- * create-group flow already uses; no new picker is built.
+ * R-GC-24: member list dialog. Reuses Modal + Button (component-library);
+ * rows render the existing member list shape. No custom top bar.
+ */
+interface GroupMembersDialogProps {
+  groupName?: string;
+  memberRows: Array<{ id: string; name: string }>;
+  isLoading: boolean;
+  loadFailed: boolean;
+  busy: boolean;
+  onRetry: () => void;
+  onClose: () => void;
+  onRemove: (memberSessionId: string) => void | Promise<void>;
+}
+
+function GroupMembersDialog({
+  groupName,
+  memberRows,
+  isLoading,
+  loadFailed,
+  busy,
+  onRetry,
+  onClose,
+  onRemove,
+}: GroupMembersDialogProps) {
+  const { t } = useI18n('common');
+  return (
+    <Modal
+      isOpen
+      onClose={busy ? () => {} : onClose}
+      title={groupName || t('nav.groupChats.untitled')}
+      size="small"
+      closeOnOverlayClick={!busy}
+    >
+      <div data-bf-component="group-member-list-dialog" data-bf-part="root" className="group-chat-dialog">
+        {isLoading ? (
+          <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
+        ) : loadFailed ? (
+          <div className="group-chat-dialog__state">
+            {t('nav.groupChats.membersLoadFailed')}
+            <Button type="button" variant="secondary" size="small" onClick={onRetry}>
+              {t('actions.retry')}
+            </Button>
+          </div>
+        ) : memberRows.length === 0 ? (
+          <div className="group-chat-dialog__state">{t('nav.groupChats.noMembers')}</div>
+        ) : (
+          <div className="group-chat-dialog__member-list" data-testid="group-chat-member-list">
+            {memberRows.map(member => (
+              <div
+                key={member.id}
+                className="group-chat-dialog__member-row"
+                data-bf-component="group-member-list-dialog"
+                data-bf-part="memberRow"
+                data-member-id={member.id}
+              >
+                <span className="group-chat-dialog__member-name">{member.name}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="small"
+                  disabled={busy}
+                  onClick={() => { void onRemove(member.id); }}
+                >
+                  {t('nav.groupChats.remove')}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="group-chat-dialog__actions">
+          <Button type="button" variant="ghost" onClick={onClose} disabled={busy}>
+            {t('actions.close')}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * R-GC-22: member picker dialog (invite). Reuses the component-library Select
+ * (Select.tsx:87, exported via component-library index.ts:21) with
+ * multiple + searchable + showSelectAll inside the existing Modal — the
+ * original BitFun dropdown component; no custom member list is built.
  */
 interface GroupMemberPickerDialogProps {
   title: string;
@@ -655,24 +698,18 @@ function GroupMemberPickerDialog({
     void loadSessions();
   }, [isOpen, loadSessions]);
 
-  const toggle = useCallback((sessionId: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
-      } else {
-        next.add(sessionId);
-      }
-      return next;
-    });
-  }, []);
+  const options = useMemo<SelectOption[]>(
+    () => sessions.map(meta => ({
+      value: meta.sessionId,
+      label: meta.sessionName || t('nav.sessions.untitled'),
+    })),
+    [sessions, t],
+  );
 
-  const allIds = sessions.map(meta => meta.sessionId);
-  const allSelected = allIds.length > 0 && selectedIds.size === allIds.length;
-
-  const toggleSelectAll = useCallback(() => {
-    setSelectedIds(prev => (prev.size === allIds.length ? new Set() : new Set(allIds)));
-  }, [allIds]);
+  const selectedValue = useMemo(
+    () => options.filter(option => selectedIds.has(String(option.value))).map(option => option.value),
+    [options, selectedIds],
+  );
 
   return (
     <Modal
@@ -683,51 +720,33 @@ function GroupMemberPickerDialog({
       closeOnOverlayClick={!busy}
     >
       <div data-bf-component="group-member-picker-dialog" data-bf-part="root" className="group-chat-dialog">
-        <div className="group-chat-dialog__members">
-          <div className="group-chat-dialog__members-header">
-            <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>
-            {sessions.length > 0 ? (
-              <Checkbox
-                checked={allSelected}
-                onChange={toggleSelectAll}
-                label={allSelected ? t('actions.deselectAll') : t('actions.selectAll')}
-                size="small"
-              />
-            ) : null}
-          </div>
-
-          {isLoading ? (
-            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
-          ) : loadFailed ? (
+        <div className="group-chat-dialog__field">
+          {loadFailed ? (
             <div className="group-chat-dialog__state">
               {t('nav.groupChats.membersLoadFailed')}
               <Button type="button" variant="secondary" size="small" onClick={() => { void loadSessions(); }}>
                 {t('actions.retry')}
               </Button>
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="group-chat-dialog__state">{t('nav.groupChats.noClawSessions')}</div>
           ) : (
-            <div className="group-chat-dialog__member-list">
-              {sessions.map(meta => {
-                const isSelected = selectedIds.has(meta.sessionId);
-                return (
-                  <label
-                    key={meta.sessionId}
-                    className={`group-chat-dialog__member-row${isSelected ? ' is-selected' : ''}`}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onChange={() => toggle(meta.sessionId)}
-                      disabled={busy}
-                    />
-                    <span className="group-chat-dialog__member-name">
-                      {meta.sessionName || t('nav.sessions.untitled')}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
+            <Select
+              multiple
+              searchable
+              showSelectAll
+              loading={isLoading}
+              options={options}
+              value={selectedValue}
+              placeholder={t('nav.groupChats.members')}
+              emptyText={t('nav.groupChats.noClawSessions')}
+              searchPlaceholder={t('nav.groupChats.membersSearch')}
+              onChange={(value) => {
+                const next = Array.isArray(value) ? value : [value];
+                setSelectedIds(new Set(next.map(String)));
+              }}
+              data-testid="group-member-picker-select"
+              triggerTestId="group-member-picker-trigger"
+              dropdownTestId="group-member-picker-dropdown"
+            />
           )}
         </div>
 
@@ -748,12 +767,12 @@ function GroupMemberPickerDialog({
       </div>
     </Modal>
   );
-};
+}
 
 /**
  * R-GC-15: fork dialog — child group name + member multi-select. Reuses the
- * same Input (Input.tsx:20) + Checkbox multi-select shape as the create-group
- * dialog; no new picker is built.
+ * same Input (Input.tsx:20) + component-library Select (Select.tsx:87) shape;
+ * no new picker is built.
  */
 interface GroupForkDialogProps {
   groupName?: string;
@@ -812,24 +831,18 @@ function GroupForkDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, loadSessions]);
 
-  const toggle = useCallback((sessionId: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
-      } else {
-        next.add(sessionId);
-      }
-      return next;
-    });
-  }, []);
+  const options = useMemo<SelectOption[]>(
+    () => sessions.map(meta => ({
+      value: meta.sessionId,
+      label: meta.sessionName || t('nav.sessions.untitled'),
+    })),
+    [sessions, t],
+  );
 
-  const allIds = sessions.map(meta => meta.sessionId);
-  const allSelected = allIds.length > 0 && selectedIds.size === allIds.length;
-
-  const toggleSelectAll = useCallback(() => {
-    setSelectedIds(prev => (prev.size === allIds.length ? new Set() : new Set(allIds)));
-  }, [allIds]);
+  const selectedValue = useMemo(
+    () => options.filter(option => selectedIds.has(String(option.value))).map(option => option.value),
+    [options, selectedIds],
+  );
 
   const trimmedName = name.trim();
 
@@ -853,51 +866,33 @@ function GroupForkDialog({
           />
         </div>
 
-        <div className="group-chat-dialog__members">
-          <div className="group-chat-dialog__members-header">
-            <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>
-            {sessions.length > 0 ? (
-              <Checkbox
-                checked={allSelected}
-                onChange={toggleSelectAll}
-                label={allSelected ? t('actions.deselectAll') : t('actions.selectAll')}
-                size="small"
-              />
-            ) : null}
-          </div>
-
-          {isLoading ? (
-            <div className="group-chat-dialog__state">{t('nav.sessions.loading')}</div>
-          ) : loadFailed ? (
+        <div className="group-chat-dialog__field">
+          {loadFailed ? (
             <div className="group-chat-dialog__state">
               {t('nav.groupChats.membersLoadFailed')}
               <Button type="button" variant="secondary" size="small" onClick={() => { void loadSessions(); }}>
                 {t('actions.retry')}
               </Button>
             </div>
-          ) : sessions.length === 0 ? (
-            <div className="group-chat-dialog__state">{t('nav.groupChats.noClawSessions')}</div>
           ) : (
-            <div className="group-chat-dialog__member-list">
-              {sessions.map(meta => {
-                const isSelected = selectedIds.has(meta.sessionId);
-                return (
-                  <label
-                    key={meta.sessionId}
-                    className={`group-chat-dialog__member-row${isSelected ? ' is-selected' : ''}`}
-                  >
-                    <Checkbox
-                      checked={isSelected}
-                      onChange={() => toggle(meta.sessionId)}
-                      disabled={busy}
-                    />
-                    <span className="group-chat-dialog__member-name">
-                      {meta.sessionName || t('nav.sessions.untitled')}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
+            <Select
+              multiple
+              searchable
+              showSelectAll
+              loading={isLoading}
+              options={options}
+              value={selectedValue}
+              placeholder={t('nav.groupChats.members')}
+              emptyText={t('nav.groupChats.noClawSessions')}
+              searchPlaceholder={t('nav.groupChats.membersSearch')}
+              onChange={(value) => {
+                const next = Array.isArray(value) ? value : [value];
+                setSelectedIds(new Set(next.map(String)));
+              }}
+              data-testid="group-fork-picker-select"
+              triggerTestId="group-fork-picker-trigger"
+              dropdownTestId="group-fork-picker-dropdown"
+            />
           )}
         </div>
 
@@ -918,6 +913,6 @@ function GroupForkDialog({
       </div>
     </Modal>
   );
-};
+}
 
 export default GroupChatView;

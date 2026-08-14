@@ -13,7 +13,8 @@
 //! - 成员状态 = `session_manager.get_session`（:3060）
 //! - 删除 = `coordinator.delete_session`（coordinator.rs:7434）
 //!
-//! 群聊 ID = 会话 ID（UUID）；群 = Claw 会话（agent_type="Claw"）带专属 workspace。
+//! 群聊 ID = 会话 ID（UUID）；群 = 默认对话类型会话（agent_type 取
+//! AgentRegistry::default_agent_type，R-GC-25 零硬编码）带专属 workspace。
 //!
 //! 契约偏差修复（姬码锋 CEO 派发 R-GC-08，2026-08-14）：
 //! - B-1（契约 §三）：`GroupMessage.author: SenderIdentity`（复用
@@ -28,6 +29,7 @@
 //! - B-4（契约 §二.8）：member_status 先校验 member_session_id ∈ 群成员表
 //!   （custom_metadata.groupChats）再 get_session 查 state。
 
+use crate::agentic::agents::get_agent_registry;
 use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
 use crate::agentic::core::SessionConfig;
 use crate::agentic::tools::framework::{
@@ -276,7 +278,17 @@ impl GroupRoomTool {
             })
     }
 
-    /// 建群 = 建 Claw 会话（type-contract §二.1）。
+    /// 群主默认对话类型（R-GC-25 零硬编码纠正，主人定标 2026-08-14）：
+    /// 复用现成 `AgentRegistry::default_agent_type()`（agents/registry/
+    /// resolution.rs:92）——默认对话类型由 AgentRegistry 单一事实源提供，
+    /// 配置驱动（可改默认对话类型而不改群聊代码）。禁散落硬编码
+    /// agent_type 字符串。
+    fn default_group_agent_type() -> String {
+        get_agent_registry().default_agent_type().to_string()
+    }
+
+    /// 建群 = 建默认对话类型会话（type-contract §二.1；R-GC-25 群主对话
+    /// 模型 + 零硬编码：agent_type 取默认对话类型，workspace 取入参兜底链）。
     async fn create_group(
         coordinator: &ConversationCoordinator,
         name: &str,
@@ -284,6 +296,7 @@ impl GroupRoomTool {
         workspace: &str,
     ) -> BitFunResult<String> {
         let group_session_id = uuid::Uuid::new_v4().to_string();
+        let group_agent_type = Self::default_group_agent_type();
         let config = SessionConfig {
             workspace_path: Some(workspace.to_string()),
             project_workspace_path: Some(workspace.to_string()),
@@ -293,12 +306,28 @@ impl GroupRoomTool {
             .create_session_with_workspace(
                 Some(group_session_id.clone()),
                 name.to_string(),
-                "Claw".to_string(),
+                group_agent_type.clone(),
                 config,
                 workspace.to_string(),
             )
             .await
             .map_err(BitFunError::tool)?;
+
+        // R-GC-25 群主对话模型：建群 = 创建群主 Claw 会话 + 写入群主欢迎
+        // turn（宿主 turn）。群聊 = 普通会话（契约 §一）：群主会话必须带
+        // 真实对话 turn，否则开局为空字符串/空时间线、且无宿主 turn 支撑
+        // 「该轮以非标准方式结束」的根因（R-GC-23 同根）。
+        // 欢迎 turn 与 send_message 同构（kind=UserDialog + status=Completed
+        // + finish_reason="complete"），前端 NORMAL_FINISH_REASONS 命中，
+        // 不再误报横幅。
+        Self::write_group_turn(
+            coordinator,
+            workspace,
+            &group_session_id,
+            &group_session_id,
+            &format!("群聊「{name}」已创建。我是群主，成员消息将汇聚于此。"),
+        )
+        .await?;
 
         // 建成员会话（成员各自 workspace——v3 不解析成员 workspace，
         // 由调用方传入；此处统一用群 workspace 绑定）。
@@ -312,7 +341,7 @@ impl GroupRoomTool {
                 .create_session_with_workspace(
                     Some(member_id.clone()),
                     format!("Group member {member_id}"),
-                    "Claw".to_string(),
+                    Self::default_group_agent_type(),
                     member_config,
                     workspace.to_string(),
                 )
@@ -325,7 +354,7 @@ impl GroupRoomTool {
         Ok(group_session_id)
     }
 
-    /// 拉成员 = 建/确认成员 Claw 会话 + 记入群成员表。
+    /// 拉成员 = 建/确认成员默认对话类型会话 + 记入群成员表。
     async fn invite_member(
         coordinator: &ConversationCoordinator,
         group_id: &str,
@@ -344,7 +373,7 @@ impl GroupRoomTool {
                 .create_session_with_workspace(
                     Some(member_session_id.to_string()),
                     format!("Group member {member_session_id}"),
-                    "Claw".to_string(),
+                    Self::default_group_agent_type(),
                     member_config,
                     workspace.to_string(),
                 )
@@ -418,15 +447,77 @@ impl GroupRoomTool {
                 .unwrap_or(sender_session_id)),
         );
 
-        // 写群会话 turns（user_message.metadata 持久化，types.rs:662）。
-        // turn_index 取「已持久化 turns 的最大 index + 1」——不能固定为 0，
-        // 否则后续消息会覆盖 turn-0 文件（修复：R-GC-10 三形态实测发现，
-        // 群主与成员各发一条时后者把前者覆盖；根因 = 硬编码 turn_index: 0）。
+        let message_id = Self::write_group_turn_with_metadata(
+            coordinator,
+            &group_workspace,
+            group_id,
+            content,
+            metadata,
+        )
+        .await?;
+
+        Ok(message_id)
+    }
+
+    /// 群主欢迎 turn（R-GC-25）：建群 = 创建群主 Claw 会话，写群主欢迎
+    /// turn 作为会话首条宿主 turn（带 sender 身份 = 群主）。
+    async fn write_group_turn(
+        coordinator: &ConversationCoordinator,
+        workspace: &str,
+        group_id: &str,
+        sender_session_id: &str,
+        content: &str,
+    ) -> BitFunResult<String> {
+        // 与 send_message 同构的五字段 metadata（契约 §三）：解析群主
+        // 会话身份（role/depth/name），让欢迎 turn 的 senderBadge 正常显示。
+        let sender = Self::resolve_sender_identity(coordinator, sender_session_id, workspace).await;
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("groupId".to_string(), json!(group_id));
+        metadata.insert("senderSessionId".to_string(), json!(sender.session_id));
+        if let Some(role) = &sender.role {
+            metadata.insert("senderRole".to_string(), json!(role));
+        }
+        if let Some(depth) = sender.depth {
+            metadata.insert("senderDepth".to_string(), json!(depth));
+        }
+        metadata.insert(
+            "senderName".to_string(),
+            json!(sender
+                .name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(sender_session_id)),
+        );
+        Self::write_group_turn_with_metadata(
+            coordinator,
+            workspace,
+            group_id,
+            content,
+            metadata,
+        )
+        .await
+    }
+
+    /// 落盘一条群会话 turn（宿主 turn 形态）：
+    /// - kind = UserDialog（is_model_visible=true，history 可读）
+    /// - status = Completed + finish_reason = "complete"（前端
+    ///   NORMAL_FINISH_REASONS 命中，R-GC-25 消除「该轮以非标准方式结束」）
+    /// - has_final_response = true（群消息本身即最终响应）
+    /// - turn_index 取「已持久化 turns 的最大 index + 1」——不能固定为 0，
+    ///   否则后续消息会覆盖 turn-0 文件（R-GC-10 三形态实测发现，
+    ///   群主与成员各发一条时后者把前者覆盖；根因 = 硬编码 turn_index: 0）。
+    async fn write_group_turn_with_metadata(
+        coordinator: &ConversationCoordinator,
+        workspace: &str,
+        group_id: &str,
+        content: &str,
+        metadata: serde_json::Map<String, Value>,
+    ) -> BitFunResult<String> {
         let mut next_turn_index = 0usize;
         if let Ok(turns) = coordinator
             .get_session_manager()
             .persistence_manager()
-            .load_session_turns(&PathBuf::from(&group_workspace), group_id)
+            .load_session_turns(&PathBuf::from(workspace), group_id)
             .await
         {
             next_turn_index = turns.iter().map(|turn| turn.turn_index).max().map_or(0, |max| max + 1);
@@ -439,7 +530,7 @@ impl GroupRoomTool {
             session_id: group_id.to_string(),
             timestamp: now_ms as u64,
             kind: bitfun_services_core::session::DialogTurnKind::UserDialog,
-            agent_type: Some("Claw".to_string()),
+            agent_type: Some(Self::default_group_agent_type()),
             user_message: bitfun_services_core::session::UserMessageData {
                 id: message_id.clone(),
                 content: content.to_string(),
@@ -448,11 +539,15 @@ impl GroupRoomTool {
             },
             model_rounds: Vec::new(),
             start_time: now_ms as u64,
-            end_time: None,
-            duration_ms: None,
+            end_time: Some(now_ms as u64),
+            duration_ms: Some(0),
             token_usage: None,
-            finish_reason: None,
-            has_final_response: None,
+            // R-GC-25 根因级修复：群消息 = 正常完成的宿主 turn。普通会话
+            // 正常终态为 finish_reason="complete"（coordinator.rs:4828/5836），
+            // 群消息按同一口径落盘，前端 turnCompletionNotice 不再误报
+            // 「该轮以非标准方式结束」（NORMAL_FINISH_REASONS 命中）。
+            finish_reason: Some("complete".to_string()),
+            has_final_response: Some(true),
             error: None,
             error_detail: None,
             status: bitfun_services_core::session::TurnStatus::Completed,
@@ -460,7 +555,7 @@ impl GroupRoomTool {
         coordinator
             .get_session_manager()
             .persistence_manager()
-            .save_dialog_turn(&PathBuf::from(&group_workspace), &turn)
+            .save_dialog_turn(&PathBuf::from(workspace), &turn)
             .await
             .map_err(BitFunError::tool)?;
 
@@ -588,8 +683,9 @@ impl GroupRoomTool {
             .await
             .map_err(BitFunError::tool)?;
         let mut groups = Vec::new();
+        let group_agent_type = Self::default_group_agent_type();
         for summary in summaries {
-            if summary.agent_type != "Claw" {
+            if summary.agent_type != group_agent_type {
                 continue;
             }
             let metadata = manager
@@ -659,7 +755,7 @@ impl GroupRoomTool {
                 .create_session_with_workspace(
                     Some(member_id.clone()),
                     format!("Group member {member_id}"),
-                    "Claw".to_string(),
+                    Self::default_group_agent_type(),
                     member_config,
                     group_workspace.clone(),
                 )
@@ -830,11 +926,11 @@ impl Tool for GroupRoomTool {
     }
 
     async fn description(&self) -> BitFunResult<String> {
-        Ok(r#"Manage group chat rooms that coordinate multiple Claw assistant sessions (v3: 群聊 = 普通会话).
+        Ok(r#"Manage group chat rooms that coordinate multiple default assistant sessions (v3: 群聊 = 普通会话).
 
 Actions:
-- "create": Create a group with a name, members, and a dedicated workspace. Group ID = the created session ID (Claw agent_type).
-- "invite": Invite a member session into a group (creates the member Claw session if missing).
+- "create": Create a group with a name, members, and a dedicated workspace. Group ID = the created session ID (default assistant agent_type, config-driven).
+- "invite": Invite a member session into a group (creates the member session if missing).
 - "remove": Remove a member session from a group.
 - "send": Send a group message written into the group session's turn stream (metadata carries sender + groupId).
 - "history": Read group message history (SessionHistory of the group session).
@@ -1077,7 +1173,7 @@ mod tests {
             session_id: "group-1".to_string(),
             timestamp: 0,
             kind: bitfun_services_core::session::DialogTurnKind::UserDialog,
-            agent_type: Some("Claw".to_string()),
+            agent_type: Some(GroupRoomTool::default_group_agent_type()),
             user_message: bitfun_services_core::session::UserMessageData {
                 id: turn_id.to_string(),
                 content: "hello".to_string(),
@@ -1151,6 +1247,21 @@ mod tests {
         // 非法 action → 保守非只读。
         let bad = json!({ "action": "nope" });
         assert!(!tool.is_concurrency_safe(Some(&bad)));
+    }
+
+    // ── R-GC-25 零硬编码纠正（主人定标 2026-08-14）──
+    // 群主对话类型不写死字符串：复用 AgentRegistry::default_agent_type()
+    // （agents/registry/resolution.rs:92）——配置驱动，改默认对话类型
+    // 即生效，群聊代码零改动。本测试断言「默认类型来自 AgentRegistry
+    // 单一事实源」而非散落硬编码。
+    #[test]
+    fn default_group_agent_type_comes_from_agent_registry() {
+        let expected = crate::agentic::agents::get_agent_registry()
+            .default_agent_type()
+            .to_string();
+        let actual = GroupRoomTool::default_group_agent_type();
+        assert_eq!(actual, expected);
+        assert!(!actual.trim().is_empty(), "default agent type must be non-empty");
     }
 
     // ── B-2（契约 §三）：send metadata 五字段 + senderName 回退 ──
@@ -1605,7 +1716,7 @@ mod tests {
         let manager = coordinator.get_session_manager();
         let workspace_str = workspace.to_string_lossy().to_string();
 
-        // create：建群（2 成员）→ 返回 group_id（UUID）；会话列表可见且 agent_type=Claw。
+        // create：建群（2 成员）→ 返回 group_id（UUID）；会话列表可见且 agent_type=默认对话类型。
         let group_id = GroupRoomTool::create_group(
             coordinator,
             "测试群",
@@ -1618,7 +1729,11 @@ mod tests {
         let group_session = manager
             .get_session(&group_id)
             .expect("group session in memory");
-        assert_eq!(group_session.agent_type, "Claw");
+        assert_eq!(
+            group_session.agent_type,
+            GroupRoomTool::default_group_agent_type(),
+            "R-GC-25: group-owner session uses the config-driven default agent type (no hardcoded string)"
+        );
         assert_eq!(
             group_session.config.workspace_path.as_deref(),
             Some(workspace_str.as_str())
@@ -1639,11 +1754,75 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(members.len(), 2, "groupChats must contain 2 members");
 
+        // ── R-GC-25 群主对话模型：建群 = 创建群主 Claw 会话 + 群主欢迎
+        // turn（宿主 turn）。开局不再空字符串/空时间线；欢迎 turn 是
+        // 正常完成的宿主 turn（status=Completed + finish_reason="complete"
+        // + has_final_response=true），前端 NORMAL_FINISH_REASONS 命中，
+        // 「该轮以非标准方式结束」横幅不再误报。
+        let welcome_turns = manager
+            .persistence_manager()
+            .load_session_turns(workspace, &group_id)
+            .await
+            .expect("load welcome turns");
+        assert!(
+            !welcome_turns.is_empty(),
+            "R-GC-25: create must write a group-owner welcome turn (宿主 turn)"
+        );
+        let welcome = welcome_turns
+            .iter()
+            .find(|t| t.user_message.content.contains("已创建"))
+            .expect("welcome turn content must mention group creation");
+        assert_eq!(
+            welcome.status,
+            bitfun_services_core::session::TurnStatus::Completed
+        );
+        assert_eq!(
+            welcome.finish_reason.as_deref(),
+            Some("complete"),
+            "R-GC-25: welcome turn must carry the normal finish code"
+        );
+        assert_eq!(
+            welcome.has_final_response,
+            Some(true),
+            "R-GC-25: welcome turn is a final response"
+        );
+        assert_eq!(
+            welcome.user_message.metadata.as_ref().and_then(|m| m.get("senderSessionId")).and_then(Value::as_str),
+            Some(group_id.as_str()),
+            "R-GC-25: welcome turn sender = 群主会话（群聊 ID = 群主会话 ID）"
+        );
+
         // send：写群会话 turns → message_id。
         let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", "member-a")
             .await
             .expect("send message");
         assert!(!message_id.is_empty());
+
+        // ── R-GC-25：send 落盘 turn 是正常完成的宿主 turn（finish_reason=
+        // "complete"），不再触发「该轮以非标准方式结束」。──
+        let sent_turns = manager
+            .persistence_manager()
+            .load_session_turns(workspace, &group_id)
+            .await
+            .expect("load sent turns");
+        let sent = sent_turns
+            .iter()
+            .find(|t| t.turn_id == message_id)
+            .expect("sent turn persisted by message_id");
+        assert_eq!(
+            sent.finish_reason.as_deref(),
+            Some("complete"),
+            "R-GC-25: group message turn must carry the normal finish code"
+        );
+        assert_eq!(
+            sent.has_final_response,
+            Some(true),
+            "R-GC-25: group message turn is a final response"
+        );
+        assert_eq!(
+            sent.status,
+            bitfun_services_core::session::TurnStatus::Completed
+        );
 
         // history：读回消息（author 从 turn metadata 解析 senderSessionId=member-a）。
         // 注意：get_messages 从持久化 turns 重建 Message（Message.id 为重建时新 uuid），
@@ -1675,12 +1854,16 @@ mod tests {
             "memberCount from groupChats"
         );
 
-        // ── 三形态之②：成员会话（create 拉入的成员为 Claw 会话）──
-        // 成员会话 = 独立 Claw 会话（契约 §一），可作 sender 写入群 turns。
+        // ── 三形态之②：成员会话（create 拉入的成员为默认对话类型会话）──
+        // 成员会话 = 独立默认对话类型会话（契约 §一），可作 sender 写入群 turns。
         let member_session = manager
             .get_session("member-a")
             .expect("member session in memory");
-        assert_eq!(member_session.agent_type, "Claw");
+        assert_eq!(
+            member_session.agent_type,
+            GroupRoomTool::default_group_agent_type(),
+            "R-GC-25: member session uses the config-driven default agent type"
+        );
 
         // ── 三形态之①：默认 BuiltIn 群主（assistant_id 空）──
         // 群主 = GROUP_MASTER_ACTOR（__master__，契约 §五），无底层 assistant
@@ -1803,7 +1986,11 @@ mod tests {
         let fallback_group = manager
             .get_session(group_id)
             .expect("fallback group session in memory");
-        assert_eq!(fallback_group.agent_type, "Claw");
+        assert_eq!(
+            fallback_group.agent_type,
+            GroupRoomTool::default_group_agent_type(),
+            "R-GC-25: fallback create must use the config-driven default agent type"
+        );
         assert!(
             fallback_group
                 .config

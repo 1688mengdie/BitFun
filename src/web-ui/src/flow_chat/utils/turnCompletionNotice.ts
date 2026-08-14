@@ -24,7 +24,10 @@ interface NormalizedTurnCompletionNoticeState {
 // 'eos' / 'tool_calls' are also model-native normal termination codes: stream
 // EOF or the model finally turning to tool calls — neither is an abnormal
 // termination meaning "no usable result".
-const NORMAL_FINISH_REASONS = new Set(['complete', 'stop', 'eos', 'tool_calls']);
+// 'completed' is the DialogTurn.status value mirrored into finishReason by
+// group chat message projection (GroupChatView.groupMessageToDialogTurn) and
+// other local turn builders - a normal completion, not an abnormal reason.
+const NORMAL_FINISH_REASONS = new Set(['complete', 'stop', 'eos', 'tool_calls', 'completed']);
 
 const TURN_COMPLETION_NOTICE_CONFIG: Record<string, TurnCompletionNoticeConfig> = {
   repeated_tool_failures: {

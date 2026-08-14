@@ -209,6 +209,7 @@ import { groupChatViewAppearanceDescriptor } from '@/app/scenes/session/GroupCha
 import {
   groupMemberPickerDialogAppearanceDescriptor,
   groupForkDialogAppearanceDescriptor,
+  groupMemberListDialogAppearanceDescriptor,
 } from '@/app/scenes/session/GroupChatViewDialogs.appearance';
 import { createGroupChatDialogAppearanceDescriptor } from '@/app/components/NavPanel/components/CreateGroupChatDialog.appearance';
 import { auxPaneAppearanceDescriptor } from '@/app/scenes/session/AuxPane.appearance';
@@ -392,6 +393,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(createGroupChatDialogAppearanceDescriptor)
     .registerComponent(groupMemberPickerDialogAppearanceDescriptor)
     .registerComponent(groupForkDialogAppearanceDescriptor)
+    .registerComponent(groupMemberListDialogAppearanceDescriptor)
     .registerComponent(auxPaneAppearanceDescriptor)
     .registerComponent(bottomTerminalPaneAppearanceDescriptor)
     .registerComponent(scheduledJobsModalAppearanceDescriptor)

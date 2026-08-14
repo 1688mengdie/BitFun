@@ -26,8 +26,17 @@ vi.mock('@/shared/notification-system', () => ({
 
 // 现成组件 mock（复用核验：真实组件路径保留在 import 中，测试只 stub 渲染面）。
 vi.mock('../../../flow_chat/components/modern/ModernFlowChatContainer', () => ({
-  ModernFlowChatContainer: ({ className, emptyState }: { className?: string; emptyState?: React.ReactNode }) => (
+  ModernFlowChatContainer: ({
+    className,
+    emptyState,
+    headerLeftActionsContent,
+  }: {
+    className?: string;
+    emptyState?: React.ReactNode;
+    headerLeftActionsContent?: React.ReactNode;
+  }) => (
     <div data-testid="flow-chat-container" data-class-name={className ?? ''}>
+      {headerLeftActionsContent}
       {emptyState}
     </div>
   ),
@@ -108,6 +117,50 @@ vi.mock('@/component-library', () => {
         {props.children}
       </button>
     ),
+    // R-GC-22: 邀请/裂变成员选择 = component-library Select（原始下拉组件）。
+    // 测试 stub 渲染面：渲染 options 为可点击项，点击后调用 onChange。
+    Select: (props: {
+      options?: Array<{ value: string | number; label: string }>;
+      value?: string | number | Array<string | number>;
+      onChange?: (value: string | number | Array<string | number>) => void;
+      multiple?: boolean;
+      loading?: boolean;
+      placeholder?: string;
+      'data-testid'?: string;
+      triggerTestId?: string;
+      dropdownTestId?: string;
+    }) => {
+      const values = Array.isArray(props.value) ? props.value : [];
+      return (
+        <div data-testid={props['data-testid'] ?? 'select'}>
+          <div data-testid={props.triggerTestId ?? 'select-trigger'}>
+            {props.placeholder ?? ''}
+          </div>
+          <div data-testid={props.dropdownTestId ?? 'select-dropdown'}>
+            {(props.options ?? []).map(option => {
+              const isSelected = values.includes(option.value);
+              return (
+                <button
+                  key={String(option.value)}
+                  type="button"
+                  data-testid="member-select-option"
+                  data-value={String(option.value)}
+                  data-selected={isSelected ? 'true' : 'false'}
+                  onClick={() => {
+                    const next = isSelected
+                      ? values.filter(v => v !== option.value)
+                      : [...values, option.value];
+                    props.onChange?.(props.multiple ? next : option.value);
+                  }}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    },
   };
 });
 
@@ -348,6 +401,15 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     renderView();
     await flush();
 
+    // R-GC-24: the member list lives in a Modal opened from the header action
+    // group (original FlowChatHeader left slot).
+    const membersBtn = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find(
+      b => b.getAttribute('aria-label')?.includes('Members'),
+    );
+    expect(membersBtn).not.toBeNull();
+    act(() => membersBtn!.click());
+    await flush();
+
     const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="group-chat-member-list"] [data-member-id]')];
     expect(rows).toHaveLength(2);
     expect(rows[0]!.textContent).toContain('Assist A');
@@ -384,9 +446,10 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
 
     const modal = document.querySelector('[data-testid="modal"]');
     expect(modal).not.toBeNull();
-    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
-    expect(checkboxes.length).toBeGreaterThan(0);
-    act(() => checkboxes[0]!.click());
+    // R-GC-22: 成员选择 = component-library Select 多选（member-select-option）。
+    const optionBtns = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
+    expect(optionBtns.length).toBeGreaterThan(0);
+    act(() => optionBtns[0]!.click());
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
       b => b.textContent?.includes('Confirm invite'),
@@ -441,6 +504,14 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       makeSession('claw-1', 'Claw', 'Assist A'),
     ]);
     renderView();
+    await flush();
+
+    // R-GC-24: 成员列表在 Modal 中（原布局 header 左动作 → 成员弹窗）。
+    const membersBtn = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find(
+      b => b.getAttribute('aria-label')?.includes('Members'),
+    );
+    expect(membersBtn).not.toBeNull();
+    act(() => membersBtn!.click());
     await flush();
 
     const removeBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(

@@ -56,10 +56,11 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   const [loadFailed, setLoadFailed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // R-GC-19: 稳定引用 assistantWorkspaces（父组件传入的数组引用每次 render
-  // 可能变化；若直接进 useCallback deps 会导致 loadMembers 反复重建 →
-  // useEffect 无限触发 loadMembers → 死循环。用 ref 持最新值，deps 只留
-  // workspacePath 与 isOpen 驱动的一次性加载）。
+  // R-GC-19: keep a stable ref to assistantWorkspaces (the array reference
+  // passed by the parent may change every render; putting it directly into
+  // useCallback deps would rebuild loadMembers repeatedly -> useEffect would
+  // trigger loadMembers forever -> infinite loop. Hold the latest value in a
+  // ref so deps only contain workspacePath and isOpen for the one-shot load).
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
@@ -87,7 +88,8 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
           sessionName: workspace.identity?.name?.trim() || workspace.name,
           agentType: 'Claw',
           inactive: true,
-          // SessionMetadata 其余字段：pickup 展示无需真实数据，填类型最小占位。
+          // Remaining SessionMetadata fields: the picker only renders what is
+          // needed, so fill the minimal type placeholders.
           modelName: 'auto',
           createdAt: 0,
           lastActiveAt: 0,

@@ -77,6 +77,12 @@ export interface FlowChatHeaderProps {
   onStopBackgroundCommand?: (command: FlowChatHeaderCommandSummary) => void;
   /** Stop all running background commands. */
   onStopAllBackgroundCommands?: () => void;
+  /**
+   * Host-owned content rendered inside the left action group, after
+   * SessionFilesBadge (R-GC-24: group chat menu reuses the original header
+   * left-actions slot instead of a custom top bar).
+   */
+  leftActionsContent?: React.ReactNode;
 }
 export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   currentTurn,
@@ -101,6 +107,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   onRequestBackgroundCommandInput,
   onStopBackgroundCommand,
   onStopAllBackgroundCommands,
+  leftActionsContent,
 }) => {
   const { t } = useTranslation('flow-chat');
   const { toggleChatFullWidth } = useApp();
@@ -494,6 +501,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
         data-bf-part="leftActions"
       >
         <SessionFilesBadge sessionId={sessionId} />
+        {leftActionsContent}
       </div>
 
       {hasTurnInfo ? (

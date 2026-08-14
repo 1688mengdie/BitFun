@@ -13,3 +13,11 @@ export const groupForkDialogAppearanceDescriptor: AppearanceSurfaceDescriptor = 
     { id: 'root', propertyProfile: 'layout', visualRole: 'dialog' },
   ],
 };
+
+export const groupMemberListDialogAppearanceDescriptor: AppearanceSurfaceDescriptor = {
+  id: 'group-member-list-dialog',
+  parts: [
+    { id: 'root', propertyProfile: 'layout', visualRole: 'dialog' },
+    { id: 'memberRow', visualRole: 'content' },
+  ],
+};

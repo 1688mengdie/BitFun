@@ -137,7 +137,8 @@
       "forkFailed": "Failed to fork child group",
       "forked": "Child group \"{{name}}\" created",
       "forkNeedsMessage": "Send at least one message before forking.",
-      "confirmFork": "Confirm fork"
+      "confirmFork": "Confirm fork",
+      "membersSearch": "Search members..."
     },
     "search": {
       "triggerPlaceholder": "Search",

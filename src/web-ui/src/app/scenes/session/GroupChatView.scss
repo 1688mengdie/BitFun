@@ -1,12 +1,8 @@
 /**
- * GroupChatView styles — existing appearance tokens and size tokens only
- * (no new style system). Reuses the CreateGroupChatDialog.scss row/state/
- * actions semantics (existing shape) for the member panel; header/body/input
- * layout mirrors the SessionScene chat-pane column structure.
- *
- * R-GC-18: this file was previously an accidental build artifact (flat CSS
- * of CreateGroupChatDialog with a stale sourceMappingURL). Rewritten as the
- * real SCSS source so the group chat view has its layout styles.
+ * GroupChatView styles - existing appearance tokens and size tokens only
+ * (no new style system). R-GC-24: the top bar and input bar are the original
+ * session layout (FlowChatHeader / ChatInput) - this file only keeps the
+ * minimal body scaffold plus the header-actions inline group.
  */
 
 @use '../../../component-library/styles/tokens' as *;
@@ -19,129 +15,11 @@
   height: 100%;
   color: var(--bf-appearance-token-color-text-primary);
 
-  &__header {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-2;
-    min-width: 0;
-    padding: $size-gap-3 $size-gap-4;
-    border-bottom: 1px solid var(--bf-appearance-token-border-subtle);
-    background: var(--bf-appearance-token-element-bg-soft);
-  }
-
-  &__title {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: var(--bf-appearance-token-font-size-md);
-    font-weight: 600;
-  }
-
-  &__member-badge {
-    flex: 0 0 auto;
-    padding: 0 $size-gap-2;
-    border-radius: $size-radius-sm;
-    background: var(--bf-appearance-token-element-bg-soft);
-    color: var(--bf-appearance-token-color-text-secondary);
-    font-size: var(--bf-appearance-token-font-size-xs);
-  }
-
-  &__members-toggle {
-    flex: 0 0 auto;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: var(--bf-appearance-token-color-text-secondary);
-    font-size: var(--bf-appearance-token-font-size-sm);
-
-    &:hover {
-      color: var(--bf-appearance-token-color-text-primary);
-    }
-  }
-
-  &__members {
-    display: flex;
-    flex-direction: column;
-    gap: $size-gap-2;
-    min-width: 0;
-    max-height: 220px;
-    overflow-y: auto;
-    padding: $size-gap-3 $size-gap-4;
-    border-bottom: 1px solid var(--bf-appearance-token-border-subtle);
-  }
-
-  &__members-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: $size-gap-2;
-    min-width: 0;
-  }
-
-  &__members-label {
-    font-size: var(--bf-appearance-token-font-size-xs);
-    font-weight: 600;
-    color: var(--bf-appearance-token-color-text-secondary);
-  }
-
-  &__members-actions {
-    display: flex;
+  &__header-actions {
+    display: inline-flex;
     align-items: center;
     gap: $size-gap-1;
-    min-width: 0;
-  }
-
-  &__member-list {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    gap: 2px;
-  }
-
-  &__member-row {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-2;
-    min-width: 0;
-    padding: 4px $size-gap-2;
-    border-radius: $size-radius-sm;
-    color: var(--bf-appearance-token-color-text-secondary);
-    font-size: var(--bf-appearance-token-font-size-sm);
-  }
-
-  &__member-name {
-    flex: 1 1 0;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__state {
-    display: flex;
-    align-items: center;
-    gap: $size-gap-2;
-    min-width: 0;
-    padding: $size-gap-3 $size-gap-2;
-    border: 1px dashed var(--bf-appearance-token-border-subtle);
-    border-radius: $size-radius-base;
-    color: var(--bf-appearance-token-color-text-muted);
-    font-size: var(--bf-appearance-token-font-size-xs);
-  }
-
-  &__retry {
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    color: var(--bf-appearance-token-color-accent-strong);
-    font-size: var(--bf-appearance-token-font-size-xs);
-    padding: 0 $size-gap-1;
-
-    &:hover {
-      text-decoration: underline;
-    }
+    margin-left: $size-gap-1;
   }
 
   &__body {
@@ -167,6 +45,31 @@
     padding: $size-gap-6;
     color: var(--bf-appearance-token-color-text-muted);
     font-size: var(--bf-appearance-token-font-size-sm);
+  }
+
+  &__state {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+    padding: $size-gap-3 $size-gap-2;
+    border: 1px dashed var(--bf-appearance-token-border-subtle);
+    border-radius: $size-radius-base;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-xs);
+  }
+
+  &__retry {
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    color: $color-accent-500;
+    font-size: var(--bf-appearance-token-font-size-xs);
+    padding: 0 $size-gap-1;
+
+    &:hover {
+      text-decoration: underline;
+    }
   }
 
   &__input {

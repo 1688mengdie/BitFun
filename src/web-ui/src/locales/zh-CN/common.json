@@ -137,7 +137,8 @@
       "forkFailed": "裂变子群失败",
       "forked": "子群「{{name}}」已创建",
       "forkNeedsMessage": "请先发送至少一条消息后再裂变。",
-      "confirmFork": "确认裂变"
+      "confirmFork": "确认裂变",
+      "membersSearch": "搜索成员..."
     },
     "search": {
       "triggerPlaceholder": "搜索",
