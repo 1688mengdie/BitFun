@@ -2721,4 +2721,15 @@ mod tests {
         assert_eq!(resolved.env.get("BASE").map(String::as_str), Some("1"));
         assert!(resolved.enabled);
     }
+
+    #[test]
+    fn resolves_builtin_dsh_config_for_remote_workspace() {
+        let resolved =
+            resolve_config_for_client(&AcpClientConfigFile::default(), "dsh", Some("remote-host"))
+                .expect("built-in DSH config");
+
+        assert_eq!(resolved.command, "dsh-acp-demo");
+        assert!(resolved.args.is_empty());
+        assert!(resolved.enabled);
+    }
 }
