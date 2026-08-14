@@ -49,6 +49,14 @@ which ordinary Node parent-directory lookup finds from inside the profile. That
 is why this package vendors almost nothing and never installs a second copy of
 the harness.
 
+A remote workspace works the same way: BitFun packs the profile above into a tar
+stream and extracts it into `$DSH_HOME/profiles/bitfun-acp/` on that host over
+the session's own transport — no SFTP, so container connections are covered too
+— and skips the upload when the stamp there already matches. `dsh` itself, the
+models, and the key are the remote host's, exactly as they are locally. Steps 1
+and 2 above therefore have to have been done on that host, and BitFun says so if
+they were not.
+
 ## Development
 
 ```sh

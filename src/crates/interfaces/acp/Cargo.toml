@@ -13,6 +13,7 @@ client = [
     "dep:serde",
     "dep:dirs",
     "dep:semver",
+    "dep:tar",
     "dep:bitfun-core",
     "bitfun-core/agent-runtime",
     "bitfun-core/ssh-remote",
@@ -59,6 +60,7 @@ async-trait = { workspace = true }
 serde = { workspace = true, optional = true }
 dirs = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
+tar = { workspace = true, optional = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }

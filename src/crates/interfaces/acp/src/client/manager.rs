@@ -43,7 +43,7 @@ use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
-use super::dsh_profile::ensure_bundled_profile;
+use super::dsh_profile::{ensure_bundled_profile, ensure_bundled_profile_remote};
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
 use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
@@ -1807,6 +1807,21 @@ impl AcpClientService {
         let ssh_manager = remote_manager.get_ssh_manager().await.ok_or_else(|| {
             BitFunError::service("SSH manager is not available for remote ACP".to_string())
         })?;
+
+        // Same reason as `start_local_transport`: the command below only boots
+        // the runtime BitFun ships, so it has to be on that host first.
+        if let Some(profile) = builtin_acp_client_preset(client_id).and_then(|p| p.bundled_profile)
+        {
+            ensure_bundled_profile_remote(
+                profile,
+                config.command.trim(),
+                &config.env,
+                &ssh_manager,
+                remote_connection_id,
+            )
+            .await?;
+        }
+
         let transport = ssh_manager
             .open_workspace_stdio(remote_connection_id, &command)
             .await
@@ -2738,9 +2753,9 @@ mod tests {
                 .expect("built-in DSH config");
 
         assert_eq!(resolved.command, "dsh");
-        // A remote workspace resolves the same launch as a local one. Note that
-        // materialization only runs in `start_local_transport`, so a remote host
-        // needs the profile put there by hand until that is wired up too.
+        // A remote workspace resolves the same launch as a local one, and both
+        // transports materialize the profile first, so the command finds it
+        // there either way.
         assert_eq!(resolved.args, vec!["--profile", "bitfun-acp"]);
         assert!(resolved.enabled);
     }
