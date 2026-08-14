@@ -166,6 +166,14 @@ pub fn shared_coding_mode_tools() -> Vec<String> {
         "PageDeploy".to_string(),
         "PagePublish".to_string(),
     ];
+    // R-GC-09（姬码锋 CEO 裁决）：群聊 9 工具默认可见——主 agent
+    // （Agentic/Multitask/Plan/Debug）与子代理共享集同一来源，主/子均
+    // 可见。逐名 contains 防重复，GROUP_CHAT_TOOL_NAMES 为单一权威源。
+    for tool_name in GROUP_CHAT_TOOL_NAMES {
+        if !tools.contains(&tool_name.to_string()) {
+            tools.push(tool_name.to_string());
+        }
+    }
     append_provider_group_tools(&mut tools, "core.canvas");
     tools
 }
@@ -181,11 +189,33 @@ pub fn subagent_default_tools() -> Vec<String> {
     if !tools.contains(&"SessionControl".to_string()) {
         tools.push("SessionControl".to_string());
     }
-    if !tools.contains(&"group_chat".to_string()) {
-        tools.push("group_chat".to_string());
+    // R-GC-09 默认可见兜底：与 SessionControl 同级，逐名 contains 后 push，
+    // 防重复（shared_coding_mode_tools 已含时保持幂等）。
+    for tool_name in GROUP_CHAT_TOOL_NAMES {
+        if !tools.contains(&tool_name.to_string()) {
+            tools.push(tool_name.to_string());
+        }
     }
     tools
 }
+
+/// R-GC-09（契约 §六.6，姬码锋 CEO 裁决）群聊 9 工具名：单一权威源。
+///
+/// 默认可见：经 `shared_coding_mode_tools()` 进入主 agent（Agentic/
+/// Multitask/Plan/Debug）共享工具集，`subagent_default_tools()` 兜底追加
+/// 保证子代理/Claw/Legion 可见；此常量不做内联展开，mode/agent 如需
+/// 关闭或定制仍可基于本常量过滤。
+pub const GROUP_CHAT_TOOL_NAMES: &[&str] = &[
+    "create_group_chat",
+    "invite_group_member",
+    "remove_group_member",
+    "send_group_message",
+    "get_group_history",
+    "list_group_chats",
+    "fork_group_chat",
+    "group_member_status",
+    "delete_group_chat",
+];
 
 /// Agent trait defining the interface for all agents
 #[async_trait]
@@ -428,5 +458,51 @@ mod tests {
         assert_eq!(multitask.tool_exposure_overrides(), &shared_overrides);
         assert_eq!(plan.tool_exposure_overrides(), &shared_overrides);
         assert_eq!(debug.tool_exposure_overrides(), &shared_overrides);
+    }
+
+    #[test]
+    fn group_chat_tools_visible_in_shared_and_subagent_defaults() {
+        // R-GC-09（姬码锋 CEO 裁决）：群聊 9 工具默认可见——主 agent 共享
+        // 工具集（shared_coding_mode_tools，Agentic/Multitask/Plan/Debug
+        // 继承）与子代理工具集（subagent_default_tools）都必须含 9 名。
+        let shared = shared_coding_mode_tools();
+        let subagents = super::subagent_default_tools();
+        for tool_name in super::GROUP_CHAT_TOOL_NAMES {
+            assert!(
+                shared.iter().any(|name| name == tool_name),
+                "{tool_name} must default into shared coding mode tools"
+            );
+            assert!(
+                subagents.iter().any(|name| name == tool_name),
+                "{tool_name} must default into subagent tools"
+            );
+        }
+        assert_eq!(super::GROUP_CHAT_TOOL_NAMES.len(), 9);
+    }
+
+    #[test]
+    fn group_chat_tools_not_duplicated_in_default_sets() {
+        // 防重复回归：shared_coding_mode_tools 与 subagent_default_tools 中
+        // 群聊 9 名各只出现一次（subagent 兜底 contains 后 push 幂等）。
+        let shared = shared_coding_mode_tools();
+        let subagents = super::subagent_default_tools();
+        for tool_name in super::GROUP_CHAT_TOOL_NAMES {
+            assert_eq!(
+                shared
+                    .iter()
+                    .filter(|name| *name == tool_name)
+                    .count(),
+                1,
+                "{tool_name} must appear exactly once in shared coding mode tools"
+            );
+            assert_eq!(
+                subagents
+                    .iter()
+                    .filter(|name| *name == tool_name)
+                    .count(),
+                1,
+                "{tool_name} must appear exactly once in subagent tools"
+            );
+        }
     }
 }

@@ -474,13 +474,6 @@ fn runtime_tool_restrictions_for_session_lifetime(
             "LegionControl",
             "LegionControl is unavailable in connection-scoped transient Sessions.",
         ),
-        (
-            // Group chat rooms persist durable member back-indexes and message
-            // files; a connection-scoped transient session must not mutate
-            // durable group state.
-            "group_chat",
-            "group_chat is unavailable in connection-scoped transient Sessions.",
-        ),
     ] {
         restrictions.denied_tool_names.insert(tool_name.to_string());
         restrictions
@@ -12247,6 +12240,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     }
                     Err(_) => (SubagentCompletionStatus::Failed, None),
                 };
+                // R-AR-04（2026-08-14）：SubagentTurnCompleted 事件 output_text
+                // 由 None 改为 Some(全文)。全文与通知 turn 同源组装（同一
+                // background_subagent_follow_up_message），组装结果仅计算一次，
+                // 事件与通知共用同一 String，不产生第二份全文（防双路）。
+                let follow_up_message = background_subagent_follow_up_message(
+                    &subagent_session_id_for_emit,
+                    &agent_type,
+                    completion_text.as_deref(),
+                );
                 let _ = event_queue
                     .enqueue(
                         AgenticEvent::SubagentTurnCompleted {
@@ -12259,7 +12261,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                             parent_tool_call_id: subagent_parent_info_for_emit.tool_call_id.clone(),
                             agent_type: Some(agent_type.clone()),
                             status: completion_status,
-                            output_text: None,
+                            output_text: Some(follow_up_message.clone()),
                         },
                         Some(EventPriority::Normal),
                     )
@@ -12267,11 +12269,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 let _ = scheduler_for_cancel
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
-                        message: background_subagent_follow_up_message(
-                            &subagent_session_id_for_emit,
-                            &agent_type,
-                            completion_text.as_deref(),
-                        ),
+                        message: follow_up_message,
                         original_message: None,
                         turn_id: None,
                         execution: Default::default(),
@@ -12416,6 +12414,15 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 }
                 Err(_) => (SubagentCompletionStatus::Failed, None),
             };
+            // R-AR-04（2026-08-14）：SubagentTurnCompleted 事件 output_text
+            // 由 None 改为 Some(全文)。全文与通知 turn 同源组装（同一
+            // background_subagent_follow_up_message），组装结果仅计算一次，
+            // 事件与通知共用同一 String，不产生第二份全文（防双路）。
+            let follow_up_message = background_subagent_follow_up_message(
+                &subagent_session_id_for_emit,
+                &agent_type,
+                completion_text.as_deref(),
+            );
             let _ = event_queue
                 .enqueue(
                     AgenticEvent::SubagentTurnCompleted {
@@ -12426,7 +12433,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         parent_tool_call_id: subagent_parent_info_for_emit.tool_call_id.clone(),
                         agent_type: Some(agent_type.clone()),
                         status: completion_status,
-                        output_text: None,
+                        output_text: Some(follow_up_message.clone()),
                     },
                     Some(EventPriority::Normal),
                 )
@@ -12435,11 +12442,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 let _ = scheduler
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
-                        message: background_subagent_follow_up_message(
-                            &subagent_session_id_for_emit,
-                            &agent_type,
-                            completion_text.as_deref(),
-                        ),
+                        message: follow_up_message,
                         original_message: None,
                         turn_id: None,
                         execution: Default::default(),
@@ -12787,10 +12790,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 }
 
-/// P-19 修订（2026-08-13 主人定标）：后台 subagent 完成主会话通知携带最终
-/// 结果全文（对齐 SessionMessage 回传体验），但仍保持单一来源（通知 turn 是
-/// 全文的唯一投递通道，SubagentTurnCompleted 事件 output_text 仍为 None，
-/// 不产生重复事件流）。
+/// P-19 修订（2026-08-13 主人定标）+ R-AR-04（2026-08-14）：后台 subagent
+/// 完成主会话通知携带最终结果全文（对齐 SessionMessage 回传体验）。
+/// R-AR-04 起 SubagentTurnCompleted 事件 output_text 由 None 改为
+/// Some(全文)，与通知 turn 同源组装（同一函数，组装结果共用同一 String），
+/// 事件全文 = 通知全文，不产生第二份全文（防双路）。
 ///
 /// 截断护栏：全文超过 [`BACKGROUND_FOLLOW_UP_TEXT_LIMIT`] 字符时截断为
 /// 前缀摘要 + "完整回复见 SessionHistory(session_id)" 指引，防止上下文膨胀。
@@ -16932,7 +16936,6 @@ mod tests {
             "Cron",
             "ControlHub",
             "LegionControl",
-            "group_chat",
         ] {
             assert!(
                 !transient.is_tool_allowed(tool_name),
@@ -16950,7 +16953,6 @@ mod tests {
             "Cron",
             "ControlHub",
             "LegionControl",
-            "group_chat",
         ] {
             assert!(durable.is_tool_allowed(tool_name));
         }
@@ -22211,10 +22213,10 @@ mod tests {
 
     #[test]
     fn background_subagent_follow_up_message_carries_full_text_single_source() {
-        // P-19 修订（2026-08-13 主人定标）：后台 subagent 完成通知携带最终
-        // 结果全文（对齐 SessionMessage 回传），但仍是单一来源（通知 turn 是
-        // 全文唯一投递通道；SubagentTurnCompleted 事件 output_text 仍为 None，
-        // 不产生重复事件流）。
+        // P-19 修订（2026-08-13 主人定标）+ R-AR-04（2026-08-14）：后台 subagent
+        // 完成通知携带最终结果全文；R-AR-04 起 SubagentTurnCompleted 事件
+        // output_text 同样携带全文，且与通知同源组装（同一
+        // background_subagent_follow_up_message），不产生第二份全文（防双路）。
         let full_output = format!("SUBAGENT_FULL_OUTPUT_MARKER_{}", "x".repeat(4096));
         let notice = background_subagent_follow_up_message(
             "flow-session-9",

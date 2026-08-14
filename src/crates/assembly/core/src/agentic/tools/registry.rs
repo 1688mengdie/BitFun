@@ -614,6 +614,15 @@ mod tests {
             "knowledge_graph",
             "gbrain",
             "Cron",
+            "create_group_chat",
+            "invite_group_member",
+            "remove_group_member",
+            "send_group_message",
+            "get_group_history",
+            "list_group_chats",
+            "fork_group_chat",
+            "group_member_status",
+            "delete_group_chat",
             "WebSearch",
             "WebFetch",
             "ListMCPResources",
@@ -890,6 +899,9 @@ mod tests {
                 "quant_strategen",
                 "content_render_kline",
                 "knowledge_graph",
+                "get_group_history",
+                "list_group_chats",
+                "group_member_status",
                 "WebSearch",
                 "WebFetch",
                 "ListMCPResources",
@@ -901,6 +913,30 @@ mod tests {
             ],
             "readonly tool manifest must stay stable before moving registry ownership"
         );
+    }
+
+    #[cfg(feature = "product-full")]
+    #[test]
+    fn group_room_alias_readonly_matches_action_readonly_manifest() {
+        // R-GC-09 §六.5：9 个群聊别名工具按 action 区分只读（与
+        // group_room_action_is_readonly 一致）；readonly manifest 为 tool 级
+        // is_readonly() 过滤，别名工具 is_readonly 即 manifest 判定源。
+        use crate::agentic::tools::implementations::group_room_aliases::{
+            group_room_alias_tool_for_name, GROUP_ROOM_ALIAS_TOOL_NAMES,
+        };
+        for tool_name in GROUP_ROOM_ALIAS_TOOL_NAMES {
+            let alias = group_room_alias_tool_for_name(tool_name)
+                .unwrap_or_else(|| panic!("alias {tool_name} must materialize"));
+            let readonly = matches!(
+                *tool_name,
+                "get_group_history" | "list_group_chats" | "group_member_status"
+            );
+            assert_eq!(
+                alias.is_readonly(),
+                readonly,
+                "alias {tool_name} readonly must match contract §六.5"
+            );
+        }
     }
 
     #[tokio::test]

@@ -117,7 +117,10 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         | "quant_backtest" | "quote" | "strategy" | "order" | "quant_pattern_chan"
         | "quant_pattern_dtw" | "quant_sentiment" | "quant_alert" | "quant_anomaly" | "quant_strategen" | "content_publish" | "content_render_kline" | "knowledge_graph" | "gbrain" | "submit_code_review"
         | "GetToolSpec" | "CallDeferredTool" | "SessionControl" | "SessionMessage"
-        | "SessionHistory" | "Cron" => Some(ToolPackFeatureGroup::AgentControl),
+        | "SessionHistory" | "Cron" | "create_group_chat" | "invite_group_member"
+        | "remove_group_member" | "send_group_message" | "get_group_history"
+        | "list_group_chats" | "fork_group_chat" | "group_member_status"
+        | "delete_group_chat" => Some(ToolPackFeatureGroup::AgentControl),
         _ => None,
     }
 }
@@ -249,6 +252,15 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "knowledge_graph",
             "gbrain",
             "Cron",
+            "create_group_chat",
+            "invite_group_member",
+            "remove_group_member",
+            "send_group_message",
+            "get_group_history",
+            "list_group_chats",
+            "fork_group_chat",
+            "group_member_status",
+            "delete_group_chat",
         ],
     },
     ToolProviderGroupPlan {
@@ -559,6 +571,15 @@ mod tests {
                 "knowledge_graph",
                 "gbrain",
                 "Cron",
+                "create_group_chat",
+                "invite_group_member",
+                "remove_group_member",
+                "send_group_message",
+                "get_group_history",
+                "list_group_chats",
+                "fork_group_chat",
+                "group_member_status",
+                "delete_group_chat",
                 "WebSearch",
                 "WebFetch",
                 "ListMCPResources",

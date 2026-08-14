@@ -19,7 +19,7 @@ import { resolve } from 'node:path';
 // per-file duplication and silences the warning globally.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// groupChatStore state uses Map (rooms/members/messages, contract §2.2).
+// Flow-chat stores use Map-based state (contract §2.2).
 // immer needs the MapSet plugin enabled explicitly to draft-change Maps.
 enableMapSet();
 

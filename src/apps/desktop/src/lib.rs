@@ -730,35 +730,6 @@ pub async fn run() {
 
     let path_manager = get_path_manager_arc();
 
-    // Startup migration (W1 数据归属全局化, 2026-08-13): migrate any legacy
-    // workspace-local group-chats (<projects_root>/*/group-chats/<room_id>) to
-    // the global root (~/.bitfun/group-chats/). Idempotent (existing rooms are
-    // skipped; a migration record is written per run). Spawned off the startup
-    // critical path: a migration failure must never block app launch, and the
-    // first group_chat_list after startup sees the migrated rooms.
-    {
-        tauri::async_runtime::spawn(async move {
-            match bitfun_core::agentic::tools::implementations::group_chat_tool::migrate_legacy_group_chats()
-                .await
-            {
-                Ok(report) => {
-                    log::info!(
-                        "group-chat legacy migration: migrated={}, conflictRenamed={}, failed={}, roomsBefore={}, roomsAfter={}, record={}",
-                        report.migrated_rooms,
-                        report.conflict_renamed_rooms,
-                        report.failed_rooms.len(),
-                        report.total_rooms_before,
-                        report.total_rooms_after,
-                        report.record_path.as_deref().unwrap_or("-"),
-                    );
-                }
-                Err(error) => {
-                    log::warn!("group-chat legacy migration failed (non-fatal): {}", error);
-                }
-            }
-        });
-    }
-
     let mut builder = tauri::Builder::default();
 
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -1602,20 +1573,6 @@ pub async fn run() {
             archive_all_sessions,
             list_archived_sessions,
             delete_all_archived_sessions,
-            // Group chat API (R-GC-12, P0: 11 commands + scan_timeouts must be
-            // registered or the frontend hits "command not found")
-            group_chat_list,
-            group_chat_load,
-            group_chat_members,
-            group_chat_create,
-            group_chat_join,
-            group_chat_leave,
-            group_chat_delete,
-            group_chat_set_mode,
-            group_chat_send,
-            group_chat_messages,
-            group_chat_ingest_reply,
-            group_chat_scan_timeouts,
             initialize_mcp_servers,
             api::mcp_api::initialize_mcp_servers_non_destructive,
             get_mcp_servers,

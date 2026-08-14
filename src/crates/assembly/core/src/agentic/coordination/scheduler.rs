@@ -11,8 +11,9 @@
 //! - Queue cleared on unrecoverable failure
 
 use super::coordinator::{
-    session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
-    HiddenSubagentExecutionRequest, SubagentResult, SubagentResultStatus,
+    background_subagent_follow_up_message, session_storage_workspace_locator,
+    ConversationCoordinator, DialogTriggerSource, HiddenSubagentExecutionRequest, SubagentResult,
+    SubagentResultStatus,
 };
 use super::plan_todo_binding::{
     auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
@@ -41,10 +42,10 @@ use bitfun_runtime_ports::ThreadGoal;
 use log::{debug, info, warn};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -76,7 +77,6 @@ pub use bitfun_runtime_ports::{
     AgentSessionReplyRoute, DialogQueuePriority, DialogSteerOutcome, DialogSubmissionPolicy,
     DialogSubmitOutcome,
 };
-use bitfun_services_core::session::GroupChatStore;
 
 /// Resolve the configured goal idle-wakeup delay
 /// (`ai.thresholds.goal.idle_wakeup_delay_ms`), falling back to
@@ -96,6 +96,36 @@ async fn configured_goal_idle_wakeup_delay_ms() -> u64 {
         return GOAL_IDLE_WAKEUP_DELAY_MS;
     }
     delay_ms
+}
+
+/// R-AR-05 16k 护栏：运行中 turn 注入全文超限截断阈值，与 deliver 通道
+/// coordinator.rs `BACKGROUND_FOLLOW_UP_TEXT_LIMIT`（16_000）同值（契约 §四）。
+const BACKGROUND_INJECTION_TEXT_LIMIT: usize = 16_000;
+
+/// Coalescing key for background-result follow-up notifications (R-AR-03).
+///
+/// The dedupe key is the `(session_id, agent_type)` tuple, decoupled from the
+/// notification body: after R-AR-02 every delivery carries the full final
+/// reply (`content`), so exact user-input text equality would never match and
+/// the storm guard would silently degrade. Keying on the tuple restores the
+/// guard — the same parent session being notified about the same subagent
+/// (agent type) is reported at most once, regardless of the body text, while
+/// distinct child sessions (different `session_id`) still get their own
+/// notification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DedupeKey {
+    session_id: String,
+    agent_type: Option<String>,
+}
+
+impl DedupeKey {
+    fn new(session_id: &str, agent_type: &str) -> Self {
+        let agent_type = agent_type.trim();
+        Self {
+            session_id: session_id.to_string(),
+            agent_type: (!agent_type.is_empty()).then(|| agent_type.to_string()),
+        }
+    }
 }
 
 /// A message waiting to be dispatched to the coordinator
@@ -382,7 +412,16 @@ struct BackgroundResultDelivery {
     workspace_path: Option<String>,
     remote_connection_id: Option<String>,
     remote_ssh_host: Option<String>,
+    #[allow(dead_code)]
     display_content: Option<String>,
+    /// 最终完整回复全文（异步回复全文化 R-AR-01；R-AR-02 起由
+    /// submit_background_result_follow_up_locked 消费，经
+    /// background_subagent_follow_up_message 组装进 deliver 通道；
+    /// R-AR-05 起运行中 turn 注入 content 同值全文，display 不再作摘要源）。
+    /// `display_content` 字段保留（契约 §四「若保留则 content 同值」）：deliver
+    /// 参数摘要语义兼容外部调用方，注入内容一律取 content 全文（含 16k 护栏），
+    /// 字段本身仅作 API 兼容保留。
+    content: String,
     user_message_metadata: Option<serde_json::Value>,
 }
 
@@ -498,11 +537,13 @@ fn is_user_submission_source(source: DialogTriggerSource) -> bool {
     )
 }
 
-/// P-19：主会话通知只含极简元信息（session_id + 身份标识 + 已回复状态）。
+/// P-19：极简通知句模板（仅测试用）。
 ///
-/// 全量异步消息不回主会话，只由 P-03 persist_background_acp_turn 落盘成
-/// turn，经 SessionHistory(session_id) 检索。命中/非命中通知标记一律返回
-/// 极简元信息，不再保留全文旁路。
+/// R-AR-02 后 deliver_background_result 通道已改为复用
+/// `background_subagent_follow_up_message`（coordinator.rs:12805 唯一全文
+/// 组装源，通知句 + 全文），本函数不再被生产代码调用，仅保留为 detector
+/// 相关测试的固定模板生成器。
+#[cfg(test)]
 fn background_result_follow_up_user_input(session_id: &str, agent_type: &str) -> String {
     let identity = if agent_type.trim().is_empty() {
         "agent".to_string()
@@ -516,9 +557,9 @@ fn background_result_follow_up_user_input(session_id: &str, agent_type: &str) ->
 
 /// Whether `user_input` is a background-result follow-up notification text.
 ///
-/// Both the scheduler follow-up path (`background_result_follow_up_user_input`)
-/// and the coordinator direct-submit path (`background_subagent_follow_up_notice`
-/// in coordinator.rs) emit the same fixed template, so one detector covers both
+/// Both the scheduler follow-up path (`background_subagent_follow_up_message`
+/// with full text) and the coordinator direct-submit path emit the same fixed
+/// notice prefix ("Background agent session ..."), so one detector covers both
 /// routes. User messages never match: the template starts with the literal
 /// "Background agent session " prefix.
 fn is_background_result_follow_up(user_input: &str) -> bool {
@@ -561,22 +602,6 @@ impl DialogScheduler {
         let _ = scheduler
             .goal_idle_wakeup_self
             .set(std::sync::Arc::downgrade(&scheduler));
-
-        // 阈值参数配置化（R-GC-26）：`group_chat.queue_limit` 注入对话框队列
-        // 深度。构造是同步链，配置读取需 async——通过 spawn 的后台任务在构造
-        // 后异步注入（best-effort；默认 = 现值硬编码，未初始化 config service
-        // 时零回归，`set_max_depth` 忽略 0 防止配置错误禁用上限）。
-        let queues_for_config = Arc::clone(&scheduler.queues);
-        tokio::spawn(async move {
-            if let Ok(service) = crate::service::config::get_global_config_service().await {
-                if let Ok(limit) = service
-                    .get_config::<usize>(Some("group_chat.queue_limit"))
-                    .await
-                {
-                    queues_for_config.set_max_depth(limit);
-                }
-            }
-        });
 
         let scheduler_for_handler = Arc::clone(&scheduler);
         tokio::spawn(async move {
@@ -637,15 +662,21 @@ impl DialogScheduler {
         self.round_injection_source.clone()
     }
 
-    /// Extract the fixed background-notification text from a queued turn, if
-    /// the turn is an agent-driven background-result follow-up (either the
-    /// scheduler follow-up path or the coordinator direct-submit path).
-    fn background_notice_for_queued_turn(queued_turn: &QueuedTurn) -> Option<String> {
+    /// Extract the fixed background-notification dedupe key from a queued
+    /// turn, if the turn is an agent-driven background-result follow-up
+    /// (either the scheduler follow-up path or the coordinator direct-submit
+    /// path). R-AR-03: the key is the `(session_id, agent_type)` tuple,
+    /// decoupled from the notification body (which carries the full final
+    /// reply since R-AR-02 and therefore differs across duplicate reports).
+    fn background_notice_dedupe_key_for_queued_turn(
+        session_id: &str,
+        queued_turn: &QueuedTurn,
+    ) -> Option<DedupeKey> {
         if queued_turn.policy.trigger_source != DialogTriggerSource::AgentSession {
             return None;
         }
         is_background_result_follow_up(&queued_turn.user_input)
-            .then(|| queued_turn.user_input.clone())
+            .then(|| DedupeKey::new(session_id, &queued_turn.agent_type))
     }
 
     /// Current running turn id when the session is `Processing`, otherwise `None`.
@@ -899,6 +930,7 @@ impl DialogScheduler {
             remote_connection_id,
             remote_ssh_host,
             display_content: Some(display),
+            content,
             user_message_metadata,
         };
         let state = self
@@ -925,17 +957,34 @@ impl DialogScheduler {
                     ));
                 };
                 let injection_id = Uuid::new_v4().to_string();
-                // B（注入约束）：运行中 turn 只注入 display 摘要（极简），全量
-                // 结果内容不注入——全文由 P-03 落盘/子会话 turn 承载，
-                // 避免与通知 turn 构成「通知 + 全文」双路。
+                // R-AR-05（异步回复全文化 §四）：运行中 turn 注入完整最终回复
+                // 全文，不再只注入 display 摘要——content 同值注入（display
+                // 字段保留同值，供事件投影）；16k 截断护栏兜底（超限截断，
+                // BACKGROUND_FOLLOW_UP_TEXT_LIMIT），注入体积暴涨不回退摘要。
+                // 注入键元数据：dedup_key = (session_id, agent_type)，与正文
+                // 解耦——全文注入后按正文查重必然失效（R-AR-03 沉淀对齐）。
+                let injection_content = Self::truncate_background_injection_text(
+                    &delivery.content,
+                    delivery.session_id.as_str(),
+                );
                 let injection = resolve_background_delivery_injection_for_turn(
                     BackgroundInjectionKind::BackgroundResult,
                     injection_id.clone(),
-                    delivery.display_content.clone().unwrap_or_default(),
-                    delivery.display_content.clone(),
+                    injection_content.clone(),
+                    Some(injection_content.clone()),
                     SystemTime::now(),
                     current_turn_id,
                 );
+                let mut injection = injection;
+                let mut injection_metadata = injection.metadata;
+                injection_metadata.insert(
+                    "dedupKey".to_string(),
+                    serde_json::json!({
+                        "sessionId": delivery.session_id,
+                        "agentType": delivery.agent_type,
+                    }),
+                );
+                injection.metadata = injection_metadata;
                 self.round_injection_buffer.push(&session_id, injection);
                 Ok(())
             }
@@ -957,17 +1006,38 @@ impl DialogScheduler {
         }
     }
 
+    /// R-AR-05 16k 护栏：运行中 turn 注入全文超限时截断（与 deliver 通道的
+    /// `BACKGROUND_FOLLOW_UP_TEXT_LIMIT` 同值），保留指引（完整回复见
+    /// SessionHistory）。护栏只兜底体积，不退回摘要。
+    fn truncate_background_injection_text(text: &str, session_id: &str) -> String {
+        if text.chars().count() > BACKGROUND_INJECTION_TEXT_LIMIT {
+            let truncated: String = text
+                .chars()
+                .take(BACKGROUND_INJECTION_TEXT_LIMIT)
+                .collect();
+            format!(
+                "{truncated}\n\n[完整回复超过 {BACKGROUND_INJECTION_TEXT_LIMIT} 字符，已截断；全文见 SessionHistory({session_id})]"
+            )
+        } else {
+            text.to_string()
+        }
+    }
+
     async fn submit_background_result_follow_up_locked(
         &self,
         delivery: BackgroundResultDelivery,
         queue_priority: DialogQueuePriority,
     ) -> Result<(), String> {
         let resolved_turn_id = Uuid::new_v4().to_string();
-        // P-19：主会话通知只含极简元信息（session_id + 身份标识 + 已回复状态）。
-        // 全量结果内容由 P-03 persist_background_acp_turn 落盘，
-        // 经 SessionHistory(session_id) 检索；不进入主会话 message 历史。
-        let user_input =
-            background_result_follow_up_user_input(&delivery.session_id, &delivery.agent_type);
+        // 异步回复全文化（R-AR-02）：deliver_background_result 通道复用
+        // background_subagent_follow_up_message（coordinator.rs:12805 唯一全文
+        // 组装源）——通知句 + 最终回复全文 + 16k 截断护栏
+        // （BACKGROUND_FOLLOW_UP_TEXT_LIMIT），全文为空/失败时退化为纯通知句。
+        let user_input = background_subagent_follow_up_message(
+            &delivery.session_id,
+            &delivery.agent_type,
+            Some(&delivery.content),
+        );
         let queued_turn = QueuedTurn {
             user_input,
             original_user_input: None,
@@ -1312,30 +1382,33 @@ impl DialogScheduler {
         reject_if_busy: bool,
     ) -> Result<DialogSubmitOutcome, SchedulerSubmitError> {
         // Background-notification coalescing (主人裁决：后台通知 = 必要功能，
-        // 修的是"通知风暴"——同一会话重复通知只应通知一次)。The follow-up
-        // text is a fixed template derived only from (session_id, agent_type),
-        // so an identical notification already running or queued for the same
-        // session means the same subagent completion is being reported twice;
-        // the duplicate submit is skipped instead of spawning a second model
-        // request. Distinct child sessions produce distinct texts (each carries
-        // its own session id) and are all delivered — notifications are kept,
-        // only the storm is removed. The check happens before any prompt is
-        // built, so the kept notification's prompt text, position, and prefix
-        // are byte-identical to the pre-fix behavior.
-        if let Some(notice) = Self::background_notice_for_queued_turn(&queued_turn) {
+        // 修的是"通知风暴"——同一会话重复通知只应通知一次)。R-AR-03：查重键 =
+        // (session_id, agent_type) 元组，与正文解耦。R-AR-02 后 deliver 通道
+        // 携带最终回复全文，同一 (session_id, agent_type) 的重复报告正文可能
+        // 不同（每次组装全文/时间戳），整串文本相等守卫已失效；改为元组键后，
+        // 同一主会话、同一子代理身份（agent_type）的完成通知只保留一个 turn
+        // （一次模型请求），正文不同也合并。不同子会话（不同 session_id）或
+        // 不同 agent_type 产生不同键，各自通知都投递——通知保留，只去风暴。
+        // The check happens before any prompt is built, so the kept
+        // notification's prompt text, position, and prefix are byte-identical
+        // to the pre-fix behavior.
+        if let Some(key) = Self::background_notice_dedupe_key_for_queued_turn(&session_id, &queued_turn)
+        {
             let already_active = self
                 .active_turns
-                .active_turn_user_input(&session_id)
-                .is_some_and(|user_input| user_input == notice);
+                .active_turn_agent_type_and_user_input(&session_id)
+                .is_some_and(|(active_agent_type, _)| {
+                    key.agent_type.as_deref() == Some(active_agent_type.as_str())
+                });
             let already_queued = self.queues.any_matching(&session_id, |turn| {
-                turn.policy.trigger_source == DialogTriggerSource::AgentSession
-                    && turn.user_input == notice
+                Self::background_notice_dedupe_key_for_queued_turn(&session_id, turn)
+                    .is_some_and(|queued_key| queued_key == key)
             });
             if already_active || already_queued {
                 debug!(
-                    "Coalesced duplicate background notification: an identical follow-up is already active/queued: session_id={}, notice_len={}",
+                    "Coalesced duplicate background notification: a follow-up with the same (session_id, agent_type) key is already active/queued: session_id={}, agent_type={:?}",
                     session_id,
-                    notice.len()
+                    key.agent_type
                 );
                 return Ok(DialogSubmitOutcome::Queued {
                     session_id,
@@ -2798,68 +2871,6 @@ impl DialogScheduler {
         )];
         let user_message_metadata = plan.user_message_metadata;
 
-        // Group chat reply ingestion (P0-3): when the finished turn was a group
-        // dispatch (metadata carries groupId/groupMessageId), ingest the reply
-        // into the room — mark the original message Replied and persist the
-        // reply body (P2-1). W5 回执可靠性（2026-08-13，方案 v1.1 §七.2）：
-        // 从 best-effort 升级——失败重试 1 次 + 错误计数 + 仍失败明确告警
-        // （可观测，不再静默丢）。正常 reply 转发不受影响（ingest 失败不阻断）。
-        if let Some(serde_json::Value::Object(metadata)) = user_message_metadata.as_ref() {
-            if metadata.get("groupId").is_some() && metadata.get("groupMessageId").is_some() {
-                let now_ms = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64;
-                let reply_author = bitfun_runtime_ports::GroupChatActor::Claw {
-                    session_id: responder_session_id.to_string(),
-                    agent_type: "Claw".to_string(),
-                };
-                if let Ok(store) = self
-                    .resolve_group_chat_store(target_workspace_path.as_str())
-                    .await
-                {
-                    let ingest_result = crate::agentic::tools::implementations::group_chat_router::GroupChatRouter::ingest_reply(
-                        &store,
-                        metadata,
-                        &reply_user_input,
-                        &reply_author,
-                        now_ms,
-                    )
-                    .await;
-                    // 失败重试 1 次（W5：回执必达，跨进程/瞬时错误可自愈）。
-                    let final_result = match ingest_result {
-                        Err(first_error) => {
-                            warn!(
-                                "Group chat reply ingest failed (attempt 1/2, retrying): responder_session_id={}, error={}",
-                                responder_session_id, first_error
-                            );
-                            crate::agentic::tools::implementations::group_chat_router::GroupChatRouter::ingest_reply(
-                                &store,
-                                metadata,
-                                &reply_user_input,
-                                &reply_author,
-                                now_ms,
-                            )
-                            .await
-                        }
-                        ok => ok,
-                    };
-                    if let Err(error) = final_result {
-                        // 错误计数（可观测）+ 明确告警，供后续排查。
-                        let count =
-                            GROUP_CHAT_INGEST_FAILURES.fetch_add(1, AtomicOrdering::Relaxed) + 1;
-                        warn!(
-                            "Group chat reply ingest FAILED after retry (cumulative_failures={}): responder_session_id={}, group_id={:?}, error={}",
-                            count,
-                            responder_session_id,
-                            metadata.get("groupId"),
-                            error
-                        );
-                    }
-                }
-            }
-        }
-
         if let Err(error) = self
             .submit_with_prepended_messages(
                 target_session_id.clone(),
@@ -2921,22 +2932,6 @@ impl DialogScheduler {
 
     fn take_suppressed_cancelled_reply(&self, session_id: &str, turn_id: &str) -> bool {
         self.suppressed_cancelled_replies.take(session_id, turn_id)
-    }
-
-    /// Resolves the group-chat store for a workspace (sibling of the sessions
-    /// root), mirroring the group_chat_tool resolution. Used by the reply
-    /// ingestion hook (P0-3). Returns an error when the workspace is absent so
-    /// the reply forwarding path stays best-effort.
-    async fn resolve_group_chat_store(
-        &self,
-        _workspace_path: &str,
-    ) -> Result<GroupChatStore, String> {
-        // W1 数据归属全局化（2026-08-13）：回执侧与派发侧收敛到同一全局根
-        // `~/.bitfun/group-chats/`（PathManager 唯一权威源），消除「房间在
-        // 群主 workspace / 回执找成员 workspace」双轨；workspace_path 仅保留
-        // 兼容调用面，不再决定存储位置。
-        let root = crate::infrastructure::get_path_manager_arc().group_chats_root();
-        Ok(GroupChatStore::new(root))
     }
 
     async fn dispatch_next_if_idle(&self, session_id: &str) -> Result<(), String> {
@@ -3630,10 +3625,6 @@ fn background_result_delivery_state_fact(
 /// are busy.
 const OUTCOME_PROCESSING_MAX_CONCURRENCY: usize = 64;
 
-/// W5 回执可靠性（2026-08-13）：群聊回执 ingest 失败累计计数（可观测，
-/// 重试 1 次后仍失败时递增，供告警与后续排查）。
-static GROUP_CHAT_INGEST_FAILURES: AtomicUsize = AtomicUsize::new(0);
-
 static GLOBAL_SCHEDULER: OnceLock<Arc<DialogScheduler>> = OnceLock::new();
 
 pub fn get_global_scheduler() -> Option<Arc<DialogScheduler>> {
@@ -4191,6 +4182,222 @@ mod tests {
             .take_pending(session_id, turn_id);
         assert_eq!(pending.len(), 1);
         assert_eq!(scheduler.queue_depth(session_id), 0);
+    }
+
+    #[tokio::test]
+    async fn running_turn_injection_carries_full_reply_not_display_summary() {
+        // R-AR-05 验收断言 1：运行中 turn 注入内容 = 完整最终回复全文（content
+        // 同值），而非 display 摘要；display_content 字段保留同值（供事件投影）。
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "inject-full-reply-session";
+        let turn_id = "inject-full-reply-turn";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "InjectFullReply".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        session_manager
+            .update_session_state(
+                session_id,
+                SessionState::Processing {
+                    current_turn_id: turn_id.to_string(),
+                    phase: ProcessingPhase::Thinking,
+                },
+            )
+            .await
+            .expect("mark turn active");
+
+        let full_reply = "Final full reply body: ".to_string()
+            + &"task completed, full details follow ".repeat(50);
+        let display_summary = "Summary only — must not be injected".to_string();
+        scheduler
+            .deliver_background_result(
+                session_id.to_string(),
+                "agentic".to_string(),
+                None,
+                None,
+                None,
+                full_reply.clone(),
+                Some(display_summary.clone()),
+                None,
+            )
+            .await
+            .expect("inject full reply");
+
+        let pending = scheduler
+            .round_injection_monitor()
+            .take_pending(session_id, turn_id);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            pending[0].content, full_reply,
+            "injected content must be the full final reply, not the display summary"
+        );
+        assert_eq!(
+            pending[0].display_content, full_reply,
+            "display_content must carry the same full text (contract §四 content 同值)"
+        );
+        assert!(
+            !pending[0].content.contains(&display_summary),
+            "display summary must not leak into the injected content"
+        );
+        let dedup_key = pending[0]
+            .metadata
+            .get("dedupKey")
+            .and_then(serde_json::Value::as_object)
+            .expect("injection must carry the (session_id, agent_type) dedup key");
+        assert_eq!(
+            dedup_key["sessionId"].as_str(),
+            Some(session_id),
+            "dedup key session_id must match the target session"
+        );
+        assert_eq!(
+            dedup_key["agentType"].as_str(),
+            Some("agentic"),
+            "dedup key agent_type must match the delivery agent type"
+        );
+    }
+
+    #[tokio::test]
+    async fn running_turn_injection_truncates_overlong_reply_at_16k_guard() {
+        // R-AR-05 验收断言 2：16k 护栏兜底——超限全文注入被截断（前缀保留 +
+        // 截断指引），不退回摘要、不丢弃。
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "inject-truncate-session";
+        let turn_id = "inject-truncate-turn";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "InjectTruncate".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        session_manager
+            .update_session_state(
+                session_id,
+                SessionState::Processing {
+                    current_turn_id: turn_id.to_string(),
+                    phase: ProcessingPhase::Thinking,
+                },
+            )
+            .await
+            .expect("mark turn active");
+
+        let huge = "y".repeat(BACKGROUND_INJECTION_TEXT_LIMIT + 4096);
+        scheduler
+            .deliver_background_result(
+                session_id.to_string(),
+                "agentic".to_string(),
+                None,
+                None,
+                None,
+                huge.clone(),
+                None,
+                None,
+            )
+            .await
+            .expect("inject overlong reply");
+
+        let pending = scheduler
+            .round_injection_monitor()
+            .take_pending(session_id, turn_id);
+        assert_eq!(pending.len(), 1);
+        assert!(
+            pending[0].content.len() < huge.len(),
+            "overlong reply must be truncated by the 16k guard"
+        );
+        assert!(
+            pending[0].content.starts_with(&"y".repeat(BACKGROUND_INJECTION_TEXT_LIMIT)),
+            "truncation keeps the first 16k chars of the full reply"
+        );
+        assert!(
+            pending[0].content.contains("已截断"),
+            "truncated injection carries the truncation notice"
+        );
+        assert!(
+            pending[0].content.contains("SessionHistory"),
+            "truncation points to SessionHistory for the full text"
+        );
+        // 内容尾部是截断指引而非原文末尾：注入体积被护栏兜住。
+        assert!(!pending[0].content.trim_end().ends_with('y'));
+    }
+
+    #[tokio::test]
+    async fn running_turn_injection_without_display_content_falls_back_to_content() {
+        // R-AR-05 回退语义：display_content 为 None 时注入内容 = content（全文），
+        // 不因缺 display 而注入空/摘要。
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "inject-fallback-session";
+        let turn_id = "inject-fallback-turn";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "InjectFallback".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        session_manager
+            .update_session_state(
+                session_id,
+                SessionState::Processing {
+                    current_turn_id: turn_id.to_string(),
+                    phase: ProcessingPhase::Thinking,
+                },
+            )
+            .await
+            .expect("mark turn active");
+
+        scheduler
+            .deliver_background_result(
+                session_id.to_string(),
+                "agentic".to_string(),
+                None,
+                None,
+                None,
+                "Full reply without display".to_string(),
+                None,
+                None,
+            )
+            .await
+            .expect("inject fallback reply");
+
+        let pending = scheduler
+            .round_injection_monitor()
+            .take_pending(session_id, turn_id);
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].content, "Full reply without display");
+        assert_eq!(pending[0].display_content, "Full reply without display");
+    }
+
+    #[test]
+    fn truncate_background_injection_text_keeps_short_text_untouched() {
+        let short = "short reply";
+        assert_eq!(
+            DialogScheduler::truncate_background_injection_text(short, "s-1"),
+            short
+        );
     }
 
     #[tokio::test]
@@ -5820,47 +6027,72 @@ mod tests {
     }
 
     #[test]
-    fn background_result_follow_up_returns_minimal_metadata_only() {
-        // P-19：主会话通知只含极简元信息（session_id + 身份标识 + 已回复状态），
-        // 不含内容全文；全文由 P-03 persist_background_acp_turn 落盘后经
-        // SessionHistory(session_id) 检索。
-        let notice = background_result_follow_up_user_input("flow-session-1", "external::opencode");
+    fn background_result_follow_up_returns_full_reply() {
+        // 异步回复全文化（R-AR-02）：deliver_background_result 通道复用
+        // background_subagent_follow_up_message（coordinator.rs:12816 唯一全文
+        // 组装源）——通知句 + 最终回复全文，父会话可见完整回复；不再只回传
+        // 极简元信息（session_id + 身份标识 + 已回复状态）。
+        let full_output = format!("FULL_REPLY_MARKER_{}", "x".repeat(2048));
+        let notice = background_subagent_follow_up_message(
+            "flow-session-1",
+            "external::opencode",
+            Some(&full_output),
+        );
         assert!(notice.contains("flow-session-1"));
         assert!(notice.contains("external::opencode"));
         assert!(notice.contains("has replied"));
         assert!(notice.contains("use SessionHistory"));
-        assert!(!notice.contains("full reply body"));
-        assert!(!notice.contains("EXTERNAL_REPLY_MARKER_"));
+        // 全文随通知回传（父会话可见完整回复，而非仅极简元信息）
+        assert!(
+            notice.contains(&full_output),
+            "deliver follow-up must carry the full final reply"
+        );
     }
 
     #[test]
-    fn background_result_follow_up_is_minimal_for_marker_and_full_reply() {
-        // P-19：命中/非命中通知标记一律返回极简元信息，不再保留全文旁路。
-        let bash_notice =
+    fn background_result_follow_up_full_reply_passed_through() {
+        // R-AR-02：全文（含长文/标记文本）经组装函数原样透传（截断护栏内），
+        // 不回退为摘要、不丢失内容；确定性文本由
+        // background_result_follow_up_text_is_deterministic 单独覆盖。
+        let bash_full =
             "Background Bash command completed; use SessionHistory to view the full reply. Full output was saved to /tmp/out.txt";
-        let marker_notice = background_result_follow_up_user_input("flow-session-2", "agentic");
+        let marker_notice = background_subagent_follow_up_message(
+            "flow-session-2",
+            "agentic",
+            Some(&bash_full.to_string()),
+        );
         assert!(marker_notice.contains("flow-session-2"));
         assert!(marker_notice.contains("agentic"));
         assert!(marker_notice.contains("has replied"));
-        // 通知式摘要标记内容不再保留为旁路：极简元信息与原文不同且不含原文。
-        assert_ne!(marker_notice, bash_notice);
-        assert!(!marker_notice.contains("Full output was saved"));
-        assert!(!marker_notice.contains("/tmp/out.txt"));
+        // 全文旁路保留：通知式标记内容不再被剥离，完整透传。
+        assert!(marker_notice.contains("Full output was saved"));
+        assert!(marker_notice.contains("/tmp/out.txt"));
     }
 
     #[test]
     fn background_result_follow_up_text_is_deterministic() {
-        // 缓存前缀稳定性：同一 (session_id, agent_type) 的 follow-up 文本必须
-        // 逐字节一致——通知合并后同类场景使用相同文本，杜绝时序抖动变体。
-        let first = background_result_follow_up_user_input("flow-session-3", "agentic");
-        let second = background_result_follow_up_user_input("flow-session-3", "agentic");
+        // 缓存前缀稳定性：同一 (session_id, agent_type) 的 follow-up 全文文本
+        // 必须逐字节一致（通知句 + 全文组装结果）——通知合并后同类场景使用
+        // 相同文本，杜绝时序抖动变体。
+        let first = background_subagent_follow_up_message(
+            "flow-session-3",
+            "agentic",
+            Some(&"deterministic full reply".to_string()),
+        );
+        let second = background_subagent_follow_up_message(
+            "flow-session-3",
+            "agentic",
+            Some(&"deterministic full reply".to_string()),
+        );
         assert_eq!(first, second);
     }
 
     #[tokio::test]
     async fn duplicate_background_result_follow_up_is_coalesced() {
-        // Token 风暴守卫：同一会话、相同 follow-up 文本的重复提交必须被
-        // 队列查重吸收，只保留一个 turn（一次模型请求）。
+        // R-AR-03 验收断言 1：查重键 = (session_id, agent_type) 元组，与正文
+        // 解耦。R-AR-02 后 deliver 通道携带最终回复全文，重复报告的正文必然
+        // 不同（全文/组装差异）；同一 (session_id, agent_type) 键的重复提交
+        // 仍必须被队列查重吸收，只保留一个 turn（一次模型请求）。
         let (scheduler, session_manager, _, root) = test_scheduler();
         let session_id = "coalesce-follow-up-session";
         let workspace = root.path().join("workspace");
@@ -5894,7 +6126,8 @@ mod tests {
             .expect("first follow-up accepted");
         let depth_after_first = scheduler.queue_depth(session_id);
 
-        // 第二次提交（同 session、同 agent_type → 同 follow-up 文本）：去重跳过。
+        // 第二次提交：同 session、同 agent_type（键相同），但正文不同（模拟
+        // 全文入通道后的另一份组装文本）——仍按 (session_id, agent_type) 键去重。
         scheduler
             .deliver_background_result(
                 session_id.to_string(),
@@ -5902,7 +6135,7 @@ mod tests {
                 None,
                 None,
                 None,
-                "Background task completed".to_string(),
+                "Background task completed with a different full-reply body".to_string(),
                 None,
                 None,
             )
@@ -5911,7 +6144,7 @@ mod tests {
         assert_eq!(
             scheduler.queue_depth(session_id),
             depth_after_first,
-            "duplicate follow-up must not add another queued turn"
+            "same (session_id, agent_type) key must coalesce regardless of body text"
         );
     }
 
@@ -5919,7 +6152,7 @@ mod tests {
     async fn duplicate_background_notification_is_coalesced_across_submit_routes() {
         // 主人裁决：后台通知 = 必要功能，修的是"通知风暴"。本测试验证咽喉级
         // 查重覆盖两条提交路径（scheduler follow-up + coordinator 直提），
-        // 且不同子代理（不同 session_id → 不同通知文本）各自保留。
+        // 且不同 agent_type（键不同）的完成通知各自保留。
         let (scheduler, session_manager, _, root) = test_scheduler();
         let session_id = "coalesce-throat-session";
         let workspace = root.path().join("workspace");
@@ -5937,7 +6170,7 @@ mod tests {
             .await
             .expect("create session");
 
-        // 同一条后台通知（同 child session + 同 agent_type → 同文本）经两条
+        // 同一条后台通知（同 (session_id, agent_type) 键 → 同一通知身份）经两条
         // 路径各提交一次：第一次 Started，重复提交必须被查重拦截（队列深度
         // 不变，不启动第二个 turn）。
         let notice = background_result_follow_up_user_input("child-session-1", "GeneralPurpose");
@@ -5969,13 +6202,14 @@ mod tests {
         assert!(matches!(first_outcome, DialogSubmitOutcome::Started { .. }));
         let depth_after_first = scheduler.queue_depth(session_id);
 
-        // 重复提交：查重拦截，队列深度不变。
+        // 重复提交：键相同（同 session_id、同 agent_type）但正文不同（模拟
+        // coordinator 直提路径组装出不同全文）——仍必须被查重拦截，队列深度不变。
         let second_outcome = scheduler
             .submit_queued_turn(
                 session_id.to_string(),
                 "throat-turn-2".to_string(),
                 QueuedTurn {
-                    user_input: notice.clone(),
+                    user_input: format!("{notice}\n\nA differently assembled full reply body."),
                     original_user_input: None,
                     prepended_messages: Vec::new(),
                     turn_id: Some("throat-turn-2".to_string()),
@@ -6005,9 +6239,9 @@ mod tests {
             "duplicate notification must not add a queued turn"
         );
 
-        // 不同子代理 → 不同通知文本 → 正常入队保留（通知功能不丢失）。
+        // 不同 agent_type → 键不同 → 正常入队保留（通知功能不丢失）。
         let other_notice =
-            background_result_follow_up_user_input("child-session-2", "GeneralPurpose");
+            background_result_follow_up_user_input("child-session-2", "CodeReviewer");
         let third_outcome = scheduler
             .submit_queued_turn(
                 session_id.to_string(),
@@ -6017,7 +6251,7 @@ mod tests {
                     original_user_input: None,
                     prepended_messages: Vec::new(),
                     turn_id: Some("throat-turn-3".to_string()),
-                    agent_type: "GeneralPurpose".to_string(),
+                    agent_type: "CodeReviewer".to_string(),
                     workspace_path: None,
                     remote_connection_id: None,
                     remote_ssh_host: None,
@@ -6035,18 +6269,138 @@ mod tests {
             .expect("distinct notification accepted");
         assert!(
             matches!(third_outcome, DialogSubmitOutcome::Queued { .. }),
-            "distinct child notification must be accepted (queued behind the running turn): {third_outcome:?}"
+            "distinct agent_type notification must be accepted (queued behind the running turn): {third_outcome:?}"
         );
         assert_eq!(
             scheduler.queue_depth(session_id),
             depth_after_first + 1,
-            "distinct child notifications must both be retained"
+            "distinct (session_id, agent_type) keys must both be retained"
+        );
+    }
+
+    #[tokio::test]
+    async fn same_body_different_dedupe_key_is_not_coalesced() {
+        // R-AR-03 验收断言 2：正文相同但 (session_id, agent_type) 键不同 →
+        // 不合并。正文不再是查重依据：同正文、不同键的提交必须各自保留。
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "coalesce-key-distinct-session";
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "CoalesceKeyDistinct".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+
+        // 同正文（含通知前缀，命中后台通知 detector）但 agent_type 不同 →
+        // (session_id, agent_type) 键不同 → 两次都入队保留。
+        let notice = "Background agent session child-key-1 (agentic) has replied; use SessionHistory to view the full reply.";
+        let first_outcome = scheduler
+            .submit_queued_turn(
+                session_id.to_string(),
+                "key-turn-1".to_string(),
+                QueuedTurn {
+                    user_input: notice.to_string(),
+                    original_user_input: None,
+                    prepended_messages: Vec::new(),
+                    turn_id: Some("key-turn-1".to_string()),
+                    agent_type: "agentic".to_string(),
+                    workspace_path: None,
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                    reply_route: None,
+                    user_message_metadata: None,
+                    image_contexts: None,
+                    enqueued_at: SystemTime::now(),
+                    _settlement_registration: None,
+                    execution: QueuedTurnExecution::Standard,
+                },
+                false,
+            )
+            .await
+            .expect("first key accepted");
+        assert!(matches!(first_outcome, DialogSubmitOutcome::Started { .. }));
+        let depth_after_first = scheduler.queue_depth(session_id);
+
+        // 同正文、不同 agent_type：键不同，不得被查重拦截。
+        let second_outcome = scheduler
+            .submit_queued_turn(
+                session_id.to_string(),
+                "key-turn-2".to_string(),
+                QueuedTurn {
+                    user_input: notice.to_string(),
+                    original_user_input: None,
+                    prepended_messages: Vec::new(),
+                    turn_id: Some("key-turn-2".to_string()),
+                    agent_type: "CodeReviewer".to_string(),
+                    workspace_path: None,
+                    remote_connection_id: None,
+                    remote_ssh_host: None,
+                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                    reply_route: None,
+                    user_message_metadata: None,
+                    image_contexts: None,
+                    enqueued_at: SystemTime::now(),
+                    _settlement_registration: None,
+                    execution: QueuedTurnExecution::Standard,
+                },
+                false,
+            )
+            .await
+            .expect("second key accepted");
+        assert!(
+            matches!(second_outcome, DialogSubmitOutcome::Queued { .. }),
+            "same body with a distinct (session_id, agent_type) key must not be coalesced: {second_outcome:?}"
+        );
+        assert_eq!(
+            scheduler.queue_depth(session_id),
+            depth_after_first + 1,
+            "same body, distinct (session_id, agent_type) key must both be retained"
         );
     }
 
     #[test]
+    fn dedupe_key_is_the_session_agent_type_tuple() {
+        // R-AR-03：DedupeKey = (session_id, agent_type) 元组，与正文无关；
+        // 空白 agent_type 归一化为 None（与 BackgroundResultDelivery.agent_type
+        // 的可空语义一致），空白 session_id 不做归一化（身份标识必须原样保留）。
+        let key_a = DedupeKey::new("s1", "agentic");
+        assert_eq!(key_a.session_id, "s1");
+        assert_eq!(key_a.agent_type.as_deref(), Some("agentic"));
+
+        // 同键（同 session_id、同 agent_type）即使来自不同正文也相等。
+        let key_b = DedupeKey::new("s1", "agentic");
+        assert_eq!(key_a, key_b);
+
+        // 不同 agent_type → 键不同。
+        assert_ne!(key_a, DedupeKey::new("s1", "CodeReviewer"));
+        // 不同 session_id → 键不同。
+        assert_ne!(key_a, DedupeKey::new("s2", "agentic"));
+
+        // 空白 agent_type 归一化为 None。
+        let blank = DedupeKey::new("s1", "   ");
+        assert_eq!(blank.agent_type, None);
+        assert_ne!(key_a, blank);
+    }
+
+    #[test]
     fn background_notice_detector_matches_fixed_template_only() {
-        let notice = background_result_follow_up_user_input("child-session-1", "GeneralPurpose");
+        // R-AR-02 起生产 deliver 通道输出 = background_subagent_follow_up_message
+        // 全文组装（通知句 + 全文），detector 必须命中生产输出而非仅测试模板；
+        // 真实用户消息绝不能被误判为后台通知。
+        let notice = background_subagent_follow_up_message(
+            "child-session-1",
+            "GeneralPurpose",
+            Some(&"full reply body".to_string()),
+        );
         assert!(is_background_result_follow_up(&notice));
         // 真实用户消息绝不能被误判为后台通知。
         assert!(!is_background_result_follow_up("check tests"));

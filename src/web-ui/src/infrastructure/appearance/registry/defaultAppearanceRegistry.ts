@@ -278,11 +278,6 @@ import { virtualItemAppearanceDescriptor } from '@/flow_chat/components/modern/V
 import { beeColonyMonitorAppearanceDescriptor } from '@/app/layout/BeeColonyMonitor.appearance';
 import { createLegionPageAppearanceDescriptor } from '@/app/scenes/agents/components/CreateLegionPage.appearance';
 import { legionCardAppearanceDescriptor } from '@/app/scenes/agents/components/LegionCard.appearance';
-import { groupChatPaneAppearanceDescriptor } from '@/flow_chat/components/GroupChatPane.appearance';
-import { groupChatMemberPickerAppearanceDescriptor } from '@/flow_chat/components/GroupChatMemberPicker.appearance';
-import { groupChatMentionPickerAppearanceDescriptor } from '@/flow_chat/components/GroupChatMentionPicker.appearance';
-import { groupChatsSectionAppearanceDescriptor } from '@/app/components/NavPanel/sections/groups/GroupChatsSection.appearance';
-import { groupChatCreateDialogAppearanceDescriptor } from '@/app/components/NavPanel/sections/groups/GroupChatCreateDialog.appearance';
 import { AppearanceRegistry } from './AppearanceRegistry';
 
 export function createDefaultAppearanceRegistry(): AppearanceRegistry {
@@ -543,11 +538,6 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(turnCompletionNoticeAppearanceDescriptor)
     .registerComponent(turnFailureNoticeAppearanceDescriptor)
     .registerComponent(virtualItemAppearanceDescriptor)
-    .registerComponent(groupChatPaneAppearanceDescriptor)
-    .registerComponent(groupChatMemberPickerAppearanceDescriptor)
-    .registerComponent(groupChatMentionPickerAppearanceDescriptor)
-    .registerComponent(groupChatsSectionAppearanceDescriptor)
-    .registerComponent(groupChatCreateDialogAppearanceDescriptor)
     .registerScene(workbenchAppearanceDescriptor)
     .registerScene(welcomeAppearanceDescriptor)
     .registerScene(shellAppearanceDescriptor)

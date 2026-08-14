@@ -1,6 +1,7 @@
 //! Product tool materialization owner.
 
 use crate::agentic::tools::framework::Tool;
+use crate::agentic::tools::implementations::group_room_aliases::group_room_alias_tool_for_name;
 use crate::agentic::tools::implementations::*;
 use crate::agentic::tools::product_runtime::CallDeferredTool;
 use crate::agentic::tools::registry::ProductToolDecoratorRef;
@@ -78,7 +79,24 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "GetFileDiff" => Some(Arc::new(GetFileDiffTool::new())),
             "SessionControl" => Some(Arc::new(SessionControlTool::new())),
             "LegionControl" => Some(Arc::new(LegionControlTool::new())),
-            "group_chat" => Some(Arc::new(GroupChatTool::new())),
+            "create_group_chat" => group_room_alias_tool_for_name("create_group_chat")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "invite_group_member" => group_room_alias_tool_for_name("invite_group_member")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "remove_group_member" => group_room_alias_tool_for_name("remove_group_member")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "send_group_message" => group_room_alias_tool_for_name("send_group_message")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "get_group_history" => group_room_alias_tool_for_name("get_group_history")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "list_group_chats" => group_room_alias_tool_for_name("list_group_chats")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "fork_group_chat" => group_room_alias_tool_for_name("fork_group_chat")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "group_member_status" => group_room_alias_tool_for_name("group_member_status")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "delete_group_chat" => group_room_alias_tool_for_name("delete_group_chat")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
             "SessionMessage" => Some(Arc::new(SessionMessageTool::new())),
             "SessionHistory" => Some(Arc::new(SessionHistoryTool::new())),
             "acp_control" => Some(Arc::new(AcpControlTool::new())),

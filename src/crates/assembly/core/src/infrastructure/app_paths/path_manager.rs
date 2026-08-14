@@ -118,17 +118,6 @@ impl PathManager {
             .join(".bitfun")
     }
 
-    /// Get the global group-chats root: ~/.bitfun/group-chats/
-    ///
-    /// 群聊数据全局归属的唯一权威根（W1 数据归属全局化，2026-08-13）：
-    /// 群聊房间/消息/成员不挂在任何单个 workspace 下，任何 workspace 打开
-    /// 都看到同一群聊视图；成员会话数据仍归成员各自 workspace。
-    /// `group_chat_layout` / `group_chat_store` / scheduler 回执 / Tauri 命令
-    /// 层全部经此 API 解析，禁自行拼接。
-    pub fn group_chats_root(&self) -> PathBuf {
-        self.bitfun_home_dir().join("group-chats")
-    }
-
     /// Get the legacy assistant workspace base directory: ~/.bitfun/
     ///
     /// `override_root` is reserved for future user customization.

@@ -18,7 +18,6 @@ pub enum SessionRelationshipKind {
     DeepReview,
     Miniapp,
     Subagent,
-    GroupChat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -1727,32 +1726,5 @@ mod tests {
 
         let serialized = serde_json::to_value(metadata).expect("metadata should serialize");
         assert_eq!(serialized["reviewActionState"]["phase"], "fix_completed");
-    }
-
-    #[test]
-    fn session_relationship_kind_group_chat_round_trips_as_snake_case() {
-        let kind = SessionRelationshipKind::GroupChat;
-
-        let value = serde_json::to_value(&kind).expect("group chat kind should serialize");
-        assert_eq!(value, serde_json::json!("group_chat"));
-
-        let back: SessionRelationshipKind =
-            serde_json::from_value(value).expect("group chat kind should deserialize");
-        assert_eq!(back, SessionRelationshipKind::GroupChat);
-    }
-
-    #[test]
-    fn session_relationship_kind_group_chat_survives_session_relationship_round_trip() {
-        let relationship = SessionRelationship {
-            kind: Some(SessionRelationshipKind::GroupChat),
-            ..SessionRelationship::default()
-        };
-
-        let value = serde_json::to_value(&relationship).expect("relationship should serialize");
-        assert_eq!(value["kind"], "group_chat");
-
-        let back: SessionRelationship =
-            serde_json::from_value(value).expect("relationship should deserialize");
-        assert_eq!(back.kind, Some(SessionRelationshipKind::GroupChat));
     }
 }

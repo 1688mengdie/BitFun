@@ -515,21 +515,15 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                     p.insert("agentType".to_string(), json!(at));
                 }
                 p.insert("status".to_string(), json!(status));
-                // Coordinator emits SubagentTurnCompleted with output_text = None
-                // (see coordinator.rs start_background_subagent / follow-up) so the
-                // parent session does not receive the full subagent text twice
-                // ("notification turn + full-text event" dual-feed). Full text is
-                // carried by the subagent's own turn / on-disk record (P-03);
-                // the parent reads it via SessionHistory when needed. When
-                // output_text is None no outputText is projected.
-                //
-                // Known experience window (L3-P2-01): the parent session card only
-                // shows the "has replied" notice until the subagent session is
-                // hydrated in the frontend store (ensureBtwSessionAvailable) and
-                // the SubagentProjectionView projects the child turn. This is an
-                // accepted P-19/P-03 design trade-off — the full reply is always
-                // retrievable from the child session history; the projection is
-                // eventually consistent with hydration, not missing data.
+                // R-AR-04（2026-08-14）投影契约：Coordinator emits
+                // SubagentTurnCompleted with output_text = Some(full reply),
+                // assembled by the same background_subagent_follow_up_message
+                // as the notification turn (single source, no second full-text
+                // assembly / dual feed). outputText therefore carries the full
+                // reply and is projected directly — the parent event card shows
+                // the full reply immediately, with no "has replied" wait window
+                // (previously the projection only appeared after the subagent
+                // session was hydrated in the frontend store).
                 if let Some(text) = output_text {
                     p.insert("outputText".to_string(), json!(text));
                 }
@@ -543,8 +537,8 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
 mod tests {
     use super::*;
     use crate::{
-        DeepReviewQueueReason, DeepReviewQueueState, DeepReviewQueueStatus,
-        ModelRoundAttemptDiagnostic,
+        agentic::SubagentCompletionStatus, DeepReviewQueueReason, DeepReviewQueueState,
+        DeepReviewQueueStatus, ModelRoundAttemptDiagnostic,
     };
     use bitfun_core_types::{
         SessionExecutionTarget, SessionExecutionTargetKind, WorktreeLifecycle,
@@ -800,5 +794,26 @@ mod tests {
         assert_eq!(projected.payload["sessionId"], "session-1");
         assert_eq!(projected.payload["previousPresetId"], "high");
         assert_eq!(projected.payload["reason"], "reasoning_catalog_updated");
+    }
+
+    #[test]
+    fn subagent_turn_completed_projects_full_reply_output_text() {
+        // R-AR-04（2026-08-14）：SubagentTurnCompleted 事件 output_text 携带
+        // 全文（与通知同源组装），投影层将 outputText 直接投影为全文。
+        let projected = project_agentic_frontend_event(AgenticEvent::SubagentTurnCompleted {
+            session_id: "child-session".to_string(),
+            subagent_dialog_turn_id: "child-turn".to_string(),
+            parent_session_id: "parent-session".to_string(),
+            parent_dialog_turn_id: "parent-turn".to_string(),
+            parent_tool_call_id: "task-tool".to_string(),
+            agent_type: Some("agentic".to_string()),
+            status: SubagentCompletionStatus::Completed,
+            output_text: Some("FULL_REPLY_MARKER\nline two".to_string()),
+        })
+        .expect("projected");
+
+        assert_eq!(projected.event_name, "agentic://subagent-turn-completed");
+        assert_eq!(projected.payload["sessionId"], "child-session");
+        assert_eq!(projected.payload["outputText"], "FULL_REPLY_MARKER\nline two");
     }
 }

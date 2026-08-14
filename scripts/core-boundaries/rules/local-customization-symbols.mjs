@@ -13,33 +13,13 @@
 // check without a review (防漂移).
 
 // local_customizations.rs top-level `pub` symbols that must survive upstream
-// syncs (GroupChat contract + AgentType + steering helpers; 常开 + agent-api).
+// syncs (GroupChat 主人标识 + AgentType + steering helpers; 常开 + agent-api).
+// R-AD-GC (2026-08-14): GroupChat 旧 IM 模型移除，仅保留主人标识（司令官裁决
+// GROUP_MASTER_ACTOR / GroupChatActor）；GroupChatRoom 等 22 个契约符号已删。
 export const localCustomizationSymbols = [
   { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum AgentType\b/m, note: 'R-AD-01 #25' },
   { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub const GROUP_MASTER_ACTOR\b/m, note: 'R-AD-01 #1' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatRoom\b/m, note: 'R-AD-01 #2' },
   { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatActor\b/m, note: 'R-AD-01 #3' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatMode\b/m, note: 'R-AD-01 #4' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatMember\b/m, note: 'R-AD-01 #5' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatMemberRole\b/m, note: 'R-AD-01 #6' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatStatus\b/m, note: 'R-AD-01 #7' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatMessage\b/m, note: 'R-AD-01 #8' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatMessageKind\b/m, note: 'R-AD-01 #9' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatMessageStatus\b/m, note: 'R-AD-01 #10' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub trait GroupChatPort\b/m, note: 'R-AD-01 #11' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatCreateRequest\b/m, note: 'R-AD-01 #12' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatJoinRequest\b/m, note: 'R-AD-01 #13' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatLeaveRequest\b/m, note: 'R-AD-01 #14' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatDeleteRequest\b/m, note: 'R-AD-01 #15' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatModeRequest\b/m, note: 'R-AD-01 #16' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatSendRequest\b/m, note: 'R-AD-01 #17' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatSendResult\b/m, note: 'R-AD-01 #18' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatDeliveryFailure\b/m, note: 'R-AD-01 #19' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatMessagesRequest\b/m, note: 'R-AD-01 #20' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatMessagesResponse\b/m, note: 'R-AD-01 #21' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatIngestReplyRequest\b/m, note: 'R-AD-01 #22' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub struct GroupChatError\b/m, note: 'R-AD-01 #23' },
-  { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub enum GroupChatErrorCode\b/m, note: 'R-AD-01 #24' },
   { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub fn round_injection_dedup_key\b/m, note: 'R-AD-01 #29' },
   { path: 'src/crates/contracts/runtime-ports/src/local_customizations.rs', anchor: /^pub fn round_injection_push_reminder\b/m, note: 'R-AD-01 #30' },
   { path: 'src/crates/contracts/runtime-ports/src/agent_api.rs', anchor: /pub include_hidden: bool\b/m, note: 'R-AD-01 #31' },
@@ -52,7 +32,6 @@ export const localCustomizationSymbols = [
   { path: 'src/crates/contracts/runtime-ports/src/agent_api.rs', anchor: /pub include_hidden_subagents: bool\b/m, note: 'R-AD-01 #36' },
   { path: 'src/crates/contracts/runtime-ports/src/agent_api.rs', anchor: /pub fn dedup_key\(&self\) -> Option<&str>/m, note: 'R-AD-01 #37' },
   { path: 'src/crates/contracts/runtime-ports/src/lib.rs', anchor: /^pub const MAX_FISSION_DEPTH: u8 = 10;$/m, note: 'R-AD-01 #35' },
-  { path: 'src/crates/assembly/core/src/service/config/types.rs', anchor: /^pub struct GroupChatConfig\b/m, note: 'R-AD-01 GroupChatConfig' },
 ];
 
 // Symbols that are deliberately allowed to leave the manifest after R-AD-03

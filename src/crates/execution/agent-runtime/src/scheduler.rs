@@ -173,6 +173,20 @@ impl ActiveDialogTurnStore {
             .map(|turn| turn.user_input().to_string())
     }
 
+    /// Agent type + user input of the currently active turn for `session_id`,
+    /// if any. Consumed by the background-notification coalescing guard
+    /// (R-AR-03): the dedupe key is the (session_id, agent_type) tuple, so the
+    /// active turn must expose its agent type alongside the user input instead
+    /// of relying on exact user-input text equality.
+    pub fn active_turn_agent_type_and_user_input(&self, session_id: &str) -> Option<(String, String)> {
+        self.inner.get(session_id).map(|turn| {
+            (
+                turn.agent_type_owned(),
+                turn.user_input().to_string(),
+            )
+        })
+    }
+
     pub fn suppression_key_for_requester(
         &self,
         target_session_id: &str,
@@ -638,11 +652,13 @@ impl SessionRoundInjectionBuffer {
     ///
     /// Dedup keys (窗口语义：同会话 5 秒窗口内）:
     /// - `BackgroundResult` / `ThreadGoalObjectiveUpdated`: the notification
-    ///   text is a fixed template (the display text never enters the prompt),
-    ///   so all pending entries of the same kind created within the 5s window
-    ///   are semantically identical — keep only the first and drop the rest.
-    ///   Entries older than the window are kept: a genuinely later notification
-    ///   must still reach the model (后台通知 = 必要功能，只去风暴不去通知).
+    ///   identity is the caller-supplied `dedupKey` metadata tuple
+    ///   `(session_id, agent_type)` (R-AR-03/R-AR-05) — R-AR-05 起注入内容为
+    ///   完整回复全文，按正文相等查重必然失效（每份组装不同），键与正文解耦；
+    ///   同键条目在 5s 窗口内视为同一通知风暴，保留首条、丢弃其余。无键条目
+    ///   回退窗口语义（同 kind 5s 内合并，如 ThreadGoal 注入）。窗口外的条目
+    ///   保留：真正的后续通知必须到达模型（后台通知 = 必要功能，只去风暴不去
+    ///   通知）。
     /// - `UserSteering`: the user message text is the prompt payload; two
     ///   pending entries with the same content within the window are the same
     ///   message re-steered, so keep only the first. Distinct messages always
@@ -672,8 +688,14 @@ impl SessionRoundInjectionBuffer {
         let duplicate = entry
             .iter()
             .any(|existing| match (&existing.kind, &message.kind) {
-                (RoundInjectionKind::BackgroundResult, RoundInjectionKind::BackgroundResult)
-                | (
+                (RoundInjectionKind::BackgroundResult, RoundInjectionKind::BackgroundResult) => {
+                    // R-AR-05：注入键 (session_id, agent_type) 元数据优先——
+                    // 全文注入后正文必然不同，按正文查重失效。同键 + 同 5s 窗口
+                    // 视为同一通知风暴。无键条目回退窗口语义（按 kind 合并）。
+                    Self::same_background_result_key(existing, &message)
+                        && Self::within_dedup_window(existing, &message)
+                }
+                (
                     RoundInjectionKind::ThreadGoalObjectiveUpdated,
                     RoundInjectionKind::ThreadGoalObjectiveUpdated,
                 ) => Self::within_dedup_window(existing, &message),
@@ -725,6 +747,18 @@ impl SessionRoundInjectionBuffer {
                 session_id.to_string(),
                 format!("content:{}", message.content),
             )),
+        }
+    }
+
+    /// R-AR-05 注入键判定：`BackgroundResult` 优先按注入元数据 `dedupKey`
+    /// （(session_id, agent_type) 元组，scheduler 注入时写入）判断，与正文解耦；
+    /// 无键条目（遗留/测试构造）回退按 kind 恒等（窗口内合并）。
+    fn same_background_result_key(left: &RoundInjection, right: &RoundInjection) -> bool {
+        let left_key = left.metadata.get("dedupKey");
+        let right_key = right.metadata.get("dedupKey");
+        match (left_key, right_key) {
+            (Some(left_key), Some(right_key)) => left_key == right_key,
+            _ => true,
         }
     }
 
@@ -1353,6 +1387,20 @@ mod tests {
         }
     }
 
+    /// Test helper：给 BackgroundResult 注入附加 R-AR-05 键元数据
+    /// `dedupKey = (session_id, agent_type)`，模拟 scheduler 注入路径。
+    fn keyed_background_injection(session_id: &str, agent_type: &str, content: &str) -> RoundInjection {
+        let mut injection = injection(RoundInjectionKind::BackgroundResult, content);
+        injection.metadata.insert(
+            "dedupKey".to_string(),
+            serde_json::json!({
+                "sessionId": session_id,
+                "agentType": agent_type,
+            }),
+        );
+        injection
+    }
+
     fn uuid_like() -> String {
         format!("injection-{}", std::process::id())
     }
@@ -1362,8 +1410,7 @@ mod tests {
         let buffer = SessionRoundInjectionBuffer::default();
         // A notification storm: N identical background-result entries for the
         // same session within the 5s window must collapse to a single pending
-        // entry (one model request) while keeping the fixed template text
-        // byte-identical.
+        // entry (one model request).
         for _ in 0..5 {
             buffer.push(
                 "session-1",
@@ -1373,6 +1420,49 @@ mod tests {
         let pending = buffer.drain_for_turn("session-1", "turn-1");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].kind, RoundInjectionKind::BackgroundResult);
+    }
+
+    #[test]
+    fn injection_buffer_merges_same_key_different_body_background_within_window() {
+        // R-AR-05 键对齐：同 (session_id, agent_type) 键、正文不同（全文注入后
+        // 每份组装不同）的 BackgroundResult 在 5s 窗口内必须合并——查重键与正文
+        // 解耦，通知风暴仍被守卫。
+        let buffer = SessionRoundInjectionBuffer::default();
+        buffer.push(
+            "session-1",
+            keyed_background_injection("child-1", "GeneralPurpose", "first full reply body"),
+        );
+        buffer.push(
+            "session-1",
+            keyed_background_injection(
+                "child-1",
+                "GeneralPurpose",
+                "second, differently assembled full reply body",
+            ),
+        );
+        let pending = buffer.drain_for_turn("session-1", "turn-1");
+        assert_eq!(
+            pending.len(),
+            1,
+            "same (session_id, agent_type) key must coalesce regardless of body text"
+        );
+    }
+
+    #[test]
+    fn injection_buffer_keeps_distinct_keys_within_window() {
+        // R-AR-05 键语义：不同 (session_id, agent_type) 键（不同子会话）在窗口内
+        // 各自保留——通知功能不丢失。
+        let buffer = SessionRoundInjectionBuffer::default();
+        buffer.push(
+            "session-1",
+            keyed_background_injection("child-a", "GeneralPurpose", "reply a"),
+        );
+        buffer.push(
+            "session-1",
+            keyed_background_injection("child-b", "GeneralPurpose", "reply b"),
+        );
+        let pending = buffer.drain_for_turn("session-1", "turn-1");
+        assert_eq!(pending.len(), 2);
     }
 
     #[test]
