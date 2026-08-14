@@ -2380,6 +2380,9 @@
     "fastModel": "Fast 模型",
     "fastMode": "Fast 模式",
     "fastModeDescription": "1.5 倍速度，消耗更多額度",
+    "acpMode": "模式",
+    "acpModeLocked": "對話已經開始，模式不能再改。",
+    "acpModeFailed": "切換模式失敗",
     "switchFailed": "切換模型失敗",
     "modelNotConfigured": "未設定",
     "contextUsage": {

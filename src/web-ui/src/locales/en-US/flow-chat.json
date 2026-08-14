@@ -2380,6 +2380,9 @@
     "fastModel": "Fast Model",
     "fastMode": "Fast mode",
     "fastModeDescription": "1.5x speed with higher credit usage",
+    "acpMode": "Mode",
+    "acpModeLocked": "This conversation has already started, so its mode is fixed.",
+    "acpModeFailed": "Failed to switch mode",
     "switchFailed": "Failed to switch model",
     "modelNotConfigured": "Not Configured",
     "contextUsage": {
