@@ -14,6 +14,7 @@ export struct RemoteCreateSessionView {
   @Param state: RemoteCreateSessionState = new RemoteCreateSessionState();
   @Param presentation: ComposerPresentation = ComposerPresentation.Create;
   @Param showSidebarRestoreButton: boolean = false;
+  @Param hoverOperateMode: boolean = false;
   @Param isVoiceListening: boolean = false;
   @Param modelCatalog: ConversationUiModelCatalog = {
     version: 0,
@@ -55,6 +56,7 @@ export struct RemoteCreateSessionView {
         showBackButton: true,
         showSidebarButton: false,
         showSidebarRestoreButton: this.showSidebarRestoreButton,
+        hoverOperateMode: this.hoverOperateMode,
         aboveComposer: () => {
           this.ContextControls();
         },

@@ -61,6 +61,7 @@ export struct ConversationView {
   @Param composerPresentation: ComposerPresentation = ComposerPresentation.Compact;
   @Param composerInputId: string = 'conversation-composer-input';
   @Param contentHorizontalOffset: number = 0;
+  @Param hoverOperateMode: boolean = false;
   @BuilderParam aboveComposer: () => void = this.EmptyBuilder;
   @Event onOpenSidebar: () => void = () => {};
   @Event onRestoreSidebar: () => void = () => {};
@@ -108,44 +109,79 @@ export struct ConversationView {
     Stack() {
       Column() {
         this.Header()
-        Column() {
-          if (this.shouldShowStatusBar()) {
-            this.ExecutionStatusBar()
-          }
-          if (this.isLoadingConversation) {
-            ConversationLoadingState({
-              maxContentWidth: this.composerPresentation === ComposerPresentation.Floating ? 800 : 0
-            })
-              .layoutWeight(1)
-          } else if (this.surface === ChatSurface.Create) {
-            Blank()
-              .layoutWeight(1)
-              .width('100%')
-              .onClick(() => {
-                this.onBackgroundTap();
-              })
-          } else if (this.shouldCenterInlineStatus()) {
-            this.CenteredInlineStatus()
-          } else {
-            this.MessageList()
-          }
-          if (this.inlineStatusText.length > 0 && !this.shouldCenterInlineStatus()) {
-            Text(this.inlineStatusText)
-              .fontSize(12).lineHeight(18).fontColor(MUTED).width('100%')
-              .padding({ left: 20, right: 20, bottom: 8 })
-          }
-          this.Composer()
+        if (this.hoverOperateMode) {
+          this.HoverBody()
+        } else {
+          this.StandardBody()
         }
-        .layoutWeight(1)
-        .width('100%')
-        .translate({ x: this.contentHorizontalOffset, y: 0 })
-        .animation({ duration: 220, curve: Curve.EaseInOut })
       }
       .width('100%').height('100%').backgroundColor(PAGE_BG)
     }
     .width('100%')
     .height('100%')
     .backgroundColor(PAGE_BG)
+  }
+
+  @Builder
+  private StandardBody() {
+    Column() {
+      this.ConversationBody()
+      this.Composer()
+    }
+    .layoutWeight(1)
+    .width('100%')
+    .translate({ x: this.contentHorizontalOffset, y: 0 })
+    .animation({ duration: 220, curve: Curve.EaseInOut })
+  }
+
+  @Builder
+  private HoverBody() {
+    FolderStack() {
+      Column() {
+        this.ConversationBody()
+      }
+      .width('100%')
+      .height('100%')
+      .padding({ bottom: 12 })
+      Column() {
+        this.Composer()
+      }
+      .width('100%')
+    }
+    .alignContent(Alignment.Bottom)
+    .layoutWeight(1)
+    .width('100%')
+    .enableAnimation(true)
+    .autoHalfFold(true)
+  }
+
+  @Builder
+  private ConversationBody() {
+    if (this.shouldShowStatusBar()) {
+      this.ExecutionStatusBar()
+    }
+    if (this.isLoadingConversation) {
+      ConversationLoadingState({
+        maxContentWidth: this.composerPresentation === ComposerPresentation.Floating ? 800 : 0
+      })
+        .layoutWeight(1)
+    } else if (this.surface === ChatSurface.Create) {
+      Blank()
+        .layoutWeight(1)
+        .width('100%')
+        .onClick(() => {
+          this.onBackgroundTap();
+        })
+    } else if (this.shouldCenterInlineStatus()) {
+      this.CenteredInlineStatus()
+    } else {
+      this.MessageList()
+    }
+    if (this.inlineStatusText.length > 0 && !this.shouldCenterInlineStatus()) {
+      Text(this.inlineStatusText)
+        .fontSize(12).lineHeight(18).fontColor(MUTED).width('100%')
+        .padding({ left: 20, right: 20, bottom: 8 })
+    }
   }
 
   @Builder
