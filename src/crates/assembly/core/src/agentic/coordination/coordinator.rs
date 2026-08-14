@@ -857,7 +857,11 @@ pub enum AssistantBootstrapEnsureOutcome {
     },
 }
 
-const ASSISTANT_BOOTSTRAP_AGENT_TYPE: &str = "Claw";
+/// 助理引导（assistant bootstrap）会话使用的 agent 类型（Claw）。
+/// R-GC-28b（2026-08-14）：`pub` 导出为「默认对话类型 = Claw」的单一
+/// 权威源——group_room_tools.rs 的 default_group_agent_type 通过 use 引用
+/// 本常量（零硬编码铁律：禁散落 "Claw" 字符串）。
+pub const ASSISTANT_BOOTSTRAP_AGENT_TYPE: &str = "Claw";
 
 /// Cancel token cleanup guard
 ///

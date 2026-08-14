@@ -13,8 +13,9 @@
 //! - 成员状态 = `session_manager.get_session`（:3060）
 //! - 删除 = `coordinator.delete_session`（coordinator.rs:7434）
 //!
-//! 群聊 ID = 会话 ID（UUID）；群 = 默认对话类型会话（agent_type 取
-//! AgentRegistry::default_agent_type，R-GC-25 零硬编码）带专属 workspace。
+//! 群聊 ID = 会话 ID（UUID）；群 = Claw 对话类型会话（agent_type 取
+//! `coordinator::ASSISTANT_BOOTSTRAP_AGENT_TYPE`，R-GC-28b 零硬编码）
+//! 带专属 workspace。
 //!
 //! 契约偏差修复（姬码锋 CEO 派发 R-GC-08，2026-08-14）：
 //! - B-1（契约 §三）：`GroupMessage.author: SenderIdentity`（复用
@@ -30,7 +31,9 @@
 //!   （custom_metadata.groupChats）再 get_session 查 state。
 
 use crate::agentic::agents::get_agent_registry;
-use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
+use crate::agentic::coordination::{
+    get_global_coordinator, ConversationCoordinator, ASSISTANT_BOOTSTRAP_AGENT_TYPE,
+};
 use crate::agentic::core::SessionConfig;
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
@@ -279,17 +282,17 @@ impl GroupRoomTool {
             })
     }
 
-    /// 群主默认对话类型（R-GC-25 零硬编码纠正，主人定标 2026-08-14）：
-    /// 复用现成 `AgentRegistry::default_agent_type()`（agents/registry/
-    /// resolution.rs:92）——默认对话类型由 AgentRegistry 单一事实源提供，
-    /// 配置驱动（可改默认对话类型而不改群聊代码）。禁散落硬编码
-    /// agent_type 字符串。
+    /// 群主默认对话类型（R-GC-28b 主人实测修正，2026-08-14）：
+    /// 邀请/裂变成员会话类型 = Claw（非「智能体」agentic）。
+    /// 复用现成 `coordinator::ASSISTANT_BOOTSTRAP_AGENT_TYPE`（coordinator.rs
+    /// :860 pub const = "Claw"）作为单一权威源——禁散落硬编码 "Claw" 字符串
+    /// （零硬编码铁律），改 Claw 类型只改 coordinator 常量一处。
     fn default_group_agent_type() -> String {
-        get_agent_registry().default_agent_type().to_string()
+        ASSISTANT_BOOTSTRAP_AGENT_TYPE.to_string()
     }
 
-    /// 群主默认对话显示名（R-GC-28，零硬编码）：从 AgentRegistry 取默认
-    /// 对话类型 agent 的 name()（如默认对话类型为 Claw 则返回 "Claw"）。
+    /// 群主默认对话显示名（R-GC-28/28b，零硬编码）：从 AgentRegistry 取
+    /// Claw 类型 agent 的 name()（ClawMode::name() = "Claw"，claw.rs:53）。
     /// 复用现成 `get_agent(agent_type, None)`（registry/mod.rs:177）→
     /// `Agent::name()`；缺失时回退 agent_type 本身（不炸）。
     fn default_group_agent_name() -> String {
@@ -301,12 +304,12 @@ impl GroupRoomTool {
 
     /// 新建成员会话（R-GC-28 主人定标：成员全部新建，零复用已有 ID）。
     ///
-    /// 每个成员 = 全新会话：唯一 UUID + 默认对话类型（配置驱动，
-    /// default_group_agent_type）+ 默认对话显示名（Claw 名称，
-    /// default_group_agent_name）+ 群 workspace。调用方传的 member_session_id
-    /// 只是「成员选择来源/数量占位」，后端一律生成新 UUID——自然消除
-    /// "Session ID already exists"（create_session_with_workspace 撞磁盘已
-    /// 存在 ID，session_manager.rs:513）。
+    /// 每个成员 = 全新会话：唯一 UUID + Claw 类型（R-GC-28b：
+    /// default_group_agent_type = ASSISTANT_BOOTSTRAP_AGENT_TYPE）+ 默认
+    /// 对话显示名（Claw 名称，default_group_agent_name）+ 群 workspace。
+    /// 调用方传的 member_session_id 只是「成员选择来源/数量占位」，后端一律
+    /// 生成新 UUID——自然消除 "Session ID already exists"
+    /// （create_session_with_workspace 撞磁盘已存在 ID，session_manager.rs:513）。
     async fn create_member_session(
         coordinator: &ConversationCoordinator,
         workspace: &str,
@@ -330,8 +333,9 @@ impl GroupRoomTool {
         Ok(member_id)
     }
 
-    /// 建群 = 建默认对话类型会话（type-contract §二.1；R-GC-25 群主对话
-    /// 模型 + 零硬编码：agent_type 取默认对话类型，workspace 取入参兜底链）。
+    /// 建群 = 建 Claw 对话类型会话（type-contract §二.1；R-GC-25/28b 群主
+    /// 对话模型 + 零硬编码：agent_type 取 ASSISTANT_BOOTSTRAP_AGENT_TYPE
+    /// = "Claw"，workspace 取入参兜底链）。
     async fn create_group(
         coordinator: &ConversationCoordinator,
         name: &str,
@@ -1281,23 +1285,22 @@ mod tests {
         assert!(!tool.is_concurrency_safe(Some(&bad)));
     }
 
-    // ── R-GC-25 零硬编码纠正（主人定标 2026-08-14）──
-    // 群主对话类型不写死字符串：复用 AgentRegistry::default_agent_type()
-    // （agents/registry/resolution.rs:92）——配置驱动，改默认对话类型
-    // 即生效，群聊代码零改动。本测试断言「默认类型来自 AgentRegistry
-    // 单一事实源」而非散落硬编码。
+    // ── R-GC-28b 主人实测修正（2026-08-14）：邀请/裂变成员类型 = Claw ──
+    // 群主/成员对话类型 = `coordinator::ASSISTANT_BOOTSTRAP_AGENT_TYPE`
+    // （coordinator.rs:860 pub const "Claw"）单一权威源——本测试断言
+    // default_group_agent_type 返回该常量引用（禁散落硬编码 "Claw" 字符串；
+    // 若 coordinator 常量改为其他类型，群聊自动跟随，本测试同步断言）。
     #[test]
-    fn default_group_agent_type_comes_from_agent_registry() {
-        let expected = crate::agentic::agents::get_agent_registry()
-            .default_agent_type()
-            .to_string();
+    fn default_group_agent_type_is_assistant_bootstrap_agent_type() {
+        let expected = ASSISTANT_BOOTSTRAP_AGENT_TYPE.to_string();
         let actual = GroupRoomTool::default_group_agent_type();
-        assert_eq!(actual, expected);
+        assert_eq!(actual, expected, "default group agent type must follow the Claw constant");
         assert!(!actual.trim().is_empty(), "default agent type must be non-empty");
     }
 
-    // ── R-GC-28 零硬编码（主人定标 2026-08-14）：成员名称 = 默认对话类型
-    // agent 的显示名（Claw 名称），来自 AgentRegistry 单一事实源 ──
+    // ── R-GC-28/28b 零硬编码（主人定标 2026-08-14）：成员名称 = Claw
+    // 类型 agent 的显示名（ClawMode::name() = "Claw"），类型来自
+    // coordinator 常量、名称来自 AgentRegistry 单一事实源 ──
     #[test]
     fn default_group_agent_name_comes_from_agent_registry() {
         let agent_type = GroupRoomTool::default_group_agent_type();
@@ -1313,10 +1316,10 @@ mod tests {
         );
     }
 
-    // ── R-GC-28：成员会话全部新建唯一 UUID（零复用已有 ID）──
+    // ── R-GC-28/28b：成员会话全部新建唯一 UUID（零复用已有 ID）──
     #[test]
     fn member_session_name_is_registry_agent_name() {
-        // create_member_session 使用的名称 = 默认对话类型 agent 的显示名
+        // create_member_session 使用的名称 = Claw 类型 agent 的显示名
         //（零硬编码：禁散落 "Group member" 字符串；名称来自 registry）。
         let agent_type = GroupRoomTool::default_group_agent_type();
         let registry_name = crate::agentic::agents::get_agent_registry()
