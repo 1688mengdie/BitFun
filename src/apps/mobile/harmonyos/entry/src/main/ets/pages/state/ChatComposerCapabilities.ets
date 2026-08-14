@@ -30,10 +30,10 @@ export class ChatComposerCapabilities {
 }
 
 export const GENERAL_CHAT_COMPOSER_CAPABILITIES: ChatComposerCapabilities =
-  new ChatComposerCapabilities(ChatSurface.General, false, false);
+  new ChatComposerCapabilities(ChatSurface.General, true, false);
 
 export const REMOTE_CHAT_COMPOSER_CAPABILITIES: ChatComposerCapabilities =
   new ChatComposerCapabilities(ChatSurface.Remote, true, true, true, true, true);
 
 export const REMOTE_CREATE_COMPOSER_CAPABILITIES: ChatComposerCapabilities =
-  new ChatComposerCapabilities(ChatSurface.Remote, false, true, false, true);
+  new ChatComposerCapabilities(ChatSurface.Create, false, true, false, true);

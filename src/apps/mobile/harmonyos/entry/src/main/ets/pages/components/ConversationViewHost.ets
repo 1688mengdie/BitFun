@@ -5,7 +5,7 @@ import {
   ConversationIntents,
   ConversationIntentType
 } from '../actions/ConversationIntent';
-import { ConversationUiQuestionAnswer } from './ConversationUiModels';
+import { ConversationUiQuestionAnswer } from '../state/ConversationUiModels';
 import { ComposerPresentation } from './ComposerBar';
 
 @ComponentV2
@@ -37,10 +37,6 @@ export struct ConversationViewHost {
       hasMoreMessages: this.viewState.hasMoreMessages,
       timelineItems: this.viewState.timelineItems,
       timelineRevision: this.viewState.timelineRevision,
-      showSuggestionsWhenEmpty: this.viewState.showSuggestionsWhenEmpty,
-      supportsSearch: this.viewState.supportsSearch,
-      supportsImages: this.viewState.supportsImages,
-      supportsFiles: this.viewState.supportsFiles,
       modelCatalog: this.viewState.modelCatalog,
       selectedModelId: this.viewState.selectedModelId,
       downloadingFilePath: this.viewState.downloadingFilePath,
