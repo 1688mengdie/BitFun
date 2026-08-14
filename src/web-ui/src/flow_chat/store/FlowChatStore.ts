@@ -83,6 +83,7 @@ import { cleanRemoteUserInput } from '../utils/userInputText';
 import { useBackgroundSubagentActivityStore } from './backgroundSubagentActivityStore';
 import { clearRuntimeStatusState } from './runtimeStatusStore';
 import { sessionComposerStore } from './sessionComposerStore';
+import { completeSessionMutationReconciliation } from './sessionMutationStore';
 import { recordHistorySessionDiagnosticEvent } from '../services/historySessionDiagnostics';
 import {
   isDispatchJobTerminal,
@@ -2241,6 +2242,18 @@ export class FlowChatStore {
     const catalog = session.turnCatalog?.sessionId === sessionId
       ? session.turnCatalog
       : undefined;
+    const existingView = this.sessionHistoryViews.get(sessionId);
+    if (
+      catalog
+      && existingView?.catalog
+      && existingView.catalog.revision !== catalog.revision
+    ) {
+      existingView.navigationGeneration += 1;
+      existingView.pendingTargetOrdinal = null;
+      existingView.activeRange = null;
+      existingView.loadedRanges = [];
+      this.sessionHistoryTurnAccessTimes.delete(sessionId);
+    }
     const view = this.ensureSessionHistoryView(sessionId, catalog ?? null);
     if (catalog) {
       view.catalog = catalog;
@@ -7759,6 +7772,7 @@ config: {
           dialogTurnId: activeTurnId,
         });
       }
+      completeSessionMutationReconciliation(sessionId);
       startupTrace.markPhase('historical_session_hydrate_end', {
         remote,
         sessionId,

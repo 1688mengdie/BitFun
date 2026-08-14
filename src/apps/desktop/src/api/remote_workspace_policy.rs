@@ -1663,7 +1663,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     ("rollback_miniapp", RemoteWorkspacePolicy::LegacyUnaudited),
     ("rollback_session", RemoteWorkspacePolicy::RemoteUnsupported),
-    ("rollback_to_turn", RemoteWorkspacePolicy::RemoteUnsupported),
+    (
+        "rollback_session_to_turn",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
     ("run_init_agents_md", RemoteWorkspacePolicy::LegacyUnaudited),
     ("run_system_command", RemoteWorkspacePolicy::LegacyUnaudited),
     (
@@ -2180,7 +2183,7 @@ mod tests {
 
     #[test]
     fn complete_rollback_commands_explicitly_reject_remote_workspaces() {
-        for command in ["rollback_session", "rollback_to_turn"] {
+        for command in ["rollback_session", "rollback_session_to_turn"] {
             assert_eq!(
                 remote_workspace_policy(command),
                 Some(RemoteWorkspacePolicy::RemoteUnsupported),
