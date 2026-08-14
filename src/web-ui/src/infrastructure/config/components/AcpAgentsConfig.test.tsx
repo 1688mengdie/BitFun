@@ -548,6 +548,30 @@ describe('AcpAgentsConfig', () => {
     expect(notifySuccessMock).toHaveBeenCalledWith('notifications.configAddedManualCliRequired');
   });
 
+  it('offers DeepSeek Harness as a native ACP preset', async () => {
+    probeClientRequirementsMock.mockResolvedValue([
+      {
+        id: 'dsh',
+        tool: { name: 'dsh-acp-demo', installed: true, version: '0.1.0-rc.6' },
+        runnable: true,
+        notes: [],
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<AcpAgentsConfig />);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(container.textContent).toContain('DeepSeek Harness');
+    expect(container.textContent).toContain('dsh-acp-demo');
+    expect(container.textContent).not.toContain('registry.acpMissing');
+  });
+
   it('does not downgrade enabled agents on transient probe timeouts during refresh', async () => {
     probeClientRequirementsMock
       .mockResolvedValueOnce([
