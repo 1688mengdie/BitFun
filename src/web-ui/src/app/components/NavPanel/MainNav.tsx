@@ -114,19 +114,26 @@ const MainNav: React.FC<MainNavProps> = ({
   // menu; the create dialog stays the existing CreateGroupChatDialog.
   const [isGroupChatDialogOpen, setIsGroupChatDialogOpen] = useState(false);
 
-  // R-GC-17: when current workspace is empty, group chats fall back to the
-  // default assistant workspace (backend create applies the same fallback).
-  const groupChatFallbackWorkspace = useMemo(
-    () => assistantWorkspacesList[0] ?? null,
-    [assistantWorkspacesList]
-  );
+  // R-GC-26: group chat = a new Claw default conversation. The group session
+  // (and its workspace) always belongs to the Claw default assistant workspace
+  // (primary assistant workspace, else the first assistant workspace), never
+  // the current project workspace. The backend create resolves the same
+  // workspace (path_manager default assistant workspace), so the local
+  // registration must use the same root.
+  const defaultAssistantWorkspace =
+    pickPrimaryAssistantWorkspace(assistantWorkspacesList, primaryAssistantWorkspaceId)
+    ?? assistantWorkspacesList[0]
+    ?? null;
 
   const handleGroupChatCreated = useCallback(async (groupId: string, name: string) => {
-    // R-GC-17: backend create already falls back to the default Claw workspace
-    // when the current workspace is empty; register with the fallback path so
-    // the group session can open locally.
-    const workspacePath = currentWorkspace?.rootPath || groupChatFallbackWorkspace?.rootPath || '';
-    const workspaceId = currentWorkspace?.id || groupChatFallbackWorkspace?.id || undefined;
+    // R-GC-26: group chat = a new Claw default conversation living under the
+    // Claw default assistant workspace (never the current project workspace).
+    // The backend create resolves the same workspace (path_manager default
+    // assistant workspace), so register locally with the same root so the
+    // group session opens consistently.
+    const workspace = defaultAssistantWorkspace;
+    const workspacePath = workspace?.rootPath || '';
+    const workspaceId = workspace?.id || undefined;
     if (!workspacePath) return;
     // Group = Claw session (backend group_room_tools.rs create_group builds a
     // Claw session); registering it locally into flowChatStore lets the
@@ -151,7 +158,7 @@ const MainNav: React.FC<MainNavProps> = ({
       workspaceId,
       activateWorkspace: workspaceId ? setActiveWorkspace : undefined,
     });
-  }, [currentWorkspace?.id, currentWorkspace?.rootPath, groupChatFallbackWorkspace?.id, groupChatFallbackWorkspace?.rootPath, setActiveWorkspace]);
+  }, [defaultAssistantWorkspace, setActiveWorkspace]);
 
   const workspaceMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const workspaceMenuRef = useRef<HTMLDivElement | null>(null);
@@ -236,9 +243,6 @@ const MainNav: React.FC<MainNavProps> = ({
       : assistantWorkspacesList,
     [assistantWorkspacesList, primaryAssistantWorkspace]
   );
-
-  const defaultAssistantWorkspace =
-    primaryAssistantWorkspace ?? assistantWorkspacesList[0] ?? null;
 
   const toggleNavSearch = useCallback(() => {
     setSearchOpen((v) => !v);
@@ -864,11 +868,12 @@ const MainNav: React.FC<MainNavProps> = ({
 
       {workspaceMenuPortal}
 
-      {/* Group chat create dialog (R-GC-13 / R-GC-17: workspace empty -> backend default fallback) */}
+      {/* Group chat create dialog (R-GC-13 / R-GC-26: workspace = Claw default
+           assistant workspace, never the current project workspace) */}
       <CreateGroupChatDialog
         isOpen={isGroupChatDialogOpen}
         onClose={() => setIsGroupChatDialogOpen(false)}
-        workspacePath={currentWorkspace?.rootPath ?? ''}
+        workspacePath={defaultAssistantWorkspace?.rootPath ?? ''}
         assistantWorkspaces={assistantWorkspacesList}
         onCreated={handleGroupChatCreated}
       />

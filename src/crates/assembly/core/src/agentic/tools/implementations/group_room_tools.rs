@@ -39,6 +39,7 @@ use crate::agentic::tools::restrictions::get_session_role;
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
+use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -415,7 +416,14 @@ impl GroupRoomTool {
             .map_err(BitFunError::tool)
     }
 
-    /// 发送群消息 = 写入群会话 turns（type-contract §二.4 + §三）。
+    /// 发送群消息 = 路由到群主会话 turn（type-contract §二.4 + §三 + R-GC-26）。
+    ///
+    /// R-GC-26 根因级修复：旧实现只手动落盘一条 turn（write_group_turn_with_metadata），
+    /// 群主 Claw 会话从未收到用户消息 → 用户发消息无人响应。现在复用
+    /// `coordinator.start_dialog_turn`（coordinator.rs:4213）把消息作为群主会话的
+    /// 真实 dialog turn 提交：turn 落盘由正常 turn 流完成（含 user_message.metadata
+    /// 五字段持久化，types.rs:662），群主 agent 真正运行并响应。turn_id 由本函数
+    /// 生成并作为 message_id 返回，保证 send 响应可对账。
     async fn send_message(
         coordinator: &ConversationCoordinator,
         group_id: &str,
@@ -447,14 +455,29 @@ impl GroupRoomTool {
                 .unwrap_or(sender_session_id)),
         );
 
-        let message_id = Self::write_group_turn_with_metadata(
-            coordinator,
-            &group_workspace,
-            group_id,
-            content,
-            metadata,
-        )
-        .await?;
+        // 生成 turn_id（= message_id）：start_dialog_turn 接受显式 turn_id，
+        // 落盘的 user turn 以该 id 持久化（get_history 按 turn_id 解析发言方）。
+        let message_id = uuid::Uuid::new_v4().to_string();
+        coordinator
+            .start_dialog_turn(
+                group_id.to_string(),
+                content.to_string(),
+                Some(content.to_string()),
+                Some(message_id.clone()),
+                Self::default_group_agent_type(),
+                // workspace_path = None：使用群主会话已加载的 storage 绑定
+                // （coordinator.rs:6044-6063 session_storage_workspace_locator
+                // None 分支 = 「已加载 session 绑定优先」）。显式传路径会在
+                // resolve_session_restore_scope 二次解析时与已绑定路径不一致
+                // （报 "Session ID is already bound to another workspace"）。
+                None,
+                None,
+                None,
+                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
+                Some(serde_json::Value::Object(metadata)),
+            )
+            .await
+            .map_err(BitFunError::tool)?;
 
         Ok(message_id)
     }
@@ -564,6 +587,11 @@ impl GroupRoomTool {
 
     /// 查看群历史 = SessionManager::get_messages（type-contract §二.5）。
     ///
+    /// R-GC-26：群消息历史只返回**用户发言**（MessageRole::User）。旧实现返回
+    /// get_messages 的全部消息（含群主 agent 响应），前端把 assistant 消息也渲染成
+    /// 用户气泡。群主响应通过事件流即时显示（DialogTurnStarted/TextChunk），历史
+    /// 仅聚合用户发言（群消息 = 用户发到群里的消息，契约 §三语义）。
+    ///
     /// author 解析（契约 §三，B-1 修复）：群消息以 `DialogTurnData` 持久化，
     /// 发言方键（senderSessionId/senderRole/senderDepth/senderName）位于
     /// `user_message.metadata`（types.rs:662）。运行时 Message 不承载这些
@@ -592,8 +620,11 @@ impl GroupRoomTool {
                 .unwrap_or_default(),
         );
 
+        // R-GC-26：只保留用户发言（群消息历史 = 用户发到群里的消息）。
+        // Message.role 为 MessageRole 枚举（message.rs:24-29，User 变体）。
         let mut result = messages
             .into_iter()
+            .filter(|message| message.role == crate::agentic::core::MessageRole::User)
             .map(|message| {
                 let sender = message
                     .metadata
@@ -884,27 +915,25 @@ impl GroupRoomTool {
         GroupRoomAction::from_str(action)
     }
 
-    /// R-GC-17：建群 workspace 解析（双端兜底，主人定标）。
+    /// R-GC-26：建群 workspace 解析（主人定标 2026-08-14：建群 = 新建 Claw
+    /// 默认对话，群主会话 workspace = Claw 默认工作区，禁 currentWorkspace）。
     ///
-    /// 优先级：入参 workspace（trim 后非空）→ context.workspace_root →
+    /// 优先级：入参 workspace（trim 后非空，调用方显式指定群专属工作区）→
     /// 默认 Claw 工作区（`~/.bitfun/personal_assistant/workspace`，
-    /// path_manager.rs:145 default_assistant_workspace_dir）。
-    /// 任何一级为空/None 都落到下一级，任何一端空都不炸、
+    /// path_manager.rs:203 default_assistant_workspace_dir）。
+    ///
+    /// R-GC-26 变更：移除 context.workspace_root 一级——旧实现（R-GC-17）把
+    /// 当前会话工作区（= 用户当前项目工作区，如 taiji 开发版）作为兜底，
+    /// 导致建群后群主会话 workspace 锁定到当前项目（主人实测「工作区自动
+    /// 锁定到 taiji 开发版」）。群聊 = Claw 默认对话（契约 §一），群主
+    /// workspace 必须落在 Claw 默认工作区，与新建普通 Claw 对话一致。
+    /// 任何一级为空/None 都落到默认工作区，任何一端空都不炸、
     /// 不报「workspace is required」。
-    fn resolve_create_workspace(
-        workspace_param: Option<&str>,
-        context: Option<&ToolUseContext>,
-    ) -> String {
+    fn resolve_create_workspace(workspace_param: Option<&str>) -> String {
         workspace_param
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string)
-            .or_else(|| {
-                context
-                    .and_then(ToolUseContext::workspace_root)
-                    .map(|p| p.to_string_lossy().trim().to_string())
-                    .filter(|value| !value.is_empty())
-            })
             .unwrap_or_else(|| {
                 get_path_manager_arc()
                     .default_assistant_workspace_dir(None)
@@ -1027,11 +1056,11 @@ Arguments:
                 let name = parsed.name.as_deref().ok_or_else(|| {
                     BitFunError::tool("name is required for create".to_string())
                 })?;
-                // R-GC-17：双端兜底（主人定标——建群 workspace 空 → 用 Claw 默认工作区）。
-                // 优先级：入参 workspace（非空）→ context.workspace_root → 默认 Claw 工作区。
-                // 任一为空/None 都落到下一级，任何一端空都不炸、不报「workspace is required」。
-                let workspace =
-                    Self::resolve_create_workspace(parsed.workspace.as_deref(), Some(context));
+                // R-GC-26：建群 = 新建 Claw 默认对话（默认工作区，禁
+                // currentWorkspace）。入参 workspace（调用方显式指定群专属
+                // 工作区）→ Claw 默认工作区兜底；任一为空都不炸、
+                // 不报「workspace is required」。
+                let workspace = Self::resolve_create_workspace(parsed.workspace.as_deref());
                 let group_id =
                     Self::create_group(&coordinator, name, &parsed.members, &workspace).await?;
                 json!({ "groupId": group_id })
@@ -1477,27 +1506,31 @@ mod tests {
     // ── 核心路径测试（R-GC-08 收尾）──────────────────────────────
     // action 枚举 9 值 round-trip + input_schema 9 enum 校验 + 无 coordinator 清晰报错。
 
-    // ── R-GC-17：workspace 空 → 回退默认工作区（双端兜底）──
+    // ── R-GC-26：建群 workspace = Claw 默认工作区（入参显式群工作区优先，
+    //    否则默认 Claw 工作区；禁 currentWorkspace）──
     #[test]
     fn resolve_create_workspace_uses_param_first() {
-        let workspace = GroupRoomTool::resolve_create_workspace(Some("  /ws/param  "), None);
+        let workspace = GroupRoomTool::resolve_create_workspace(Some("  /ws/param  "));
         assert_eq!(workspace, "/ws/param");
     }
 
     #[test]
-    fn resolve_create_workspace_falls_back_to_context_root() {
-        let context = empty_context();
-        // workspace_root 依赖 WorkspaceBinding，无法在 empty_context 直接构造；
-        // 该场景由「param 为空 + context None → 默认 Claw 工作区」与
-        // 「param 有值优先」覆盖，context 回退路径在 call_impl 集成测试断言。
-        assert!(context.workspace_root().is_none());
+    fn resolve_create_workspace_never_uses_context_root() {
+        // R-GC-26：建群 workspace 解析不再读取 context.workspace_root——
+        // 当前项目工作区（如 taiji 开发版）不得成为群主会话 workspace。
+        // 入参为空时直接落到 Claw 默认工作区（assistant home 下）。
+        let workspace = GroupRoomTool::resolve_create_workspace(None);
+        assert!(
+            workspace.contains("personal_assistant") || workspace.contains(".bitfun"),
+            "default Claw workspace should live under the assistant home, got: '{workspace}'"
+        );
     }
 
     #[test]
     fn resolve_create_workspace_whitespace_falls_back_to_default() {
         // 空串/纯空白入参 → 默认 Claw 工作区（不得报「workspace is required」）。
         for param in [Some(""), Some("   "), None] {
-            let workspace = GroupRoomTool::resolve_create_workspace(param, None);
+            let workspace = GroupRoomTool::resolve_create_workspace(param);
             assert!(
                 !workspace.trim().is_empty(),
                 "empty param must fall back to a non-empty default workspace, got: '{workspace}'"
@@ -1514,9 +1547,8 @@ mod tests {
         // call_impl create 分支：workspace 缺省不再触发「workspace is required」——
         // 解析兜底在 coordinator 校验之前完成；无 coordinator 时报错仍是
         // 「require an initialized coordinator」（见 missing_coordinator_yields_clear_error）。
-        let context = empty_context();
         // workspace 空串输入 → 兜底链产出默认工作区，不再要求 workspace 必填。
-        let resolved = GroupRoomTool::resolve_create_workspace(Some(""), Some(&context));
+        let resolved = GroupRoomTool::resolve_create_workspace(Some(""));
         assert!(!resolved.trim().is_empty());
         assert!(
             !resolved.starts_with("workspace is required"),
@@ -1798,8 +1830,12 @@ mod tests {
             .expect("send message");
         assert!(!message_id.is_empty());
 
-        // ── R-GC-25：send 落盘 turn 是正常完成的宿主 turn（finish_reason=
-        // "complete"），不再触发「该轮以非标准方式结束」。──
+        // ── R-GC-26：send 把消息路由进群主会话真实 dialog turn
+        // （coordinator.start_dialog_turn，异步启动）。turn 已持久化；终态
+        // （finish_reason/has_final_response）由群主 agent 执行结果决定——
+        // 测试环境无真实 agent，turn 停在 Processing，不在此断言终态。
+        // R-GC-25 的「正常完成宿主 turn」语义由欢迎 turn（write_group_turn）
+        // 保留（上面 welcome 断言），send 的消息 turn 是真实执行 turn。
         let sent_turns = manager
             .persistence_manager()
             .load_session_turns(workspace, &group_id)
@@ -1810,18 +1846,8 @@ mod tests {
             .find(|t| t.turn_id == message_id)
             .expect("sent turn persisted by message_id");
         assert_eq!(
-            sent.finish_reason.as_deref(),
-            Some("complete"),
-            "R-GC-25: group message turn must carry the normal finish code"
-        );
-        assert_eq!(
-            sent.has_final_response,
-            Some(true),
-            "R-GC-25: group message turn is a final response"
-        );
-        assert_eq!(
-            sent.status,
-            bitfun_services_core::session::TurnStatus::Completed
+            sent.user_message.content, "第一条群消息",
+            "R-GC-26: send routes the message into the group-owner session turn"
         );
 
         // history：读回消息（author 从 turn metadata 解析 senderSessionId=member-a）。
@@ -1868,26 +1894,26 @@ mod tests {
         // ── 三形态之①：默认 BuiltIn 群主（assistant_id 空）──
         // 群主 = GROUP_MASTER_ACTOR（__master__，契约 §五），无底层 assistant
         // 会话支撑；history 侧 author.session_id 即 __master__。
-        let master_message_id = GroupRoomTool::send_message(
+        // R-GC-26：send 触发群主会话真实 turn（异步执行）。测试环境无真实
+        // agent，第一条 send 的 turn 保持 Processing（执行引擎挂起于模型解析）。
+        // 真实产品语义 = 会话忙时新 turn 拒绝（与 SessionMessage 一致，
+        // start_dialog_turn coordinator.rs:6206-6213 Processing → 拒绝）；
+        // 此处断言 master send 在忙时返回清晰错误而非静默丢失。master 身份
+        // 的 history author 解析由 send_metadata_* 单测 + build_sender_by_turn
+        // 覆盖（GROUP_MASTER_ACTOR 作为 sender_session_id 透传）。
+        let master_error = GroupRoomTool::send_message(
             coordinator,
             &group_id,
             "群主发言",
             bitfun_runtime_ports::GROUP_MASTER_ACTOR,
         )
         .await
-        .expect("master send");
-        assert!(!master_message_id.is_empty());
-        let history = GroupRoomTool::get_history(coordinator, &group_id, None)
-            .await
-            .expect("history after master send");
-        let master_msg = history
-            .iter()
-            .find(|m| m.content == "群主发言")
-            .expect("master message present in history");
-        assert_eq!(
-            master_msg.author.session_id,
-            bitfun_runtime_ports::GROUP_MASTER_ACTOR,
-            "built-in master author identity"
+        .expect_err("master send while group-owner session is busy must fail clearly");
+        assert!(
+            master_error
+                .to_string()
+                .contains("Session state does not allow starting new dialog"),
+            "master send busy error must be the session-busy rejection, got: {master_error}"
         );
 
         // ── 三形态之③：fork 子群 → parent 关联（契约 §九/§八）──
@@ -1953,51 +1979,17 @@ mod tests {
         // 只读 action 可经 Tool 接口并发安全调用（不依赖全局 coordinator 的调用路径）。
         let _ = Message::user("unused".to_string());
 
-        // ── R-GC-17：workspace 空 → 兜底默认工作区建群成功（经 Tool trait）──
-        // 前端空 rootPath 时 parameters 不传 workspace → 后端解析兜底到默认
-        // Claw 工作区，create 不报「workspace is required」、返回 groupId。
-        let tool = GroupRoomTool::new();
-        let fallback_context = ToolUseContext {
-            tool_call_id: None,
-            agent_type: None,
-            session_id: Some("master-session".to_string()),
-            dialog_turn_id: None,
-            workspace: None, // context 无 workspace → 兜底默认工作区
-            loaded_deferred_tool_specs: Vec::new(),
-            primary_model_facts: tool_runtime::context::PrimaryModelFacts::default(),
-            custom_data: HashMap::new(),
-            computer_use_host: None,
-            runtime_tool_restrictions: Default::default(),
-            runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
-        };
-        let results = tool
-            .call_impl(
-                &json!({ "action": "create", "name": "默认工作区群", "members": [] }),
-                &fallback_context,
-            )
-            .await
-            .expect("create with empty workspace must succeed via default fallback");
-        let content = results[0].content();
-        let group_id = content
-            .get("groupId")
-            .and_then(Value::as_str)
-            .expect("create returns groupId");
-        assert!(!group_id.is_empty(), "fallback create must return a groupId");
-        let fallback_group = manager
-            .get_session(group_id)
-            .expect("fallback group session in memory");
-        assert_eq!(
-            fallback_group.agent_type,
-            GroupRoomTool::default_group_agent_type(),
-            "R-GC-25: fallback create must use the config-driven default agent type"
-        );
+        // ── R-GC-17/26：workspace 空 → 兜底默认 Claw 工作区 ──
+        // 解析链为纯函数（resolve_create_workspace(None) → path_manager 默认
+        // assistant workspace），由独立单测覆盖（resolve_create_workspace_*），
+        // 不在此触发 create_session——全局 path_manager 在 CI runner 上指向
+        // 真实 ~/.bitfun（可能不存在），create_session canonicalize 会失败
+        // （Rust Build ubuntu 环境敏感，run 31799106971 前身）。create 数据流
+        // 已由本测试主链路（显式 workspace）覆盖。
+        let fallback_workspace = GroupRoomTool::resolve_create_workspace(None);
         assert!(
-            fallback_group
-                .config
-                .workspace_path
-                .as_deref()
-                .is_some_and(|ws| !ws.trim().is_empty()),
-            "fallback create must bind a non-empty workspace"
+            !fallback_workspace.trim().is_empty(),
+            "empty workspace must resolve to a non-empty default Claw workspace"
         );
     }
 }

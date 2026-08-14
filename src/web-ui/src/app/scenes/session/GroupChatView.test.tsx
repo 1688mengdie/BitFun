@@ -346,6 +346,12 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       },
       workspacePath: '/workspace-a',
     });
+
+    // R-GC-26: send no longer optimistically injects a local turn - the
+    // backend routes the message into the group-owner session's real dialog
+    // turn and the DialogTurnStarted event creates the turn (avoids duplicating
+    // the backend turn).
+    expect(flowChatMocks.addDialogTurn).not.toHaveBeenCalled();
   });
 
   it('does not inject a local turn when the backend send fails', async () => {

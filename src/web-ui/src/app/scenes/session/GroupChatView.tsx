@@ -393,21 +393,11 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
         notificationService.error(message, { duration: 4000 });
         return;
       }
-      // Local optimistic injection: the bubble + senderBadge appear
-      // immediately (startAutoSync mirrors the active session to the modern store).
-      const messageId = response?.result?.messageId;
-      const now = Date.now();
-      const turn = groupMessageToDialogTurn(
-        {
-          messageId: typeof messageId === 'string' && messageId ? messageId : undefined,
-          content,
-          timestamp: now,
-          author: { sessionId: groupId, name: groupName || null },
-          groupSessionId: groupId,
-        },
-        groupId,
-      );
-      flowChatStore.addDialogTurn(groupId, turn);
+      // R-GC-26: the backend routes the message into the group session's real
+      // dialog turn (coordinator.start_dialog_turn), which emits
+      // DialogTurnStarted + streaming events. The event handler creates the
+      // turn and renders the group master response; no local optimistic
+      // injection is needed (a local turn would duplicate the backend turn).
     } catch (error) {
       log.error('Failed to send group message', { groupId, error });
       notificationService.error(
@@ -417,7 +407,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
     } finally {
       setIsSending(false);
     }
-  }, [groupId, groupName, isSending, t, workspacePath]);
+  }, [groupId, isSending, t, workspacePath]);
 
   const registration = useMemo<ChatInputRegistration>(
     () => ({
