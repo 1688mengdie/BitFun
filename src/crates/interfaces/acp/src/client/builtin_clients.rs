@@ -79,20 +79,6 @@ const BUILTIN_ACP_CLIENT_PRESETS: &[BuiltinAcpClientPreset] = &[
         adapter_package: Some(CODEX_ACP_PACKAGE),
         adapter_bin: Some("codex-acp"),
     },
-    // taiji-quant — native ACP server from the taiji-lvpa quant engine
-    // (RAD06 Phase 1: `taiji acp` speaks standard ACP over stdio with the
-    // quant methods run_backtest / generate_signal / analyze / get_status).
-    // User-managed like omp: BitFun only detects `taiji` on PATH and launches
-    // it, no npm installer.
-    BuiltinAcpClientPreset {
-        id: "taiji-quant",
-        command: "taiji",
-        args: &["acp"],
-        tool_command: "taiji",
-        install_package: None,
-        adapter_package: None,
-        adapter_bin: None,
-    },
 ];
 
 pub(crate) fn builtin_client_ids() -> impl Iterator<Item = &'static str> {

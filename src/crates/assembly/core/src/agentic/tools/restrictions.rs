@@ -87,54 +87,6 @@ fn build_default_role_permissions() -> RolePermissionMap {
         allowed_tools.insert("acp_control".to_string());
         allowed_tools.insert("acp_message".to_string());
         allowed_tools.insert("acp_history".to_string());
-        // taiji-quant tool family (RAD06 Phase 1): quant_backtest goes through
-        // the real ACP bridge; quote/strategy/order call taiji-server JSON-RPC.
-        allowed_tools.insert("quant_backtest".to_string());
-        allowed_tools.insert("quote".to_string());
-        allowed_tools.insert("strategy".to_string());
-        allowed_tools.insert("order".to_string());
-        // W1-1（pattern 工具族）：quant_pattern_chan / quant_pattern_dtw
-        // 走 9527 JSON-RPC（与 quote/strategy/order 同通道），Commander
-        // 白名单同步登记。
-        allowed_tools.insert("quant_pattern_chan".to_string());
-        allowed_tools.insert("quant_pattern_dtw".to_string());
-        // W1-3（sentiment 工具族）：quant_sentiment（analyze/fgi）走 9527
-        // JSON-RPC（与 quant_pattern_* 同通道），Commander 白名单同步登记。
-        allowed_tools.insert("quant_sentiment".to_string());
-        // W1-5（alert 工具族）：quant_alert（send/heartbeat）走 9527 JSON-RPC
-        //（与 quant_pattern_* 同通道）；dry_run 默认 true（干跑优先，副作用红线
-        // ——真实发送通道需显式 dry_run=false + 用户确认），Commander 白名单
-        // 同步登记。
-        allowed_tools.insert("quant_alert".to_string());
-        // W1-4（strategen 工具族）：quant_strategen（generate/validate）走
-        // 9527 JSON-RPC（与 quant_pattern_* 同通道；generate 默认 mock refiner
-        // 无 LLM key 可跑），Commander 白名单同步登记。
-        allowed_tools.insert("quant_strategen".to_string());
-        // W1-2（anomaly 工具族）：quant_anomaly（abnormal.score）走 9527
-        // JSON-RPC（与 quant_pattern_* 同通道；5 指标加权融合评分卡，
-        // 阈值 warn70/reduce85/emergency95），Commander 白名单同步登记。
-        allowed_tools.insert("quant_anomaly".to_string());
-        // W2-2（publisher 工具族）：content_publish（publish.preview 只读探测 +
-        // publish.submit 显式发布）走 9527 JSON-RPC（与 quant_pattern_* 同通道）；
-        // dry_run 默认 true（干跑优先，副作用红线——真实发布需显式
-        // dry_run=false + 用户确认；凭证只在服务端零回传），Commander 白名单
-        // 同步登记。
-        allowed_tools.insert("content_publish".to_string());
-        // W2-1（content 工具族）：content_render_kline（content.render 纯函数
-        // PNG 渲染 → base64，只读零副作用——不碰 ffmpeg/文件系统/RTMP，合成/
-        // 直播/定时任务留幻梦池管线），Commander 白名单同步登记。
-        allowed_tools.insert("content_render_kline".to_string());
-        // W2-4（knowledge_graph 工具族）：knowledge_graph（kgraph.query/
-        // search/path/meta——编译期静态策略图谱，纯只读零副作用）走 9527
-        // JSON-RPC（与 quant_pattern_* 同通道；Direct 暴露），Commander
-        // 白名单同步登记。
-        allowed_tools.insert("knowledge_graph".to_string());
-        // W2-3（gbrain 工具族）：gbrain（put/get/delete/list/search/ingest——
-        // 结构化 RAG 知识库：页面 CRUD + 分块嵌入 + 混合检索 + Agent 命名空间
-        // 隔离 + JSON 持久化；与 KnowledgeBaseSearch 文件系统全文检索互补
-        // 非重叠）走 9527 JSON-RPC（与 quant_pattern_* 同通道；Deferred 暴露），
-        // Commander 白名单同步登记。
-        allowed_tools.insert("gbrain".to_string());
         // Deferred 工具链核心：GetToolSpec/CallDeferredTool 不在
         // subagent_default_tools()，但缺失会导致全部 deferred 工具
         // （SessionControl/SessionMessage/Git/Plan 等）无法解锁。

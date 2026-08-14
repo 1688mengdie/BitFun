@@ -22,11 +22,6 @@ pub(crate) enum ExternalAcpClient {
     Opencode,
     ClaudeCode,
     Codex,
-    /// taiji-lvpa quant engine (`taiji acp`, standard ACP over stdio).
-    /// Registered as `taiji-quant` so the `acp__taiji_quant__prompt` bridge
-    /// tool and the quant tool family (quant_backtest / quote / strategy /
-    /// order) can target it (RAD06 Phase 1).
-    TaijiQuant,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -43,7 +38,6 @@ impl ExternalAcpClient {
             Self::Opencode => "opencode",
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
-            Self::TaijiQuant => "taiji-quant",
         }
     }
 
@@ -52,7 +46,6 @@ impl ExternalAcpClient {
             Self::Opencode => "opencode",
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
-            Self::TaijiQuant => "taiji-quant",
         }
     }
 
@@ -67,7 +60,6 @@ impl ExternalAcpClient {
                 "npx",
                 vec!["--yes", "@agentclientprotocol/codex-acp@latest"],
             ),
-            Self::TaijiQuant => ("taiji", vec!["acp"]),
         };
         AcpClientConfig {
             name: Some(self.display_name().to_string()),
@@ -256,7 +248,6 @@ pub(crate) async fn list_external_clients() -> Result<()> {
         ExternalAcpClient::Opencode,
         ExternalAcpClient::ClaudeCode,
         ExternalAcpClient::Codex,
-        ExternalAcpClient::TaijiQuant,
     ] {
         if let Some(info) = configured.get(client.id()) {
             print_client_info(info);
@@ -273,7 +264,7 @@ pub(crate) async fn list_external_clients() -> Result<()> {
     for info in configured.values() {
         if !matches!(
             info.id.as_str(),
-            "opencode" | "claude-code" | "codex" | "taiji-quant"
+            "opencode" | "claude-code" | "codex"
         ) {
             print_client_info(info);
         }
