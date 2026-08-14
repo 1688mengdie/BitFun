@@ -1831,7 +1831,7 @@ impl AcpClientService {
                     client_id, error
                 ))
             })?;
-        let (writer, reader, stderr, _control, _completion) = transport.into_parts();
+        let (writer, reader, stderr, _control, completion) = transport.into_parts();
         // Whatever the remote agent says on its way out is the only explanation
         // a user gets when it dies at startup; sinking it leaves nothing behind
         // but an unexplained broken pipe.
@@ -1845,6 +1845,16 @@ impl AcpClientService {
                 }
                 log::warn!("Remote ACP client stderr: id={stderr_client_id} {line}");
             }
+        });
+        // An agent that dies mid-session leaves the same broken pipe behind as
+        // one that never started, so record which it was.
+        let exit_client_id = client_id.to_string();
+        tokio::spawn(async move {
+            let exit = completion.wait().await;
+            log::info!(
+                "Remote ACP client exited: id={exit_client_id} exit_code={:?}",
+                exit.exit_code
+            );
         });
         Ok(ByteStreams::new(
             Box::pin(writer.compat_write()),
