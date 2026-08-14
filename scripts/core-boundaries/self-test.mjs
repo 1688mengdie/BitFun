@@ -5690,7 +5690,8 @@ export function runLocalCustomizationSymbolSelfTest({ localCustomizationSymbols 
       throw new Error(`local customization symbol entry must carry a R-AD-01 note: ${entry.path}`);
     }
   }
-  if (localCustomizationSymbols.length < 34) {
-    throw new Error(`local customization symbol manifest must cover the 34 kept symbols, got ${localCustomizationSymbols.length}`);
+  // GroupChat 契约符号 R-GC-01~07 移除后收缩 34→15
+  if (localCustomizationSymbols.length < 15) {
+    throw new Error(`local customization symbol manifest must cover the 15 kept symbols, got ${localCustomizationSymbols.length}`);
   }
 }

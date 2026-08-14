@@ -3913,12 +3913,13 @@ test('capability contract consumers cannot remove reviewed dependency edges', as
   assert.ok(messages.some((message) => /bitfun-opencode-adapter.*missing reviewed.*dev.*edge/.test(message)));
 });
 
-test('local customization symbol manifest covers the 34 kept symbols', async () => {
+test('local customization symbol manifest covers the 15 kept symbols', async () => {
   const { localCustomizationSymbols } = await import(
     './core-boundaries/rules/local-customization-symbols.mjs'
   );
   assert.ok(Array.isArray(localCustomizationSymbols));
-  assert.ok(localCustomizationSymbols.length >= 34);
+  // GroupChat 契约符号 R-GC-01~07 移除后收缩 34→15
+  assert.ok(localCustomizationSymbols.length >= 15);
   const seen = new Set();
   for (const entry of localCustomizationSymbols) {
     assert.ok(entry.path, 'each entry must declare an owner file path');
