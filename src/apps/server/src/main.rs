@@ -35,6 +35,18 @@ mod app_server;
 mod bootstrap;
 mod routes;
 
+// Detached-dispatch host state. Wired through the old `websocket.rs::handle_command`
+// path; under browser-direct ACP-over-WS that surface is temporarily dead
+// (tracked for a later batch that brings external_sources + dispatch onto the
+// app-server schema, same as `routes/external_sources.rs`). Kept so the host
+// capability plumbing stays intact for that follow-up.
+pub(crate) struct DispatchHostState {
+    #[allow(dead_code)]
+    path_manager: Arc<bitfun_core::infrastructure::PathManager>,
+    #[allow(dead_code)]
+    ssh_manager: Arc<bitfun_core::service::remote_ssh::SSHConnectionManager>,
+}
+
 /// Application state
 #[derive(Clone)]
 pub struct AppState {
@@ -44,6 +56,11 @@ pub struct AppState {
     #[allow(dead_code)]
     external_workspace_root: Option<PathBuf>,
     allowed_browser_origins: Arc<HashSet<String>>,
+    // Only read by the detached-dispatch route, which is temporarily dead under
+    // browser-direct ACP-over-WS (see `DispatchHostState` note). Kept for the
+    // follow-up that brings dispatch onto the app-server schema.
+    #[allow(dead_code)]
+    dispatch_host: Option<Arc<DispatchHostState>>,
     /// In-process agent runtime surface, present only when the host is started
     /// with `--with-runtime`. Kept dormant (None) for the default read-only
     /// HTTP shell so a bare `bitfun-server` never silently boots an Agent
@@ -158,9 +175,31 @@ async fn main() -> Result<()> {
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // This is a narrow controller/observer capability. It deliberately does
+    // not initialize the Server Host's dormant Agent Runtime: authoritative
+    // sessions and execution stay inside the target-side `bitfun dispatch`
+    // worker.
+    let path_manager = Arc::new(bitfun_core::infrastructure::PathManager::new()?);
+    let ssh_data_dir = dirs::data_local_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve the local data directory"))?
+        .join("BitFun")
+        .join("ssh");
+    let ssh_manager = Arc::new(bitfun_core::service::remote_ssh::SSHConnectionManager::new(
+        ssh_data_dir,
+    ));
+    if let Err(error) = ssh_manager.load_saved_connections().await {
+        tracing::warn!(error = %error, "Failed to load saved SSH connections");
+    }
+    if let Err(error) = ssh_manager.load_known_hosts().await {
+        tracing::warn!(error = %error, "Failed to load SSH known hosts");
+    }
     let app_state = AppState {
         external_workspace_root,
         allowed_browser_origins: Arc::new(allowed_browser_origins),
+        dispatch_host: Some(Arc::new(DispatchHostState {
+            path_manager,
+            ssh_manager,
+        })),
         app_server,
     };
 
@@ -268,6 +307,10 @@ mod tests {
         assert!(
             !main_source.contains("bootstrap::initialize"),
             "the current read-only HTTP shell must not silently start an Agent Runtime"
+        );
+        assert!(
+            main_source.contains("DispatchHostState"),
+            "the lightweight Server Host should expose dispatch without booting an Agent Runtime"
         );
     }
 }
