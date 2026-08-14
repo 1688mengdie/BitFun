@@ -215,6 +215,50 @@ mod tests {
     }
 
     #[test]
+    fn code_mode_gets_its_own_card_rather_than_an_empty_terminal() {
+        // DeepSeek Harness's PTC preset answers every step with one `run_code`
+        // call whose argument is a TypeScript program. As an Execute kind with
+        // no `command`, it used to land on the Bash card and render blank.
+        let input = json!({
+            "code": "const files = await tools.bash({ command: \"ls\" });",
+            "description": "List the project root",
+        });
+        assert_eq!(
+            acp_tool_name("run_code", Some(&input), Some(&ToolKind::Execute)),
+            "RunCode"
+        );
+        let params = normalize_tool_params("RunCode", input);
+        assert_eq!(params["description"], "List the project root");
+
+        // The shape alone is enough when the tool is named something else.
+        assert_eq!(
+            acp_tool_name(
+                "python",
+                Some(&json!({ "code": "print(1)" })),
+                Some(&ToolKind::Execute)
+            ),
+            "RunCode"
+        );
+        // …and a harness that spells the program differently still fills the
+        // field the card reads.
+        assert_eq!(
+            normalize_tool_params("RunCode", json!({ "source": "print(1)" }))["code"],
+            "print(1)"
+        );
+
+        // A shell call that happens to carry a `code` argument is still Bash:
+        // the command is what ran.
+        assert_eq!(
+            acp_tool_name(
+                "bash",
+                Some(&json!({ "command": "echo hi", "code": "unused" })),
+                Some(&ToolKind::Execute)
+            ),
+            "Bash"
+        );
+    }
+
+    #[test]
     fn descriptive_titles_still_reach_the_heuristics() {
         // Whole-string aliasing only: a prose title is not a tool name, so the
         // rawInput shape keeps deciding these.

@@ -43,6 +43,7 @@ import { GitToolDisplay } from './GitToolDisplay';
 import { GetFileDiffDisplay } from './GetFileDiffDisplay';
 import { CreatePlanDisplay } from './CreatePlanDisplay';
 import { TerminalToolCard } from './TerminalToolCard';
+import { RunCodeToolCard } from './RunCodeToolCard';
 import { ExecCommandToolCard } from './ExecCommandToolCard';
 import { WriteStdinToolCard } from './WriteStdinToolCard';
 import { ExecControlToolCard } from './ExecControlToolCard';
@@ -112,6 +113,9 @@ export const TOOL_CARD_COMPONENTS = {
 
   // Bash tool
   'Bash': TerminalToolCard,
+
+  // Code-mode agents: one program per step instead of one card per action
+  'RunCode': RunCodeToolCard,
 
   // Exec process tools
   'ExecCommand': ExecCommandToolCard,
