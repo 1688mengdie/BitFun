@@ -362,11 +362,14 @@ pub(crate) async fn ensure_bundled_profile_remote(
     }
     let probe = parse_remote_probe(&stdout);
 
-    if probe.version.is_empty() {
+    // Presence is `command -v`, the same question the agent list asks. Asking a
+    // different one here is how the list ends up saying "installed" while the
+    // launch says "not installed".
+    if probe.launcher.is_empty() {
         return Err(BitFunError::service(format!(
-            "DeepSeek Harness is not installed on the remote host: `{launcher} --version` produced \
-             nothing. Install it there with `npm install -g @deepseek-ai/dsh`; BitFun ships the \
-             bridge, not the harness."
+            "DeepSeek Harness is not installed on the remote host: `{launcher}` is not on the login \
+             shell's PATH. Install it there with `npm install -g @deepseek-ai/dsh`; BitFun ships \
+             the bridge, not the harness."
         )));
     }
     if !version_is_supported(&probe.version, &stamp.min_dsh_version) {
@@ -464,7 +467,12 @@ struct RemoteProbe {
     /// log line only — the install script resolves it again on its own, so the
     /// two never travel through a quoting round trip.
     profiles: String,
-    /// First line of `dsh --version`, or empty when dsh is not there at all.
+    /// Where the remote login shell resolves the launcher, or empty when it
+    /// resolves nowhere. This — not the version below — is what "installed"
+    /// means, because it is what the agent list's own probe asks.
+    launcher: String,
+    /// First line of `dsh --version`, on either stream. Best effort: a launcher
+    /// that answers nothing is still a launcher.
     version: String,
     /// The installed build stamp, verbatim, or empty when the profile is new.
     stamp: String,
@@ -490,7 +498,8 @@ fn remote_probe_script(profile: &str, launcher: &str, exports: &str) -> String {
     format!(
         "{exports}profiles=\"${{DSH_HOME:-$HOME/.dsh}}/profiles\"\n\
          printf 'profiles=%s\\n' \"$profiles\"\n\
-         printf 'version=%s\\n' \"$({launcher} --version 2>/dev/null | head -n 1 | tr -d '\\r')\"\n\
+         printf 'launcher=%s\\n' \"$(command -v {launcher} 2>/dev/null | head -n 1 | tr -d '\\r')\"\n\
+         printf 'version=%s\\n' \"$({launcher} --version 2>&1 | head -n 1 | tr -d '\\r')\"\n\
          printf 'stamp=%s\\n' \"$(cat \"$profiles\"/{profile}/{STAMP_FILENAME} 2>/dev/null | tr -d '\\n\\r')\"\n"
     )
 }
@@ -503,6 +512,8 @@ fn parse_remote_probe(stdout: &str) -> RemoteProbe {
         let line = line.trim();
         if let Some(value) = line.strip_prefix("profiles=") {
             probe.profiles = value.to_string();
+        } else if let Some(value) = line.strip_prefix("launcher=") {
+            probe.launcher = value.to_string();
         } else if let Some(value) = line.strip_prefix("version=") {
             probe.version = value.to_string();
         } else if let Some(value) = line.strip_prefix("stamp=") {
@@ -716,23 +727,28 @@ mod tests {
     }
 
     #[test]
-    fn the_remote_probe_answers_all_three_questions_in_one_round_trip() {
+    fn the_remote_probe_answers_every_question_in_one_round_trip() {
         let script = remote_probe_script("bitfun-acp", "dsh", "");
 
         // $DSH_HOME is resolved on the far side: reading it here would point at
         // the developer's own install, not the workspace's.
         assert!(script.contains("profiles=\"${DSH_HOME:-$HOME/.dsh}/profiles\""));
-        assert!(script.contains("dsh --version"));
+        assert!(script.contains("command -v dsh"));
+        // Both streams: a launcher that prints its version on stderr is still
+        // installed, and treating that as absent blocks a working host.
+        assert!(script.contains("dsh --version 2>&1"));
         assert!(script.contains(STAMP_FILENAME));
 
         let probe = parse_remote_probe(concat!(
             "Welcome to Ubuntu\n",
             "profiles=/home/dev/.dsh/profiles\n",
+            "launcher=/usr/local/bin/dsh\n",
             "version=0.1.0-rc.6\n",
             r#"stamp={"content":"abc","minDshVersion":"0.1.0-rc.6"}"#,
             "\n",
         ));
         assert_eq!(probe.profiles, "/home/dev/.dsh/profiles");
+        assert_eq!(probe.launcher, "/usr/local/bin/dsh");
         assert_eq!(probe.version, "0.1.0-rc.6");
         assert_eq!(
             probe.stamp,
@@ -741,9 +757,17 @@ mod tests {
 
         // A host without dsh reports empty rather than nothing at all, so the
         // caller can tell "not installed" from "the probe never ran".
-        let missing = parse_remote_probe("profiles=/root/.dsh/profiles\nversion=\nstamp=\n");
+        let missing =
+            parse_remote_probe("profiles=/root/.dsh/profiles\nlauncher=\nversion=\nstamp=\n");
+        assert_eq!(missing.launcher, "");
         assert_eq!(missing.version, "");
         assert_eq!(missing.stamp, "");
+
+        // Installed but mute: the version gate lets an unparsable answer
+        // through, so this host launches instead of being turned away.
+        let mute = parse_remote_probe("launcher=/usr/local/bin/dsh\nversion=\nstamp=\n");
+        assert!(!mute.launcher.is_empty());
+        assert!(version_is_supported(&mute.version, "0.1.0-rc.6"));
     }
 
     #[test]
