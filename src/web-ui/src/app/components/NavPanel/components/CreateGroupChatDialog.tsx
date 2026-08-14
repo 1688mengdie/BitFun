@@ -1,16 +1,20 @@
 /**
- * CreateGroupChatDialog - group chat create dialog (R-GC-13 / R-GC-28 / R-GC-30).
+ * CreateGroupChatDialog - group chat create dialog (R-GC-13 / R-GC-28 / R-GC-30
+ * / R-GC-33).
  *
  * Reuse rules:
  * - Modal / Button / Input / Checkbox all from component-library (existing components).
  * - R-GC-30 (owner directive, direction corrected 2026-08-14): the owner picks
  *   group members themselves from a real optional Claw list — NO member-count
  *   input (R-GC-28 had wrongly added it), NO hardcoded presets. Member source =
- *   runtime-fetched: real Claw sessions (sessionAPI.listSessions filtered by
- *   agentType === 'Claw') UNION assistant workspace presets (marked inactive
- *   when no real session exists). Reuses the R-GC-19 member-source unification
- *   (ac0987172 CreateGroupChatDialog.tsx) — the same Checkbox multi-select
- *   shape; no new picker is built.
+ *   runtime-fetched real Claw sessions across ALL assistant workspace roots
+ *   (sessionAPI.listSessions per root, filtered by agentType === 'Claw').
+ * - R-GC-33 (2026-08-14, 主人实测 P0, CEO 裁决): R-GC-19's preset fabrication is
+ *   REMOVED — previously assistantWorkspaces were faked into SessionMetadata
+ *   rows (sessionId = workspace.id, hardcoded agentType 'Claw', fake values).
+ *   Now each assistant workspace rootPath is queried with listSessions and the
+ *   real persisted sessions (opened or not) are shown; agentType comes from
+ *   real session metadata, zero hardcoded strings.
  * - Create goes through toolAPI.executeTool (camelCase - the only existing
  *   execute_tool wrapper, ToolAPI.ts:49-61); direct invoke('create_group_chat')
  *   is forbidden (the backend command was removed in R-GC-05).
@@ -39,12 +43,10 @@ interface CreateGroupChatDialogProps {
   /** Group workspace rootPath (R-GC-26: Claw default assistant workspace). */
   workspacePath: string;
   /**
-   * R-GC-19/30: assistant workspaces (Claw presets). Members = real Claw
-   * sessions (listSessions filtered by agentType === 'Claw') UNION assistant
-   * workspace presets (marked inactive when no real session exists). Reuses
-   * the W2 member-source unification (ac0987172) — the picker must see Claw
-   * members living under assistant workspaces, not only the current project
-   * workspace. Zero hardcoded member lists.
+   * R-GC-19/30/33: assistant workspaces (Claw presets) — each workspace's
+   * rootPath is queried with sessionAPI.listSessions to collect the REAL
+   * persisted Claw sessions living there (opened or not). R-GC-33 removes the
+   * R-GC-19 fake-preset fabrication: no SessionMetadata rows are invented.
    */
   assistantWorkspaces?: WorkspaceInfo[];
   onCreated: (groupId: string, name: string) => void | Promise<void>;
@@ -59,7 +61,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
 }) => {
   const { t } = useI18n('common');
   const [name, setName] = useState('');
-  const [members, setMembers] = useState<Array<SessionMetadata & { inactive?: boolean }>>([]);
+  const [members, setMembers] = useState<SessionMetadata[]>([]);
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -72,40 +74,35 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
-  // R-GC-19/30: member source = real Claw sessions (listSessions filtered by
-  // agentType === 'Claw') UNION assistant workspace presets (inactive when no
-  // real session exists). Reuses the W2 unification shape (old MainNav
-  // groupChatAvailableAssistants, 8346a7399) so Claw members that live under
-  // assistant workspaces are always listable, no matter the current project
-  // workspace. Runtime-fetched only — zero hardcoded member lists.
+  // R-GC-33: member source = ALL real Claw sessions across every assistant
+  // workspace root (including the current workspace). listSessions per root
+  // reads real persisted metadata from disk; R-GC-19's fabricated preset rows
+  // (inactive fake SessionMetadata) are removed. agentType is read from real
+  // session metadata — zero hardcoded strings.
   const loadMembers = useCallback(async () => {
     setIsLoadingMembers(true);
     setLoadFailed(false);
     try {
-      const list = await sessionAPI.listSessions(workspacePath);
-      const realClaws = list.filter(meta => meta.agentType === 'Claw');
-      const byId = new Map<string, SessionMetadata & { inactive?: boolean }>();
-      for (const meta of realClaws) {
-        byId.set(meta.sessionId, meta);
-      }
-      for (const workspace of assistantWorkspacesRef.current) {
-        const sessionId = workspace.assistantId || workspace.id;
-        if (!sessionId || byId.has(sessionId)) continue;
-        byId.set(sessionId, {
-          sessionId,
-          sessionName: workspace.identity?.name?.trim() || workspace.name,
-          agentType: 'Claw',
-          inactive: true,
-          // SessionMetadata 其余字段：pickup 展示无需真实数据，填类型最小占位。
-          modelName: 'auto',
-          createdAt: 0,
-          lastActiveAt: 0,
-          turnCount: 0,
-          messageCount: 0,
-          toolCallCount: 0,
-          status: 'active',
-          tags: [],
-        } as SessionMetadata & { inactive?: boolean });
+      const roots = [
+        workspacePath,
+        ...assistantWorkspacesRef.current.map(workspace => workspace.rootPath).filter(Boolean),
+      ].filter((root, index, array) => root && array.indexOf(root) === index);
+      const seen = new Set<string>();
+      const byId = new Map<string, SessionMetadata>();
+      const lists = await Promise.all(
+        roots.map(root =>
+          sessionAPI.listSessions(root).catch((error) => {
+            log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath: root });
+            return [];
+          }),
+        ),
+      );
+      for (const list of lists) {
+        for (const meta of list) {
+          if (meta.agentType !== 'Claw' || seen.has(meta.sessionId)) continue;
+          seen.add(meta.sessionId);
+          byId.set(meta.sessionId, meta);
+        }
       }
       setMembers(Array.from(byId.values()));
     } catch (error) {
@@ -173,11 +170,11 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
         notificationService.error(message, { duration: 4000 });
         return;
       }
-      // R-GC-29: single concise success toast — the only creation notice.
-      // The backend welcome turn is a host turn ("群聊「X」已创建。") rendered
-      // as the first group message; it must NOT repeat the redundant "我是群主"
-      // description (removed in R-GC-29).
-      notificationService.success(t('nav.groupChats.created', { name: trimmedName }), { duration: 3000 });
+      // R-GC-31 (2026-08-14, 主人实测 P0): 前端建群 toast 已删除 — 建群提示
+      // 单条 = 后端 welcome turn 气泡（group_room_tools.rs:382 "群聊「X」已创建。"，
+      // R-GC-25 群主会话结构依赖，开局必须有真实宿主 turn）。此前前端 toast 与
+      // welcome turn 双通道文案相同 = 真重复（R-GC-29 只精简了后端文案未实测，
+      // 验收断言必须实测验证非改完自封）。
       await onCreated(groupId, trimmedName);
       onClose();
     } catch (error) {
@@ -254,15 +251,6 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
                     <span className="group-chat-dialog__member-name">
                       {meta.sessionName || t('nav.sessions.untitled')}
                     </span>
-                    {meta.inactive ? (
-                      <span
-                        className="group-chat-dialog__inactive-badge"
-                        data-bf-component="create-group-chat-dialog"
-                        data-bf-part="inactiveBadge"
-                      >
-                        {t('nav.groupChats.inactiveBadge')}
-                      </span>
-                    ) : null}
                   </label>
                 );
               })}

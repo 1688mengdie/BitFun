@@ -124,7 +124,7 @@ vi.mock('@/component-library', () => {
     // multiple + searchable + showSelectAll）。测试 stub 渲染面：渲染 options
     // 为可点击项，点击后调用 onChange。
     Select: (props: {
-      options?: Array<{ value: string | number; label: string }>;
+      options?: Array<{ value: string | number; label: string; description?: string }>;
       value?: string | number | Array<string | number>;
       onChange?: (value: string | number | Array<string | number>) => void;
       multiple?: boolean;
@@ -150,6 +150,7 @@ vi.mock('@/component-library', () => {
                   data-testid="member-select-option"
                   data-value={String(option.value)}
                   data-selected={isSelected ? 'true' : 'false'}
+                  data-inactive={option.description ? 'true' : undefined}
                   onClick={() => {
                     const next = isSelected
                       ? values.filter(v => v !== option.value)
@@ -493,6 +494,78 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     expect(inviteCalls[1]![0].parameters.member_session_id).toBe('claw-2');
   });
 
+  it('R-GC-33: invite member source = real Claw sessions across ALL assistant workspace roots (no fabricated presets)', async () => {
+    vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
+      toolName: string;
+    }) => {
+      if (request.toolName === 'get_group_history') {
+        return { toolName: 'get_group_history', success: true, result: { messages: [] } };
+      }
+      if (request.toolName === 'invite_group_member') {
+        return { toolName: 'invite_group_member', success: true, result: { status: 'invited' } };
+      }
+      return { toolName: request.toolName, success: false, result: null };
+    });
+    vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
+    // 每个 assistant workspace root 返回该工作区真实 Claw 会话（含未打开）。
+    vi.mocked(sessionAPI.listSessions).mockImplementation(async (root: string) => {
+      if (root === '/workspace-a') {
+        return [makeSession('claw-1', 'Claw', 'Assist A')];
+      }
+      if (root === '/assistant/ws-preset') {
+        return [makeSession('claw-preset-1', 'Claw', '姬梦情-审查官')];
+      }
+      return [];
+    });
+    renderView({
+      assistantWorkspaces: [
+        {
+          id: 'ws-preset',
+          name: '姬梦情-审查官',
+          rootPath: '/assistant/ws-preset',
+          workspaceKind: 'assistant',
+          assistantId: 'claw-preset-1',
+          languages: [],
+          openedAt: '',
+          lastAccessed: '',
+          tags: [],
+        },
+      ],
+    });
+    await flush();
+
+    const inviteBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
+      b => b.getAttribute('aria-label')?.includes('Invite'),
+    );
+    act(() => inviteBtns[0]!.click());
+    await flush();
+
+    // 候选 = 主工作区 (claw-1) ∪ assistant 工作区真实会话 (claw-preset-1) = 2 个，
+    // 与建群 CreateGroupChatDialog 成员源一致；无任何伪造 inactive 假条目。
+    expect(sessionAPI.listSessions).toHaveBeenCalledWith('/assistant/ws-preset');
+    const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
+    expect(options).toHaveLength(2);
+    expect(options[1]!.getAttribute('data-value')).toBe('claw-preset-1');
+    expect(options[1]!.getAttribute('data-inactive')).toBeNull();
+
+    act(() => options[0]!.click());
+    act(() => options[1]!.click());
+    await flush();
+
+    const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      b => b.textContent?.includes('Confirm invite'),
+    );
+    expect(confirmBtn).not.toBeNull();
+    act(() => confirmBtn!.click());
+    await flush();
+
+    const inviteCalls = vi.mocked(toolAPI.executeTool).mock.calls.filter(
+      c => c[0].toolName === 'invite_group_member',
+    );
+    expect(inviteCalls).toHaveLength(2);
+    expect(inviteCalls[1]![0].parameters.member_session_id).toBe('claw-preset-1');
+  });
+
   it('removes a member through remove_group_member', async () => {
     vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
       toolName: string;
@@ -665,6 +738,99 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     );
     expect(flowChatMocks.markSessionAsGroupChat).toHaveBeenCalledWith('group-child-1');
     expect(openMainSession).toHaveBeenCalledWith('group-child-1', {});
+  });
+
+  it('R-GC-33: fork member source = real Claw sessions across ALL assistant workspace roots (no fabricated presets)', async () => {
+    vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
+      toolName: string;
+    }) => {
+      if (request.toolName === 'get_group_history') {
+        return {
+          toolName: 'get_group_history',
+          success: true,
+          result: {
+            messages: [{
+              messageId: 'msg-last',
+              groupSessionId: 'group-1',
+              author: { sessionId: 'commander-1', name: '群主' },
+              content: 'fork point',
+              timestamp: 1000,
+            }],
+          },
+        };
+      }
+      if (request.toolName === 'fork_group_chat') {
+        return {
+          toolName: 'fork_group_chat',
+          success: true,
+          result: { parentGroupId: 'group-1', childGroupId: 'group-child-1' },
+        };
+      }
+      return { toolName: request.toolName, success: false, result: null };
+    });
+    vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
+    vi.mocked(sessionAPI.listSessions).mockImplementation(async (root: string) => {
+      if (root === '/workspace-a') {
+        return [makeSession('claw-1', 'Claw', 'Assist A')];
+      }
+      if (root === '/assistant/ws-preset') {
+        return [makeSession('claw-preset-1', 'Claw', '姬梦情-审查官')];
+      }
+      return [];
+    });
+    flowChatMocks.getState.mockReturnValue({
+      sessions: new Map([['group-1', {
+        dialogTurns: [{
+          id: 'msg-last',
+          userMessage: { id: 'msg-last', content: 'fork point', timestamp: 1000 },
+        }],
+      }]]),
+      activeSessionId: 'group-1',
+    });
+    renderView({
+      assistantWorkspaces: [
+        {
+          id: 'ws-preset',
+          name: '姬梦情-审查官',
+          rootPath: '/assistant/ws-preset',
+          workspaceKind: 'assistant',
+          assistantId: 'claw-preset-1',
+          languages: [],
+          openedAt: '',
+          lastAccessed: '',
+          tags: [],
+        },
+      ],
+    });
+    await flush();
+
+    const forkBtns = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].filter(
+      b => b.getAttribute('aria-label')?.includes('Fork'),
+    );
+    act(() => forkBtns[0]!.click());
+    await flush();
+
+    // 候选 = 主工作区 (claw-1) ∪ assistant 工作区真实会话 (claw-preset-1) = 2 个。
+    const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
+    expect(options).toHaveLength(2);
+    expect(options[1]!.getAttribute('data-value')).toBe('claw-preset-1');
+
+    act(() => options[0]!.click());
+    act(() => options[1]!.click());
+    await flush();
+
+    const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      b => b.textContent?.includes('Confirm fork'),
+    );
+    expect(confirmBtn).not.toBeNull();
+    act(() => confirmBtn!.click());
+    await flush();
+
+    const forkCall = vi.mocked(toolAPI.executeTool).mock.calls.find(
+      c => c[0].toolName === 'fork_group_chat',
+    );
+    expect(forkCall).toBeDefined();
+    expect(forkCall![0].parameters.members).toEqual(['claw-1', 'claw-preset-1']);
   });
 
   it('refuses to fork without a persisted message (forkNeedsMessage)', async () => {

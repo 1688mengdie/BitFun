@@ -77,6 +77,7 @@ vi.mock('@/shared/notification-system', () => ({
 import CreateGroupChatDialog from './CreateGroupChatDialog';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import { notificationService } from '@/shared/notification-system';
 import type { SessionMetadata } from '@/shared/types/session-history';
 
 const makeSession = (id: string, agentType: string, sessionName?: string): SessionMetadata => ({
@@ -103,6 +104,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     root = createRoot(container);
     vi.mocked(toolAPI.executeTool).mockReset();
     vi.mocked(sessionAPI.listSessions).mockReset();
+    vi.mocked(notificationService.success).mockReset();
   });
 
   afterEach(() => {
@@ -180,6 +182,9 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
       workspacePath: '/workspace-a',
     });
     expect(onCreated).toHaveBeenCalledWith('group-1', '项目群');
+    // R-GC-31 (P0): 建群提示单条 = 后端 welcome turn 气泡；前端不再发成功
+    // toast（R-GC-29 只精简后端文案未实测，双通道 = 真重复）。
+    expect(notificationService.success).not.toHaveBeenCalled();
   });
 
   it('R-GC-30: members = owner-picked Claw multi-select from the runtime list (no member-count input)', async () => {
@@ -220,8 +225,18 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     expect(onCreated).toHaveBeenCalledWith('group-9', '群A');
   });
 
-  it('R-GC-19/30: assistant workspace presets appear as inactive members when no real session exists', async () => {
-    vi.mocked(sessionAPI.listSessions).mockResolvedValue([makeSession('claw-1', 'Claw', 'Assist A')]);
+  it('R-GC-33: members = real Claw sessions across ALL assistant workspace roots (no fabricated presets)', async () => {
+    // R-GC-33: 每个 assistant workspace rootPath 都被查询，返回该工作区真实
+    // 持久化 Claw 会话（含未打开的）。不再伪造 inactive preset 假条目。
+    vi.mocked(sessionAPI.listSessions).mockImplementation(async (root: string) => {
+      if (root === '/workspace-a') {
+        return [makeSession('claw-1', 'Claw', 'Assist A')];
+      }
+      if (root === '/assistant/ws-preset') {
+        return [makeSession('claw-preset-1', 'Claw', '姬梦情-审查官')];
+      }
+      return [];
+    });
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
       success: true,
@@ -244,7 +259,8 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     });
     await act(async () => { await Promise.resolve(); });
 
-    // real Claw (claw-1) ∪ preset inactive (claw-preset-1) = 2 个候选。
+    // 主工作区 (claw-1) ∪ assistant 工作区 (claw-preset-1) = 2 个真实候选。
+    expect(sessionAPI.listSessions).toHaveBeenCalledWith('/assistant/ws-preset');
     const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
     expect(checkboxes).toHaveLength(2);
     const names = [...document.querySelectorAll<HTMLElement>('.group-chat-dialog__member-name')]
@@ -252,7 +268,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     expect(names).toContain('姬梦情-审查官');
 
     setGroupName('预设群');
-    toggleMember(1); // 勾选 inactive preset
+    toggleMember(1);
     clickCreate();
     await act(async () => { await Promise.resolve(); });
 

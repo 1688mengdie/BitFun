@@ -17,6 +17,7 @@ import GroupChatView from './GroupChatView';
 import AuxPane, { type AuxPaneRef } from './AuxPane';
 import BottomTerminalPane from './BottomTerminalPane';
 import { useActiveSession } from '../../../flow_chat/store/modernFlowChatStore';
+import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import {
   getCachedTerminalPanelPosition,
   onTerminalPanelPositionChange,
@@ -65,6 +66,13 @@ const SessionScene: React.FC<SessionSceneProps> = ({
     toggleBottomTerminalPanel,
   } = useApp();
   const auxPaneRef = useRef<AuxPaneRef>(null);
+
+  // R-GC-32 (2026-08-14, 主人实测 P0): 邀请/裂变成员源必须与建群一致（real
+  // Claw ∪ assistant workspace presets）。assistantWorkspacesList 来自
+  // useWorkspaceContext（MainNav assistantWorkspacesList 同源，
+  // WorkspaceProvider.tsx WorkspaceKind.Assistant 过滤），传给 GroupChatView
+  // 再注入 invite/fork picker（GroupMemberPickerDialog / GroupForkDialog）。
+  const { assistantWorkspacesList } = useWorkspaceContext();
 
   const [isDraggingRight, setIsDraggingRight] = useState(false);
   const [isDraggingBottom, setIsDraggingBottom] = useState(false);
@@ -580,6 +588,7 @@ const SessionScene: React.FC<SessionSceneProps> = ({
                 workspacePath={workspacePath || activeSession?.workspacePath || ''}
                 groupName={activeSession?.title}
                 isSceneActive={isActive}
+                assistantWorkspaces={assistantWorkspacesList}
               />
             ) : (
               <ChatPane
