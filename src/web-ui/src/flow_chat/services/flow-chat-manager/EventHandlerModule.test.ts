@@ -20,14 +20,35 @@ import type { DialogTurn, FlowToolItem, FlowUserSteeringItem, ModelRound, Sessio
 import type { FlowChatContext } from './types';
 import { markOptimisticDispatchTurnMetadata } from '@/features/dispatch/optimisticDispatchTurn';
 import { interruptedTurnRecoveryGate } from '../interruptedTurnRecoveryGate';
+import { systemAPI } from '@/infrastructure/api/service-api/SystemAPI';
+import { configManager } from '@/infrastructure/config/services/ConfigManager';
+import { i18nService } from '@/infrastructure/i18n';
 
-const { handleCompressionCompleted, handleTokenUsageUpdate } = __test_only__;
+const { handleCompressionCompleted, handleTokenUsageUpdate, notifySubagentTurnCompleted } = __test_only__;
 
 vi.mock('../../../shared/notification-system/services/NotificationService', () => ({
   notificationService: {
     error: vi.fn(),
     warning: vi.fn(),
     success: vi.fn(),
+  },
+}));
+
+vi.mock('@/infrastructure/api/service-api/SystemAPI', () => ({
+  systemAPI: {
+    sendSystemNotification: vi.fn(),
+  },
+}));
+
+vi.mock('@/infrastructure/config/services/ConfigManager', () => ({
+  configManager: {
+    getConfig: vi.fn().mockResolvedValue(true),
+  },
+}));
+
+vi.mock('@/infrastructure/i18n', () => ({
+  i18nService: {
+    t: vi.fn((key: string) => `i18n[${key}]`),
   },
 }));
 
@@ -1837,5 +1858,53 @@ describe('handleTokenUsageUpdate', () => {
 
     const session = FlowChatStore.getInstance().getState().sessions.get('session-1');
     expect(session?.currentTokenUsage).toBeUndefined();
+  });
+});
+
+describe('notifySubagentTurnCompleted', () => {
+  const sendSystemNotificationMock = systemAPI.sendSystemNotification as unknown as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFlowChatStore();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetFlowChatStore();
+  });
+
+  it('sends only metadata in the desktop notification body when outputText carries the full reply', async () => {
+    const outputText = [
+      'EXTERNAL_REPLY_MARKER_ reply begins here.',
+      'Detailed tool results and assistant reasoning paragraphs.',
+      'Final answer line that must never leak into the OS toast.',
+    ].join('\n');
+
+    FlowChatStore.getInstance().setState(() => ({
+      sessions: new Map(),
+      activeSessionId: 'other-active-session',
+    }));
+
+    await notifySubagentTurnCompleted(
+      'child-1',
+      'parent-1',
+      'research',
+      outputText,
+      'completed',
+    );
+
+    expect(sendSystemNotificationMock).toHaveBeenCalledTimes(1);
+    const [title, body] = sendSystemNotificationMock.mock.calls[0] as [string, string];
+
+    expect(title).toBeTruthy();
+    expect(body).not.toContain('EXTERNAL_REPLY_MARKER_');
+    expect(body).not.toContain('reply begins here');
+    expect(body).not.toContain('tool results');
+    expect(body).not.toContain('Final answer line');
+    expect(body).toContain('child-1');
+    expect(body).toContain('research');
+    expect(body).toContain('completed');
+    expect(body).toContain('SessionHistory(child-1)');
   });
 });
