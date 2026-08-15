@@ -6293,8 +6293,6 @@ impl ExecutionEngine {
             new_messages: self
                 .take_generation_messages(&context.session_id, &context.dialog_turn_id),
             finish_reason,
-            total_tools,
-            duration_ms,
             partial_recovery_reason: last_partial_recovery_reason,
             effective_finish_reason: effective_finish_reason.to_string(),
             has_final_response,

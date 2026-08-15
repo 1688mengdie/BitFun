@@ -600,6 +600,8 @@ impl GroupRoomTool {
             has_final_response: Some(true),
             error: None,
             error_detail: None,
+            recovery: None,
+            recovery_epoch: None,
             status: bitfun_services_core::session::TurnStatus::Completed,
         };
         coordinator
@@ -1232,6 +1234,8 @@ mod tests {
             has_final_response: None,
             error: None,
             error_detail: None,
+            recovery: None,
+            recovery_epoch: None,
             status: bitfun_services_core::session::TurnStatus::Completed,
         }
     }
@@ -1873,7 +1877,28 @@ mod tests {
         );
 
         // send：写群会话 turns → message_id。
-        let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", "member-a")
+        // Upstream merge 91207f1de 引入 turn admission 模型解析：send_message
+        // 经 start_dialog_turn → resolve_model_id_for_turn 需要 config service。
+        // 测试环境无全局 config service → 注入 TEST_MODEL_RESOLUTION_AI_CONFIG
+        // 提供标准模型配置（与 scheduler.rs 测试同构）。
+        let message_id = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                crate::service::config::types::AIConfig {
+                    models: vec![crate::service::config::types::AIModelConfig {
+                        id: "model-original".to_string(),
+                        name: "model-original".to_string(),
+                        model_name: "model-original".to_string(),
+                        enabled: true,
+                        ..Default::default()
+                    }],
+                    default_models: crate::service::config::types::DefaultModelsConfig {
+                        primary: Some("model-original".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", "member-a"),
+            )
             .await
             .expect("send message");
         assert!(!message_id.is_empty());

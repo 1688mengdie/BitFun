@@ -25,8 +25,9 @@ use crate::agentic::core::{
 };
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::goal_mode::{
-    goal_internal_context_message, goal_objective_updated_message,
-    thread_goal_from_custom_metadata, GOAL_IDLE_WAKEUP_DELAY_MS,
+    goal_continuation_submit_retry_delay_ms, goal_internal_context_message,
+    goal_objective_updated_message, thread_goal_from_custom_metadata,
+    MAX_THREAD_GOAL_AUTO_CONTINUATIONS, GOAL_IDLE_WAKEUP_DELAY_MS,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
@@ -3236,7 +3237,10 @@ impl DialogScheduler {
                 return;
             };
             let active_turn = match active_turn_result {
-                ActiveDialogTurnTakeResult::Matched(turn) => Some(turn),
+                ActiveDialogTurnTakeResult::Matched(turn) => {
+                    self.active_turn_retired.notify_waiters();
+                    Some(turn)
+                }
                 ActiveDialogTurnTakeResult::Absent => None,
                 ActiveDialogTurnTakeResult::DifferentTurn => {
                     self.round_injection_buffer
@@ -3270,7 +3274,6 @@ impl DialogScheduler {
                 let _ = self.clear_queue(session_id).await;
             }
             let status = lifecycle_plan.status;
-            let queue_action = lifecycle_plan.queue_action;
             // Only drop steering messages targeted at the *finished* turn. We
             // must NOT clear the entire session buffer here: a user might have
             // legitimately submitted steering against a brand-new follow-up
@@ -3402,25 +3405,129 @@ impl DialogScheduler {
         if !is_internal_turn {
             // The plan already encodes "no active turn" as SkipNoActiveTurn,
             // so no extra active_turn guard is needed here.
-            match lifecycle_plan.goal_continuation {
-                GoalContinuationAfterTurnAction::SkipNoActiveTurn => {}
-                GoalContinuationAfterTurnAction::AbortForCancelled => {
-                    self.goal_continuation_abort.mark(session_id);
-                    debug!(
-                        "Skipping thread goal continuation after user-cancelled turn: session_id={}, turn_id={}",
-                        session_id,
-                        outcome.turn_id()
-                    );
-                }
-                GoalContinuationAfterTurnAction::Evaluate { .. } => {
-                    // COORD-02: `prepare_goal_continuation_after_turn`
-                    // always returns `Ok(None)` (the immediate after-turn
-                    // continuation channel is closed; only the idle-wakeup
-                    // safety net continues goals). The submit-retry loop
-                    // below it was therefore unreachable dead code and is
-                    // removed. The abort-flag clear is kept so a normal
-                    // completion un-sticks the flag for future goal paths.
-                    self.goal_continuation_abort.clear(session_id);
+            if let Some(active_turn) = active_turn.as_ref() {
+                match lifecycle_plan.goal_continuation {
+                    GoalContinuationAfterTurnAction::SkipNoActiveTurn => {}
+                    GoalContinuationAfterTurnAction::AbortForCancelled => {
+                        self.goal_continuation_abort.mark(session_id);
+                        debug!(
+                            "Skipping thread goal continuation after user-cancelled turn: session_id={}, turn_id={}",
+                            session_id,
+                            outcome.turn_id()
+                        );
+                    }
+                    GoalContinuationAfterTurnAction::AbortForInterrupted => {
+                        self.goal_continuation_abort.mark(session_id);
+                        debug!(
+                            "Holding thread goal continuation after interrupted turn: session_id={}, turn_id={}",
+                            session_id,
+                            outcome.turn_id()
+                        );
+                    }
+                    GoalContinuationAfterTurnAction::Evaluate { turn_completed } => {
+                        self.goal_continuation_abort.clear(session_id);
+                        match self
+                            .coordinator
+                            .prepare_goal_continuation_after_turn(
+                                session_id,
+                                outcome.turn_id(),
+                                active_turn.user_input(),
+                                active_turn.user_message_metadata(),
+                                turn_completed,
+                            )
+                            .await
+                        {
+                            Ok(Some(plan)) => {
+                                let prepended: Vec<Message> = plan
+                                    .prepended_reminders
+                                    .into_iter()
+                                    .map(|text| {
+                                        Message::internal_reminder(
+                                            InternalReminderKind::GoalContinuation,
+                                            text,
+                                        )
+                                    })
+                                    .collect();
+                                let mut last_error = None;
+                                for attempt in 1..=MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
+                                    if self.goal_continuation_abort.contains(session_id) {
+                                        debug!(
+                                            "Aborting goal continuation submit retries after user cancellation: session_id={}",
+                                            session_id
+                                        );
+                                        break;
+                                    }
+                                    match self
+                                        .submit_with_prepended_messages(
+                                            session_id.to_string(),
+                                            "Continue working toward the active thread goal."
+                                                .to_string(),
+                                            Some(plan.display_message.clone()),
+                                            None,
+                                            active_turn.agent_type_owned(),
+                                            active_turn.workspace_path_owned(),
+                                            active_turn.remote_connection_id_owned(),
+                                            active_turn.remote_ssh_host_owned(),
+                                            DialogSubmissionPolicy::for_source(
+                                                DialogTriggerSource::AgentSession,
+                                            ),
+                                            None,
+                                            Some(plan.user_message_metadata.clone()),
+                                            prepended.clone(),
+                                            None,
+                                        )
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            last_error = None;
+                                            break;
+                                        }
+                                        Err(error) => {
+                                            last_error = Some(error);
+                                            if self.goal_continuation_abort.contains(session_id) {
+                                                debug!(
+                                                    "Aborting goal continuation submit retries after user cancellation: session_id={}",
+                                                    session_id
+                                                );
+                                                break;
+                                            }
+                                            if attempt < MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
+                                                let delay_ms =
+                                                    goal_continuation_submit_retry_delay_ms(attempt);
+                                                warn!(
+                                                    "Goal continuation submit failed; retrying: session_id={}, attempt={}/{}, delay_ms={}, error={}",
+                                                    session_id,
+                                                    attempt,
+                                                    MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
+                                                    delay_ms,
+                                                    last_error.as_ref().unwrap()
+                                                );
+                                                tokio::time::sleep(
+                                                    std::time::Duration::from_millis(delay_ms),
+                                                )
+                                                .await;
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(error) = last_error {
+                                    if !self.goal_continuation_abort.contains(session_id) {
+                                        warn!(
+                                            "Failed to submit goal continuation turn after retries: session_id={}, error={}",
+                                            session_id, error
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(error) => {
+                                warn!(
+                                    "Goal verification failed after turn stopped: session_id={}, status={}, error={}",
+                                    session_id, status, error
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4201,6 +4308,32 @@ mod tests {
         scheduler.set_agent_reply_archive_root(root.path().join("agent-replies"));
         (scheduler, session_manager, event_queue, root)
     }
+
+    /// Standard AIConfig used to satisfy turn-admission model resolution in
+    /// scheduler tests. Upstream merge 91207f1de introduced
+    /// `resolve_model_id_for_turn` into `start_dialog_turn_internal`; tests
+    /// that drive the admission path must scope `TEST_MODEL_RESOLUTION_AI_CONFIG`
+    /// or resolution falls through to the global config service (absent in
+    /// tests) and fails with "Failed to get config service for model resolution".
+    /// `default_models.primary` is set because these tests create sessions
+    /// without an explicit `model_id`, so resolution selects the primary model.
+    fn test_model_resolution_config() -> AIConfig {
+        AIConfig {
+            models: vec![AIModelConfig {
+                id: "model-original".to_string(),
+                name: "model-original".to_string(),
+                model_name: "model-original".to_string(),
+                enabled: true,
+                ..Default::default()
+            }],
+            default_models: crate::service::config::types::DefaultModelsConfig {
+                primary: Some("model-original".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn queued_turn_execution_default_is_standard() {
         assert!(matches!(
@@ -4453,7 +4586,6 @@ mod tests {
                     final_response: "done".to_string(),
                 },
             ))
-            .await
             .expect("send outcome");
 
         // The outcome handler runs on a background task. Wait until the turn
@@ -4508,7 +4640,6 @@ mod tests {
                     final_response: "done".to_string(),
                 },
             ))
-            .await
             .expect("send outcome");
 
         for _ in 0..100 {
@@ -5043,6 +5174,7 @@ mod tests {
                     created_at: 1,
                     updated_at: 2,
                     auto_continuation_count: 0,
+                    reference_files: Vec::new(),
                 },
             )
             .await
@@ -6504,7 +6636,6 @@ mod tests {
                     final_response: "done".to_string(),
                 },
             ))
-            .await
             .expect("send completed outcome");
 
         for _ in 0..100 {
@@ -6542,7 +6673,6 @@ mod tests {
                     error: "boom".to_string(),
                 },
             ))
-            .await
             .expect("send failed outcome");
 
         wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
@@ -6574,7 +6704,6 @@ mod tests {
                     turn_id: turn_id.to_string(),
                 },
             ))
-            .await
             .expect("send cancelled outcome");
 
         wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
@@ -6610,7 +6739,6 @@ mod tests {
                     final_response: "done".to_string(),
                 },
             ))
-            .await
             .expect("send completed reply outcome");
 
         wait_for_active_turn_consumed(&scheduler, reply_session_id, reply_turn_id).await;
@@ -6668,7 +6796,6 @@ mod tests {
                     final_response: "archive this reply".to_string(),
                 },
             ))
-            .await
             .expect("send completed outcome");
 
         let archive_root = root.path().join("agent-replies");
@@ -6723,7 +6850,6 @@ mod tests {
                     final_response: "deliver anyway".to_string(),
                 },
             ))
-            .await
             .expect("send completed outcome");
 
         wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
@@ -6828,16 +6954,19 @@ mod tests {
             .expect("create session");
 
         // 第一次提交：入队成功。
-        scheduler
-            .deliver_background_result(
-                session_id.to_string(),
-                "agentic".to_string(),
-                None,
-                None,
-                None,
-                "Background task completed".to_string(),
-                None,
-                None,
+        TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.deliver_background_result(
+                    session_id.to_string(),
+                    "agentic".to_string(),
+                    None,
+                    None,
+                    None,
+                    "Background task completed".to_string(),
+                    None,
+                    None,
+                ),
             )
             .await
             .expect("first follow-up accepted");
@@ -6845,16 +6974,19 @@ mod tests {
 
         // 第二次提交：同 session、同 agent_type（键相同），但正文不同（模拟
         // 全文入通道后的另一份组装文本）——仍按 (session_id, agent_type) 键去重。
-        scheduler
-            .deliver_background_result(
-                session_id.to_string(),
-                "agentic".to_string(),
-                None,
-                None,
-                None,
-                "Background task completed with a different full-reply body".to_string(),
-                None,
-                None,
+        TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.deliver_background_result(
+                    session_id.to_string(),
+                    "agentic".to_string(),
+                    None,
+                    None,
+                    None,
+                    "Background task completed with a different full-reply body".to_string(),
+                    None,
+                    None,
+                ),
             )
             .await
             .expect("second follow-up deduplicated");
@@ -6891,28 +7023,31 @@ mod tests {
         // 路径各提交一次：第一次 Started，重复提交必须被查重拦截（队列深度
         // 不变，不启动第二个 turn）。
         let notice = background_result_follow_up_user_input("child-session-1", "GeneralPurpose");
-        let first_outcome = scheduler
-            .submit_queued_turn(
-                session_id.to_string(),
-                "throat-turn-1".to_string(),
-                QueuedTurn {
-                    user_input: notice.clone(),
-                    original_user_input: None,
-                    prepended_messages: Vec::new(),
-                    turn_id: Some("throat-turn-1".to_string()),
-                    agent_type: "GeneralPurpose".to_string(),
-                    workspace_path: None,
-                    remote_connection_id: None,
-                    remote_ssh_host: None,
-                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                    reply_route: None,
-                    user_message_metadata: None,
-                    image_contexts: None,
-                    enqueued_at: SystemTime::now(),
-                    _settlement_registration: None,
-                    execution: QueuedTurnExecution::Standard,
-                },
-                false,
+        let first_outcome = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.submit_queued_turn(
+                    session_id.to_string(),
+                    "throat-turn-1".to_string(),
+                    QueuedTurn {
+                        user_input: notice.clone(),
+                        original_user_input: None,
+                        prepended_messages: Vec::new(),
+                        turn_id: Some("throat-turn-1".to_string()),
+                        agent_type: "GeneralPurpose".to_string(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        reply_route: None,
+                        user_message_metadata: None,
+                        image_contexts: None,
+                        enqueued_at: SystemTime::now(),
+                        _settlement_registration: None,
+                        execution: QueuedTurnExecution::Standard,
+                    },
+                    false,
+                ),
             )
             .await
             .expect("first route accepted");
@@ -6921,28 +7056,31 @@ mod tests {
 
         // 重复提交：键相同（同 session_id、同 agent_type）但正文不同（模拟
         // coordinator 直提路径组装出不同全文）——仍必须被查重拦截，队列深度不变。
-        let second_outcome = scheduler
-            .submit_queued_turn(
-                session_id.to_string(),
-                "throat-turn-2".to_string(),
-                QueuedTurn {
-                    user_input: format!("{notice}\n\nA differently assembled full reply body."),
-                    original_user_input: None,
-                    prepended_messages: Vec::new(),
-                    turn_id: Some("throat-turn-2".to_string()),
-                    agent_type: "GeneralPurpose".to_string(),
-                    workspace_path: None,
-                    remote_connection_id: None,
-                    remote_ssh_host: None,
-                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                    reply_route: None,
-                    user_message_metadata: None,
-                    image_contexts: None,
-                    enqueued_at: SystemTime::now(),
-                    _settlement_registration: None,
-                    execution: QueuedTurnExecution::Standard,
-                },
-                false,
+        let second_outcome = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.submit_queued_turn(
+                    session_id.to_string(),
+                    "throat-turn-2".to_string(),
+                    QueuedTurn {
+                        user_input: format!("{notice}\n\nA differently assembled full reply body."),
+                        original_user_input: None,
+                        prepended_messages: Vec::new(),
+                        turn_id: Some("throat-turn-2".to_string()),
+                        agent_type: "GeneralPurpose".to_string(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        reply_route: None,
+                        user_message_metadata: None,
+                        image_contexts: None,
+                        enqueued_at: SystemTime::now(),
+                        _settlement_registration: None,
+                        execution: QueuedTurnExecution::Standard,
+                    },
+                    false,
+                ),
             )
             .await
             .expect("second route accepted (coalesced)");
@@ -6959,28 +7097,31 @@ mod tests {
         // 不同 agent_type → 键不同 → 正常入队保留（通知功能不丢失）。
         let other_notice =
             background_result_follow_up_user_input("child-session-2", "CodeReviewer");
-        let third_outcome = scheduler
-            .submit_queued_turn(
-                session_id.to_string(),
-                "throat-turn-3".to_string(),
-                QueuedTurn {
-                    user_input: other_notice,
-                    original_user_input: None,
-                    prepended_messages: Vec::new(),
-                    turn_id: Some("throat-turn-3".to_string()),
-                    agent_type: "CodeReviewer".to_string(),
-                    workspace_path: None,
-                    remote_connection_id: None,
-                    remote_ssh_host: None,
-                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                    reply_route: None,
-                    user_message_metadata: None,
-                    image_contexts: None,
-                    enqueued_at: SystemTime::now(),
-                    _settlement_registration: None,
-                    execution: QueuedTurnExecution::Standard,
-                },
-                false,
+        let third_outcome = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.submit_queued_turn(
+                    session_id.to_string(),
+                    "throat-turn-3".to_string(),
+                    QueuedTurn {
+                        user_input: other_notice,
+                        original_user_input: None,
+                        prepended_messages: Vec::new(),
+                        turn_id: Some("throat-turn-3".to_string()),
+                        agent_type: "CodeReviewer".to_string(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        reply_route: None,
+                        user_message_metadata: None,
+                        image_contexts: None,
+                        enqueued_at: SystemTime::now(),
+                        _settlement_registration: None,
+                        execution: QueuedTurnExecution::Standard,
+                    },
+                    false,
+                ),
             )
             .await
             .expect("distinct notification accepted");
@@ -7019,28 +7160,31 @@ mod tests {
         // 同正文（含通知前缀，命中后台通知 detector）但 agent_type 不同 →
         // (session_id, agent_type) 键不同 → 两次都入队保留。
         let notice = "Background agent session child-key-1 (agentic) has replied; use SessionHistory to view the full reply.";
-        let first_outcome = scheduler
-            .submit_queued_turn(
-                session_id.to_string(),
-                "key-turn-1".to_string(),
-                QueuedTurn {
-                    user_input: notice.to_string(),
-                    original_user_input: None,
-                    prepended_messages: Vec::new(),
-                    turn_id: Some("key-turn-1".to_string()),
-                    agent_type: "agentic".to_string(),
-                    workspace_path: None,
-                    remote_connection_id: None,
-                    remote_ssh_host: None,
-                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                    reply_route: None,
-                    user_message_metadata: None,
-                    image_contexts: None,
-                    enqueued_at: SystemTime::now(),
-                    _settlement_registration: None,
-                    execution: QueuedTurnExecution::Standard,
-                },
-                false,
+        let first_outcome = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.submit_queued_turn(
+                    session_id.to_string(),
+                    "key-turn-1".to_string(),
+                    QueuedTurn {
+                        user_input: notice.to_string(),
+                        original_user_input: None,
+                        prepended_messages: Vec::new(),
+                        turn_id: Some("key-turn-1".to_string()),
+                        agent_type: "agentic".to_string(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        reply_route: None,
+                        user_message_metadata: None,
+                        image_contexts: None,
+                        enqueued_at: SystemTime::now(),
+                        _settlement_registration: None,
+                        execution: QueuedTurnExecution::Standard,
+                    },
+                    false,
+                ),
             )
             .await
             .expect("first key accepted");
@@ -7048,28 +7192,31 @@ mod tests {
         let depth_after_first = scheduler.queue_depth(session_id);
 
         // 同正文、不同 agent_type：键不同，不得被查重拦截。
-        let second_outcome = scheduler
-            .submit_queued_turn(
-                session_id.to_string(),
-                "key-turn-2".to_string(),
-                QueuedTurn {
-                    user_input: notice.to_string(),
-                    original_user_input: None,
-                    prepended_messages: Vec::new(),
-                    turn_id: Some("key-turn-2".to_string()),
-                    agent_type: "CodeReviewer".to_string(),
-                    workspace_path: None,
-                    remote_connection_id: None,
-                    remote_ssh_host: None,
-                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                    reply_route: None,
-                    user_message_metadata: None,
-                    image_contexts: None,
-                    enqueued_at: SystemTime::now(),
-                    _settlement_registration: None,
-                    execution: QueuedTurnExecution::Standard,
-                },
-                false,
+        let second_outcome = TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_model_resolution_config(),
+                scheduler.submit_queued_turn(
+                    session_id.to_string(),
+                    "key-turn-2".to_string(),
+                    QueuedTurn {
+                        user_input: notice.to_string(),
+                        original_user_input: None,
+                        prepended_messages: Vec::new(),
+                        turn_id: Some("key-turn-2".to_string()),
+                        agent_type: "CodeReviewer".to_string(),
+                        workspace_path: None,
+                        remote_connection_id: None,
+                        remote_ssh_host: None,
+                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        reply_route: None,
+                        user_message_metadata: None,
+                        image_contexts: None,
+                        enqueued_at: SystemTime::now(),
+                        _settlement_registration: None,
+                        execution: QueuedTurnExecution::Standard,
+                    },
+                    false,
+                ),
             )
             .await
             .expect("second key accepted");

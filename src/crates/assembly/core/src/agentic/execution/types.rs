@@ -162,8 +162,6 @@ pub struct ExecutionResult {
     pub new_messages: Vec<Message>,
     /// Why the execution finished
     pub finish_reason: FinishReason,
-    pub total_tools: usize,
-    pub duration_ms: u64,
     pub partial_recovery_reason: Option<String>,
     pub effective_finish_reason: String,
     pub has_final_response: bool,

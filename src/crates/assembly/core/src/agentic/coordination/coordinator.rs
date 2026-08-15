@@ -1319,6 +1319,8 @@ fn register_session_tree_edge_idempotent(
     }
     let _ = tree.register_child(parent_session_id, child_session_id, child_depth);
     true
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DialogTurnStopDisposition {
     Cancelled,
@@ -6508,7 +6510,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // Get latest session, restoring from persistence on demand so every entry
         // point can use the same start_dialog_turn flow. A loaded session must keep
         // the same storage identity as this invocation.
-        let session = match loaded_session {
+        let mut session = match loaded_session {
             Some(session) => {
                 if let Some(restore) = requested_restore.as_ref() {
                     self.session_manager.ensure_session_storage_path(
@@ -6604,6 +6606,18 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     primary_agent_binding.route_owner,
                 )
                 .await?;
+            // The binding update mutated the stored session. Refresh the local
+            // snapshot so the later `TurnAdmissionSessionFacts::from_session`
+            // matches the session that `start_..._if_session_matches` re-reads;
+            // otherwise admission fails with "Session execution settings
+            // changed during turn admission" whenever the submitted agent type
+            // differs from the stored one (upstream turn-admission refactor).
+            session = self
+                .session_manager
+                .get_session(&session_id)
+                .ok_or_else(|| {
+                    BitFunError::NotFound(format!("Session not found after binding update: {session_id}"))
+                })?;
         }
 
         debug!(
@@ -7795,6 +7809,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             // Turn payload is durably committed by the coordinator.
             emit_lifecycle_events: false,
             recover_partial_on_cancel: false,
+            trigger_source: None,
         };
 
         let active_counter = self
@@ -16706,7 +16721,7 @@ mod tests {
         commit_interrupted_turn_intent, lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
         logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
-        normalize_subagent_max_concurrency_with_cap, normalize_subagent_max_concurrency,
+        normalize_subagent_max_concurrency_with_cap,
         permission_mode_from_metadata, register_session_tree_edge_idempotent,
         resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
         resolve_subagent_model_selection, resolve_submission_permission_mode,
