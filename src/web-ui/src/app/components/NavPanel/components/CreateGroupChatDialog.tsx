@@ -19,10 +19,11 @@
  * - Create goes through toolAPI.executeTool (camelCase - the only existing
  *   execute_tool wrapper, ToolAPI.ts:49-61); direct invoke('create_group_chat')
  *   is forbidden (the backend command was removed in R-GC-05).
- * - The backend create still CREATES fresh unique-UUID member sessions
- *   (group_room_tools.rs create_member_session): the selected ids here are
- *   "member choice source" only; the backend never reuses them 1:1
- *   (R-GC-28b keeps members = Claw type + Claw name).
+ * - Members = the real session ids the caller passes in. The backend
+ *   create validates each id exists and registers it in groupChats
+ *   (group_room_tools.rs create_group, R-GC-28 rebuilt contract: no fresh
+ *   anonymous member sessions are created anymore). The selected ids here
+ *   are the members, used 1:1.
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -155,9 +156,9 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     try {
       // R-GC-30 / R-GC-R6: members = the owner's own picks from the real
       // session list (every real session including agentic, not filtered).
-      // The backend creates fresh unique-UUID member sessions per pick
-      // (group_room_tools.rs create_member_session); ids here are the choice
-      // source only.
+      // The backend create validates each picked id exists and registers it
+      // in the group's groupChats (group_room_tools.rs create_group); it does
+      // not create fresh member sessions.
       const memberIds = Array.from(selectedMemberIds);
       // Contract section 1.4: go through execute_tool (ToolAPI camelCase
       // wrapper); direct invoke('create_group_chat') is forbidden.

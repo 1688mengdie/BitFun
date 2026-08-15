@@ -136,8 +136,10 @@ const MainNav: React.FC<MainNavProps> = ({
     const workspaceId = workspace?.id || undefined;
     if (!workspacePath) return;
     // Group = Claw session (backend group_room_tools.rs create_group builds a
-    // Claw session); registering it locally into flowChatStore lets the
-    // existing SessionScene open it.
+    // Claw session — agent type ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator
+    // .rs:872; the createSession config agentType and mode below mirror it);
+    // registering it locally into flowChatStore lets the existing SessionScene
+    // open it.
     flowChatStore.createSession(
       groupId,
       {

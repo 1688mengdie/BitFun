@@ -29,9 +29,10 @@
  *   NO member-count input (R-GC-28 had wrongly added it). Member source =
  *   runtime-fetched real sessions (sessionAPI.listSessions per root;
  *   R-GC-R6 2026-08-15: agentType no longer filtered — every real session
- *   including agentic is a selectable member). The backend invite/fork still
- *   CREATES fresh unique-UUID member sessions per pick
- *   (group_room_tools.rs create_member_session).
+ *   including agentic is a selectable member). The backend invite/fork
+ *   validates each picked id exists and registers it in the group's
+ *   groupChats (group_room_tools.rs invite_member / fork_group); no fresh
+ *   member sessions are created.
  * - Jump to a forked child group reuses the R-GC-13 handleGroupChatCreated
  *   registration shape: flowChatStore.createSession (FlowChatStore.ts:3744) +
  *   markSessionAsGroupChat (FlowChatStore.ts:7075) + openMainSession
@@ -109,6 +110,9 @@ function groupMessageToDialogTurn(
     id,
     sessionId: groupId,
     kind,
+    // Group sessions are Claw conversations (backend builds them with
+    // ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator.rs:872); keep the rendered
+    // turn agentType aligned with the group session type.
     agentType: 'Claw',
     userMessage: {
       id,
@@ -399,6 +403,9 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       }
       notificationService.success(t('nav.groupChats.forked', { name }), { duration: 3000 });
       // Jump to the child group view (R-GC-15 acceptance: fork -> child view).
+      // Child group = Claw session, same as the parent (branch_session forks
+      // the Claw group session; backend agent type is
+      // ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator.rs:872).
       flowChatStore.createSession(
         childGroupId,
         {
