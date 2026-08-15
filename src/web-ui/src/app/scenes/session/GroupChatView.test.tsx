@@ -430,6 +430,109 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     expect(rows[1]!.textContent).toContain('Assist C');
   });
 
+  it('R-GC-37: member names resolve across ALL workspace roots (cross-root member shows real name, same-root member does not fall back)', async () => {
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'get_group_history',
+      success: true,
+      result: { messages: [] },
+    });
+    vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
+      sessionId: 'group-1',
+      sessionName: '项目群',
+      agentType: 'Claw',
+      modelName: 'auto',
+      createdAt: 0,
+      lastActiveAt: 0,
+      turnCount: 0,
+      messageCount: 0,
+      toolCallCount: 0,
+      status: 'active',
+      tags: [],
+      customMetadata: { groupChats: ['claw-1', 'cross-root-1'] },
+    });
+    // 跨 root：claw-1 只存在于主工作区；cross-root-1 只存在于 assistant 工作区。
+    vi.mocked(sessionAPI.listSessions).mockImplementation(async (root: string) => {
+      if (root === '/workspace-a') {
+        return [makeSession('claw-1', 'Claw', 'Assist A')];
+      }
+      if (root === '/assistant/ws-cross') {
+        return [makeSession('cross-root-1', 'Claw', 'CrossRoot Assistant')];
+      }
+      return [];
+    });
+    renderView({
+      assistantWorkspaces: [
+        {
+          id: 'ws-cross',
+          name: 'CrossRoot Assistant',
+          rootPath: '/assistant/ws-cross',
+          workspaceKind: 'assistant',
+          assistantId: 'cross-root-1',
+          languages: [],
+          openedAt: '',
+          lastAccessed: '',
+          tags: [],
+        },
+      ],
+    });
+    await flush();
+
+    // 解析必须真正遍历 assistant workspace root（与建群成员源同构）。
+    expect(sessionAPI.listSessions).toHaveBeenCalledWith('/assistant/ws-cross');
+
+    const membersBtn = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find(
+      b => b.getAttribute('aria-label')?.includes('Members'),
+    );
+    expect(membersBtn).not.toBeNull();
+    act(() => membersBtn!.click());
+    await flush();
+
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="group-chat-member-list"] [data-member-id]')];
+    expect(rows).toHaveLength(2);
+    // 同 root 成员 = 真实名（不回退到 UUID）；跨 root 成员 = 真实名（非 UUID）。
+    expect(rows[0]!.textContent).toContain('Assist A');
+    expect(rows[1]!.textContent).toContain('CrossRoot Assistant');
+    expect(rows[1]!.textContent).not.toContain('cross-root-1');
+  });
+
+  it('R-GC-37: member name resolution falls back to the raw session id when no workspace knows the id (defensive, no crash)', async () => {
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'get_group_history',
+      success: true,
+      result: { messages: [] },
+    });
+    vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
+      sessionId: 'group-1',
+      sessionName: '项目群',
+      agentType: 'Claw',
+      modelName: 'auto',
+      createdAt: 0,
+      lastActiveAt: 0,
+      turnCount: 0,
+      messageCount: 0,
+      toolCallCount: 0,
+      status: 'active',
+      tags: [],
+      customMetadata: { groupChats: ['ghost-1'] },
+    });
+    // 任何 root 都查不到 ghost-1 → 回退原始 id，且不 crash。
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
+    renderView();
+    await flush();
+
+    const membersBtn = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find(
+      b => b.getAttribute('aria-label')?.includes('Members'),
+    );
+    expect(membersBtn).not.toBeNull();
+    act(() => membersBtn!.click());
+    await flush();
+
+    const rows = [...document.querySelectorAll<HTMLElement>('[data-testid="group-chat-member-list"] [data-member-id]')];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute('data-member-id')).toBe('ghost-1');
+    expect(rows[0]!.textContent).toContain('ghost-1');
+  });
+
   it('invites members through invite_group_member (R-GC-30/R-GC-R6: owner picks members from the full runtime session list, agentType not filtered)', async () => {
     vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
       toolName: string;

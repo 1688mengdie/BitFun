@@ -214,10 +214,20 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
     void loadHistory();
   }, [loadHistory]);
 
-  // R-GC-15: member list = group session customMetadata.groupChats (member
-  // session ids) resolved against the existing session list (display names).
+  // R-GC-37 (2026-08-15): member name resolution walks EVERY workspace root —
+  // a group may contain members persisted in other assistant workspaces, and a
+  // single listSessions(workspacePath) lookup would resolve those ids to
+  // nothing (members would render as raw UUIDs). Same shape as
+  // CreateGroupChatDialog.loadMembers (roots = workspacePath + assistant
+  // workspace rootPaths, sessionId deduped, per-root catch -> []).
   // Reuses sessionAPI.loadSessionMetadata + sessionAPI.listSessions (the same
   // data source the R-GC-13 member picker uses); no new storage is built.
+  // Same stable-reference pattern as CreateGroupChatDialog (R-GC-19): the
+  // workspaces array reference may change every render; a ref holds the latest
+  // value so loadMembers keeps a stable identity.
+  const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
+  assistantWorkspacesRef.current = assistantWorkspaces;
+
   const loadMembers = useCallback(async () => {
     if (!groupId || !workspacePath) return;
     setIsLoadingMembers(true);
@@ -230,12 +240,36 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
         : [];
       setMemberIds(ids);
 
-      // Resolve display names from the same listSessions source used by the
-      // R-GC-13 picker (contract section 1.2). Missing sessions fall back to
-      // their raw session id.
-      const listResponse = await sessionAPI.listSessions(workspacePath);
-      const list = Array.isArray(listResponse) ? listResponse : [];
-      const byId = new Map(list.map(meta => [meta.sessionId, meta] as const));
+      // Resolve display names across ALL workspace roots (R-GC-37), same as
+      // CreateGroupChatDialog:90-111: workspacePath + every assistant
+      // workspace rootPath, dedupe by sessionId (first root wins), per-root
+      // listSessions failures degrade to []. Missing sessions fall back to
+      // their raw session id in memberRows (defensive, never crashes).
+      const roots = [
+        workspacePath,
+        ...assistantWorkspacesRef.current.map(workspace => workspace.rootPath).filter(Boolean),
+      ].filter((root, index, array) => root && array.indexOf(root) === index);
+      const seen = new Set<string>();
+      const byId = new Map<string, SessionMetadata>();
+      const lists = await Promise.all(
+        roots.map(root =>
+          Promise.resolve(sessionAPI.listSessions(root)).catch((error) => {
+            log.warn('Failed to load sessions for group member resolution', { error, workspacePath: root });
+            return [];
+          }),
+        ),
+      );
+      for (const list of lists) {
+        // Defensive: a root returning undefined (or a malformed payload) must
+        // not crash member resolution — same Array.isArray guard as the old
+        // single-root lookup.
+        if (!Array.isArray(list)) continue;
+        for (const meta of list) {
+          if (seen.has(meta.sessionId)) continue;
+          seen.add(meta.sessionId);
+          byId.set(meta.sessionId, meta);
+        }
+      }
       setMemberMetaById(new Map(ids.map(id => [id, byId.get(id)]).filter(
         (entry): entry is [string, SessionMetadata] => entry[1] !== undefined,
       )));
