@@ -5,10 +5,11 @@
  * Reuse rules:
  * - Modal / Button / Input / Checkbox all from component-library (existing components).
  * - R-GC-30 (owner directive, direction corrected 2026-08-14): the owner picks
- *   group members themselves from a real optional Claw list — NO member-count
+ *   group members themselves from a real optional session list — NO member-count
  *   input (R-GC-28 had wrongly added it), NO hardcoded presets. Member source =
- *   runtime-fetched real Claw sessions across ALL assistant workspace roots
- *   (sessionAPI.listSessions per root, filtered by agentType === 'Claw').
+ *   runtime-fetched real sessions across ALL assistant workspace roots
+ *   (sessionAPI.listSessions per root; R-GC-R6 2026-08-15: agentType no longer
+ *   filtered — every real session including agentic is selectable).
  * - R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): R-GC-19's preset fabrication
  *   is REMOVED — previously assistantWorkspaces were faked into SessionMetadata
  *   rows (sessionId = workspace.id, hardcoded agentType 'Claw', fake values).
@@ -75,11 +76,13 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
-  // R-GC-33: member source = ALL real Claw sessions across every assistant
-  // workspace root (including the current workspace). listSessions per root
-  // reads real persisted metadata from disk; R-GC-19's fabricated preset rows
-  // (inactive fake SessionMetadata) are removed. agentType is read from real
-  // session metadata — zero hardcoded strings.
+  // R-GC-33 / R-GC-R6 (owner decision 2026-08-15): member source = ALL real
+  // sessions across every assistant workspace root (including the current
+  // workspace), agentType NOT filtered — every real session (Claw or agentic)
+  // is selectable as a group member. listSessions per root reads real
+  // persisted metadata from disk; R-GC-19's fabricated preset rows (inactive
+  // fake SessionMetadata) are removed. agentType is read from real session
+  // metadata — zero hardcoded strings.
   const loadMembers = useCallback(async () => {
     setIsLoadingMembers(true);
     setLoadFailed(false);
@@ -93,21 +96,21 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
       const lists = await Promise.all(
         roots.map(root =>
           sessionAPI.listSessions(root).catch((error) => {
-            log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath: root });
+            log.warn('Failed to load sessions for group member picker', { error, workspacePath: root });
             return [];
           }),
         ),
       );
       for (const list of lists) {
         for (const meta of list) {
-          if (meta.agentType !== 'Claw' || seen.has(meta.sessionId)) continue;
+          if (seen.has(meta.sessionId)) continue;
           seen.add(meta.sessionId);
           byId.set(meta.sessionId, meta);
         }
       }
       setMembers(Array.from(byId.values()));
     } catch (error) {
-      log.warn('Failed to load Claw sessions for group member picker', { error, workspacePath });
+      log.warn('Failed to load sessions for group member picker', { error, workspacePath });
       setLoadFailed(true);
     } finally {
       setIsLoadingMembers(false);
@@ -150,7 +153,8 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     if (!trimmedName || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // R-GC-30: members = the owner's own picks from the optional Claw list.
+      // R-GC-30 / R-GC-R6: members = the owner's own picks from the real
+      // session list (every real session including agentic, not filtered).
       // The backend creates fresh unique-UUID member sessions per pick
       // (group_room_tools.rs create_member_session); ids here are the choice
       // source only.
@@ -212,8 +216,9 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
           />
         </div>
 
-        {/* R-GC-30: Claw member multi-select (owner picks; runtime-fetched
-            list, zero hardcoded). R-GC-28's member-count input is removed. */}
+        {/* R-GC-30 / R-GC-R6: real-session member multi-select (owner picks;
+            runtime-fetched list, zero hardcoded). R-GC-28's member-count input
+            is removed. */}
         <div className="group-chat-dialog__members">
           <div className="group-chat-dialog__members-header">
             <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>

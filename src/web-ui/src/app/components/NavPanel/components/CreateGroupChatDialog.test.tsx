@@ -187,12 +187,13 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     expect(notificationService.success).not.toHaveBeenCalled();
   });
 
-  it('R-GC-30: members = owner-picked Claw multi-select from the runtime list (no member-count input)', async () => {
-    // 运行时成员源：listSessions 过滤 Claw（R-GC-19 union：real Claw ∪ presets）。
+  it('R-GC-30/R-GC-R6: members = owner-picked multi-select from the runtime list (every real session incl. agentic, not filtered)', async () => {
+    // 运行时成员源：listSessions 全部真实会话（R-GC-R6 2026-08-15 主人拍板
+    // 不过滤 agentType——含 agentic 的非 Claw 会话也进候选）。
     vi.mocked(sessionAPI.listSessions).mockResolvedValue([
       makeSession('claw-1', 'Claw', 'Assist A'),
       makeSession('claw-2', 'Claw', 'Assist B'),
-      makeSession('gen-1', 'GeneralPurpose', 'Not a Claw'),
+      makeSession('gen-1', 'GeneralPurpose', 'Agentic C'),
     ]);
     vi.mocked(toolAPI.executeTool).mockResolvedValue({
       toolName: 'create_group_chat',
@@ -204,13 +205,14 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
 
     // 无数量输入（R-GC-30 删掉 R-GC-28 误加的数量选择）。
     expect(document.querySelector('[data-testid="member-count-input"]')).toBeNull();
-    // 成员列表 = 真实可选的 Claw 会话（非 Claw 不进候选）。
+    // 成员列表 = 全部真实会话（Claw + agentic 均进候选，不过滤）。
     const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
-    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes).toHaveLength(3);
 
     setGroupName('群A');
     toggleMember(0);
     toggleMember(1);
+    toggleMember(2);
     clickCreate();
     await act(async () => { await Promise.resolve(); });
 
@@ -218,7 +220,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
       parameters: {
         action: 'create',
         name: '群A',
-        members: ['claw-1', 'claw-2'],
+        members: ['claw-1', 'claw-2', 'gen-1'],
         workspace: '/workspace-a',
       },
     }));

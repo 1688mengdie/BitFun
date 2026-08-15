@@ -108,7 +108,7 @@
       "members": "成员（可选，可先建群后拉人）",
       "membersLabel": "成员（{{count}}）",
       "membersLoadFailed": "加载会话列表失败。",
-      "noClawSessions": "暂无 Claw 助理会话，可先建群后再邀请成员。",
+      "noClawSessions": "暂无可用会话，可先建群后再邀请成员。",
       "noMembers": "暂无成员，点击邀请添加。",
       "create": "创建",
       "createFailed": "创建群聊失败",

@@ -25,13 +25,13 @@
  *   with Button (Button.tsx:15) / Input (Input.tsx:20) actions — no custom
  *   list is built (R-GC-22 / R-GC-30).
  * - R-GC-30 (owner directive, direction corrected 2026-08-14): the owner
- *   picks invite/fork members themselves from a real optional Claw list —
+ *   picks invite/fork members themselves from a real optional session list —
  *   NO member-count input (R-GC-28 had wrongly added it). Member source =
- *   runtime-fetched Claw sessions (sessionAPI.listSessions filtered by
- *   agentType === 'Claw'); the group workspace is the Claw default assistant
- *   workspace (R-GC-26), so listSessions there IS the real Claw candidate
- *   list. The backend invite/fork still CREATES fresh unique-UUID Claw member
- *   sessions per pick (group_room_tools.rs create_member_session).
+ *   runtime-fetched real sessions (sessionAPI.listSessions per root;
+ *   R-GC-R6 2026-08-15: agentType no longer filtered — every real session
+ *   including agentic is a selectable member). The backend invite/fork still
+ *   CREATES fresh unique-UUID member sessions per pick
+ *   (group_room_tools.rs create_member_session).
  * - Jump to a forked child group reuses the R-GC-13 handleGroupChatCreated
  *   registration shape: flowChatStore.createSession (FlowChatStore.ts:3744) +
  *   markSessionAsGroupChat (FlowChatStore.ts:7075) + openMainSession
@@ -74,7 +74,7 @@ interface GroupChatViewProps {
   /**
    * R-GC-32/33 (2026-08-14, owner-verified P0): assistant workspaces — each
    * workspace's rootPath is queried with sessionAPI.listSessions so invite/fork
-   * show the REAL persisted Claw sessions living there (opened or not), exactly
+   * show the REAL persisted sessions living there (opened or not), exactly
    * matching the create-group member source. R-GC-33 removes R-GC-19's
    * fabricated preset rows (fake SessionMetadata with hardcoded 'Claw').
    * Same shape as CreateGroupChatDialog's assistantWorkspaces (MainNav
@@ -661,9 +661,9 @@ function GroupMembersDialog({
 
 /**
  * R-GC-22/30/32/33: member picker dialog (invite). R-GC-30 (owner directive): the
- * owner picks invite members themselves from a real optional Claw list — NO
+ * owner picks invite members themselves from a real optional session list — NO
  * member-count input (R-GC-28 had wrongly added it), NO hardcoded presets.
- * R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL Claw
+ * R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL
  * sessions across ALL assistant workspaces — for each assistant workspace
  * rootPath, sessionAPI.listSessions(thatRoot) returns the persisted sessions
  * that actually live on disk (opened or not, because the backend
@@ -671,7 +671,9 @@ function GroupMembersDialog({
  * open every `~/.bitfun/personal_assistant/workspace-*`). NO fabricated
  * SessionMetadata presets (R-GC-19's `inactive` fake rows are removed — they
  * invented sessionId=workspace.id / hardcoded agentType='Claw' / fake values).
- * agentType comes from real session metadata, zero hardcoded strings.
+ * R-GC-R6 (2026-08-15, owner decision): agentType NOT filtered — every real
+ * session including agentic is a selectable member. agentType comes from real
+ * session metadata, zero hardcoded strings.
  * Reuses the component-library Select (Select.tsx:87) with multiple +
  * searchable + showSelectAll inside the existing Modal.
  */
@@ -706,9 +708,11 @@ function GroupMemberPickerDialog({
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
-  // R-GC-33: member source = ALL real Claw sessions across every assistant
-  // workspace root (including the group workspace itself). listSessions per
-  // root reads real persisted metadata from disk; no fake preset rows.
+  // R-GC-33 / R-GC-R6 (owner decision 2026-08-15): member source = ALL real
+  // sessions across every assistant workspace root (including the group
+  // workspace itself), agentType NOT filtered — every real session (Claw or
+  // agentic) is a selectable member. listSessions per root reads real
+  // persisted metadata from disk; no fake preset rows.
   const loadSessions = useCallback(() => {
     setIsLoading(true);
     setLoadFailed(false);
@@ -720,7 +724,7 @@ function GroupMemberPickerDialog({
     return Promise.all(
       roots.map(root =>
         sessionAPI.listSessions(root).catch((error) => {
-          log.warn('Failed to load Claw sessions for member picker', { error, workspacePath: root });
+          log.warn('Failed to load sessions for member picker', { error, workspacePath: root });
           return [];
         }),
       ),
@@ -729,7 +733,7 @@ function GroupMemberPickerDialog({
         const byId = new Map<string, SessionMetadata>();
         for (const list of lists) {
           for (const meta of list) {
-            if (meta.agentType !== 'Claw' || seen.has(meta.sessionId)) continue;
+            if (seen.has(meta.sessionId)) continue;
             seen.add(meta.sessionId);
             byId.set(meta.sessionId, meta);
           }
@@ -737,7 +741,7 @@ function GroupMemberPickerDialog({
         setSessions(Array.from(byId.values()));
       })
       .catch(error => {
-        log.warn('Failed to load Claw sessions for member picker', { error, workspacePath });
+        log.warn('Failed to load sessions for member picker', { error, workspacePath });
         setLoadFailed(true);
       })
       .finally(() => setIsLoading(false));
@@ -828,13 +832,15 @@ function GroupMemberPickerDialog({
 }
 
 /**
- * R-GC-15/30/32/33: fork dialog — child group name + Claw member multi-select.
+ * R-GC-15/30/32/33: fork dialog — child group name + member multi-select.
  * R-GC-30 (owner directive): the owner picks fork members themselves from a
- * real optional Claw list — NO member-count input (R-GC-28 had wrongly added
- * it). R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL Claw
+ * real optional session list — NO member-count input (R-GC-28 had wrongly added
+ * it). R-GC-33 (2026-08-14, owner-verified P0, CEO ruling): member source = REAL
  * sessions across ALL assistant workspace roots (same loader as invite/create),
- * no fabricated presets. Reuses the component-library Select (Select.tsx:87)
- * with multiple + searchable + showSelectAll inside the existing Modal.
+ * no fabricated presets. R-GC-R6 (2026-08-15, owner decision): agentType NOT
+ * filtered — every real session including agentic is a selectable member.
+ * Reuses the component-library Select (Select.tsx:87) with multiple +
+ * searchable + showSelectAll inside the existing Modal.
  */
 interface GroupForkDialogProps {
   groupName?: string;
@@ -866,8 +872,9 @@ function GroupForkDialog({
   const assistantWorkspacesRef = React.useRef(assistantWorkspaces);
   assistantWorkspacesRef.current = assistantWorkspaces;
 
-  // R-GC-33: same source as create/invite — walk every assistant workspace root
-  // to load REAL Claw sessions, zero fabricated presets.
+  // R-GC-33 / R-GC-R6: same source as create/invite — walk every assistant
+  // workspace root to load REAL sessions (agentType not filtered), zero
+  // fabricated presets.
   const loadSessions = useCallback(() => {
     setIsLoading(true);
     setLoadFailed(false);
@@ -879,7 +886,7 @@ function GroupForkDialog({
     return Promise.all(
       roots.map(root =>
         sessionAPI.listSessions(root).catch((error) => {
-          log.warn('Failed to load Claw sessions for fork member picker', { error, workspacePath: root });
+          log.warn('Failed to load sessions for fork member picker', { error, workspacePath: root });
           return [];
         }),
       ),
@@ -888,7 +895,7 @@ function GroupForkDialog({
         const byId = new Map<string, SessionMetadata>();
         for (const list of lists) {
           for (const meta of list) {
-            if (meta.agentType !== 'Claw' || seen.has(meta.sessionId)) continue;
+            if (seen.has(meta.sessionId)) continue;
             seen.add(meta.sessionId);
             byId.set(meta.sessionId, meta);
           }
@@ -896,7 +903,7 @@ function GroupForkDialog({
         setSessions(Array.from(byId.values()));
       })
       .catch(error => {
-        log.warn('Failed to load Claw sessions for fork member picker', { error, workspacePath });
+        log.warn('Failed to load sessions for fork member picker', { error, workspacePath });
         setLoadFailed(true);
       })
       .finally(() => setIsLoading(false));
