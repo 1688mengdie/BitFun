@@ -22,6 +22,8 @@ dist-ssr
 
 # Build outputs - Rust/Tauri
 target/
+sdk/typescript/src/internal/wire/
+sdk/typescript/src/internal/wire-validators.ts
 **/target/
 .target/
 /.targets/

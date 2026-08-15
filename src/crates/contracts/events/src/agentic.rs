@@ -223,6 +223,19 @@ pub enum AgenticEvent {
         turn_id: String,
     },
 
+    DialogTurnInterrupted {
+        session_id: String,
+        turn_id: String,
+        execution_generation: u32,
+        model_id: Option<String>,
+    },
+
+    DialogTurnRecovered {
+        session_id: String,
+        turn_id: String,
+        execution_generation: u32,
+    },
+
     DialogTurnFailed {
         session_id: String,
         turn_id: String,
@@ -667,6 +680,8 @@ impl AgenticEvent {
             | Self::ContextCompressionFailed { session_id, .. }
             | Self::ThreadGoalUpdated { session_id, .. }
             | Self::DialogTurnCancelled { session_id, .. }
+            | Self::DialogTurnInterrupted { session_id, .. }
+            | Self::DialogTurnRecovered { session_id, .. }
             | Self::DialogTurnFailed { session_id, .. }
             | Self::ModelRoundStarted { session_id, .. }
             | Self::ModelRoundAttemptSuperseded { session_id, .. }
@@ -692,6 +707,8 @@ impl AgenticEvent {
             Self::DialogTurnStarted { turn_id, .. }
             | Self::DialogTurnCompleted { turn_id, .. }
             | Self::DialogTurnCancelled { turn_id, .. }
+            | Self::DialogTurnInterrupted { turn_id, .. }
+            | Self::DialogTurnRecovered { turn_id, .. }
             | Self::DialogTurnFailed { turn_id, .. }
             | Self::TokenUsageUpdated { turn_id, .. }
             | Self::ContextCompressionStarted { turn_id, .. }
@@ -715,6 +732,10 @@ impl AgenticEvent {
             Self::SystemError { .. }
             | Self::DialogTurnFailed { .. }
             | Self::DialogTurnCancelled { .. } => AgenticEventPriority::Critical,
+
+            Self::DialogTurnInterrupted { .. } | Self::DialogTurnRecovered { .. } => {
+                AgenticEventPriority::Critical
+            }
 
             Self::SessionStateChanged { .. }
             | Self::SessionHistoryChanged { .. }

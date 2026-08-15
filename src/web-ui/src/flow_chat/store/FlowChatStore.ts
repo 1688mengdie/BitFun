@@ -8043,6 +8043,7 @@ config: {
       finishReason: isLiveTurn
         ? persistedFinishReason
         : normalizeRecoveredTurnFinishReason(turn.status, persistedFinishReason),
+      recovery: turn.recovery,
       hasFinalResponse:
         typeof turn.hasFinalResponse === 'boolean'
           ? turn.hasFinalResponse
