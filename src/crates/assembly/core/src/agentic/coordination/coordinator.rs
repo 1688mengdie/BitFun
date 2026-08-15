@@ -14447,15 +14447,51 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     ///
     /// Skips if global coordinator already exists
     pub fn set_global(coordinator: Arc<ConversationCoordinator>) {
-        match GLOBAL_COORDINATOR.set(coordinator) {
-            Ok(_) => {
-                debug!("Global coordinator set");
+        // CI 并行测试竞态修复（2026-08-15）：测试用例基于「全局 coordinator
+        // 尚未 set」的假设运行时（如 group_room_tools 的
+        // missing_coordinator_yields_clear_error），与 set_global 之间必须
+        // 原子化——本锁由 coordinator 测试门控 helper 与 set_global 同一把
+        // 串行化「检查 get_global + 执行」，消除 TOCTOU 窗口。
+        #[cfg(test)]
+        {
+            let _guard = test_coordinator_access_lock_sync();
+            match GLOBAL_COORDINATOR.set(coordinator) {
+                Ok(_) => {
+                    debug!("Global coordinator set");
+                }
+                Err(_) => {
+                    debug!("Global coordinator already exists, skipping set");
+                }
             }
-            Err(_) => {
-                debug!("Global coordinator already exists, skipping set");
+        }
+        #[cfg(not(test))]
+        {
+            match GLOBAL_COORDINATOR.set(coordinator) {
+                Ok(_) => {
+                    debug!("Global coordinator set");
+                }
+                Err(_) => {
+                    debug!("Global coordinator already exists, skipping set");
+                }
             }
         }
     }
+}
+
+/// 测试专用：串行化「检查全局 coordinator 状态」与 `set_global`，消除并行
+/// 测试间的 TOCTOU 竞态（CI macos-15 曾因
+/// missing_coordinator_yields_clear_error 与其它 set_global 测试并发而偶发
+/// panic）。仅测试构建可见；非测试构建不引入（C-11：cfg 门控，禁删）。
+#[cfg(test)]
+static COORDINATOR_TEST_GLOBAL_LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
+
+/// 获取测试全局 coordinator 访问锁（详见 [`COORDINATOR_TEST_GLOBAL_LOCK`]）。
+#[cfg(test)]
+pub(crate) fn test_coordinator_access_lock_sync() -> std::sync::MutexGuard<'static, ()> {
+    COORDINATOR_TEST_GLOBAL_LOCK
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .expect("coordinator test global lock poisoned")
 }
 
 /// P-19 修订（2026-08-13 主人定标）+ R-AR-04（2026-08-14）：后台 subagent

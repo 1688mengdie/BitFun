@@ -1643,8 +1643,15 @@ mod tests {
     /// 无 coordinator 时所有 action 都返回清晰 tool error（get_global_coordinator 为 None）。
     /// 注意：此测试依赖全局 coordinator 未被其他测试 set_global（OnceLock 单次写入）。
     /// 若已被设置，直接跳过断言（避免跨测试顺序耦合）。
+    /// 竞态防护（CI macos-15 修复）：与 set_global 共享同一把全局锁
+    /// （coordinator::test_coordinator_access_lock_sync），把「检查 get_global 为
+    /// None + call_impl（内部再读 get_global）」整体放在锁内原子执行——锁定期间
+    /// set_global 无法写入，两次读取一致，TOCTOU 窗口消除。若 lock 时全局已被
+    /// 其它测试设置，直接跳过断言。
     #[tokio::test]
     async fn missing_coordinator_yields_clear_error() {
+        let _guard =
+            crate::agentic::coordination::coordinator::test_coordinator_access_lock_sync();
         if get_global_coordinator().is_some() {
             return;
         }
@@ -1759,6 +1766,8 @@ mod tests {
             bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
         );
         let coordinator = Arc::new(coordinator);
+        // set_global 内部（cfg(test)）已持全局锁，与
+        // missing_coordinator_yields_clear_error 的检查原子串行。
         ConversationCoordinator::set_global(coordinator.clone());
 
         let workspace = std::env::temp_dir().join(format!(
