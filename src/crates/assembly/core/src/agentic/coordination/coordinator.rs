@@ -7248,6 +7248,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         if metadata_bool(user_message_metadata.as_ref(), "acp_transport") == Some(true) {
             context_vars.insert("acp_transport".to_string(), "true".to_string());
         }
+        // Group chat correlation (R-GC-36): a message dispatched from a group
+        // context carries the group session id in user_message_metadata
+        // (group_room_tools send_message writes "groupId"). Forward it into the
+        // tool context vars so SessionMessage forwarding can re-attach the
+        // group id when a member relays the message onward. Absent group
+        // context stays absent (None, no fallback).
+        if let Some(group_id) = user_message_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("groupId"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            context_vars.insert("groupId".to_string(), group_id.to_string());
+        }
         if let Some(user_input_available) = metadata_bool(
             user_message_metadata.as_ref(),
             USER_INPUT_AVAILABLE_CONTEXT_KEY,
@@ -7769,6 +7783,19 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         }
         if let Some(snapshot_id) = &session.snapshot_session_id {
             context_vars.insert("snapshot_session_id".to_string(), snapshot_id.clone());
+        }
+        // Group chat correlation (R-GC-36): see the non-recovered turn path
+        // (start_dialog_turn_internal) for the same injection rule. Recovered
+        // turns keep the group context so a relayed SessionMessage still carries
+        // the group id after an interrupted-turn resume.
+        if let Some(group_id) = plan
+            .user_message_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("groupId"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            context_vars.insert("groupId".to_string(), group_id.to_string());
         }
         if let Some(user_input_available) = metadata_bool(
             plan.user_message_metadata.as_ref(),

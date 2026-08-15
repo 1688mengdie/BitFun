@@ -338,6 +338,19 @@ fn build_tool_context_custom_data(context: &ToolExecutionContext) -> HashMap<Str
         deep_review_parent,
         &mut extension_custom_data,
     );
+    // Group chat correlation (R-GC-36): the coordinator forwards the group
+    // session id ("groupId") from the turn's user_message_metadata into
+    // context_vars. Propagate it into tool custom_data so SessionMessage
+    // forwarding can re-attach the group id when a member relays a message.
+    // Absent group context stays absent (None, no fallback).
+    if let Some(group_id) = context
+        .context_vars
+        .get("groupId")
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+    {
+        extension_custom_data.insert("groupId".to_string(), Value::String(group_id.to_string()));
+    }
     for key in [
         USER_INPUT_AVAILABLE_CONTEXT_KEY,
         AUTO_APPROVE_ASK_CONTEXT_KEY,

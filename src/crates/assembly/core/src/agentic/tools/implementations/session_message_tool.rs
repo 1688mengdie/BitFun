@@ -162,6 +162,26 @@ impl SessionMessageTool {
         bitfun_core_types::validate_session_id(session_id)
     }
 
+    /// Group-chat correlation of the calling (member) session context
+    /// (R-GC-36). The coordinator forwards the turn's `groupId` from
+    /// user_message_metadata into tool custom_data ("groupId", camelCase
+    /// matching the group_room metadata contract). A non-group caller carries
+    /// no such key → `GroupChatForwardMetadata::default()` (None, no fallback).
+    fn group_context_from_custom_data(
+        custom_data: &std::collections::HashMap<String, Value>,
+    ) -> GroupChatForwardMetadata {
+        match custom_data.get("groupId") {
+            Some(Value::String(group_id)) if !group_id.trim().is_empty() => {
+                GroupChatForwardMetadata {
+                    group_id: Some(group_id.clone()),
+                    group_message_id: None,
+                    group_author: None,
+                }
+            }
+            _ => GroupChatForwardMetadata::default(),
+        }
+    }
+
     fn forwarded_user_input_metadata(
         context: &ToolUseContext,
         sender: &SenderIdentity,
@@ -2636,11 +2656,16 @@ impl SessionMessageTool {
             // dispatched session to a plan todo, carry planFile/todoId in the
             // forwarded turn metadata so the scheduler can auto-mark the todo
             // (in_progress at turn start, completed on a Completed outcome).
-            let mut forwarded_metadata = Self::forwarded_user_input_metadata(
-                context,
-                &sender_identity,
-                &GroupChatForwardMetadata::default(),
-            );
+            //
+            // Group chat correlation (R-GC-36): when the calling member session
+            // runs inside a group context, the coordinator forwards the group
+            // session id into tool custom_data ("groupId", camelCase to match the
+            // group_room metadata contract). Re-attach it to the forwarded turn so
+            // the relayed message keeps the group id; a non-group caller has no
+            // such key and stays None (zero pollution, no fallback).
+            let group_context = Self::group_context_from_custom_data(&context.custom_data);
+            let mut forwarded_metadata =
+                Self::forwarded_user_input_metadata(context, &sender_identity, &group_context);
             if let Some(plan_file) = params.plan_file.as_deref() {
                 forwarded_metadata.insert(PLAN_FILE_METADATA_KEY.to_string(), json!(plan_file));
             }
@@ -3210,6 +3235,45 @@ mod tests {
         assert!(!metadata.contains_key("groupId"));
         assert!(!metadata.contains_key("groupMessageId"));
         assert!(!metadata.contains_key("groupAuthor"));
+    }
+
+    // ── R-GC-36: group id passthrough from the calling (member) context ──
+    #[test]
+    fn group_context_carries_group_id_when_present() {
+        let mut custom_data = std::collections::HashMap::new();
+        custom_data.insert("groupId".to_string(), Value::String("room-1".to_string()));
+
+        let group = SessionMessageTool::group_context_from_custom_data(&custom_data);
+
+        assert_eq!(group.group_id.as_deref(), Some("room-1"));
+        assert_eq!(group.group_message_id, None);
+        assert_eq!(group.group_author, None);
+    }
+
+    #[test]
+    fn group_context_stays_none_without_group_context() {
+        let custom_data = std::collections::HashMap::new();
+
+        let group = SessionMessageTool::group_context_from_custom_data(&custom_data);
+
+        assert_eq!(group.group_id, None);
+        assert_eq!(group.group_message_id, None);
+        assert_eq!(group.group_author, None);
+    }
+
+    #[test]
+    fn group_context_ignores_blank_or_non_string_group_id() {
+        for custom_data in [
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([(
+                "groupId".to_string(),
+                Value::String("   ".to_string()),
+            )]),
+            std::collections::HashMap::from([("groupId".to_string(), Value::Bool(true))]),
+        ] {
+            let group = SessionMessageTool::group_context_from_custom_data(&custom_data);
+            assert_eq!(group.group_id, None, "custom_data={custom_data:?}");
+        }
     }
 
     #[test]
