@@ -553,6 +553,10 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
             onCancel={cancelEdit}
             presentation={composerPresentation}
             workspacePath={currentSession?.workspacePath}
+            remoteConnectionId={
+              currentSession?.remoteConnectionId
+              || currentSession?.config?.remoteConnectionId
+            }
             excludeSessionId={resolvedSessionId}
           />
         ) : (
