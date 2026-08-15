@@ -114,6 +114,7 @@ mod tests {
             allowed_browser_origins: std::sync::Arc::new(
                 origins.iter().map(|origin| (*origin).to_string()).collect(),
             ),
+            dispatch_host: None,
             app_server: None,
         }
     }
