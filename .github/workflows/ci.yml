@@ -204,7 +204,7 @@ jobs:
       # exist during check/test; distributable assets remain frontend-build's owner.
       - name: Create Tauri resource directories
         shell: bash
-        run: mkdir -p dist src/mobile-web/dist packages/dsh-acp/dist-profile
+        run: mkdir -p dist src/mobile-web/dist
 
       - name: Install Linux system dependencies (Tauri)
         if: runner.os == 'Linux'
@@ -367,12 +367,13 @@ jobs:
         run: "cargo test --locked -p tool-runtime --lib search::"
 
   # ── DeepSeek Harness bridge: profile packaging on Windows ──────────
-  # `prepare:dsh-profile` runs only inside `frontend:build-all`, which no CI job
-  # invokes — so until now its first Windows execution ever was a release build,
-  # and it failed there (`spawnSync npm ENOENT`: npm is a `.cmd` shim Node will
-  # not spawn without a shell). This job is the cheapest thing that exercises
-  # the whole packaging path — npm install, tsc, `npm pack`, tar, tree copy — on
-  # the platform whose path and process rules differ.
+  # `prepare:dsh-profile` runs from `frontend:build-all` / official desktop
+  # packaging, not from desktop:dev or cargo check. Until this job existed,
+  # its first Windows execution ever was a release build, and it failed there
+  # (`spawnSync npm ENOENT`: npm is a `.cmd` shim Node will not spawn without
+  # a shell). This job is the cheapest thing that exercises the whole
+  # packaging path — npm install, tsc, `npm pack`, tar, tree copy — on the
+  # platform whose path and process rules differ.
   dsh-profile-windows:
     name: DSH Profile Packaging (windows-latest)
     runs-on: windows-latest
