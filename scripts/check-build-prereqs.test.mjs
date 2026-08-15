@@ -15,7 +15,6 @@ const scriptPath = path.join(repoRoot, 'scripts/check-build-prereqs.mjs');
 function createTestRoot({
   nodeModules = false,
   mobileWebDist = false,
-  dshProfile = false,
   sherpaOnnx = null,
 } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), 'bitfun-build-prereqs-'));
@@ -28,12 +27,6 @@ function createTestRoot({
     const distDir = path.join(root, 'src', 'mobile-web', 'dist');
     mkdirSync(distDir, { recursive: true });
     writeFileSync(path.join(distDir, 'index.html'), '<html></html>');
-  }
-
-  if (dshProfile) {
-    mkdirSync(path.join(root, 'packages', 'dsh-acp', 'dist-profile'), {
-      recursive: true,
-    });
   }
 
   if (sherpaOnnx) {
@@ -66,8 +59,6 @@ if (args[0] === 'install') {
 } else if (args[0] === 'run' && args[1] === 'prepare:mobile-web') {
   mkdirSync('src/mobile-web/dist', { recursive: true });
   writeFileSync('src/mobile-web/dist/index.html', '<html></html>');
-} else if (args[0] === 'run' && args[1] === 'prepare:dsh-profile') {
-  mkdirSync('packages/dsh-acp/dist-profile', { recursive: true });
 }
 `,
   );
@@ -103,7 +94,6 @@ test('passes when all prerequisites are present (including sherpa-onnx prebuilt)
   const root = createTestRoot({
     nodeModules: true,
     mobileWebDist: true,
-    dshProfile: true,
     sherpaOnnx: ['sherpa-onnx-v1.13.4-osx-arm64-static-lib'],
   });
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -118,7 +108,6 @@ test('passes when all prerequisites are present (including sherpa-onnx prebuilt)
 test('fails when root node_modules is missing', (t) => {
   const root = createTestRoot({
     mobileWebDist: true,
-    dshProfile: true,
     sherpaOnnx: ['sherpa-onnx-v1.13.4-osx-arm64-static-lib'],
   });
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -133,7 +122,6 @@ test('fails when root node_modules is missing', (t) => {
 test('fails when mobile-web dist is missing', (t) => {
   const root = createTestRoot({
     nodeModules: true,
-    dshProfile: true,
     sherpaOnnx: ['sherpa-onnx-v1.13.4-osx-arm64-static-lib'],
   });
   t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -145,7 +133,7 @@ test('fails when mobile-web dist is missing', (t) => {
   assert.match(result.stderr, /Fix: pnpm run prepare:mobile-web/);
 });
 
-test('fails when the dsh bridge profile is missing', (t) => {
+test('does not require the DeepSeek profile for cargo check', (t) => {
   const root = createTestRoot({
     nodeModules: true,
     mobileWebDist: true,
@@ -155,13 +143,13 @@ test('fails when the dsh bridge profile is missing', (t) => {
 
   const result = runCheck(root, { sherpaEnv: '' });
 
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /\[FAIL\] dsh bridge profile/);
-  assert.match(result.stderr, /Fix: pnpm run prepare:dsh-profile/);
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stderr, /dsh bridge profile/);
+  assert.doesNotMatch(result.stderr, /prepare:dsh-profile/);
 });
 
 test('warns when sherpa-onnx prebuilt dir does not exist (first build)', (t) => {
-  const root = createTestRoot({ nodeModules: true, mobileWebDist: true, dshProfile: true });
+  const root = createTestRoot({ nodeModules: true, mobileWebDist: true });
   t.after(() => rmSync(root, { recursive: true, force: true }));
 
   const result = runCheck(root, { sherpaEnv: '' });
@@ -196,7 +184,7 @@ test('--fix runs fix commands, re-verifies, and exits 0 when errors resolved', (
   assert.match(result.stdout, /Attempting fixes/);
   assert.match(result.stdout, /\$ pnpm install/);
   assert.match(result.stdout, /\$ pnpm run prepare:mobile-web/);
-  assert.match(result.stdout, /\$ pnpm run prepare:dsh-profile/);
+  assert.doesNotMatch(result.stdout, /prepare:dsh-profile/);
   assert.match(result.stdout, /Re-checking prerequisites/);
   assert.match(result.stdout, /All errors resolved/);
 });

@@ -99,8 +99,9 @@ npm test                             # vitest
 ```
 
 `pnpm run prepare:dsh-profile` from the repository root does the install and
-both build steps, and Tauri ships `dist-profile/` as a resource. A failure
-there fails the desktop build: an app that silently ships no bridge is
+both build steps. Official `desktop:build` ships `dist-profile/` as a Tauri
+resource; `desktop:dev` and `cargo check` do not compile it. A failure during
+packaging fails the desktop build: an app that silently ships no bridge is
 indistinguishable from a working one until a user starts a DeepSeek session.
 `BITFUN_SKIP_DSH_PROFILE=1` opts out on purpose.
 
