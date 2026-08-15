@@ -427,7 +427,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     expect(rows[1]!.textContent).toContain('Assist C');
   });
 
-  it('invites members through invite_group_member (R-GC-30: owner picks Claw members from a runtime list)', async () => {
+  it('invites members through invite_group_member (R-GC-30/R-GC-R6: owner picks members from the full runtime session list, agentType not filtered)', async () => {
     vi.mocked(toolAPI.executeTool).mockImplementation(async (request: {
       toolName: string;
     }) => {
@@ -440,12 +440,12 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    // R-GC-30: member source = runtime-fetched Claw sessions (listSessions
-    // filtered by agentType === 'Claw'), zero hardcoded.
+    // R-GC-30/R-GC-R6: member source = runtime-fetched sessions (listSessions),
+    // zero hardcoded. agentType NOT filtered — agentic (GeneralPurpose) included.
     vi.mocked(sessionAPI.listSessions).mockResolvedValue([
       makeSession('claw-1', 'Claw', 'Assist A'),
       makeSession('claw-2', 'Claw', 'Assist B'),
-      makeSession('gen-1', 'GeneralPurpose', 'Not a Claw'),
+      makeSession('gen-1', 'GeneralPurpose', 'Agentic C'),
     ]);
     renderView();
     await flush();
@@ -459,14 +459,15 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
 
     const modal = document.querySelector('[data-testid="modal"]');
     expect(modal).not.toBeNull();
-    // R-GC-30: 邀请 = Claw 成员多选（Select multiple），无数量输入。
+    // R-GC-30: 邀请 = 成员多选（Select multiple），无数量输入。
     expect(document.querySelector('[data-testid="dialog-count-input"]')).toBeNull();
     const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
-    expect(options).toHaveLength(2); // 只列 Claw，非 Claw 不进候选
+    expect(options).toHaveLength(3); // 全部真实会话（Claw + agentic）都进候选
 
-    // 勾选两个 Claw 成员（Select stub 点击切换选中）。
+    // 勾选全部成员（Select stub 点击切换选中）。
     act(() => options[0]!.click());
     act(() => options[1]!.click());
+    act(() => options[2]!.click());
     await flush();
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -476,11 +477,11 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     act(() => confirmBtn!.click());
     await flush();
 
-    // 每个被勾选的成员触发一次 invite（后端按选择新建 Claw 成员会话）。
+    // 每个被勾选的成员触发一次 invite（成员 ID = 真实会话 ID 透传）。
     const inviteCalls = vi.mocked(toolAPI.executeTool).mock.calls.filter(
       c => c[0].toolName === 'invite_group_member',
     );
-    expect(inviteCalls).toHaveLength(2);
+    expect(inviteCalls).toHaveLength(3);
     expect(inviteCalls[0]![0]).toEqual({
       toolName: 'invite_group_member',
       parameters: {
@@ -492,6 +493,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       workspacePath: '/workspace-a',
     });
     expect(inviteCalls[1]![0].parameters.member_session_id).toBe('claw-2');
+    expect(inviteCalls[2]![0].parameters.member_session_id).toBe('gen-1');
   });
 
   it('R-GC-33: invite member source = real Claw sessions across ALL assistant workspace roots (no fabricated presets)', async () => {
@@ -657,10 +659,11 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       return { toolName: request.toolName, success: false, result: null };
     });
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue(null);
-    // R-GC-30: fork 成员 = 运行时 Claw 列表（listSessions 过滤 Claw）。
+    // R-GC-30/R-GC-R6: fork 成员 = 运行时全量真实会话列表（不过滤 agentType）。
     vi.mocked(sessionAPI.listSessions).mockResolvedValue([
       makeSession('claw-1', 'Claw', 'Assist A'),
       makeSession('claw-2', 'Claw', 'Assist B'),
+      makeSession('gen-1', 'GeneralPurpose', 'Agentic C'),
     ]);
     // 注入历史 turn 以提供 fork 的 turn_id（lastTurnId 取自本地 session turns）
     flowChatMocks.getState.mockReturnValue({
@@ -695,12 +698,13 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       nameInput!.dispatchEvent(new Event('input', { bubbles: true }));
     });
 
-    // R-GC-30: fork 成员 = Claw 多选（Select multiple），无数量输入。
+    // R-GC-30/R-GC-R6: fork 成员 = 全量真实会话多选（Select multiple），无数量输入。
     expect(document.querySelector('[data-testid="dialog-count-input"]')).toBeNull();
     const options = [...document.querySelectorAll<HTMLButtonElement>('[data-testid="member-select-option"]')];
-    expect(options).toHaveLength(2);
+    expect(options).toHaveLength(3);
     act(() => options[0]!.click());
     act(() => options[1]!.click());
+    act(() => options[2]!.click());
     await flush();
 
     const confirmBtn = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
@@ -721,7 +725,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         group_id: 'group-1',
         name: '子群A',
         turn_id: 'msg-last',
-        members: ['claw-1', 'claw-2'],
+        members: ['claw-1', 'claw-2', 'gen-1'],
       },
       workspacePath: '/workspace-a',
     });
