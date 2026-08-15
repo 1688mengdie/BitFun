@@ -349,8 +349,10 @@ pub(crate) async fn run_acp_message(
         })
         .await
         .map_err(port_error)?;
-    // 方向 C（并列返回面）：result_for_assistant 只内嵌极简通知句（对齐
-    // task/execution.rs acp_send_input_notice 语义），不内嵌 sent.response 全文；
+    // 方向 C（并列返回面）：result_for_assistant 只内嵌极简通知句（R-TA-03
+    // 之后 task/execution.rs acp_send_input_notice 已改携带全文，但本路径为
+    // ACP 直投工具并列返回面，COORD-15 防双路保持极简——不回退任务侧语义），
+    // 不内嵌 sent.response 全文；
     // 全文留在 data JSON 的 response 字段，父会话按需取 data / SessionHistory。
     let result_for_assistant = if sent.response.trim().is_empty() {
         format!(

@@ -245,14 +245,15 @@ async fn recycle_acp_flow_session(
 }
 
 /// Build the notice injected into the caller context when an ACP send_input
-/// returns synchronously. The full external reply stays in the ACP flow
-/// session history (retrievable via SessionHistory); only the notice is
-/// injected so the calling agent's context is not inflated with the full
-/// reply text.
-fn acp_send_input_notice(_full_response: &str, session_id: &str) -> String {
-    format!(
-        "External ACP session '{}' responded; use SessionHistory to view the full reply. agent_id: \"{}\"",
-        session_id, session_id
+/// returns synchronously. R-TA-03（2026-08-15 主人拍板）：同步回执携带最终
+/// 回复全文（对齐 SessionMessage 回传），复用 coordinator.rs
+/// `background_subagent_follow_up_message` 唯一全文组装源（通知句 + 全文 +
+/// 16k 截断护栏）；`full_text=None` 时退化纯通知句。data.response 仍保持全文。
+fn acp_send_input_notice(full_text: Option<&str>, session_id: &str) -> String {
+    crate::agentic::coordination::background_subagent_follow_up_message(
+        session_id,
+        "acp",
+        full_text,
     )
 }
 
@@ -896,7 +897,7 @@ impl TaskTool {
                             "response": sent.response,
                         }),
                         result_for_assistant: Some(acp_send_input_notice(
-                            &sent.response,
+                            Some(&sent.response),
                             &flow_session_id,
                         )),
                         image_attachments: None,
@@ -2437,12 +2438,29 @@ mod target_context_tests {
     }
 
     #[test]
-    fn acp_send_input_notice_excludes_full_response() {
+    fn acp_send_input_notice_carries_full_reply() {
+        // R-TA-03（2026-08-15）：前台同步回执携带最终回复全文（复用
+        // background_subagent_follow_up_message 组装，16k 截断护栏）；
+        // full_text=None 退化纯通知句。
         let full_reply = format!("EXTERNAL_REPLY_MARKER_{}", "x".repeat(4096));
-        let notice = acp_send_input_notice(&full_reply, "flow-123");
-        assert!(!notice.contains("EXTERNAL_REPLY_MARKER_"));
+        let notice = acp_send_input_notice(Some(&full_reply), "flow-123");
+        // 全文随回执投递
+        assert!(notice.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(notice.contains(&full_reply));
         assert!(notice.contains("flow-123"));
         assert!(notice.contains("SessionHistory"));
+        // 16k 截断护栏生效：超限全文只保留前缀 + 截断指引
+        let huge = format!("EXTERNAL_REPLY_MARKER_{}", "y".repeat(40_000));
+        let truncated = acp_send_input_notice(Some(&huge), "flow-789");
+        assert!(truncated.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(truncated.contains("已截断"));
+        assert!(truncated.contains("SessionHistory(flow-789)"));
+        assert!(truncated.chars().count() < huge.chars().count());
+        // None（失败）退化纯通知句：不含全文标记，保留 session_id + SessionHistory 指引
+        let failed = acp_send_input_notice(None, "flow-456");
+        assert!(!failed.contains("EXTERNAL_REPLY_MARKER_"));
+        assert!(failed.contains("flow-456"));
+        assert!(failed.contains("SessionHistory"));
     }
 
     #[test]
