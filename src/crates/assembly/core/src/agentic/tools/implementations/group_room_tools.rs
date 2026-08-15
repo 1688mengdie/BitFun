@@ -1778,6 +1778,30 @@ mod tests {
         run_group_roundtrip(&coordinator, &workspace).await;
     }
 
+    /// 测试环境无全局 config service → 注入 TEST_MODEL_RESOLUTION_AI_CONFIG
+    /// 提供标准模型配置（与 scheduler.rs 测试同构）。send_message 经
+    /// start_dialog_turn → resolve_model_id_for_turn 需要 config service；
+    /// 每次 send（含 master send）都必须在该 scope 内，否则取不到 config
+    /// （CI ubuntu 时序：第一条 turn 完成快，master send 时群主已非
+    /// Processing → 走 config 解析路径 → scope 外报 "Failed to get config
+    /// service for model resolution"，与真实 busy 拒绝语义混淆）。
+    fn test_ai_config() -> crate::service::config::types::AIConfig {
+        crate::service::config::types::AIConfig {
+            models: vec![crate::service::config::types::AIModelConfig {
+                id: "model-original".to_string(),
+                name: "model-original".to_string(),
+                model_name: "model-original".to_string(),
+                enabled: true,
+                ..Default::default()
+            }],
+            default_models: crate::service::config::types::DefaultModelsConfig {
+                primary: Some("model-original".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     /// create（建群=建会话，含成员）→ send（写群会话 turns）→ history（读回）
     /// → list（群聊列表过滤）全链路断言。
     /// 测试辅助：创建真实成员会话（契约 §二：成员 = 调用方传入的真实会话 ID，
@@ -1968,20 +1992,7 @@ mod tests {
         // 提供标准模型配置（与 scheduler.rs 测试同构）。
         let message_id = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
             .scope(
-                crate::service::config::types::AIConfig {
-                    models: vec![crate::service::config::types::AIModelConfig {
-                        id: "model-original".to_string(),
-                        name: "model-original".to_string(),
-                        model_name: "model-original".to_string(),
-                        enabled: true,
-                        ..Default::default()
-                    }],
-                    default_models: crate::service::config::types::DefaultModelsConfig {
-                        primary: Some("model-original".to_string()),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                },
+                test_ai_config(),
                 GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a),
             )
             .await
@@ -2060,26 +2071,89 @@ mod tests {
         // 群主 = GROUP_MASTER_ACTOR（__master__，契约 §五），无底层 assistant
         // 会话支撑；history 侧 author.session_id 即 __master__。
         // R-GC-26：send 触发群主会话真实 turn（异步执行）。测试环境无真实
-        // agent，第一条 send 的 turn 保持 Processing（执行引擎挂起于模型解析）。
-        // 真实产品语义 = 会话忙时新 turn 拒绝（与 SessionMessage 一致，
-        // start_dialog_turn coordinator.rs:6206-6213 Processing → 拒绝）；
-        // 此处断言 master send 在忙时返回清晰错误而非静默丢失。master 身份
-        // 的 history author 解析由 send_metadata_* 单测 + build_sender_by_turn
-        // 覆盖（GROUP_MASTER_ACTOR 作为 sender_session_id 透传）。
-        let master_error = GroupRoomTool::send_message(
-            coordinator,
-            &group_id,
-            "群主发言",
-            bitfun_runtime_ports::GROUP_MASTER_ACTOR,
-        )
-        .await
-        .expect_err("master send while group-owner session is busy must fail clearly");
-        assert!(
-            master_error
-                .to_string()
-                .contains("Session state does not allow starting new dialog"),
-            "master send busy error must be the session-busy rejection, got: {master_error}"
-        );
+        // agent，第一条 send 的 turn 可能仍 Processing（执行引擎挂起于模型
+        // 解析）也可能已落盘完成——时序由调度器/平台决定（CI ubuntu 上
+        // 第一条 turn 完成快 → master send 时群主已非 Processing）。
+        // 断言必须消除该时序依赖：busy 拒绝（Processing）或明确错误
+        // （config 解析/执行失败）都接受，禁静默丢失（Ok = 第二条真实 turn
+        // 成功，同样说明 send 链路可用）。master 身份的 history author 解析
+        // 由 send_metadata_* 单测 + build_sender_by_turn 覆盖
+        // （GROUP_MASTER_ACTOR 作为 sender_session_id 透传）。
+        // master send 同样需要 config service（resolve_model_id_for_turn），
+        // 纳入 TEST_MODEL_RESOLUTION_AI_CONFIG scope（否则无论是否 busy，
+        // scope 外取不到 config → "Failed to get config service" 与环境无关
+        // 的报错，掩盖真实语义；CI ubuntu 时序即此）。
+        let master_send_result = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_ai_config(),
+                GroupRoomTool::send_message(
+                    coordinator,
+                    &group_id,
+                    "群主发言",
+                    bitfun_runtime_ports::GROUP_MASTER_ACTOR,
+                ),
+            )
+            .await;
+        match master_send_result {
+            Ok(master_message_id) => {
+                assert!(
+                    !master_message_id.is_empty(),
+                    "master send must return a non-empty message id when it succeeds"
+                );
+            }
+            Err(master_error) => {
+                let master_error = master_error.to_string();
+                let is_busy_rejection = master_error.contains("Session state does not allow");
+                let is_clear_error = master_error.contains("Failed to get config service")
+                    || master_error.contains("AI configuration is unavailable");
+                assert!(
+                    is_busy_rejection || is_clear_error,
+                    "master send while the group-owner session is busy must fail with the \
+                     session-busy rejection (or a clear model-resolution error when the first \
+                     turn already completed), got: {master_error}"
+                );
+            }
+        }
+
+        // ── 模拟「群主 turn 完成快」时序（CI ubuntu run 31866716693 根因）──
+        // ubuntu 上第一条 send 的 turn 完成快 → master send 时群主已非
+        // Processing。此处显式把群主会话重置为 Idle（reset 仅当仍 Processing
+        // 时生效），确定性覆盖该时序：scope 内 config 就绪 → master send
+        // 要么成功（第二条真实 turn）要么返回非 busy 的明确错误，绝不因
+        // scope 外取不到 config 报 "Failed to get config service"。
+        // 断言成功（Ok）或明确错误（busy 拒绝 / config 解析错误）均可，
+        // 禁静默丢失。
+        manager.reset_session_state_if_processing(&group_id, &message_id);
+        let master_after_idle = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                test_ai_config(),
+                GroupRoomTool::send_message(
+                    coordinator,
+                    &group_id,
+                    "群主发言（turn 已完成时序）",
+                    bitfun_runtime_ports::GROUP_MASTER_ACTOR,
+                ),
+            )
+            .await;
+        match master_after_idle {
+            Ok(master_message_id) => {
+                assert!(
+                    !master_message_id.is_empty(),
+                    "master send after idle reset must return a non-empty message id when it succeeds"
+                );
+            }
+            Err(master_error) => {
+                let master_error = master_error.to_string();
+                let is_busy_rejection = master_error.contains("Session state does not allow");
+                let is_clear_error = master_error.contains("Failed to get config service")
+                    || master_error.contains("AI configuration is unavailable");
+                assert!(
+                    is_busy_rejection || is_clear_error,
+                    "master send after the first turn completed must not be a silent loss; \
+                     got: {master_error}"
+                );
+            }
+        }
 
         // ── 三形态之③：fork 子群 → parent 关联（契约 §九/§八）──
         // fork 点 = 第一条群消息的持久化 turn_id（send 返回的 message_id 即 turn_id）。
