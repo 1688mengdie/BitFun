@@ -44,6 +44,7 @@ use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource, GROUP_MASTER_ACTOR};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -314,38 +315,71 @@ impl GroupRoomTool {
     }
 
     /// 群会话的 workspace（内存 config 绑定，coordinator.rs:3014 写入）。
-    fn group_workspace(
+    ///
+    /// R-GC-38（扩展，死锁链）：内存 session 缺失（重启后群会话未加载）
+    /// → 回退磁盘持久化校验——先 `resolve_session_workspace_binding`
+    /// （session_manager.rs:1664，四段定位含 projects_root 扫描）解析
+    /// binding，取 binding.project_root_path（本地 = 会话元数据的
+    /// workspace_path 同源）作为群 workspace。证据：group_workspace 从内存
+    /// session 读 config.workspace_path，群会话未加载内存时 send/history/
+    /// invite/fork 报「does not exist in memory」，且打开群依赖 isGroupChat
+    /// （R-GC-35）→ 死锁链（侦察-群聊运行时风险深挖-第六任CPO 隐患 2）；
+    /// 只修 validate_session_exists 不修 group_workspace = 重启后群操作仍报错。
+    async fn group_workspace(
         coordinator: &ConversationCoordinator,
         group_id: &str,
     ) -> BitFunResult<String> {
-        coordinator
-            .get_session_manager()
+        let manager = coordinator.get_session_manager();
+        if let Some(workspace) = manager
             .get_session(group_id)
             .and_then(|session| session.config.workspace_path)
-            .ok_or_else(|| {
-                BitFunError::tool(format!(
-                    "group chat session '{group_id}' does not exist in memory"
-                ))
-            })
+        {
+            return Ok(workspace);
+        }
+        if let Some(binding) = manager
+            .resolve_session_workspace_binding(group_id)
+            .await
+        {
+            let workspace = binding.project_root_path.to_string_lossy().to_string();
+            if !workspace.trim().is_empty() {
+                return Ok(workspace);
+            }
+        }
+        Err(BitFunError::tool(format!(
+            "group chat session '{group_id}' does not exist in memory or on disk"
+        )))
     }
 
     /// 校验成员会话真实存在（群聊重建 Type-Contract §二：成员 = 调用方传入
     /// 的真实会话 ID，禁按数量新建匿名会话）。
     ///
-    /// 复用现成 `session_manager.get_session`（session_manager.rs:3075，
-    /// coordinator.rs:3060 同源）做存在性校验——会话不存在 → 返回明确错误
-    /// Err("member session not found: {session_id}")（禁静默跳过 R-3）。
-    fn validate_session_exists(
+    /// R-GC-38（P1 升级）：内存 `session_manager.get_session`（session_manager
+    /// .rs:3201 只查 self.sessions）失败 → 回退磁盘持久化会话校验——A 路实证
+    /// （侦察-群聊运行时风险深挖-第六任CPO-20260815.md 现象 3 根因）：前端列
+    /// 磁盘、后端验内存 = 重启后邀请成员不全直接根因。回退
+    /// `resolve_session_workspace_binding`（session_manager.rs:1664，四段定位：
+    /// 内存 config → session_storage_path_index → 注册 workspace → projects_root
+    /// 扫描），binding 解析成功 = 磁盘存在该会话的持久化元数据。
+    /// 会话不存在 → 返回明确错误 Err("member session not found: {session_id}")
+    /// （禁静默跳过 R-3）。
+    async fn validate_session_exists(
         coordinator: &ConversationCoordinator,
         session_id: &str,
     ) -> BitFunResult<()> {
-        coordinator
-            .get_session_manager()
-            .get_session(session_id)
-            .ok_or_else(|| {
-                BitFunError::tool(format!("member session not found: {session_id}"))
-            })?;
-        Ok(())
+        let manager = coordinator.get_session_manager();
+        if manager.get_session(session_id).is_some() {
+            return Ok(());
+        }
+        if manager
+            .resolve_session_workspace_binding(session_id)
+            .await
+            .is_some()
+        {
+            return Ok(());
+        }
+        Err(BitFunError::tool(format!(
+            "member session not found: {session_id}"
+        )))
     }
 
     /// 群主默认对话类型（R-GC-28b 主人实测修正，2026-08-14）：
@@ -430,7 +464,7 @@ impl GroupRoomTool {
         // 会话 ID——每个 ID 先校验存在，再登记 groupChats；禁按数量新建匿名
         // 会话 R-GC-28 回退）。
         for member_id in members {
-            Self::validate_session_exists(coordinator, member_id)?;
+            Self::validate_session_exists(coordinator, member_id).await?;
             Self::add_group_member(coordinator, workspace, &group_session_id, member_id).await?;
         }
 
@@ -449,8 +483,8 @@ impl GroupRoomTool {
         group_id: &str,
         member_session_id: &str,
     ) -> BitFunResult<()> {
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
-        Self::validate_session_exists(coordinator, member_session_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
+        Self::validate_session_exists(coordinator, member_session_id).await?;
         Self::add_group_member(coordinator, &group_workspace, group_id, member_session_id).await
     }
 
@@ -460,7 +494,7 @@ impl GroupRoomTool {
         group_id: &str,
         member_session_id: &str,
     ) -> BitFunResult<()> {
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let manager = coordinator.get_session_manager();
         manager
             .update_session_metadata(&PathBuf::from(&group_workspace), group_id, |metadata| {
@@ -500,7 +534,7 @@ impl GroupRoomTool {
         content: &str,
         sender_session_id: &str,
     ) -> BitFunResult<String> {
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let sender = Self::resolve_sender_identity(coordinator, sender_session_id, &group_workspace)
             .await;
 
@@ -683,7 +717,7 @@ impl GroupRoomTool {
         limit: Option<usize>,
     ) -> BitFunResult<Vec<GroupMessage>> {
         let manager = coordinator.get_session_manager();
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let messages = manager
             .get_messages(group_id)
             .await
@@ -836,7 +870,7 @@ impl GroupRoomTool {
     ) -> BitFunResult<String> {
         use bitfun_services_core::session::{SessionBranchBoundary, SessionBranchRequest};
 
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let manager = coordinator.get_session_manager();
 
         // branch_session：从主群 fork 子群（规划/审查/执行小群）。
@@ -857,8 +891,21 @@ impl GroupRoomTool {
         // 登记子群成员（群聊重建 Type-Contract §三.3：fork members = 调用方
         // 传入的真实会话 ID，每个校验存在后登记子群 groupChats；禁按数量
         // 新建匿名会话 R-GC-28 回退）。
+        // R-GC-38（P2）：members 为空 → 登记子群自身 ID 到子群 groupChats
+        // （群主=子群自身，契约 §六.1）——branch_session 已继承主群
+        // custom_metadata 的 groupChats（主群成员），空成员 fork 时再登记
+        // 子群自身，保证子群有群标记 + 成员表非空（list_group_chats 识别）。
+        if members.is_empty() {
+            Self::add_group_member(
+                coordinator,
+                &group_workspace,
+                &child_session_id,
+                &child_session_id,
+            )
+            .await?;
+        }
         for member_id in members {
-            Self::validate_session_exists(coordinator, member_id)?;
+            Self::validate_session_exists(coordinator, member_id).await?;
             Self::add_group_member(coordinator, &group_workspace, &child_session_id, member_id)
                 .await?;
         }
@@ -894,7 +941,7 @@ impl GroupRoomTool {
         member_session_id: &str,
     ) -> BitFunResult<Value> {
         let manager = coordinator.get_session_manager();
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let group_metadata = manager
             .load_session_metadata(&PathBuf::from(&group_workspace), group_id)
             .await
@@ -934,11 +981,64 @@ impl GroupRoomTool {
     }
 
     /// 删除群聊 = 删群会话（type-contract §二.9）。
+    ///
+    /// R-GC-38（P2）：删除前遍历群成员表，逐个清除成员会话 custom_metadata
+    /// .groupChats 里的本群反标（文档 §7 声称「delete 级联清成员反标」对齐）。
+    /// 反标 = 成员会话 custom_metadata.groupChats 数组中的群 ID（旧模型
+    /// group_chat_membership.rs:18 同键）；单成员反标清除失败 → warn 继续
+    /// （S-38 防幽灵，先例 delete_room_impl 逐成员清反标单成员失败 warn 继续），
+    /// 不阻塞群会话删除。随后删群会话本体（coordinator.delete_session）。
     async fn delete_group(
         coordinator: &ConversationCoordinator,
         group_id: &str,
     ) -> BitFunResult<()> {
-        let group_workspace = Self::group_workspace(coordinator, group_id)?;
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
+        let manager = coordinator.get_session_manager();
+
+        // 删除前：遍历群成员表（groupChats）逐个清反标。
+        if let Ok(Some(group_metadata)) = manager
+            .load_session_metadata(&PathBuf::from(&group_workspace), group_id)
+            .await
+        {
+            let group_members = group_metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|m| m.get("groupChats"))
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            for member in group_members {
+                let Some(member_session_id) = member.as_str() else {
+                    continue;
+                };
+                if member_session_id == group_id {
+                    continue;
+                }
+                if let Err(error) = manager
+                    .update_session_metadata(&PathBuf::from(&group_workspace), member_session_id, |metadata| {
+                        let custom = metadata
+                            .custom_metadata
+                            .get_or_insert_with(|| json!({}))
+                            .as_object_mut()
+                            .expect("custom_metadata is always an object");
+                        if let Some(members) = custom.get_mut("groupChats").and_then(|v| v.as_array_mut())
+                        {
+                            members.retain(|v| v.as_str() != Some(group_id));
+                            if members.is_empty() {
+                                custom.remove("groupChats");
+                            }
+                        }
+                    })
+                    .await
+                {
+                    warn!(
+                        "R-GC-38: failed to clear group member back-mark during delete: member_session_id={}, group_id={}, error={}",
+                        member_session_id, group_id, error
+                    );
+                }
+            }
+        }
+
         coordinator
             .delete_session(std::path::Path::new(&group_workspace), group_id)
             .await
@@ -1853,6 +1953,7 @@ mod tests {
             ));
             std::fs::create_dir_all(&workspace).expect("workspace dir");
             run_group_roundtrip(&coordinator, &workspace).await;
+            run_restart_unloaded_fallback(&coordinator, &workspace).await;
             return;
         }
 
@@ -1923,6 +2024,88 @@ mod tests {
         ));
         std::fs::create_dir_all(&workspace).expect("workspace dir");
         run_group_roundtrip(&coordinator, &workspace).await;
+        run_restart_unloaded_fallback(&coordinator, &workspace).await;
+    }
+
+    /// R-GC-38（P1 升级 + 扩展）：重启未加载场景磁盘回退。
+    ///
+    /// 模拟「重启后会话未加载进内存」：
+    /// 1. 创建真实成员会话 + 建群（磁盘已持久化）；
+    /// 2. `evict_loaded_session_for_test`（session_manager.rs:541，pub(crate)
+    ///    测试专用：仅从内存移除，磁盘保留）把群会话与成员会话踢出内存；
+    /// 3. 断言 validate_session_exists（磁盘回退）不误拒真实磁盘会话；
+    /// 4. 断言 group_workspace（磁盘回退）可解析群 workspace → 群操作
+    ///    （invite/send/history/fork）不报「does not exist in memory」。
+    async fn run_restart_unloaded_fallback(
+        coordinator: &std::sync::Arc<ConversationCoordinator>,
+        workspace: &std::path::Path,
+    ) {
+        let manager = coordinator.get_session_manager();
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        // 建群（2 真实成员）→ 磁盘持久化完成。
+        let member_a = create_member_session_for_test(coordinator, &workspace_str).await;
+        let member_b = create_member_session_for_test(coordinator, &workspace_str).await;
+        let group_id = GroupRoomTool::create_group(
+            coordinator,
+            "重启未加载群",
+            &[member_a.clone(), member_b.clone()],
+            &workspace_str,
+        )
+        .await
+        .expect("create group for restart-unloaded fallback");
+
+        // 模拟重启：群会话 + 成员会话从内存移除（磁盘保留）。
+        manager.evict_loaded_session_for_test(&group_id);
+        manager.evict_loaded_session_for_test(&member_a);
+        manager.evict_loaded_session_for_test(&member_b);
+        assert!(
+            manager.get_session(&group_id).is_none(),
+            "setup: group session must be evicted from memory"
+        );
+        assert!(
+            manager.get_session(&member_a).is_none(),
+            "setup: member A must be evicted from memory"
+        );
+
+        // 1) validate_session_exists 磁盘回退：真实磁盘会话不误拒。
+        GroupRoomTool::validate_session_exists(coordinator, &member_a)
+            .await
+            .expect("R-GC-38: disk-persisted member session must pass validation after restart");
+
+        // 2) 群操作磁盘回退：invite（依赖 group_workspace + validate_session_exists）。
+        GroupRoomTool::invite_member(coordinator, &group_id, &member_a)
+            .await
+            .expect("R-GC-38: invite must not report 'does not exist in memory' after restart");
+        // invite 幂等：member_a 已登记 → 不重复。
+        let metadata_after_invite = manager
+            .load_session_metadata(workspace, &group_id)
+            .await
+            .expect("load group metadata")
+            .expect("metadata exists");
+        let members_after_invite = metadata_after_invite
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            members_after_invite
+                .iter()
+                .any(|v| v.as_str() == Some(member_a.as_str())),
+            "invited member A must be registered after restart-fallback invite"
+        );
+
+        // 3) history 磁盘回退（依赖 group_workspace）：不报 memory 错（可空历史，欢迎 turn 在）。
+        let history = GroupRoomTool::get_history(coordinator, &group_id, None)
+            .await
+            .expect("R-GC-38: history must not report 'does not exist in memory' after restart");
+        // 欢迎 turn 是 User 消息 → 历史非空（create 写 welcome）。
+        assert!(
+            !history.is_empty(),
+            "history must contain the group welcome turn after restart"
+        );
     }
 
     /// 测试环境无全局 config service → 注入 TEST_MODEL_RESOLUTION_AI_CONFIG
@@ -2396,6 +2579,83 @@ mod tests {
                 .iter()
                 .any(|t| t.user_message.content == "第一条群消息"),
             "child must inherit parent turns"
+        );
+
+        // ── R-GC-38（P2）：fork 空成员 → 子群默认登记自身 → 有群标记 ──
+        // 契约 §六.1：members 为空 → 登记子群自身 ID 到子群 groupChats
+        // （群主=子群自身）。branch_session 继承主群 groupChats（3 成员），
+        // 空成员 fork 再登记子群自身 → 成员表非空且含子群自身；
+        // list_group_chats 过滤 groupChats 标记 → 子群可被识别。
+        let empty_member_child_id = GroupRoomTool::fork_group(
+            coordinator,
+            &group_id,
+            "空成员子群",
+            Some(&message_id),
+            &[],
+        )
+        .await
+        .expect("fork with empty members must succeed (R-GC-38 default self-registration)");
+        assert!(
+            !empty_member_child_id.is_empty(),
+            "empty-member child id must be non-empty"
+        );
+        let empty_child_metadata = manager
+            .load_session_metadata(workspace, &empty_member_child_id)
+            .await
+            .expect("load empty-member child metadata")
+            .expect("empty-member child metadata exists");
+        let empty_child_members = empty_child_metadata
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !empty_child_members.is_empty(),
+            "R-GC-38: empty-member fork child must have a non-empty groupChats (self-registered)"
+        );
+        assert!(
+            empty_child_members
+                .iter()
+                .any(|v| v.as_str() == Some(empty_member_child_id.as_str())),
+            "R-GC-38: empty-member fork child must register itself (群主=子群自身)"
+        );
+        // list_group_chats 识别：子群带 groupChats 标记 → 出现在群聊列表。
+        let groups_after_empty_fork = GroupRoomTool::list_groups(coordinator, &workspace_str)
+            .await
+            .expect("list groups after empty-member fork");
+        assert!(
+            groups_after_empty_fork
+                .iter()
+                .any(|g| g.get("groupId").and_then(Value::as_str) == Some(empty_member_child_id.as_str())),
+            "R-GC-38: empty-member fork child must be recognized by list_group_chats"
+        );
+
+        // ── R-GC-38（P2）：delete_group 级联清成员反标 ──
+        // 删除群前遍历群成员表清反标（成员会话 custom_metadata.groupChats
+        // 移除本群 ID；清空后整个键移除）→ 删除后成员会话无本群反标残留。
+        GroupRoomTool::delete_group(coordinator, &group_id)
+            .await
+            .expect("delete group must succeed");
+        // 删除后：成员 A 的反标（groupChats）不再含 group_id。
+        let member_a_metadata = manager
+            .load_session_metadata(workspace, &member_a)
+            .await
+            .expect("load member A metadata")
+            .expect("member A metadata exists");
+        let member_a_groups = member_a_metadata
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !member_a_groups
+                .iter()
+                .any(|v| v.as_str() == Some(group_id.as_str())),
+            "R-GC-38: delete must clear the group back-mark on member A"
         );
 
         // 只读 action 可经 Tool 接口并发安全调用（不依赖全局 coordinator 的调用路径）。
