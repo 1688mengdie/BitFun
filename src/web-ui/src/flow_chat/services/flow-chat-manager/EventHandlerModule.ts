@@ -97,7 +97,6 @@ import {
 
 const log = createLogger('EventHandlerModule');
 const TURN_COMPLETION_QUIET_WINDOW_MS = 500;
-const SUBAGENT_NOTIFY_BODY_MAX_LENGTH = 200;
 const SUBAGENT_NOTIFY_SESSION_DEBOUNCE_MS = 3000;
 const SUBAGENT_NOTIFY_GLOBAL_THROTTLE_MS = 2000;
 const lastSubagentNotifyAt = new Map<string, number>();
@@ -181,6 +180,7 @@ export const __test_only__ = {
   handleTextChunk,
   handleTokenUsageUpdate,
   handleCompressionCompleted,
+  notifySubagentTurnCompleted,
 };
 
 function shouldMarkUnreadCompletion(sessionId: string): boolean {
@@ -660,14 +660,6 @@ function resolveSubagentNotifyTitle(sessionId: string, agentType: string | undef
   return agentType?.trim() || sessionId;
 }
 
-function compactTextForNotification(text: string, maxLength: number): string {
-  const compact = text.replace(/\s+/g, ' ').trim();
-  if (compact.length <= maxLength) {
-    return compact;
-  }
-  return `${compact.slice(0, maxLength).trimEnd()}...`;
-}
-
 async function notifySubagentTurnCompleted(
   childSessionId: string,
   parentSessionId: string,
@@ -675,6 +667,10 @@ async function notifySubagentTurnCompleted(
   outputText: string | undefined,
   status: string | undefined,
 ): Promise<void> {
+  // The full reply is intentionally NOT part of the desktop notification body
+  // (Type-Contract R-TA-01: body is minimal metadata only). It is still
+  // received here so the event-card projection stays untouched.
+  void outputText;
   const now = Date.now();
 
   // Debounce repeated completion events for the same subagent, and throttle
@@ -708,10 +704,15 @@ async function notifySubagentTurnCompleted(
   }
 
   const completionKind = resolveSubagentCompletionKind(status);
-  const trimmedOutput = outputText?.trim();
-  const body = trimmedOutput
-    ? compactTextForNotification(trimmedOutput, SUBAGENT_NOTIFY_BODY_MAX_LENGTH)
-    : i18nService.t(`flow-chat:subagent.${completionKind}Notification`);
+  const statusText = i18nService.t(`flow-chat:subagent.${completionKind}Notification`);
+  const agentLabel = agentType?.trim() || childSessionId;
+  const body = [
+    statusText,
+    `Agent: ${agentLabel}`,
+    `Status: ${completionKind}`,
+    `Session: ${childSessionId}`,
+    `Full reply: SessionHistory(${childSessionId})`,
+  ].join(' · ');
 
   await systemAPI.sendSystemNotification(
     resolveSubagentNotifyTitle(childSessionId, agentType),
