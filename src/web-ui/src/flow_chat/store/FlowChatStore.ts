@@ -6790,6 +6790,16 @@ config: {
           remoteSshHost,
         );
         const persistedCurrentContextUsage = persistedCurrentContextUsageValue(metadata);
+        // R-GC-35: group sessions are ordinary sessions whose group marker
+        // lives in the backend session metadata (`customMetadata.groupChats` =
+        // member session id array, written by group_room_tools.rs). A group
+        // whose customMetadata carries a non-empty groupChats array restores
+        // isGroupChat after a restart, so SessionScene keeps routing it to
+        // GroupChatView. Empty/missing arrays keep the marker undefined.
+        const rawGroupChats = (metadata as any)?.customMetadata?.groupChats;
+        const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
+          ? true
+          : undefined;
 
         this.setState(prev => {
           if (!scope.isCurrent() || prev.sessions.has(metadata.sessionId)) {
@@ -6854,6 +6864,7 @@ config: {
             deepReviewRunManifest: metadata.deepReviewRunManifest,
             reviewTargetEvidence: metadata.reviewTargetEvidence,
             isTransient: false,
+            isGroupChat: restoredGroupChat,
           };
 
           const newSessions = new Map(prev.sessions);
@@ -7253,6 +7264,14 @@ config: {
             remoteSshHost,
           );
           const persistedCurrentContextUsage = persistedCurrentContextUsageValue(metadata);
+          // R-GC-35: restore the group chat marker from backend session
+          // metadata (`customMetadata.groupChats`, group_room_tools.rs) so
+          // group sessions keep routing to GroupChatView after a restart.
+          // Empty/missing arrays keep the marker undefined.
+          const rawGroupChats = (metadata as any)?.customMetadata?.groupChats;
+          const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
+            ? true
+            : undefined;
 
           this.setState(prev => {
             if (!scope.isCurrent() || prev.sessions.has(metadata.sessionId)) {
@@ -7317,6 +7336,7 @@ config: {
               deepReviewRunManifest: metadata.deepReviewRunManifest,
               reviewTargetEvidence: metadata.reviewTargetEvidence,
               isTransient: false,
+              isGroupChat: restoredGroupChat,
             };
 
             const newSessions = new Map(prev.sessions);
@@ -7388,15 +7408,26 @@ config: {
   }
 
   /**
-   * R-GC-14: mark a session as a group chat (group chat = ordinary session,
-   * v3 decision). UI-local marker used by SessionScene to render
-   * GroupChatView. Never persisted; derived from the group chat create flow
-   * (MainNav), not the backend session metadata.
+   * R-GC-14 / R-GC-35: mark a session as a group chat (group chat = ordinary
+   * session, v3 decision). UI-local marker used by SessionScene to render
+   * GroupChatView; set live by the group chat create flow (MainNav), and
+   * restored from the backend session metadata (`customMetadata.groupChats`)
+   * when sessions reload after a restart (R-GC-35 restore path keeps this
+   * marker persistent across restarts).
    */
   public markSessionAsGroupChat(sessionId: string): void {
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
-      if (!session || session.isGroupChat === true) {
+      if (!session) {
+        // R-GC-35 (defensive): a missing session means the group marker would
+        // be silently dropped — the group was created on the backend but the
+        // local session registration (MainNav.handleGroupChatCreated calls
+        // createSession before markSessionAsGroupChat) did not land. Surface
+        // the skip instead of silently losing the GroupChatView routing.
+        log.warn('markSessionAsGroupChat skipped: session not found', { sessionId });
+        return prev;
+      }
+      if (session.isGroupChat === true) {
         return prev;
       }
 

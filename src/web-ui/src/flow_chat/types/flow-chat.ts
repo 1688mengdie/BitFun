@@ -492,11 +492,14 @@ export interface Session {
   sessionKind: SessionKind;
 
   /**
-   * R-GC-14: true when this session is a group chat (group chat = ordinary
-   * session, v3 decision). UI-local marker set by the group chat flow (MainNav
-   * handleGroupChatCreated); group sessions render GroupChatView instead of the
-   * plain agent chat surface. Never persisted — derived from the group chat
-   * create flow, not the backend.
+   * R-GC-14 / R-GC-35: true when this session is a group chat (group chat =
+   * ordinary session, v3 decision). Rendered as GroupChatView instead of the
+   * plain agent chat surface. Set live by the group chat create flow (MainNav
+   * handleGroupChatCreated -> markSessionAsGroupChat) and restored from the
+   * backend session metadata on reload: the backend marks group sessions via
+   * `customMetadata.groupChats` (member session ids array, group_room_tools.rs
+   * add_group_member), so a session whose metadata carries a `groupChats`
+   * array restores `isGroupChat = true` after a restart.
    */
   isGroupChat?: boolean;
 

@@ -308,9 +308,15 @@ describe('FlowChatStore group chat marker (R-GC-14)', () => {
     expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(before);
   });
 
-  it('is a no-op for a session that does not exist', () => {
+  it('is a no-op for a session that does not exist and surfaces the skip (R-GC-35)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     flowChatStore.markSessionAsGroupChat('missing-session');
     expect(flowChatStore.getState().sessions.has('missing-session')).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('markSessionAsGroupChat skipped: session not found'),
+      expect.objectContaining({ sessionId: 'missing-session' }),
+    );
+    warnSpy.mockRestore();
   });
 });
 
@@ -1515,6 +1521,57 @@ describe('FlowChatStore historical session hydration state', () => {
     });
   });
 
+  it('restores the group chat marker from backend metadata after reload (R-GC-35)', async () => {
+    // R-GC-35: after a restart the store reloads session metadata from the
+    // backend; a group session's metadata carries `customMetadata.groupChats`
+    // (member session id array written by group_room_tools.rs), so it must
+    // come back as isGroupChat = true and keep routing to GroupChatView.
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'group-1',
+        title: '项目群',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { groupChats: ['claw-1', 'claw-2'] },
+      },
+      {
+        sessionId: 'plain-1',
+        title: 'Plain session',
+        agentType: 'agentic',
+        modelName: 'auto',
+        createdAt: 11,
+        lastActiveAt: 21,
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('group-1')?.isGroupChat).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-1')?.isGroupChat).toBeUndefined();
+  });
+
+  it('does not treat an empty groupChats array as a group chat (R-GC-35)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'empty-group',
+        title: 'Empty group metadata',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { groupChats: [] },
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('empty-group')?.isGroupChat).toBeUndefined();
+  });
+
   it('keeps persisted workspace identity separate from remote execution scope', async () => {
     apiMocks.listSessions.mockResolvedValueOnce([
       {
@@ -2422,6 +2479,49 @@ describe('FlowChatStore historical session hydration state', () => {
       sessionId: 'history-1',
       historyState: 'metadata-only',
     });
+  });
+
+  it('restores the group chat marker from a paged metadata reload (R-GC-35)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessionsPage.mockResolvedValueOnce({
+      sessions: [
+        {
+          sessionId: 'group-page-1',
+          title: '项目群',
+          agentType: 'Claw',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+          customMetadata: { groupChats: ['claw-1', 'claw-2'] },
+        },
+        {
+          sessionId: 'plain-page-1',
+          title: 'Plain session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 11,
+          lastActiveAt: 21,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 2,
+      loadedTopLevelCount: 2,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'nav_initial'
+    );
+
+    expect(flowChatStore.getState().sessions.get('group-page-1')?.isGroupChat).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-page-1')?.isGroupChat).toBeUndefined();
   });
 
   it('filters tombstone-deleted sessions out of the paged metadata path', async () => {
