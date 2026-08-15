@@ -347,7 +347,10 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         action: 'send',
         group_id: 'group-1',
         content: '大家好',
-        sender_session_id: 'group-1',
+        // R-GC-34 (owner identity P0 fix): group chat owner = master actor
+        // (GROUP_MASTER_ACTOR reserved word), NOT the group session id. The
+        // backend resolves it to Commander + L0 + localized owner name.
+        sender_session_id: '__master__',
       },
       workspacePath: '/workspace-a',
     });

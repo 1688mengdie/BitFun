@@ -398,13 +398,20 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
     try {
       // Contract section 1.4: go through execute_tool (camelCase). Bare
       // invoke('send_group_message') is forbidden (R-GC-05 removed the command).
+      // R-GC-34 (owner identity P0 fix, plan B): the group chat owner is the
+      // master actor, not the group session itself. sender_session_id uses the
+      // GROUP_MASTER_ACTOR reserved word ("__master__", local_customizations.rs:
+      // 96). The backend resolves it to Commander role + L0 depth + localized
+      // owner name, so the bubble renders "[Commander L0] Owner" instead of
+      // "[Agent L0] <group name>" (sender badge reads metadata.senderRole/
+      // senderName, UserMessageItem.tsx:219).
       const response = await toolAPI.executeTool({
         toolName: 'send_group_message',
         parameters: {
           action: 'send',
           group_id: groupId,
           content,
-          sender_session_id: groupId,
+          sender_session_id: '__master__',
         },
         workspacePath,
       });

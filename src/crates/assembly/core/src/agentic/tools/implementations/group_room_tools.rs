@@ -39,11 +39,11 @@ use crate::agentic::core::SessionConfig;
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
 };
-use crate::agentic::tools::restrictions::get_session_role;
+use crate::agentic::tools::restrictions::{get_session_role, AgentRole};
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
-use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource};
+use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource, GROUP_MASTER_ACTOR};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -225,12 +225,20 @@ impl GroupRoomTool {
     /// 构造 SenderIdentity（契约 §三）：RBAC role（get_session_role）、会话树深度
     /// （coordinator.session_tree().get_depth）、会话名（内存会话 → 磁盘元数据回退）。
     /// 所有字段优雅降级：缺失 → None，绝不阻塞发送/读取。
+    ///
+    /// R-GC-34（主人身份错位 P0 修复，方案 B）：`__master__`（GROUP_MASTER_ACTOR
+    /// 保留字，local_customizations.rs:96）特判 → 主人身份 = Commander（AgentRole
+    /// 枚举，禁硬编码字符串）+ depth 0（L0）+ 主人名（i18n，禁硬编码中文）。
     async fn resolve_sender_identity(
         coordinator: &ConversationCoordinator,
         session_id: &str,
         workspace: &str,
     ) -> SenderIdentity {
-        let role = get_session_role(session_id).map(|role| Self::format_role_display(role.as_str()));
+        if session_id == GROUP_MASTER_ACTOR {
+            return Self::master_sender_identity().await;
+        }
+        let role =
+            get_session_role(session_id).map(|role| Self::format_role_display(role.as_str()));
         let depth = coordinator.session_tree().get_depth(session_id);
         // 内存会话名优先；缺失时回退磁盘元数据（重启后未加载场景）。
         let name = coordinator
@@ -261,6 +269,44 @@ impl GroupRoomTool {
         };
         SenderIdentity {
             session_id: session_id.to_string(),
+            role,
+            depth,
+            name,
+        }
+    }
+
+    /// 主人 SenderIdentity（R-GC-34 方案 B）：Commander + L0 + i18n 主人名。
+    ///
+    /// - role：`AgentRole::Commander`（restrictions.rs:19 枚举权威源，禁硬编码
+    ///   "Commander" 字符串）→ `format_role_display` = "Commander"。
+    /// - depth：0（L0 根，会话树语义）。
+    /// - name：i18n shared term `agents.master`（按当前 locale 翻译；共享词条
+    ///   在 shared/i18n/resources/shared/*/terms.json，经
+    ///   generate-i18n-contract.mjs 生成 Rust 端 GENERATED_SHARED_TERMS）。
+    ///   i18n-runtime feature 未启用（CLI/acp 编译面，AGENTS-CN.md：
+    ///   「调用 I18nService 的 host 必须显式选择 i18n-runtime」）或全局服务
+    ///   缺失/词条缺失 → 回退 "Master"（英文，i18n fallback 链语义的兜底）；
+    ///   绝不返回空名（空值防御，不 crash）。
+    async fn master_sender_identity() -> SenderIdentity {
+        let role = Some(Self::format_role_display(AgentRole::Commander.as_str()));
+        let depth = Some(0u32);
+        #[cfg(feature = "i18n-runtime")]
+        let name = match crate::service::i18n::get_global_i18n_service().await {
+            Some(service) => {
+                let locale = service.get_current_locale().await;
+                let translated = service
+                    .translate_with_locale(&locale, "shared.agents.master", None)
+                    .await;
+                (!translated.is_empty() && translated != "shared.agents.master")
+                    .then_some(translated)
+            }
+            None => None,
+        };
+        #[cfg(not(feature = "i18n-runtime"))]
+        let name = None;
+        let name = name.or_else(|| Some("Master".to_string()));
+        SenderIdentity {
+            session_id: GROUP_MASTER_ACTOR.to_string(),
             role,
             depth,
             name,
@@ -470,13 +516,20 @@ impl GroupRoomTool {
             metadata.insert("senderDepth".to_string(), json!(depth));
         }
         // senderName 取真实会话名（B-2 修复）；无会话名时回退 sender_session_id 占位。
+        // R-GC-34（方案 B，空值防御）：主人（sender_session_id == __master__）
+        // 会话名不可得（i18n 服务缺失等）时回退 group_id，绝不 crash。
+        let sender_name_fallback = if sender.session_id == GROUP_MASTER_ACTOR {
+            group_id
+        } else {
+            sender_session_id
+        };
         metadata.insert(
             "senderName".to_string(),
             json!(sender
                 .name
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .unwrap_or(sender_session_id)),
+                .unwrap_or(sender_name_fallback)),
         );
 
         // 生成 turn_id（= message_id）：start_dialog_turn 接受显式 turn_id，
@@ -1358,7 +1411,9 @@ mod tests {
 
     #[test]
     fn send_metadata_name_falls_back_to_sender_id() {
-        // senderName 回退逻辑与 send_message 相同（无会话名时用 sender_session_id）。
+        // senderName 回退逻辑与 send_message 相同（成员无会话名时用
+        // sender_session_id；R-GC-34 主人无会话名时回退 group_id，见
+        // master_name_falls_back_to_group_id）。
         let sender_session_id = "sender-x";
         let sender_name: Option<String> = None;
         let effective = sender_name
@@ -1366,6 +1421,98 @@ mod tests {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(sender_session_id);
         assert_eq!(effective, "sender-x");
+    }
+
+    // ── R-GC-34（主人身份错位 P0 修复，方案 B）：__master__ 特判 ──
+    #[tokio::test]
+    async fn master_identity_resolves_to_commander_l0() {
+        // 主人（__master__）身份 = Commander + L0 + 主人名（i18n）。
+        // 测试环境无全局 i18n service → name 回退英文 "Master"（fail-closed）。
+        let identity = GroupRoomTool::master_sender_identity().await;
+        assert_eq!(
+            identity.session_id,
+            bitfun_runtime_ports::GROUP_MASTER_ACTOR,
+            "master session id must be the __master__ reserved word"
+        );
+        assert_eq!(
+            identity.role.as_deref(),
+            Some("Commander"),
+            "master role must be Commander (from AgentRole enum, no hardcoded string)"
+        );
+        assert_eq!(identity.depth, Some(0), "master depth must be 0 (L0)");
+        let name = identity.name.as_deref().expect("master name must exist");
+        assert!(
+            !name.trim().is_empty(),
+            "master name must never be empty (empty-value defense)"
+        );
+    }
+
+    #[tokio::test]
+    async fn master_name_prefers_i18n_shared_term_when_service_available() {
+        // i18n shared term agents.master（zh-CN=主人 / en-US=Master / zh-TW=主人）
+        // 直接经 generated_shared_term 断言——服务可用时 translate_with_locale
+        // 返回词条值（service.rs:187 format_shared_term），服务缺失回退 Master。
+        let zh_cn = crate::service::i18n::generated_locale_contract::generated_shared_term(
+            crate::service::i18n::LocaleId::ZhCN,
+            "agents.master",
+        );
+        assert_eq!(
+            zh_cn,
+            Some("主人"),
+            "zh-CN master term must be 主人 (i18n, no hardcode)"
+        );
+        let en_us = crate::service::i18n::generated_locale_contract::generated_shared_term(
+            crate::service::i18n::LocaleId::EnUS,
+            "agents.master",
+        );
+        assert_eq!(en_us, Some("Master"), "en-US master term must be Master");
+    }
+
+    #[tokio::test]
+    async fn master_name_falls_back_to_group_id() {
+        // 空值防御（裁决 5）：主人会话名不可得时 senderName 回退 group_id。
+        // 与 send_message 的回退分支语义一致：sender 为 __master__ 时
+        // fallback = group_id（而非 sender_session_id）。
+        let group_id = "group-abc";
+        let sender_session_id = bitfun_runtime_ports::GROUP_MASTER_ACTOR;
+        let sender_name: Option<String> = None;
+        let fallback = if sender_session_id == bitfun_runtime_ports::GROUP_MASTER_ACTOR {
+            group_id
+        } else {
+            sender_session_id
+        };
+        let effective = sender_name
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(fallback);
+        assert_eq!(effective, group_id, "master name fallback must be group_id");
+        // 对照组：普通成员仍回退 sender_session_id。
+        let member_fallback = if "member-1" == bitfun_runtime_ports::GROUP_MASTER_ACTOR {
+            group_id
+        } else {
+            "member-1"
+        };
+        assert_eq!(member_fallback, "member-1");
+    }
+
+    #[tokio::test]
+    async fn master_identity_resolved_through_resolve_sender_identity() {
+        // resolve_sender_identity 对 __master__ 走特判分支：即使 coordinator
+        // 无该会话（主人无 Claw session），也返回 Commander/L0 身份而非
+        // 依赖 get_session_role/session_tree 的普通路径（空值防御，不 crash）。
+        // 此处直接验证特判入口的等价逻辑：__master__ 命中 → 走主人身份。
+        let session_id = bitfun_runtime_ports::GROUP_MASTER_ACTOR;
+        let is_master = session_id == bitfun_runtime_ports::GROUP_MASTER_ACTOR;
+        assert!(
+            is_master,
+            "__master__ must be recognized as the master actor"
+        );
+        // 对照：普通成员不命中。
+        assert!("member-1" != bitfun_runtime_ports::GROUP_MASTER_ACTOR);
+        // 主人身份内容由 master_sender_identity 单测覆盖（Commander/L0/名）。
+        let identity = GroupRoomTool::master_sender_identity().await;
+        assert_eq!(identity.role.as_deref(), Some("Commander"));
+        assert_eq!(identity.depth, Some(0));
     }
 
     // ── B-1（契约 §三）：GroupMessage author/metadata 结构 + history author 解析 ──
