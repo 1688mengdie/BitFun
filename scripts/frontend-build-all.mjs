@@ -4,7 +4,7 @@
  * Runs the independent pre-bundle build pipelines in parallel:
  *   - build:web            (type-check + vite build + monaco asset verify)
  *   - prepare:mobile-web   (mobile-web install/build with mtime short-circuit)
- *   - prepare:dsh-profile  (the DeepSeek Harness bridge Tauri ships as a resource)
+ *   - prepare:dsh-profile  (the DeepSeek Harness bridge official desktop:build ships)
  *
  * Used as the Tauri beforeBuildCommand so the stage costs max(…) instead of
  * their sum. Any failure fails the whole script with a non-zero exit code.

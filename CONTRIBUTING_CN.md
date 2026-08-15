@@ -39,9 +39,6 @@ pnpm run check:build-prereqs -- --fix  # 尝试自动修复缺失的前置依赖
 - 缺少 `src/mobile-web/dist`（修复：`pnpm run prepare:mobile-web` —
   bitfun-desktop 的 Tauri 构建脚本将该目录作为资源引用，缺失时
   `cargo check -p bitfun-desktop` 和 `cargo check --workspace` 会失败）
-- 缺少 `packages/dsh-acp/dist-profile`（修复：`pnpm run prepare:dsh-profile` —
-  DeepSeek Harness bridge，同样以 Tauri 资源方式引用；不需要该 bridge 时可用
-  `BITFUN_SKIP_DSH_PROFILE=1` 写一个占位目录）
 - 缺少 sherpa-onnx 预编译库（sherpa-onnx-sys 构建脚本会在构建时从
   GitHub 下载；若网络连通性差导致下载失败，设置
   `SHERPA_ONNX_LIB_DIR` 指向 `target/sherpa-onnx-prebuilt/` 下的预编译
@@ -58,6 +55,7 @@ pnpm install
 ```bash
 # Desktop（日常开发推荐）
 pnpm run desktop:dev                # 完整热更新：Vite HMR + Rust 自动重编译并重启
+pnpm run prepare:dsh-profile        # 可选：编译 DeepSeek Harness 桥，供本地会话使用
 
 # Desktop（轻量预览，无 Rust 自动重编译）
 pnpm run desktop:preview:debug      # 复用预构建二进制 + Vite HMR；Rust 改动需手动重启
