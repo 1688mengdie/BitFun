@@ -50,13 +50,6 @@
 
   }
 
-  &__inline-empty {
-    font-size: var(--bf-appearance-token-font-size-xs);
-    color: var(--bf-appearance-token-color-text-muted);
-    padding: 4px $size-gap-1;
-    font-style: italic;
-  }
-
   &__inline-loading {
     display: flex;
     align-items: center;

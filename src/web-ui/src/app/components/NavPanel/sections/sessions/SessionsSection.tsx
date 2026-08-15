@@ -1203,21 +1203,12 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
       );
     }
     return (
-      <div className="bitfun-nav-panel__inline-list">
-        <div className="bitfun-nav-panel__inline-empty" aria-disabled="true">
-          {t('nav.sessions.noSessions')}
-        </div>
-      </div>
+      <div data-bf-component="sessions-section" data-bf-part="root" className="bitfun-nav-panel__inline-list" />
     );
   }
 
   return (
     <div className="bitfun-nav-panel__inline-list" ref={sessionListRef}>
-      {topLevelSessions.length === 0 ? (
-        <div className="bitfun-nav-panel__inline-empty">
-          {t('nav.sessions.noSessions')}
-        </div>
-      ) : null}
       {visibleItems.map(({ session, depth }) => {
           const isEditing = editingSessionId === session.sessionId;
           const relationship = resolveSessionRelationship(session);

@@ -223,7 +223,6 @@
       "newAssistantSessionFor": "New session with {{assistantName}}",
       "modeCode": "Code",
       "modeCowork": "Cowork",
-      "noSessions": "No sessions",
       "filterLocal": "Local",
       "filterLabel": "Target",
       "filterAll": "All",

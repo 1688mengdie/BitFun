@@ -223,7 +223,6 @@
       "newAssistantSessionFor": "为 {{assistantName}} 新建会话",
       "modeCode": "Code",
       "modeCowork": "Cowork",
-      "noSessions": "暂无会话",
       "filterLocal": "本机",
       "filterLabel": "目标",
       "filterAll": "全部",
