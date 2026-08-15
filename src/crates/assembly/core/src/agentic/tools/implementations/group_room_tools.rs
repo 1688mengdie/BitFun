@@ -4,7 +4,8 @@
 //! R-GC-08：9 个 action（create/invite/remove/send/history/list/fork/
 //! member_status/delete），复用现成机制：
 //! - 建群 = `coordinator.create_session_with_workspace`（coordinator.rs:2659）
-//! - 拉成员 = 同上建成员 Claw 会话（各自 workspace）
+//! - 成员 = 调用方传入的真实会话 ID（校验存在后登记 groupChats；
+//!   群聊重建 Type-Contract §二，R-GC-28 按数量新建匿名会话已回退）
 //! - 发消息 = 群会话 turns（`PersistenceManager::save_dialog_turn`，
 //!   persistence/manager.rs:3089；`user_message.metadata` 带 sender+groupId，
 //!   types.rs:662）
@@ -282,6 +283,25 @@ impl GroupRoomTool {
             })
     }
 
+    /// 校验成员会话真实存在（群聊重建 Type-Contract §二：成员 = 调用方传入
+    /// 的真实会话 ID，禁按数量新建匿名会话）。
+    ///
+    /// 复用现成 `session_manager.get_session`（session_manager.rs:3075，
+    /// coordinator.rs:3060 同源）做存在性校验——会话不存在 → 返回明确错误
+    /// Err("member session not found: {session_id}")（禁静默跳过 R-3）。
+    fn validate_session_exists(
+        coordinator: &ConversationCoordinator,
+        session_id: &str,
+    ) -> BitFunResult<()> {
+        coordinator
+            .get_session_manager()
+            .get_session(session_id)
+            .ok_or_else(|| {
+                BitFunError::tool(format!("member session not found: {session_id}"))
+            })?;
+        Ok(())
+    }
+
     /// 群主默认对话类型（R-GC-28b 主人实测修正，2026-08-14）：
     /// 邀请/裂变成员会话类型 = Claw（非「智能体」agentic）。
     /// 复用现成 `coordinator::ASSISTANT_BOOTSTRAP_AGENT_TYPE`（coordinator.rs
@@ -295,42 +315,19 @@ impl GroupRoomTool {
     /// Claw 类型 agent 的 name()（ClawMode::name() = "Claw"，claw.rs:53）。
     /// 复用现成 `get_agent(agent_type, None)`（registry/mod.rs:177）→
     /// `Agent::name()`；缺失时回退 agent_type 本身（不炸）。
+    ///
+    /// 群聊重建 Type-Contract §三.5：create_member_session（按数量新建匿名
+    /// 成员会话）已移除（禁 dead_code 残留 C-10）——R-GC-28 丢弃入参 ID 的
+    /// 实现不再存在，成员 = 调用方传入的真实会话 ID。本函数保留为「显式
+    /// 新建成员」场景的命名权威源（契约 §二：default_group_agent_type/name
+    /// 保留仅用于显式新建成员场景）；当前无显式新建调用方，故标注
+    /// #[allow(dead_code)] 待该场景落地时恢复使用（C-10/C-11 零残留）。
+    #[allow(dead_code)]
     fn default_group_agent_name() -> String {
         get_agent_registry()
             .get_agent(Self::default_group_agent_type().as_str(), None)
             .map(|agent| agent.name().to_string())
             .unwrap_or_else(Self::default_group_agent_type)
-    }
-
-    /// 新建成员会话（R-GC-28 主人定标：成员全部新建，零复用已有 ID）。
-    ///
-    /// 每个成员 = 全新会话：唯一 UUID + Claw 类型（R-GC-28b：
-    /// default_group_agent_type = ASSISTANT_BOOTSTRAP_AGENT_TYPE）+ 默认
-    /// 对话显示名（Claw 名称，default_group_agent_name）+ 群 workspace。
-    /// 调用方传的 member_session_id 只是「成员选择来源/数量占位」，后端一律
-    /// 生成新 UUID——自然消除 "Session ID already exists"
-    /// （create_session_with_workspace 撞磁盘已存在 ID，session_manager.rs:513）。
-    async fn create_member_session(
-        coordinator: &ConversationCoordinator,
-        workspace: &str,
-    ) -> BitFunResult<String> {
-        let member_id = uuid::Uuid::new_v4().to_string();
-        let member_config = SessionConfig {
-            workspace_path: Some(workspace.to_string()),
-            project_workspace_path: Some(workspace.to_string()),
-            ..Default::default()
-        };
-        coordinator
-            .create_session_with_workspace(
-                Some(member_id.clone()),
-                Self::default_group_agent_name(),
-                Self::default_group_agent_type(),
-                member_config,
-                workspace.to_string(),
-            )
-            .await
-            .map_err(BitFunError::tool)?;
-        Ok(member_id)
     }
 
     /// 建群 = 建 Claw 对话类型会话（type-contract §二.1；R-GC-25/28b 群主
@@ -383,32 +380,32 @@ impl GroupRoomTool {
         )
         .await?;
 
-        // 建成员会话（R-GC-28：成员全部新建唯一 UUID 会话，零复用已有 ID，
-        // 一律默认对话类型 + Claw 名称 + 群 workspace）。
-        for _member_id in members {
-            let member_id = Self::create_member_session(coordinator, workspace).await?;
-            // 记入群成员表。
-            Self::add_group_member(coordinator, workspace, &group_session_id, &member_id).await?;
+        // 登记成员（群聊重建 Type-Contract §三.1：成员 = 调用方传入的真实
+        // 会话 ID——每个 ID 先校验存在，再登记 groupChats；禁按数量新建匿名
+        // 会话 R-GC-28 回退）。
+        for member_id in members {
+            Self::validate_session_exists(coordinator, member_id)?;
+            Self::add_group_member(coordinator, workspace, &group_session_id, member_id).await?;
         }
 
         Ok(group_session_id)
     }
 
-    /// 拉成员 = 新建默认对话类型成员会话（R-GC-28 主人定标）+ 记入群成员表。
+    /// 拉成员 = 校验调用方传入的真实会话 ID 存在 + 记入群成员表
+    /// （群聊重建 Type-Contract §三.2：invite = 登记已选真实会话，
+    /// 禁按数量新建匿名会话 R-GC-28 回退）。会话不存在 → Err（禁静默跳过）。
     ///
-    /// member_session_id 入参仅作「成员选择来源/数量占位」，后端一律新建
-    /// 唯一 UUID 会话（create_member_session）——零复用已有 ID，消除
-    /// "Session ID already exists"（旧实现把调用方传的已存在 ID 直接建会话，
-    /// create_session_with_workspace 撞磁盘已存在 ID 报错）。
+    /// 群 workspace 由 group_id 解析（group_workspace），不再接收入参
+    /// workspace（R-GC-R1R4 清理：旧签名的 workspace 仅用于新建匿名成员会话，
+    /// 已按新契约移除）。
     async fn invite_member(
         coordinator: &ConversationCoordinator,
         group_id: &str,
-        _member_session_id: &str,
-        workspace: &str,
+        member_session_id: &str,
     ) -> BitFunResult<()> {
         let group_workspace = Self::group_workspace(coordinator, group_id)?;
-        let member_id = Self::create_member_session(coordinator, workspace).await?;
-        Self::add_group_member(coordinator, &group_workspace, group_id, &member_id).await
+        Self::validate_session_exists(coordinator, member_session_id)?;
+        Self::add_group_member(coordinator, &group_workspace, group_id, member_session_id).await
     }
 
     /// 移除成员 = 从群会话 custom_metadata.groupChats 移除。
@@ -802,11 +799,12 @@ impl GroupRoomTool {
             .map_err(BitFunError::tool)?;
         let child_session_id = branch.session_id.clone();
 
-        // 子群成员新建（R-GC-28：成员全部新建唯一 UUID 会话，零复用已有 ID，
-        // 与 create/invite 一致）+ 记成员表。
-        for _member_id in members {
-            let member_id = Self::create_member_session(coordinator, &group_workspace).await?;
-            Self::add_group_member(coordinator, &group_workspace, &child_session_id, &member_id)
+        // 登记子群成员（群聊重建 Type-Contract §三.3：fork members = 调用方
+        // 传入的真实会话 ID，每个校验存在后登记子群 groupChats；禁按数量
+        // 新建匿名会话 R-GC-28 回退）。
+        for member_id in members {
+            Self::validate_session_exists(coordinator, member_id)?;
+            Self::add_group_member(coordinator, &group_workspace, &child_session_id, member_id)
                 .await?;
         }
 
@@ -1086,11 +1084,7 @@ Arguments:
                 let member = parsed.member_session_id.as_deref().ok_or_else(|| {
                     BitFunError::tool("member_session_id is required for invite".to_string())
                 })?;
-                let workspace = context
-                    .workspace_root()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                Self::invite_member(&coordinator, group_id, member, &workspace).await?;
+                Self::invite_member(&coordinator, group_id, member).await?;
                 json!({ "groupId": group_id, "member": member, "status": "invited" })
             }
             GroupRoomAction::Remove => {
@@ -1305,9 +1299,12 @@ mod tests {
         assert!(!actual.trim().is_empty(), "default agent type must be non-empty");
     }
 
-    // ── R-GC-28/28b 零硬编码（主人定标 2026-08-14）：成员名称 = Claw
+    // ── R-GC-28/28b 零硬编码（主人定标 2026-08-14）：群主默认名称 = Claw
     // 类型 agent 的显示名（ClawMode::name() = "Claw"），类型来自
-    // coordinator 常量、名称来自 AgentRegistry 单一事实源 ──
+    // coordinator 常量、名称来自 AgentRegistry 单一事实源。
+    // 群聊重建 Type-Contract §三.5：default_group_agent_name 保留为「显式
+    // 新建成员」场景命名权威源（当前无调用方，#[allow(dead_code)] 标注，
+    // 无 R-GC-28 匿名成员创建语义）。──
     #[test]
     fn default_group_agent_name_comes_from_agent_registry() {
         let agent_type = GroupRoomTool::default_group_agent_type();
@@ -1320,23 +1317,6 @@ mod tests {
         assert!(
             !actual.trim().is_empty(),
             "default group agent name must be non-empty"
-        );
-    }
-
-    // ── R-GC-28/28b：成员会话全部新建唯一 UUID（零复用已有 ID）──
-    #[test]
-    fn member_session_name_is_registry_agent_name() {
-        // create_member_session 使用的名称 = Claw 类型 agent 的显示名
-        //（零硬编码：禁散落 "Group member" 字符串；名称来自 registry）。
-        let agent_type = GroupRoomTool::default_group_agent_type();
-        let registry_name = crate::agentic::agents::get_agent_registry()
-            .get_agent(agent_type.as_str(), None)
-            .map(|agent| agent.name().to_string())
-            .unwrap_or_else(|| agent_type.clone());
-        assert_eq!(GroupRoomTool::default_group_agent_name(), registry_name);
-        assert!(
-            !GroupRoomTool::default_group_agent_name().trim().is_empty(),
-            "member session name must be non-empty"
         );
     }
 
@@ -1787,6 +1767,32 @@ mod tests {
 
     /// create（建群=建会话，含成员）→ send（写群会话 turns）→ history（读回）
     /// → list（群聊列表过滤）全链路断言。
+    /// 测试辅助：创建真实成员会话（契约 §二：成员 = 调用方传入的真实会话 ID，
+    /// 由调用方创建后传给 create/invite/fork——测试模拟前端「选中真实 Claw
+    /// 会话」后的创建动作）。
+    async fn create_member_session_for_test(
+        coordinator: &ConversationCoordinator,
+        workspace: &str,
+    ) -> String {
+        let member_id = uuid::Uuid::new_v4().to_string();
+        let config = SessionConfig {
+            workspace_path: Some(workspace.to_string()),
+            project_workspace_path: Some(workspace.to_string()),
+            ..Default::default()
+        };
+        coordinator
+            .create_session_with_workspace(
+                Some(member_id.clone()),
+                "test-member".to_string(),
+                GroupRoomTool::default_group_agent_type(),
+                config,
+                workspace.to_string(),
+            )
+            .await
+            .expect("create member session")
+            .session_id
+    }
+
     async fn run_group_roundtrip(
         coordinator: &std::sync::Arc<ConversationCoordinator>,
         workspace: &std::path::Path,
@@ -1795,12 +1801,16 @@ mod tests {
         let manager = coordinator.get_session_manager();
         let workspace_str = workspace.to_string_lossy().to_string();
 
-        // create：建群（2 成员）→ 返回 group_id（UUID）；会话列表可见且 agent_type=默认对话类型。
+        // create：先建真实成员会话（契约 §二：成员 = 调用方传入的真实会话
+        // ID）→ 建群（2 成员）→ 返回 group_id（UUID）；会话列表可见且
+        // agent_type=默认对话类型。
+        let member_a = create_member_session_for_test(coordinator, &workspace_str).await;
+        let member_b = create_member_session_for_test(coordinator, &workspace_str).await;
         let group_name = "测试群";
         let group_id = GroupRoomTool::create_group(
             coordinator,
             group_name,
-            &["member-a".to_string(), "member-b".to_string()],
+            &[member_a.clone(), member_b.clone()],
             &workspace_str,
         )
         .await
@@ -1819,7 +1829,7 @@ mod tests {
             Some(workspace_str.as_str())
         );
 
-        // 群成员表已写入 groupChats。
+        // 群成员表已写入 groupChats（契约 §一：成员 = 调用方传入的真实会话 ID）。
         let metadata = manager
             .load_session_metadata(workspace, &group_id)
             .await
@@ -1833,6 +1843,72 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert_eq!(members.len(), 2, "groupChats must contain 2 members");
+        assert!(
+            members.iter().any(|v| v.as_str() == Some(member_a.as_str())),
+            "groupChats must contain real session A"
+        );
+        assert!(
+            members.iter().any(|v| v.as_str() == Some(member_b.as_str())),
+            "groupChats must contain real session B"
+        );
+        assert!(
+            members.iter().all(|v| v.as_str() != Some("member-a") && v.as_str() != Some("member-b")),
+            "R-GC-28 回退: members must be the real caller-provided ids, never fresh placeholders"
+        );
+
+        // 契约 §四：传不存在 ID → 明确错误（禁静默跳过）。
+        let missing_err = GroupRoomTool::create_group(
+            coordinator,
+            "缺失成员群",
+            &["definitely-not-a-real-session".to_string()],
+            &workspace_str,
+        )
+        .await
+        .expect_err("create with a non-existent member must fail");
+        assert!(
+            missing_err
+                .to_string()
+                .contains("member session not found"),
+            "non-existent member must yield a clear error, got: {missing_err}"
+        );
+
+        // 契约 §三.2：invite = 登记调用方传入的真实会话 ID（校验存在）；
+        // 传不存在 ID → Err（禁静默跳过）。
+        let invite_err = GroupRoomTool::invite_member(
+            coordinator,
+            &group_id,
+            "no-such-invite-session",
+        )
+        .await
+        .expect_err("invite with a non-existent member must fail");
+        assert!(
+            invite_err
+                .to_string()
+                .contains("member session not found"),
+            "non-existent invite member must yield a clear error, got: {invite_err}"
+        );
+        let invite_member = create_member_session_for_test(coordinator, &workspace_str).await;
+        GroupRoomTool::invite_member(coordinator, &group_id, &invite_member)
+            .await
+            .expect("invite real member");
+        let metadata_after_invite = manager
+            .load_session_metadata(workspace, &group_id)
+            .await
+            .expect("load group metadata")
+            .expect("metadata exists");
+        let members_after_invite = metadata_after_invite
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            members_after_invite
+                .iter()
+                .any(|v| v.as_str() == Some(invite_member.as_str())),
+            "invited real session must be registered in groupChats"
+        );
 
         // ── R-GC-25 群主对话模型：建群 = 创建群主 Claw 会话 + 群主欢迎
         // turn（宿主 turn）。开局不再空字符串/空时间线；欢迎 turn 是
@@ -1872,8 +1948,8 @@ mod tests {
             "R-GC-25: welcome turn sender = 群主会话（群聊 ID = 群主会话 ID）"
         );
 
-        // send：写群会话 turns → message_id。
-        let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", "member-a")
+        // send：写群会话 turns → message_id（发送者 = 真实成员 A）。
+        let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a)
             .await
             .expect("send message");
         assert!(!message_id.is_empty());
@@ -1898,7 +1974,7 @@ mod tests {
             "R-GC-26: send routes the message into the group-owner session turn"
         );
 
-        // history：读回消息（author 从 turn metadata 解析 senderSessionId=member-a）。
+        // history：读回消息（author 从 turn metadata 解析 senderSessionId=member_a）。
         // 注意：get_messages 从持久化 turns 重建 Message（Message.id 为重建时新 uuid），
         // 因此按「内容 + author」匹配，而非 send 返回的 message_id。
         let history = GroupRoomTool::get_history(coordinator, &group_id, None)
@@ -1908,7 +1984,7 @@ mod tests {
             .iter()
             .find(|m| m.content == "第一条群消息")
             .expect("sent message present in history");
-        assert_eq!(found.author.session_id, "member-a");
+        assert_eq!(found.author.session_id, member_a);
         assert_eq!(found.content, "第一条群消息");
         assert_eq!(found.metadata.group_id.as_deref(), Some(group_id.as_str()));
         // message_id 形状校验（uuid 非空）。
@@ -1924,29 +2000,26 @@ mod tests {
             .expect("group listed");
         assert_eq!(
             listed.get("memberCount").and_then(Value::as_u64),
-            Some(2),
-            "memberCount from groupChats"
+            Some(3),
+            "memberCount from groupChats (2 create members + 1 invited)"
         );
 
-        // ── 三形态之②：成员会话（create 拉入的成员为默认对话类型会话）──
-        // R-GC-28：成员全部新建唯一 UUID 会话（零复用已有 ID），成员 ID 从
-        // 群成员表读取；成员会话 = 默认对话类型 + Claw 名称 + 群 workspace。
+        // ── 三形态之②：成员会话（create 拉入的成员 = 调用方传入的真实会话）──
+        // 契约 §一：成员 = 调用方传入的真实会话 ID（建群前由调用方创建），
+        // 禁按数量新建匿名会话（R-GC-28 回退）。成员 ID 即 groupChats 登记的
+        // 真实 ID；成员会话类型 = 创建时的真实 agent_type（默认对话类型）。
         let member_id = members
             .iter()
             .find_map(Value::as_str)
             .expect("first member id from groupChats");
+        assert_eq!(member_id, member_a, "first member must be the real session A");
         let member_session = manager
             .get_session(member_id)
             .expect("member session in memory");
         assert_eq!(
             member_session.agent_type,
             GroupRoomTool::default_group_agent_type(),
-            "R-GC-28: member session uses the config-driven default agent type"
-        );
-        assert_eq!(
-            member_session.session_name,
-            GroupRoomTool::default_group_agent_name(),
-            "R-GC-28: member session auto-named with the Claw default name"
+            "member session uses the config-driven default agent type"
         );
 
         // ── 三形态之①：默认 BuiltIn 群主（assistant_id 空）──
@@ -1976,17 +2049,35 @@ mod tests {
 
         // ── 三形态之③：fork 子群 → parent 关联（契约 §九/§八）──
         // fork 点 = 第一条群消息的持久化 turn_id（send 返回的 message_id 即 turn_id）。
+        let member_c = create_member_session_for_test(coordinator, &workspace_str).await;
         let child_id = GroupRoomTool::fork_group(
             coordinator,
             &group_id,
             "测试子群",
             Some(&message_id),
-            &["member-c".to_string()],
+            &[member_c.clone()],
         )
         .await
         .expect("fork group");
         assert!(!child_id.is_empty());
         assert_ne!(child_id, group_id, "child must differ from parent");
+
+        // 契约 §四：fork 传不存在 ID → 明确错误（禁静默跳过）。
+        let fork_missing_err = GroupRoomTool::fork_group(
+            coordinator,
+            &group_id,
+            "缺失成员子群",
+            Some(&message_id),
+            &["not-a-real-fork-member".to_string()],
+        )
+        .await
+        .expect_err("fork with a non-existent member must fail");
+        assert!(
+            fork_missing_err
+                .to_string()
+                .contains("member session not found"),
+            "non-existent fork member must yield a clear error, got: {fork_missing_err}"
+        );
 
         // parent 关联：child custom_metadata.forkOrigin.parentGroupId == 主群 id
         //（group_room fork 写 parentGroupId；branch_session 本身写
@@ -2008,9 +2099,8 @@ mod tests {
             "child forkOrigin.parentGroupId must reference the parent group"
         );
 
-        // 子群自带成员表（fork 继承主群成员 + 新增 fork 成员；R-GC-28：
-        // fork 新增成员全部新建唯一 UUID，数量 = 传入 members 数，
-        // 不匹配原占位 id）。
+        // 子群自带成员表（fork 继承主群成员 + 登记 fork 成员；契约 §三.3：
+        // fork members = 调用方传入的真实会话 ID，登记进子群 groupChats）。
         let child_members = child_metadata
             .custom_metadata
             .as_ref()
@@ -2019,21 +2109,25 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(
-            child_members.len() >= 3,
-            "fork child must inherit parent members (2) plus one new fork member, got {}",
+            child_members.len() >= 4,
+            "fork child must inherit parent members (3) plus one fork member, got {}",
             child_members.len()
         );
-        let child_member_id = child_members
-            .iter()
-            .find_map(Value::as_str)
-            .expect("child member id");
-        assert_ne!(
-            child_member_id, "member-c",
-            "R-GC-28: fork member must be a fresh UUID, never the caller-provided placeholder"
+        assert!(
+            child_members
+                .iter()
+                .any(|v| v.as_str() == Some(member_c.as_str())),
+            "fork child must register the real fork member C"
         );
         assert!(
-            manager.get_session(child_member_id).is_some(),
-            "R-GC-28: fork child member session must exist in memory"
+            child_members
+                .iter()
+                .all(|v| v.as_str() != Some("member-c")),
+            "R-GC-28 回退: fork member must be the real caller-provided id, never a placeholder"
+        );
+        assert!(
+            manager.get_session(&member_c).is_some(),
+            "fork child member session must exist in memory"
         );
 
         // 子群继承主群 turns（branch 复制群消息 → 子群历史可读）。
