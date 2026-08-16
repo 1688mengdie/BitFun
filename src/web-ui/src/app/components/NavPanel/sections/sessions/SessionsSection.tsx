@@ -35,6 +35,8 @@ import {
   isOrphanSession,
   resolveSessionOrphanKind,
   sessionBelongsToWorkspaceNavRow,
+  sessionIsGroupChat,
+  sessionIsWorkflowMember,
 } from '@/flow_chat/utils/sessionOrdering';
 import { stateMachineManager } from '@/flow_chat/state-machine';
 import { SessionExecutionState, SessionDisplayState } from '@/flow_chat/state-machine/types';
@@ -208,6 +210,12 @@ interface SessionsSectionProps {
   showSessionModeIcon?: boolean;
   /** Prevents startup metadata fetching while the surrounding section is collapsed. */
   isVisible?: boolean;
+  /** R-WF-12: hide group chat sessions (they render only in the group-chats section). */
+  hideGroupChats?: boolean;
+  /** R-WF-12: hide workflow-member Claws (they belong to a group, not to the plain assistant list). */
+  hideWorkflowMembers?: boolean;
+  /** R-WF-12: when true, only group chat sessions render (group-chats section). */
+  groupChatsOnly?: boolean;
 }
 
 const SessionsSection: React.FC<SessionsSectionProps> = ({
@@ -219,6 +227,9 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
   assistantLabel,
   showSessionModeIcon = true,
   isVisible = true,
+  hideGroupChats = false,
+  hideWorkflowMembers = false,
+  groupChatsOnly = false,
 }) => {
   const { t } = useI18n('common');
   const { setActiveWorkspace, currentWorkspace } = useWorkspaceContext();
@@ -656,13 +667,30 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
           if (s.isTransient) {
             return false;
           }
+          // R-WF-12: partition group chats vs plain sessions. Group chats
+          // render only in the group-chats section (groupChatsOnly); the
+          // plain assistant list hides them (hideGroupChats) and also hides
+          // workflow-owned Claws (hideWorkflowMembers).
+          const isGroupChat = sessionIsGroupChat(s);
+          if (groupChatsOnly) {
+            if (!isGroupChat || sessionIsWorkflowMember(s)) {
+              return false;
+            }
+          } else {
+            if (hideGroupChats && isGroupChat) {
+              return false;
+            }
+            if (hideWorkflowMembers && sessionIsWorkflowMember(s)) {
+              return false;
+            }
+          }
           if (workspacePath) {
             return sessionBelongsToWorkspaceNavRow(s, workspacePath, remoteConnectionId, remoteSshHost);
           }
           return !s.workspacePath;
         })
         .sort(compareSessionsForNavStable),
-    [flowChatState.sessions, workspacePath, remoteConnectionId, remoteSshHost]
+    [flowChatState.sessions, workspacePath, remoteConnectionId, remoteSshHost, hideGroupChats, hideWorkflowMembers, groupChatsOnly]
   );
 
   const { topLevelSessions: allTopLevelSessions, orphanedSessions, childrenByParent } = useMemo(() => {
@@ -1408,6 +1436,7 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               ].filter(Boolean).join(' ') || undefined}
               data-testid="nav-session-item"
               data-session-id={session.sessionId}
+              data-group-id={sessionIsGroupChat(session) ? session.sessionId : undefined}
               data-session-kind={relationship.kind}
               data-session-level={String(depth)}
               data-session-active={isRowActive ? 'true' : 'false'}

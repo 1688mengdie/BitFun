@@ -1638,6 +1638,81 @@ describe('FlowChatStore historical session hydration state', () => {
     expect(flowChatStore.getState().sessions.get('empty-group')?.isGroupChat).toBeUndefined();
   });
 
+  it('restores the workflow-member Claw marker from backend metadata after reload (R-WF-12)', async () => {
+    // R-WF-12: a Claw deployed as a group/workflow member carries
+    // `customMetadata.legionNodeId` (legion_control_tool.rs). On reload the
+    // store mirrors it into Session.workflowMember so the Claw list can hide
+    // workflow-owned Claws.
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'workflow-claw-1',
+        title: 'Group member Claw',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { legionNodeId: 'node-1' },
+      },
+      {
+        sessionId: 'plain-claw-1',
+        title: 'User Claw',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 11,
+        lastActiveAt: 21,
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('workflow-claw-1')?.workflowMember).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-claw-1')?.workflowMember).toBeUndefined();
+  });
+
+  it('restores the workflow-member Claw marker from a paged metadata reload (R-WF-12)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessionsPage.mockResolvedValueOnce({
+      sessions: [
+        {
+          sessionId: 'workflow-claw-page-1',
+          title: 'Group member Claw',
+          agentType: 'Claw',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+          customMetadata: { legionNodeId: 'node-1' },
+        },
+        {
+          sessionId: 'plain-page-2',
+          title: 'Plain session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 11,
+          lastActiveAt: 21,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 2,
+      loadedTopLevelCount: 2,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'nav_initial'
+    );
+
+    expect(flowChatStore.getState().sessions.get('workflow-claw-page-1')?.workflowMember).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-page-2')?.workflowMember).toBeUndefined();
+  });
+
   it('keeps persisted workspace identity separate from remote execution scope', async () => {
     apiMocks.listSessions.mockResolvedValueOnce([
       {

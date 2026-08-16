@@ -522,6 +522,16 @@ export interface Session {
   isGroupChat?: boolean;
 
   /**
+   * R-WF-12: true when this session is a workflow member Claw — a Claw owned
+   * by a group/workflow (backend marks members via
+   * `customMetadata.legionNodeId`, legion_control_tool.rs). Restored from
+   * backend metadata on reload, same as `isGroupChat`. UI uses it to hide
+   * workflow-owned Claws from the Claw assistant list (they belong to the
+   * group, not to the user's assistant list).
+   */
+  workflowMember?: boolean;
+
+  /**
    * R-AD-08: when true this session's parent is missing from the loaded set
    * (backend orphan classification). The nav groups such sessions under the
    * orphan section instead of pretending they are normal top-level rows.

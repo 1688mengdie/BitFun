@@ -27,6 +27,7 @@ import CreateGroupChatDialog from './components/CreateGroupChatDialog';
 import MiniAppEntry from './components/MiniAppEntry';
 import WorkspaceListSection from './sections/workspaces/WorkspaceListSection';
 import SessionsSection from './sections/sessions/SessionsSection';
+import GroupChatsSection from './sections/group-chats/GroupChatsSection';
 import { useSceneStore } from '../../stores/sceneStore';
 import { useMyAgentStore } from '../../scenes/my-agent/myAgentStore';
 import { useMiniAppCatalogSync } from '../../scenes/miniapps/hooks/useMiniAppCatalogSync';
@@ -800,6 +801,8 @@ const MainNav: React.FC<MainNavProps> = ({
                       isActiveWorkspace={workspace.id === currentWorkspace?.id}
                       assistantLabel={assistantDisplayName}
                       isVisible={expandedSections.has('assistant-sessions')}
+                      hideGroupChats
+                      hideWorkflowMembers
                     />
                   );
                 })}
@@ -841,6 +844,18 @@ const MainNav: React.FC<MainNavProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Group chats (R-WF-12) */}
+        <GroupChatsSection
+          workspaceId={defaultAssistantWorkspace?.id}
+          workspacePath={defaultAssistantWorkspace?.rootPath}
+          remoteConnectionId={
+            defaultAssistantWorkspace && isRemoteWorkspace(defaultAssistantWorkspace)
+              ? defaultAssistantWorkspace.connectionId
+              : null
+          }
+          onCreateGroupChat={() => setIsGroupChatDialogOpen(true)}
+        />
 
       </div>
 

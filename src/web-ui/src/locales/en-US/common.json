@@ -103,6 +103,7 @@
     "groupChats": {
       "sectionLabel": "Group Chats",
       "newGroupChat": "New group chat",
+      "newWorkflow": "New workflow",
       "groupName": "Group name",
       "groupNamePlaceholder": "Enter a group name",
       "members": "Members (optional — add later)",

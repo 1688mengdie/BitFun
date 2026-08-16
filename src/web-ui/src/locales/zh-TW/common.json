@@ -103,6 +103,7 @@
     "groupChats": {
       "sectionLabel": "群聊",
       "newGroupChat": "新建群聊",
+      "newWorkflow": "新建工作流",
       "groupName": "群名",
       "groupNamePlaceholder": "請輸入群名",
       "members": "成員（可選，可先建群後拉人）",
