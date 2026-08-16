@@ -84,10 +84,9 @@ use crate::agentic::tools::pipeline::{
     PrimaryModelFacts, SubagentParentInfo, ToolExecutionContext, ToolExecutionOptions, ToolPipeline,
 };
 use crate::agentic::tools::{
-    clear_session_restrictions, clear_session_role, get_session_role,
-    miniapp_agent_run_tool_restrictions, set_session_role, subagent_tool_restrictions,
+    clear_session_restrictions, miniapp_agent_run_tool_restrictions, subagent_tool_restrictions,
     tool_restrictions_for_delegation_policy as runtime_tool_restrictions_for_delegation_policy,
-    AgentRole, ToolRuntimeRestrictions,
+    ToolRuntimeRestrictions,
 };
 use crate::agentic::workspace::WorkspaceServices;
 use crate::agentic::WorkspaceBinding;
@@ -143,7 +142,6 @@ use bitfun_runtime_ports::{
     ThreadGoalStatus,
 };
 use bitfun_services_core::filesystem::{FileSearchOptions, FileSystemService, FileTreeNode};
-use bitfun_services_core::session::merge_session_custom_metadata;
 use bitfun_services_core::session::tree::SessionTreeManager;
 use bitfun_services_core::workspace_text::{
     normalize_workspace_relative_path, resolve_workspace_relative_entry, WorkspaceEntryKind,
@@ -721,7 +719,6 @@ fn subagent_parent_info_from_relationship(
         dialog_turn_id: parent_dialog_turn_id.to_string(),
         tool_call_id: parent_tool_call_id.to_string(),
         depth: relationship.depth,
-        role: get_session_role(parent_session_id).map(|role| role.as_str().to_string()),
     })
 }
 
@@ -2865,8 +2862,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     ///
     /// Subagent-marked sessions (SessionControl lineage `relationship.kind` or
     /// the `subagent`/`subagentType` custom-metadata keys written by the create
-    /// chain) are always executors; a persisted `role=commander` on such a
-    /// session is a stale pre-fix value and must be overridden on restore.
+    /// chain) are always executors.
+    #[allow(dead_code)]
     fn is_subagent_marked_metadata(metadata: &SessionMetadata) -> bool {
         metadata
             .relationship
@@ -2880,220 +2877,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .and_then(|value| value.get("subagent"))
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false)
-    }
-
-    /// Derive the RBAC role for a restored session whose persisted role key is
-    /// missing or unknown.
-    ///
-    /// Subagent-marked sessions restore as executors; everything else degrades
-    /// to the commander baseline.
-    fn derive_session_role_from_metadata(metadata: &SessionMetadata) -> AgentRole {
-        if Self::is_subagent_marked_metadata(metadata) {
-            AgentRole::Executor
-        } else {
-            AgentRole::Commander
-        }
-    }
-
-    /// Resolve the RBAC role assigned to a session at creation time (R-14 B2).
-    ///
-    /// - Subagent/EphemeralSubagent sessions are always executors: they run
-    ///   delegated work, so they carry the executor role semantics.
-    /// - Any other session inherits its creator's role; an unknown creator
-    ///   degrades to the commander (permissive) baseline.
-    /// - A main session (no creator) is the commander.
-    pub(crate) fn resolve_session_role(
-        kind: SessionKind,
-        creator_role: Option<AgentRole>,
-    ) -> AgentRole {
-        if kind == SessionKind::Subagent || kind == SessionKind::EphemeralSubagent {
-            AgentRole::Executor
-        } else {
-            creator_role.unwrap_or(AgentRole::Commander)
-        }
-    }
-
-    /// Whether an agent type is an executor subagent shape.
-    ///
-    /// Executor-role subagent sessions may carry any of the coding-agent
-    /// runtime keys (`GeneralPurpose`, `agentic`, `Explore`, `FileFinder`,
-    /// `ResearchSpecialist`, custom executor posts, …) depending on how the
-    /// commander dispatches the task. These execute-shaped subagents land on
-    /// the executor full tool template (general_purpose_tool_restrictions).
-    ///
-    /// 形态分流（复审收敛）：review 形态（CodeReview/DeepReview/ReviewWorker/
-    /// ReviewJudge/ReviewFixer 及 legacy review workers）**不命中**——它们走
-    /// 默认 Executor 模板（白名单空 = review 工具 GetFileDiff/submit_code_review
-    /// 全可见可用 + deny list 仍拦 ReviewPlatform）。执行者形态命中 →
-    /// general_purpose 模板（全工具 + deny）。恒 true 会导致 review 核心工具
-    /// 被 general_purpose 白名单过滤（模型不可见 + 运行时拦截），DeepReview
-    /// 全家桶流程不可用（P2 回归修复）。
-    fn is_executor_agent_type(agent_type: &str) -> bool {
-        use crate::agentic::deep_review_policy::{
-            is_review_worker_agent_type, CODE_REVIEW_AGENT_TYPE, DEEP_REVIEW_AGENT_TYPE,
-            REVIEW_FIXER_AGENT_TYPE, REVIEW_JUDGE_AGENT_TYPE,
-        };
-        if is_review_worker_agent_type(agent_type)
-            || matches!(
-                agent_type,
-                CODE_REVIEW_AGENT_TYPE
-                    | DEEP_REVIEW_AGENT_TYPE
-                    | REVIEW_JUDGE_AGENT_TYPE
-                    | REVIEW_FIXER_AGENT_TYPE
-            )
-        {
-            return false;
-        }
-        matches!(
-            agent_type,
-            "GeneralPurpose" | "agentic" | "Explore" | "FileFinder" | "ResearchSpecialist"
-        )
-    }
-
-    /// Register the RBAC role for a freshly created session (R-14 B2).
-    ///
-    /// The role is written to the in-memory `SESSION_ROLES` registry — the
-    /// fast, synchronous path used by delegation validation — and persisted
-    /// into the session metadata `custom_metadata.role` so it survives
-    /// restarts. Persistence is best-effort: a failure only degrades
-    /// restart-time re-registration, never session creation.
-    async fn register_session_role(
-        &self,
-        session_id: &str,
-        created_by: Option<&str>,
-        kind: SessionKind,
-        agent_type: &str,
-        workspace_path: Option<&Path>,
-    ) {
-        let creator_role = created_by.and_then(get_session_role);
-        let role = Self::resolve_session_role(kind, creator_role);
-        let role_key = role.as_str().to_string();
-        // R3 主会话豁免：主会话（Standard 类型且无 creator）只记录角色，
-        // 不落角色默认模板；否则 Commander 模板的 allowed_tool_names 白名单
-        // 在默认配置下会拒绝主会话的 Read/Grep/Glob/Edit/ExecCommand。
-        // 子代理（Executor/GeneralPurpose 专属模板）保留完整 RBAC 模板语义。
-        // P-01 方案 2：执行者子代理（Executor）应用专属模板（含 ReadOnly/
-        // Communicate 全操作类），否则默认 Executor 模板会禁掉只读侦察工具
-        // （Read/Glob/Grep）与 Communicate 类（TodoWrite/SessionMessage 等）。
-        // 形态判断覆盖全部执行者 agent_type（GeneralPurpose/agentic 等），
-        // 根治"派发形态不同 → 模板不同"的硬编码漂移。
-        let register_result =
-            if crate::agentic::tools::restrictions::is_main_session(kind, created_by) {
-                crate::agentic::tools::restrictions::register_main_session(session_id, role.clone())
-            } else if role == AgentRole::Executor && Self::is_executor_agent_type(agent_type) {
-                crate::agentic::tools::restrictions::set_session_role_with_restrictions(
-                    session_id,
-                    role.clone(),
-                    crate::agentic::tools::restrictions::general_purpose_tool_restrictions(),
-                )
-            } else {
-                set_session_role(session_id, role)
-            };
-        if let Err(e) = register_result {
-            warn!(
-                "Failed to register RBAC role for session {}: {}",
-                session_id, e
-            );
-            return;
-        }
-        let Some(workspace_path) = workspace_path else {
-            return;
-        };
-        if let Err(e) = self
-            .session_manager
-            .update_session_metadata(workspace_path, session_id, |metadata| {
-                merge_session_custom_metadata(metadata, serde_json::json!({ "role": role_key }));
-            })
-            .await
-        {
-            warn!(
-                "Failed to persist RBAC role for session {}: {}",
-                session_id, e
-            );
-        }
-    }
-
-    /// Re-register the persisted RBAC role (R-14 B2) after a session restore.
-    ///
-    /// Best-effort: a missing or unknown role key is derived from the
-    /// persisted lineage facts (subagent-marked sessions restore as executors,
-    /// everything else defaults to the commander baseline) so delegation
-    /// validation stays permissive instead of erroring on stale metadata.
-    async fn restore_session_role_best_effort(&self, workspace_path: &Path, session_id: &str) {
-        let Ok(Some(metadata)) = self
-            .session_manager
-            .load_session_metadata(workspace_path, session_id)
-            .await
-        else {
-            return;
-        };
-        let persisted_role = metadata
-            .custom_metadata
-            .as_ref()
-            .and_then(|value| value.get("role"))
-            .and_then(|value| value.as_str())
-            .and_then(AgentRole::from_str_key);
-        let (role, derived) = match persisted_role {
-            // A subagent-marked session can never be a commander: the persisted
-            // value is a stale pre-fix artifact and must be overridden so the
-            // session restores as executor.
-            Some(AgentRole::Commander) if Self::is_subagent_marked_metadata(&metadata) => {
-                (AgentRole::Executor, true)
-            }
-            Some(role) => (role, false),
-            // Legacy sessions created before role persistence carry no role
-            // key; derive it from the persisted lineage facts instead of
-            // silently leaving the session unregistered (which surfaces as a
-            // generic "Agent" label in the UI).
-            None => (Self::derive_session_role_from_metadata(&metadata), true),
-        };
-        let role_key = role.as_str().to_string();
-        // R3 主会话豁免：恢复的主会话同样只记录角色，不落 Commander 默认
-        // 模板，与 register_session_role 的豁免语义一致（上下文级默认限制
-        // = 白名单空 = 全工具放行）。P-01 方案 2：执行者子代理 restore 后
-        // 同样应用专属模板（形态判断覆盖 GeneralPurpose/agentic 等全部
-        // 执行者 agent_type）。
-        let register_result = if crate::agentic::tools::restrictions::is_main_session(
-            metadata.session_kind,
-            metadata.created_by.as_deref(),
-        ) {
-            crate::agentic::tools::restrictions::register_main_session(session_id, role.clone())
-        } else if role == AgentRole::Executor && Self::is_executor_agent_type(&metadata.agent_type)
-        {
-            crate::agentic::tools::restrictions::set_session_role_with_restrictions(
-                session_id,
-                role.clone(),
-                crate::agentic::tools::restrictions::general_purpose_tool_restrictions(),
-            )
-        } else {
-            set_session_role(session_id, role)
-        };
-        if let Err(e) = register_result {
-            warn!(
-                "Failed to re-register RBAC role for restored session {}: {}",
-                session_id, e
-            );
-            return;
-        }
-        if derived {
-            // Best-effort persist the derived role so the next restore reads
-            // the explicit key and skips re-derivation.
-            if let Err(e) = self
-                .session_manager
-                .update_session_metadata(workspace_path, session_id, |metadata| {
-                    merge_session_custom_metadata(
-                        metadata,
-                        serde_json::json!({ "role": role_key }),
-                    );
-                })
-                .await
-            {
-                warn!(
-                    "Failed to persist derived RBAC role for restored session {}: {}",
-                    session_id, e
-                );
-            }
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3140,12 +2923,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         );
         let defaults = Self::agent_model_defaults().await;
         snapshot_normal_session_model(&mut config, &defaults);
-        let creator = created_by.clone();
         // Subagent-marked creations (the SessionControl create chain sets
         // metadata.subagent=true and carries a subagent_type) map to the
-        // Subagent kind here so `resolve_session_role` yields the executor
-        // role instead of the commander baseline. Plain creations keep the
-        // SessionManager default Standard kind.
+        // Subagent kind. Plain creations keep the SessionManager default
+        // Standard kind.
         let session_kind = if subagent_type.is_some() || skip_context_window_refresh {
             SessionKind::Subagent
         } else {
@@ -3175,19 +2956,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .await?
         };
 
-        // R-14 B2: assign the RBAC role at creation time (main session =>
-        // commander, subagent sessions => executor, otherwise inherit the
-        // creator role) and persist it with the session metadata. Transient
-        // sessions register in memory only; they are never persisted.
-        let role_workspace_path = (!transient).then(|| Path::new(&workspace_path));
-        self.register_session_role(
-            &session.session_id,
-            creator.as_deref(),
-            session.kind,
-            &session.agent_type,
-            role_workspace_path,
-        )
-        .await;
+        // register nothing; persistent sessions are tracked below.
 
         if !transient {
             Self::track_session_workspace_activity_best_effort(
@@ -3230,9 +2999,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         })
         .await;
         Self::dispatch_session_start_hooks(&session, "startup").await;
-        // Custom SessionStart injection (outside hook gating): make the
-        // session's RBAC role visible to the model on startup.
-        self.inject_session_start_context(&session).await;
         Ok(session)
     }
 
@@ -3276,52 +3042,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         .await;
     }
 
-    /// Custom SessionStart injection (outside hook gating): make the RBAC role
-    /// visible to the model at session startup.
-    ///
-    /// The role was already registered by [`Self::register_session_role`]
-    /// during creation; this only adds the model-visible context. Best-effort:
-    /// a failed write degrades to a warning, never blocks session creation.
-    async fn inject_session_start_context(&self, session: &Session) {
-        let Some(role) = get_session_role(&session.session_id) else {
-            return;
-        };
-        let mut lines = vec![
-            "[Legion Context]".to_string(),
-            format!(
-                "Assigned role: {} — {}",
-                role.as_str(),
-                Self::role_duty_summary(role)
-            ),
-        ];
-        if let Some(creator_id) = session.created_by.as_deref() {
-            if let Some(creator_role) = get_session_role(creator_id) {
-                lines.push(format!(
-                    "Created by session {} with role {}",
-                    creator_id,
-                    creator_role.as_str()
-                ));
-            }
-        }
-        let context = lines.join("\n");
-        if let Err(err) = self
-            .session_manager
-            .add_message(
-                &session.session_id,
-                Message::internal_reminder(InternalReminderKind::LifecycleContext, context),
-            )
-            .await
-        {
-            warn!(
-                "Failed to inject SessionStart legion context for session {}: {}",
-                session.session_id, err
-            );
-        }
-    }
-
-    /// Custom SessionEnd cleanup (outside hook gating): unregister the RBAC
-    /// role and tool restrictions, and
-    /// clear coordinator-owned per-session in-memory registries.
+    /// Custom SessionEnd cleanup (outside hook gating): clear tool restrictions
+    /// and coordinator-owned per-session in-memory registries.
     ///
     /// Called from durable deletion and from transient-family discard, so a
     /// recycled session id cannot inherit stale lifecycle state. The
@@ -3330,7 +3052,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// covers the coordinator-side maps that are otherwise only released on the
     /// execution path (COORD-11).
     async fn session_end_cleanup(&self, session_id: &str) {
-        clear_session_role(session_id);
         clear_session_restrictions(session_id);
         self.subagent_timeout_registry
             .write()
@@ -3353,32 +3074,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     }
 
     /// Custom SubagentStart injection (outside hook gating): assemble the
-    /// legion chain context (subagent role, parent role, parent goal, depth)
-    /// for a subagent's first round. Returns `None` when nothing is known.
+    /// legion chain context (parent goal, depth) for a subagent's first round.
+    /// Returns `None` when nothing is known.
     async fn build_subagent_legion_context(
         &self,
         parent_info: Option<&SubagentParentInfo>,
-        session_id: &str,
+        _session_id: &str,
     ) -> Option<String> {
         let mut lines = Vec::new();
 
-        let subagent_role = get_session_role(session_id).or_else(|| {
-            parent_info
-                .and_then(|info| info.role.as_deref())
-                .and_then(AgentRole::from_str_key)
-        });
-        if let Some(role) = subagent_role {
-            lines.push(format!(
-                "Subagent role: {} — {}",
-                role.as_str(),
-                Self::role_duty_summary(role)
-            ));
-        }
-
         if let Some(info) = parent_info {
-            if let Some(parent_role) = get_session_role(&info.session_id) {
-                lines.push(format!("Parent session role: {}", parent_role.as_str()));
-            }
             if let Some(depth) = info.depth {
                 lines.push(format!("Legion depth: {depth}"));
             }
@@ -3400,15 +3105,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             let mut context = String::from("[Legion Context]\n");
             context.push_str(&lines.join("\n"));
             Some(context)
-        }
-    }
-
-    /// One-line duty summary per RBAC role, shown in lifecycle context.
-    fn role_duty_summary(role: AgentRole) -> &'static str {
-        match role {
-            AgentRole::Commander => "orchestrates and dispatches; never executes",
-            AgentRole::Executor => "executes atomic steps end-to-end",
-            AgentRole::Reviewer => "reviews and audits; never executes",
         }
     }
 
@@ -4340,8 +4036,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         if kind == SessionKind::Subagent || kind == SessionKind::EphemeralSubagent {
             config.max_context_tokens = SessionManager::SESSION_CONTEXT_WINDOW_MIN_TOKENS;
         }
-        let workspace_path = config.workspace_path.clone();
-        let creator = created_by.clone();
         let session = if transient {
             self.session_manager
                 .create_transient_session_with_id_and_details(
@@ -4366,21 +4060,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .await?
         };
 
-        // R-14 B2: register the RBAC role (subagent => executor, otherwise
-        // inherit the creator role) and persist it when durable. Transient
-        // sessions register in memory only; they are never persisted.
-        let role_workspace_path = (!transient)
-            .then_some(workspace_path.as_deref())
-            .flatten()
-            .map(Path::new);
-        self.register_session_role(
-            &session.session_id,
-            creator.as_deref(),
-            kind,
-            &session.agent_type,
-            role_workspace_path,
-        )
-        .await;
 
         Ok(session)
     }
@@ -4971,7 +4650,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     session_id: session_id.clone(),
                     dialog_turn_id: turn_id.clone(),
                     depth: None,
-                    role: None,
                 },
                 context: child_context,
                 permission_runtime_ceiling,
@@ -8863,7 +8541,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 );
             }
         }
-        // Custom session-end cleanup (outside hook gating): RBAC role and
         // tool-restriction unregistration, so a
         // recycled session id cannot inherit stale lifecycle state.
         self.session_end_cleanup(session_id).await;
@@ -9132,7 +8809,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .delete_session_references(related_session_id)
                 .await?;
             // Transient sessions are discarded without a SessionEnd hook
-            // dispatch; run the custom cleanup so RBAC roles and tool
             // restrictions cannot leak into recycled ids.
             self.session_end_cleanup(related_session_id).await;
         }
@@ -9277,9 +8953,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session(workspace_path, session_id)
             .await?;
-        // P1-S2：legacy workspace 入口同样补角色重注册（与 restore_session_for_workspace 对齐）。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9894,13 +9567,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_session_from_storage_path(session_storage_path, session_id)
             .await?;
         // P1-S2：storage-path 系 restore 变体与 workspace 版对齐，恢复后
-        // 重注册持久化 RBAC 角色（R-14 B2）。进程重启后 desktop 生产入口
         // （agentic_api/session_application）走 storage-path 版，缺这步会
         // 导致子代理角色静默丢失、回落到 context 级空模板全放行。
         // 已解析 sessions 目录可直接作为 workspace_path（metadata store
         // 对 resolved dir 原样使用），见 persistence `project_sessions_dir`。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9914,9 +9584,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_internal_session_from_storage_path(session_storage_path, session_id)
             .await?;
         // P1-S2：与 workspace 版 restore_internal_session_for_workspace 对齐
-        // （:8361 已调 restore_session_role_best_effort）。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9930,13 +9597,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
-        let workspace_path = request.workspace_path.clone();
         let session = self
             .session_manager
             .restore_session_for_workspace(request, session_id)
             .await?;
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9950,13 +9614,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
-        let workspace_path = request.workspace_path.clone();
         let session = self
             .session_manager
             .restore_internal_session_for_workspace(request, session_id)
             .await?;
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9970,8 +9631,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session(workspace_path, session_id)
             .await?;
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, session).await
     }
 
@@ -9986,8 +9645,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_with_turns(workspace_path, session_id)
             .await?;
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10001,9 +9658,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_session_with_turns_from_storage_path(session_storage_path, session_id)
             .await?;
         // P1-S2：与 workspace 版 restore_session_with_turns_for_workspace 对齐
-        // （:8436 已调 restore_session_role_best_effort）。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10017,9 +9671,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_internal_session_with_turns_from_storage_path(session_storage_path, session_id)
             .await?;
         // P1-S2：与 workspace 版 restore_internal_session_with_turns_for_workspace
-        // 对齐（:8456 已调 restore_session_role_best_effort）。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10033,13 +9684,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
-        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_session_with_turns_for_workspace(request, session_id)
             .await?;
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10053,13 +9701,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             request.remote_connection_id.as_deref(),
             request.remote_ssh_host.as_deref(),
         )?;
-        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_internal_session_with_turns_for_workspace(request, session_id)
             .await?;
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10073,8 +9718,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_with_turns(workspace_path, session_id)
             .await?;
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         self.reconcile_restored_session(session_id, restored).await
     }
 
@@ -10082,7 +9725,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     ///
     /// R10: desktop restore goes through this path (restore_session_view),
     /// aligned with restore_session_for_workspace/restore_session_with_turns;
-    /// after restore it re-registers the persisted RBAC role, otherwise a
     /// missing main-session role falls back to the context-level empty allowlist.
     pub async fn restore_session_view(
         &self,
@@ -10093,8 +9735,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_view(workspace_path, session_id)
             .await?;
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10111,10 +9751,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_view_timed(workspace_path, session_id)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册
         // （与 restore_session_view 对齐，S-31 根因级封死同根分叉）。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10127,14 +9764,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Vec<crate::service::session::DialogTurnData>,
         crate::agentic::session::session_manager::SessionViewRestoreTiming,
     )> {
-        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_session_view_for_workspace_timed(request, session_id)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10152,9 +9785,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_session_view_from_storage_path_timed(session_storage_path, session_id)
             .await?;
         // P1-S2：与 workspace 版 restore_session_view（:8491，desktop 主入口
-        // restore_session_view 走 storage-path 版）对齐，恢复后重注册 RBAC 角色。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10168,9 +9798,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_view_tail(workspace_path, session_id, tail_turn_count)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10189,9 +9816,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_session_view_tail_timed(workspace_path, session_id, tail_turn_count)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10214,9 +9838,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 tail_turn_count,
             )
             .await?;
-        // P1-S2：与 workspace 版 restore_session_view 对齐，恢复后重注册 RBAC 角色。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10229,9 +9850,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_view(workspace_path, session_id)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10248,9 +9866,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_view_timed(workspace_path, session_id)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10263,14 +9878,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         Vec<crate::service::session::DialogTurnData>,
         crate::agentic::session::session_manager::SessionViewRestoreTiming,
     )> {
-        let workspace_path = request.workspace_path.clone();
         let restored = self
             .session_manager
             .restore_internal_session_view_for_workspace_timed(request, session_id)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(&workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10288,9 +9899,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .restore_internal_session_view_from_storage_path_timed(session_storage_path, session_id)
             .await?;
         // P1-S2：与 workspace 版 restore_internal_session_view_for_workspace_timed
-        // 对齐（内部会话同样需要角色重注册），恢复后重注册 RBAC 角色。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10304,9 +9912,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_view_tail(workspace_path, session_id, tail_turn_count)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10325,9 +9930,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .session_manager
             .restore_internal_session_view_tail_timed(workspace_path, session_id, tail_turn_count)
             .await?;
-        // P1-S2：workspace-path 系 view restore 变体同样补角色重注册。
-        self.restore_session_role_best_effort(workspace_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -10351,9 +9953,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             )
             .await?;
         // P1-S2：与 workspace 版 restore_internal_session_view_for_workspace_timed
-        // 对齐（内部会话同样需要角色重注册），恢复后重注册 RBAC 角色。
-        self.restore_session_role_best_effort(session_storage_path, session_id)
-            .await;
         Ok(restored)
     }
 
@@ -16920,798 +16519,17 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_session_role_assigns_executor_to_subagents_and_inherits_creator() {
-        use crate::agentic::tools::AgentRole;
-        // Subagent/EphemeralSubagent sessions are always executors,
-        // regardless of the creator role.
-        assert_eq!(
-            super::ConversationCoordinator::resolve_session_role(
-                SessionKind::Subagent,
-                Some(AgentRole::Commander)
-            ),
-            AgentRole::Executor
-        );
-        assert_eq!(
-            super::ConversationCoordinator::resolve_session_role(
-                SessionKind::EphemeralSubagent,
-                None
-            ),
-            AgentRole::Executor
-        );
-        // Main sessions inherit the creator role; an unknown creator degrades
-        // to the commander (permissive) baseline.
-        assert_eq!(
-            super::ConversationCoordinator::resolve_session_role(
-                SessionKind::Standard,
-                Some(AgentRole::Reviewer)
-            ),
-            AgentRole::Reviewer
-        );
-        assert_eq!(
-            super::ConversationCoordinator::resolve_session_role(SessionKind::Standard, None),
-            AgentRole::Commander
-        );
-    }
 
-    #[tokio::test]
-    async fn session_creation_registers_rbac_role_in_registry() {
-        use crate::agentic::tools::{get_session_role, AgentRole};
-        let (coordinator, _session_manager) = test_coordinator();
-        let workspace =
-            std::env::temp_dir().join(format!("bitfun-rbac-role-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create workspace dir");
-        let workspace_path = workspace.to_string_lossy().into_owned();
 
-        // Main session (no creator) => commander.
-        let main_session = coordinator
-            .create_session_with_workspace_and_creator(
-                Some("rbac-main-01".to_string()),
-                "main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-            )
-            .await
-            .expect("create main session");
-        assert_eq!(
-            get_session_role(&main_session.session_id),
-            Some(AgentRole::Commander)
-        );
 
-        // Subagent session => executor (R-14 B2 role inheritance).
-        let subagent_session = coordinator
-            .create_hidden_agent_session(
-                Some("rbac-sub-01".to_string()),
-                "sub".to_string(),
-                "agentic".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace_path),
-                    ..Default::default()
-                },
-                Some("rbac-main-01".to_string()),
-                SessionKind::Subagent,
-            )
-            .await
-            .expect("create subagent session");
-        assert_eq!(
-            get_session_role(&subagent_session.session_id),
-            Some(AgentRole::Executor)
-        );
-    }
 
-    #[tokio::test]
-    async fn subagent_marked_creation_yields_executor_role() {
-        use crate::agentic::tools::{get_session_role, AgentRole};
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-        let session_id = format!("sub-kind-{}", uuid::Uuid::new_v4());
 
-        // SessionControl-style creation: metadata.subagent=true + subagentType
-        // map to the Subagent kind, so the role resolves to executor.
-        let session = coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(session_id),
-                "subagent".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                Some("parent-session".to_string()),
-                false, // transient
-                true,  // skip_context_window_refresh (subagent forced 1M)
-                Some("parent-session".to_string()),
-                Some("TestSubagent".to_string()),
-            )
-            .await
-            .expect("create subagent session");
-        assert_eq!(session.kind, SessionKind::Subagent);
-        assert_eq!(
-            get_session_role(&session.session_id),
-            Some(AgentRole::Executor),
-            "subagent-marked session must resolve as executor, not commander"
-        );
-        let metadata = coordinator
-            .session_manager
-            .load_session_metadata(workspace.path(), &session.session_id)
-            .await
-            .expect("load metadata")
-            .expect("metadata exists");
-        assert_eq!(
-            metadata
-                .custom_metadata
-                .as_ref()
-                .and_then(|value| value.get("role"))
-                .and_then(|value| value.as_str()),
-            Some("executor"),
-            "executor role must be persisted with the session metadata"
-        );
-    }
 
-    #[tokio::test]
-    async fn main_session_without_creator_gets_full_tools() {
-        use crate::agentic::tools::{
-            clear_session_role, get_session_restrictions, get_session_role, AgentRole,
-        };
-        use bitfun_agent_tools::ToolRuntimeRestrictions;
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-        let session_id = format!("main-exempt-{}", uuid::Uuid::new_v4());
 
-        // Main session (Standard kind, no creator): role is recorded as
-        // Commander, but the Commander default template is not landed —
-        // otherwise the main flow's Read/Edit/ExecCommand would all be
-        // rejected by the allowed_tool_names allowlist.
-        let session = coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(session_id.clone()),
-                "main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create main session");
-        assert_eq!(session.kind, SessionKind::Standard);
-        assert_eq!(
-            get_session_role(&session_id),
-            Some(AgentRole::Commander),
-            "main session keeps the commander role (owner/delegation semantics)"
-        );
-        assert_eq!(
-            get_session_restrictions(&session_id),
-            None,
-            "main session must NOT land the Commander template; enforcement falls back to context-level defaults (allow all)"
-        );
-        // When session-level restrictions are empty, enforcement uses the
-        // context-level default (empty allowlist) = allow all, so all main
-        // flow tools remain available.
-        let effective = ToolRuntimeRestrictions::default();
-        for tool in [
-            "Read",
-            "Grep",
-            "Glob",
-            "Edit",
-            "Delete",
-            "ExecCommand",
-            "WebSearch",
-        ] {
-            assert!(
-                effective.ensure_tool_allowed(tool).is_ok(),
-                "main session default restrictions must allow {tool}"
-            );
-        }
 
-        // Cleanup (the role is also cleared at session end; idempotent).
-        clear_session_role(&session_id);
-        assert_eq!(get_session_role(&session_id), None);
-    }
 
-    #[tokio::test]
-    async fn main_session_restore_keeps_exemption_and_subagent_keeps_executor_template() {
-        use crate::agentic::tools::{
-            clear_session_role, get_session_restrictions, get_session_role, AgentRole,
-        };
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
 
-        // Main session: keeps the exemption after restore (no template is
-        // landed), consistent with the register path.
-        let main_session_id = format!("main-restore-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(main_session_id.clone()),
-                "main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create main session");
-        clear_session_role(&main_session_id);
-        coordinator
-            .restore_session_role_best_effort(workspace.path(), &main_session_id)
-            .await;
-        assert_eq!(
-            get_session_role(&main_session_id),
-            Some(AgentRole::Commander),
-            "restored main session keeps commander role"
-        );
-        assert_eq!(
-            get_session_restrictions(&main_session_id),
-            None,
-            "restored main session must keep the exemption (no Commander template)"
-        );
 
-        // Subagent: after restore, the Executor role + default Executor
-        // template must be landed (core RBAC customization semantics; must
-        // not be broken by the main-session exemption).
-        let sub_session_id = format!("sub-restore-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(sub_session_id.clone()),
-                "subagent".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                Some("parent-session".to_string()),
-                false,
-                true,
-                Some("parent-session".to_string()),
-                Some("TestSubagent".to_string()),
-            )
-            .await
-            .expect("create subagent session");
-        clear_session_role(&sub_session_id);
-        coordinator
-            .restore_session_role_best_effort(workspace.path(), &sub_session_id)
-            .await;
-        assert_eq!(
-            get_session_role(&sub_session_id),
-            Some(AgentRole::Executor),
-            "subagent must restore as executor"
-        );
-        let sub_restrictions = get_session_restrictions(&sub_session_id)
-            .expect("subagent must land the Executor template");
-        assert!(
-            sub_restrictions
-                .ensure_operation_allowed(
-                    bitfun_agent_tools::OperationClass::ExecuteCode,
-                    "ExecCommand"
-                )
-                .is_ok(),
-            "subagent Executor template must allow ExecuteCode"
-        );
-        clear_session_role(&sub_session_id);
-    }
-
-    #[tokio::test]
-    async fn restore_session_view_registers_persisted_role_for_main_session() {
-        use crate::agentic::tools::{
-            clear_session_role, get_session_restrictions, get_session_role, AgentRole,
-        };
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-
-        // Main session: desktop restore goes through restore_session_view;
-        // the persisted role (Commander) must be re-registered after restore
-        // while keeping the main-session exemption (no template is landed).
-        let main_session_id = format!("main-view-restore-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(main_session_id.clone()),
-                "main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create main session");
-        clear_session_role(&main_session_id);
-
-        let (restored, _turns) = coordinator
-            .restore_session_view(workspace.path(), &main_session_id)
-            .await
-            .expect("restore session view");
-        assert_eq!(
-            restored.session_id, main_session_id,
-            "restore_session_view returns the restored session"
-        );
-        assert_eq!(
-            get_session_role(&main_session_id),
-            Some(AgentRole::Commander),
-            "restore_session_view must re-register the commander role for a main session"
-        );
-        assert_eq!(
-            get_session_restrictions(&main_session_id),
-            None,
-            "restore_session_view must keep the main-session exemption (no template landed)"
-        );
-        clear_session_role(&main_session_id);
-    }
-
-    #[tokio::test]
-    async fn storage_path_restore_registers_persisted_role() {
-        // P1-S2 断言：storage-path 系 restore 变体（desktop 生产主入口）必须
-        // 与 workspace 版对齐，恢复后重注册持久化 RBAC 角色——否则进程重启后
-        // 子代理角色静默丢失、回落到 context 级空模板全放行。
-        use crate::agentic::tools::{
-            clear_session_role, get_session_restrictions, get_session_role, AgentRole,
-        };
-        let (coordinator, session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-
-        // 主会话：restore_session_from_storage_path 后 Commander 角色必须重注册。
-        let main_session_id = format!("storage-main-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(main_session_id.clone()),
-                "main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create main session");
-        let storage_path = session_manager
-            .effective_session_storage_path(&main_session_id)
-            .await
-            .expect("resolve storage path");
-        clear_session_role(&main_session_id);
-        let restored = coordinator
-            .restore_session_from_storage_path(&storage_path, &main_session_id)
-            .await
-            .expect("restore from storage path");
-        assert_eq!(restored.session_id, main_session_id);
-        assert_eq!(
-            get_session_role(&main_session_id),
-            Some(AgentRole::Commander),
-            "restore_session_from_storage_path must re-register the commander role"
-        );
-        clear_session_role(&main_session_id);
-
-        // 子代理：storage-path restore 后 Executor 角色 + 默认模板必须落地。
-        let sub_session_id = format!("storage-sub-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(sub_session_id.clone()),
-                "subagent".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                Some("parent-session".to_string()),
-                false,
-                true,
-                Some("parent-session".to_string()),
-                Some("TestSubagent".to_string()),
-            )
-            .await
-            .expect("create subagent session");
-        let storage_path = session_manager
-            .effective_session_storage_path(&sub_session_id)
-            .await
-            .expect("resolve storage path");
-        clear_session_role(&sub_session_id);
-        let (restored, _turns) = coordinator
-            .restore_internal_session_with_turns_from_storage_path(&storage_path, &sub_session_id)
-            .await
-            .expect("restore subagent from storage path");
-        assert_eq!(restored.session_id, sub_session_id);
-        assert_eq!(
-            get_session_role(&sub_session_id),
-            Some(AgentRole::Executor),
-            "storage-path restore must re-register the executor role for a subagent"
-        );
-        assert!(
-            get_session_restrictions(&sub_session_id)
-                .expect("subagent must land the Executor template")
-                .ensure_operation_allowed(
-                    bitfun_agent_tools::OperationClass::ExecuteCode,
-                    "ExecCommand"
-                )
-                .is_ok(),
-            "storage-path restore must land the Executor template"
-        );
-        clear_session_role(&sub_session_id);
-
-        // view 系 storage-path 变体（desktop restore_session_view 主入口）
-        // 同样必须重注册角色。
-        let view_session_id = format!("storage-view-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(view_session_id.clone()),
-                "view".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create view session");
-        let storage_path = session_manager
-            .effective_session_storage_path(&view_session_id)
-            .await
-            .expect("resolve storage path");
-        clear_session_role(&view_session_id);
-        let (restored, _turns, _timing) = coordinator
-            .restore_session_view_from_storage_path_timed(&storage_path, &view_session_id)
-            .await
-            .expect("restore view from storage path");
-        assert_eq!(restored.session_id, view_session_id);
-        assert_eq!(
-            get_session_role(&view_session_id),
-            Some(AgentRole::Commander),
-            "restore_session_view_from_storage_path_timed must re-register the role"
-        );
-        clear_session_role(&view_session_id);
-    }
-
-    #[tokio::test]
-    async fn restore_derives_role_from_legacy_subagent_metadata() {
-        use crate::agentic::tools::{clear_session_role, get_session_role, AgentRole};
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-        let sub_session_id = format!("restore-sub-{}", uuid::Uuid::new_v4());
-
-        // Legacy subagent session: created with the subagent marker so the
-        // lineage metadata carries relationship.kind=Subagent, then the role
-        // key is stripped to simulate pre-role-persistence state.
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(sub_session_id.clone()),
-                "subagent".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                Some("parent-session".to_string()),
-                false,
-                true,
-                Some("parent-session".to_string()),
-                Some("TestSubagent".to_string()),
-            )
-            .await
-            .expect("create subagent session");
-        coordinator
-            .session_manager
-            .update_session_metadata(workspace.path(), &sub_session_id, |metadata| {
-                if let Some(custom) = metadata.custom_metadata.as_mut() {
-                    if let Some(object) = custom.as_object_mut() {
-                        object.remove("role");
-                    }
-                }
-            })
-            .await
-            .expect("strip role key");
-        clear_session_role(&sub_session_id);
-
-        coordinator
-            .restore_session_role_best_effort(workspace.path(), &sub_session_id)
-            .await;
-        assert_eq!(
-            get_session_role(&sub_session_id),
-            Some(AgentRole::Executor),
-            "legacy subagent session must restore as executor"
-        );
-        // The derived role is persisted back so the next restore reads it directly.
-        let metadata = coordinator
-            .session_manager
-            .load_session_metadata(workspace.path(), &sub_session_id)
-            .await
-            .expect("load metadata")
-            .expect("metadata exists");
-        assert_eq!(
-            metadata
-                .custom_metadata
-                .as_ref()
-                .and_then(|value| value.get("role"))
-                .and_then(|value| value.as_str()),
-            Some("executor")
-        );
-
-        // Plain session without any subagent marker restores as commander.
-        let plain_session_id = format!("restore-plain-{}", uuid::Uuid::new_v4());
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(plain_session_id.clone()),
-                "plain".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                None,
-                false,
-                false,
-                None,
-                None,
-            )
-            .await
-            .expect("create plain session");
-        coordinator
-            .session_manager
-            .update_session_metadata(workspace.path(), &plain_session_id, |metadata| {
-                if let Some(custom) = metadata.custom_metadata.as_mut() {
-                    if let Some(object) = custom.as_object_mut() {
-                        object.remove("role");
-                    }
-                }
-            })
-            .await
-            .expect("strip role key");
-        clear_session_role(&plain_session_id);
-
-        coordinator
-            .restore_session_role_best_effort(workspace.path(), &plain_session_id)
-            .await;
-        assert_eq!(
-            get_session_role(&plain_session_id),
-            Some(AgentRole::Commander),
-            "plain session without markers must default to commander"
-        );
-    }
-
-    #[tokio::test]
-    async fn restore_overrides_stale_commander_role_for_subagent_sessions() {
-        use crate::agentic::tools::{clear_session_role, get_session_role, AgentRole};
-        let (coordinator, _session_manager) = test_persistent_coordinator();
-        let workspace = tempfile::tempdir().expect("workspace");
-        let workspace_path = workspace.path().to_string_lossy().into_owned();
-        let session_id = format!("restore-stale-{}", uuid::Uuid::new_v4());
-
-        // Create a subagent-marked session (persists role=executor), then
-        // rewrite the persisted role to "commander" to simulate the stale
-        // value written by the pre-fix creation chain.
-        coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(session_id.clone()),
-                "subagent".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path.clone(),
-                Some("parent-session".to_string()),
-                false,
-                true,
-                Some("parent-session".to_string()),
-                Some("TestSubagent".to_string()),
-            )
-            .await
-            .expect("create subagent session");
-        coordinator
-            .session_manager
-            .update_session_metadata(workspace.path(), &session_id, |metadata| {
-                crate::service::session::merge_session_custom_metadata(
-                    metadata,
-                    serde_json::json!({ "role": "commander" }),
-                );
-            })
-            .await
-            .expect("write stale commander role");
-        clear_session_role(&session_id);
-
-        coordinator
-            .restore_session_role_best_effort(workspace.path(), &session_id)
-            .await;
-        assert_eq!(
-            get_session_role(&session_id),
-            Some(AgentRole::Executor),
-            "stale commander role on a subagent-marked session must be overridden"
-        );
-        // The override is persisted back so the next restore reads executor directly.
-        let metadata = coordinator
-            .session_manager
-            .load_session_metadata(workspace.path(), &session_id)
-            .await
-            .expect("load metadata")
-            .expect("metadata exists");
-        assert_eq!(
-            metadata
-                .custom_metadata
-                .as_ref()
-                .and_then(|value| value.get("role"))
-                .and_then(|value| value.as_str()),
-            Some("executor")
-        );
-    }
-
-    #[tokio::test]
-    async fn session_lifecycle_injects_start_context_and_cleans_up() {
-        use crate::agentic::tools::{
-            clear_session_restrictions, get_session_restrictions, get_session_role,
-            set_session_role, update_restrictions, AgentRole, ToolRuntimeRestrictionsPatch,
-        };
-        let (coordinator, _session_manager) = test_coordinator();
-        let workspace =
-            std::env::temp_dir().join(format!("bitfun-lifecycle-test-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&workspace).expect("create workspace dir");
-        let workspace_path = workspace.to_string_lossy().into_owned();
-
-        let session = coordinator
-            .create_session_with_workspace_and_creator(
-                Some("lc-main-01".to_string()),
-                "lifecycle main".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path,
-                None,
-            )
-            .await
-            .expect("create main session");
-        let session_id = session.session_id.clone();
-        assert_eq!(get_session_role(&session_id), Some(AgentRole::Commander));
-
-        // SessionStart injection: the lifecycle context must be visible to the model.
-        let transcript = bitfun_runtime_ports::SessionTranscriptReader::read_session_transcript(
-            &coordinator,
-            bitfun_runtime_ports::SessionTranscriptRequest {
-                session_id: session_id.clone(),
-                turn_id: None,
-            },
-        )
-        .await
-        .expect("session transcript");
-        let injected = transcript.messages.iter().any(|message| {
-            matches!(
-                &message.content,
-                bitfun_runtime_ports::TranscriptContent::Text(text)
-                    if text.contains("[Legion Context]") && text.contains("commander")
-            )
-        });
-        assert!(injected, "SessionStart must inject the legion role context");
-
-        // Populate the registries so cleanup has something to remove.
-        set_session_role(&session_id, AgentRole::Reviewer).expect("set role");
-        update_restrictions(&session_id, None, ToolRuntimeRestrictionsPatch::default())
-            .expect("set restrictions");
-        assert!(get_session_restrictions(&session_id).is_some());
-
-        // SessionEnd cleanup: role + restrictions unregistered, idempotent.
-        coordinator.session_end_cleanup(&session_id).await;
-        assert_eq!(
-            get_session_role(&session_id),
-            None,
-            "role must be unregistered"
-        );
-        assert_eq!(
-            get_session_restrictions(&session_id),
-            None,
-            "restrictions must be unregistered"
-        );
-        clear_session_restrictions(&session_id); // exercise the idempotent path
-        coordinator.session_end_cleanup(&session_id).await; // no-op, must not panic
-    }
-
-    #[tokio::test]
-    async fn agentic_executor_subagent_registers_full_tool_template() {
-        // P-01 漂移修复：subagent_type="agentic" 的执行者会话必须命中
-        // general_purpose_tool_restrictions（含 Communicate），而不是默认
-        // Executor 模板（缺 Communicate → TodoWrite 被拦）。
-        use crate::agentic::tools::{
-            get_session_restrictions, get_session_role, AgentRole, OperationClass,
-        };
-        let (coordinator, _session_manager) = test_coordinator();
-        let workspace = std::env::temp_dir().join(format!(
-            "bitfun-agentic-executor-role-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&workspace).expect("create workspace dir");
-        let workspace_path = workspace.to_string_lossy().into_owned();
-
-        let session = coordinator
-            .create_session_with_workspace_and_creator_internal(
-                Some(format!(
-                    "agentic-exec-{}",
-                    uuid::Uuid::new_v4().to_string().split('-').next().unwrap()
-                )),
-                "agentic executor".to_string(),
-                "agentic".to_string(),
-                SessionConfig::default(),
-                workspace_path,
-                Some("parent-session".to_string()),
-                false,
-                true,
-                Some("parent-session".to_string()),
-                Some("agentic".to_string()),
-            )
-            .await
-            .expect("create agentic executor subagent session");
-        let session_id = session.session_id.clone();
-
-        // role must be Executor for a subagent-marked session.
-        assert_eq!(get_session_role(&session_id), Some(AgentRole::Executor));
-
-        // Restrictions must include Communicate so TodoWrite passes.
-        let restrictions = get_session_restrictions(&session_id)
-            .expect("session restrictions should be registered");
-        assert!(
-            restrictions
-                .allowed_operation_classes
-                .contains(&OperationClass::Communicate),
-            "agentic executor session must allow Communicate (TodoWrite)"
-        );
-        assert!(
-            restrictions
-                .ensure_operation_allowed(OperationClass::Communicate, "TodoWrite")
-                .is_ok(),
-            "agentic executor session must pass ensure_operation_allowed for TodoWrite"
-        );
-
-        // Cleanup so the temp registry does not leak.
-        crate::agentic::tools::clear_session_role(&session_id);
-    }
-
-    #[tokio::test]
-    async fn subagent_start_builds_legion_context() {
-        use crate::agentic::tools::{get_session_role, set_session_role, AgentRole};
-        let (coordinator, _session_manager) = test_coordinator();
-
-        // Parent session with a registered role (no active thread goal on disk).
-        set_session_role("lc-parent-01", AgentRole::Commander).expect("set parent role");
-        let parent_info = SubagentParentInfo {
-            tool_call_id: "tool-call-1".to_string(),
-            session_id: "lc-parent-01".to_string(),
-            dialog_turn_id: "turn-1".to_string(),
-            depth: Some(2),
-            role: Some("reviewer".to_string()),
-        };
-
-        // Subagent role resolved from the session registry (takes precedence
-        // over the parent info role).
-        set_session_role("lc-sub-01", AgentRole::Reviewer).expect("set subagent role");
-        let context = coordinator
-            .build_subagent_legion_context(Some(&parent_info), "lc-sub-01")
-            .await
-            .expect("context must be built");
-        assert!(context.contains("[Legion Context]"), "got: {context}");
-        assert!(
-            context.contains("Subagent role: reviewer"),
-            "subagent role line missing, got: {context}"
-        );
-        assert!(
-            context.contains("Parent session role: commander"),
-            "parent role line missing, got: {context}"
-        );
-        assert!(
-            context.contains("Legion depth: 2"),
-            "depth line missing, got: {context}"
-        );
-
-        // No role and no parent info => nothing to inject.
-        let empty = coordinator
-            .build_subagent_legion_context(None, "lc-unknown")
-            .await;
-        assert!(empty.is_none(), "unknown session must yield no context");
-
-        // Registry wins over the parent-info role claim.
-        assert_eq!(get_session_role("lc-sub-01"), Some(AgentRole::Reviewer));
-    }
 
     #[test]
     fn external_command_delegation_uses_the_resolved_primary_binding() {
@@ -18612,7 +17430,6 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
                 depth: None,
-                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23179,7 +21996,6 @@ mod tests {
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
                     depth: None,
-                    role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23257,7 +22073,6 @@ mod tests {
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
                     depth: None,
-                    role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23325,7 +22140,6 @@ mod tests {
                     dialog_turn_id: "parent-turn".to_string(),
                     tool_call_id: "task-tool".to_string(),
                     depth: None,
-                    role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23383,7 +22197,6 @@ mod tests {
                     dialog_turn_id: "parent-turn-2".to_string(),
                     tool_call_id: "task-tool-2".to_string(),
                     depth: None,
-                    role: None,
                 },
                 context: HashMap::new(),
                 permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23582,7 +22395,6 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
                 depth: None,
-                role: None,
             },
             context: HashMap::from([(
                 AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(),
@@ -23649,7 +22461,6 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
                 depth: None,
-                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23724,7 +22535,6 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
                 depth: None,
-                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
@@ -23770,7 +22580,6 @@ mod tests {
                 dialog_turn_id: "parent-turn".to_string(),
                 tool_call_id: "task-tool".to_string(),
                 depth: None,
-                role: None,
             },
             context: HashMap::new(),
             permission_runtime_ceiling: PermissionRuntimeCeiling::default(),
