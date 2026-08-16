@@ -3,7 +3,7 @@ use super::visibility::SubagentVisibilityPolicy;
 use crate::agentic::agents::{
     Agent, AgenticMode, ClawMode, CodeReviewAgent, ComputerUseMode, CoworkMode, DebugMode,
     DeepResearchMode, DeepReviewAgent, ExploreAgent, FileFinderAgent, GeneralPurposeAgent,
-    GenerateDocAgent, LegionMode, MultitaskMode, PlanMode, ResearchSpecialistAgent,
+    GenerateDocAgent, GroupMode, LegionMode, MultitaskMode, PlanMode, ResearchSpecialistAgent,
     ReviewFixerAgent, ReviewJudgeAgent, ReviewWorkerAgent, TeamMode,
 };
 use crate::agentic::memories::MemoryPhase2Agent;
@@ -36,6 +36,7 @@ fn builtin_agent_factory(id: &str) -> fn() -> Arc<dyn Agent> {
         "Multitask" => || Arc::new(MultitaskMode::new()),
         "Plan" => || Arc::new(PlanMode::new()),
         "Claw" => || Arc::new(ClawMode::new()),
+        "group" => || Arc::new(GroupMode::new()),
         "DeepResearch" => || Arc::new(DeepResearchMode::new()),
         "Team" => || Arc::new(TeamMode::new()),
         "Legion" => || Arc::new(LegionMode::new()),

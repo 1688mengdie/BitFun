@@ -126,32 +126,32 @@ const MainNav: React.FC<MainNavProps> = ({
     ?? null;
 
   const handleGroupChatCreated = useCallback(async (groupId: string, name: string) => {
-    // R-GC-26: group chat = a new Claw default conversation living under the
-    // Claw default assistant workspace (never the current project workspace).
-    // The backend create resolves the same workspace (path_manager default
-    // assistant workspace), so register locally with the same root so the
-    // group session opens consistently.
+    // R-GC-26 + R-WF-02: group chat = a new agent_type="group" conversation
+    // living under the Claw default assistant workspace (never the current
+    // project workspace). The backend create resolves the same workspace
+    // (path_manager default assistant workspace), so register locally with
+    // the same root so the group session opens consistently.
     const workspace = defaultAssistantWorkspace;
     const workspacePath = workspace?.rootPath || '';
     const workspaceId = workspace?.id || undefined;
     if (!workspacePath) return;
-    // Group = Claw session (backend group_room_tools.rs create_group builds a
-    // Claw session — agent type ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator
-    // .rs:872; the createSession config agentType and mode below mirror it);
-    // registering it locally into flowChatStore lets the existing SessionScene
-    // open it.
+    // Group = agent_type="group" session (backend group_room_tools.rs
+    // create_group builds a group session — default_group_agent_type,
+    // group_room_tools.rs; the createSession config agentType and mode below
+    // mirror it); registering it locally into flowChatStore lets the existing
+    // SessionScene open it.
     flowChatStore.createSession(
       groupId,
       {
         workspacePath,
         projectWorkspacePath: workspacePath,
-        agentType: 'Claw',
+        agentType: 'group',
         workspaceId,
       },
       undefined,
       name,
       1048576,
-      'Claw',
+      'group',
       workspacePath,
     );
     // R-GC-14: mark the group session (UI-local, used by the group chat view).
