@@ -820,6 +820,136 @@ impl GroupRoomTool {
         Ok(result)
     }
 
+    /// R-WF-05（原子步 1）：成员 turn 最终回复 → 群会话桥接（消息实时聚合
+    /// 复刻）。成员完成一次 dialog turn 后，把最终回复以群消息形态复刻进该
+    /// 成员所属的每个群（一对多）：
+    /// - 走 `write_group_turn_with_metadata` 纯落盘路径（绕过 agent 执行，
+    ///   不触发群主/成员 agent 再跑一轮，Plan:128「走 write_group_turn_
+    ///   with_metadata 落盘，绕过 agent 执行」）；
+    /// - sender 用成员真实会话 id（resolve_sender_identity → SOUL.name +
+    ///   类型，R-WF-03 发言方标识口径）；
+    /// - 数据源 = 成员会话 custom_metadata.groupChats 反标（原子步 3 写入，
+    ///   成员→群一对多）；
+    /// - 异步不阻塞：调用方（persist_completed_dialog_turn hook）以 spawn
+    ///   方式调用本函数；本函数内部单群失败 warn 继续（复刻是尽力而为的
+    ///   旁路，绝不允许阻断成员会话主流程——验收断言 Plan:132「不阻塞成员
+    ///   会话」）。
+    pub(crate) async fn replicate_member_turn_to_groups(
+        coordinator: &ConversationCoordinator,
+        member_session_id: &str,
+        final_response: &str,
+    ) -> BitFunResult<()> {
+        if final_response.trim().is_empty() {
+            return Ok(());
+        }
+        let manager = coordinator.get_session_manager();
+        // 读成员反标（成员会话 custom_metadata.groupChats = 群 ID 数组）。
+        // 成员会话 workspace 解析：内存 config → 磁盘 binding 回退
+        // （group_workspace 同链，但目标 = 成员会话本身）。
+        let member_workspace = if let Some(workspace) = manager
+            .get_session(member_session_id)
+            .and_then(|session| session.config.workspace_path)
+        {
+            workspace
+        } else if let Some(binding) = manager
+            .resolve_session_workspace_binding(member_session_id)
+            .await
+        {
+            binding.project_root_path.to_string_lossy().to_string()
+        } else {
+            // 成员会话不可解析（已删除/未持久化）→ 静默跳过复刻（无群可发）。
+            return Ok(());
+        };
+        let group_ids = match manager
+            .load_session_metadata(&PathBuf::from(&member_workspace), member_session_id)
+            .await
+        {
+            Ok(Some(metadata)) => metadata
+                .custom_metadata
+                .as_ref()
+                .and_then(|m| m.get("groupChats"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<String>>()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if group_ids.is_empty() {
+            return Ok(());
+        }
+        for group_id in group_ids {
+            // 单群失败 warn 继续（尽力而为的旁路复刻，禁阻塞其它群）。
+            if let Err(error) = Self::replicate_member_turn_to_group(
+                coordinator,
+                &member_workspace,
+                member_session_id,
+                &group_id,
+                final_response,
+            )
+            .await
+            {
+                warn!(
+                    "Failed to replicate member turn to group: member={}, group={}, error={}",
+                    member_session_id, group_id, error
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// R-WF-05：单群复刻落盘（replicate_member_turn_to_groups 的单个群执行体）。
+    /// 群存在性门（group_workspace）+ 五字段 metadata + senderType（契约 §三
+    /// + R-WF-03 发言方标识），内容 = 成员最终回复全文。落盘失败 → Err
+    /// （调用方 warn 继续）。
+    async fn replicate_member_turn_to_group(
+        coordinator: &ConversationCoordinator,
+        member_workspace: &str,
+        member_session_id: &str,
+        group_id: &str,
+        final_response: &str,
+    ) -> BitFunResult<String> {
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
+        let sender = Self::resolve_sender_identity(coordinator, member_session_id, member_workspace)
+            .await;
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("groupId".to_string(), json!(group_id));
+        metadata.insert("senderSessionId".to_string(), json!(sender.session_id));
+        if let Some(role) = &sender.role {
+            metadata.insert("senderRole".to_string(), json!(role));
+        }
+        if let Some(depth) = sender.depth {
+            metadata.insert("senderDepth".to_string(), json!(depth));
+        }
+        metadata.insert(
+            "senderName".to_string(),
+            json!(sender
+                .name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(member_session_id)),
+        );
+        metadata.insert(
+            "senderType".to_string(),
+            json!(sender
+                .agent_type
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(sender.session_id.as_str())),
+        );
+        Self::write_group_turn_with_metadata(
+            coordinator,
+            &group_workspace,
+            group_id,
+            final_response,
+            metadata,
+        )
+        .await
+    }
+
     /// 从持久化 turns 重建「turn_id → SenderIdentity」发言方映射（契约 §三）。
     /// user_message.metadata 缺失或为 JSON null 的 turn 跳过；调用方负责容错
     /// （读取失败 → 空映射）。
@@ -1165,6 +1295,14 @@ impl GroupRoomTool {
         member_session_id: &str,
     ) -> BitFunResult<()> {
         let manager = coordinator.get_session_manager();
+        // R-WF-05（原子步 3）：成员↔群一对多「反标」持久化。群侧成员表
+        // （groupChats）写群会话；成员侧反标（成员会话 custom_metadata.
+        // groupChats = 群 ID 数组）此前只在 delete_group 清除、加入时从不
+        // 写入（深侦-群聊工具与复刻链路 §2.4：权威存储 = 群会话 groupChats
+        // = 群→多成员；反标 = 成员→多群）。补写反标是「成员 turn 最终回复
+        // 实时聚合复刻」（R-WF-05 原子步 1/2）的数据基础——复刻时从成员
+        // 反标查该成员属于哪些群。存储路径 = 群 workspace 域（与
+        // delete_group 清反标同一存储域，成员会话在该域内可解析）。
         manager
             .update_session_metadata(&PathBuf::from(group_workspace), group_id, |metadata| {
                 let mut members = metadata
@@ -1185,7 +1323,44 @@ impl GroupRoomTool {
                 custom.insert("groupChats".to_string(), json!(members));
             })
             .await
-            .map_err(BitFunError::tool)
+            .map_err(BitFunError::tool)?;
+        // 成员侧反标（幂等去重）：成员会话 groupChats 追加本群 ID。单成员
+        // 反标写入失败 → warn 继续（S-38 防幽灵先例：delete_group 逐成员清
+        // 反标单成员失败 warn 继续），不阻断建群/邀请主流程（R-WF-05 验收
+        // 断言「不阻塞成员会话」同源：反标是复刻数据源，缺失时复刻静默跳过）。
+        manager
+            .update_session_metadata(
+                &PathBuf::from(group_workspace),
+                member_session_id,
+                |metadata| {
+                    let mut groups = metadata
+                        .custom_metadata
+                        .as_ref()
+                        .and_then(|m| m.get("groupChats"))
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    if !groups.iter().any(|v| v.as_str() == Some(group_id)) {
+                        groups.push(json!(group_id));
+                    }
+                    let custom = metadata
+                        .custom_metadata
+                        .get_or_insert_with(|| json!({}))
+                        .as_object_mut()
+                        .expect("custom_metadata is always an object");
+                    custom.insert("groupChats".to_string(), json!(groups));
+                },
+            )
+            .await
+            .map_err(|error| {
+                warn!(
+                    "Failed to write member back-mark (groupChats) for member={}, group={}, error={}",
+                    member_session_id, group_id, error
+                );
+                error
+            })
+            .map_err(BitFunError::tool)?;
+        Ok(())
     }
 
     /// 从输入提取 action（只读判定入口；缺失/非法 → None）。
@@ -3095,6 +3270,268 @@ mod tests {
                 .to_string()
                 .contains("does not exist"),
             "R-WF-04: send to non-existent group must yield a clear error, got: {missing_group_err}"
+        );
+
+        // ── R-WF-05 验收断言（Plan:132）──
+        // 1) 成员侧反标持久化（原子步 3）：create/invite 后，成员会话
+        //    custom_metadata.groupChats 含群 ID（成员→群一对多反标）。
+        //    member_a 是 open_group 的唯一成员（R-WF-04 开放投递群只登记
+        //    member_a；member_b 是开放投递的非成员，无反标）。
+        let member_a_meta = manager
+            .load_session_metadata(workspace, &member_a)
+            .await
+            .expect("load member A metadata")
+            .expect("member A metadata exists");
+        let member_a_groups = member_a_meta
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            member_a_groups
+                .iter()
+                .any(|v| v.as_str() == Some(open_group_id.as_str())),
+            "R-WF-05: member back-mark (groupChats) must contain the group id after create"
+        );
+        // 2) 桥接函数（原子步 1）：成员最终回复复刻进所属群（异步落盘 →
+        //    群 turns 出现最终回复；成员主动发已由 R-WF-04 覆盖）。
+        let replicate_reply = "成员的最终回复（R-WF-05 复刻验收）";
+        GroupRoomTool::replicate_member_turn_to_groups(
+            coordinator,
+            &member_a,
+            replicate_reply,
+        )
+        .await
+        .expect("R-WF-05: replicate member turn to group log must succeed");
+        let replicated_turns = manager
+            .persistence_manager()
+            .load_session_turns(workspace, &open_group_id)
+            .await
+            .expect("load replicated group turns");
+        let replicated = replicated_turns
+            .iter()
+            .find(|t| t.user_message.content == replicate_reply)
+            .expect("replicated final reply must be persisted into the group log");
+        assert_eq!(
+            replicated.status,
+            bitfun_services_core::session::TurnStatus::Completed,
+            "R-WF-05: replicated turn must be Completed (no agent execution)"
+        );
+        assert_eq!(
+            replicated.finish_reason.as_deref(),
+            Some("complete"),
+            "R-WF-05: replicated turn must carry the normal finish code"
+        );
+        assert_eq!(
+            replicated.has_final_response,
+            Some(true),
+            "R-WF-05: replicated turn is itself the final response"
+        );
+        // 3) 复刻消息 sender = 成员真实会话（发言方标识可解析）。
+        let replicated_meta = replicated
+            .user_message
+            .metadata
+            .as_ref()
+            .expect("replicated turn metadata");
+        assert_eq!(
+            replicated_meta.get("senderSessionId").and_then(Value::as_str),
+            Some(member_a.as_str()),
+            "R-WF-05: replicated turn sender must be the member session"
+        );
+        // 4) 历史读回：复刻最终回复在群消息历史可见（成员完成 turn → 群消息
+        //    出现最终回复）。
+        let replicated_history = GroupRoomTool::get_history(coordinator, &open_group_id, None)
+            .await
+            .expect("replicated history");
+        assert!(
+            replicated_history
+                .iter()
+                .any(|m| m.content == replicate_reply),
+            "R-WF-05: replicated final reply must be visible in group history"
+        );
+    }
+
+    /// R-WF-05 独立验收：成员↔群一对多——一个成员加入两个群，最终回复
+    /// 复刻进**每个**群（反标数组驱动的一对多复刻）；成员不在任何群时复刻
+    /// 静默成功（无群可发，不报错、不阻塞）。
+    #[tokio::test]
+    async fn replicate_member_turn_to_multiple_groups() {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
+        };
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
+        use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::infrastructure::PathManager;
+        use crate::runtime_ownership::CoreRuntimeOwnership;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let user_root = std::env::temp_dir().join(format!(
+            "bitfun-grouproom-rwf05-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&user_root).expect("user root");
+        let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
+        let persistence =
+            PersistenceManager::new(Arc::new(path_manager)).expect("persistence manager");
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(persistence),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: true,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(tokio::sync::RwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let ownership_root = user_root.join("runtime-ownership");
+        let coordinator = Arc::new(ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue,
+            Arc::new(EventRouter::new()),
+            Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+                ownership_root,
+                "bitfun".to_string(),
+                "test",
+            )),
+        ));
+        coordinator.set_terminal_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
+        );
+        coordinator.set_remote_exec_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
+        );
+        ConversationCoordinator::set_global(coordinator.clone());
+
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-grouproom-rwf05-ws-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let workspace_str = workspace.to_string_lossy().to_string();
+        let manager = coordinator.get_session_manager();
+
+        let member = create_member_session_for_test(&coordinator, &workspace_str).await;
+        let group_1 = GroupRoomTool::create_group(
+            &coordinator,
+            "R-WF-05 群一",
+            &[member.clone()],
+            &workspace_str,
+        )
+        .await
+        .expect("create group 1");
+        let group_2 = GroupRoomTool::create_group(
+            &coordinator,
+            "R-WF-05 群二",
+            &[member.clone()],
+            &workspace_str,
+        )
+        .await
+        .expect("create group 2");
+
+        // 一对多反标：成员反标含两个群 ID。
+        let member_meta = manager
+            .load_session_metadata(&workspace, &member)
+            .await
+            .expect("load member metadata")
+            .expect("member metadata exists");
+        let member_groups = member_meta
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            member_groups.len(),
+            2,
+            "R-WF-05: one member in two groups must carry two back-marks"
+        );
+
+        // 复刻最终回复 → 两个群 turns 都出现。
+        let reply = "一对多复刻最终回复";
+        GroupRoomTool::replicate_member_turn_to_groups(&coordinator, &member, reply)
+            .await
+            .expect("replicate to multiple groups");
+        for group_id in [&group_1, &group_2] {
+            let turns = manager
+                .persistence_manager()
+                .load_session_turns(&workspace, group_id)
+                .await
+                .expect("load group turns");
+            assert!(
+                turns.iter().any(|t| t.user_message.content == reply),
+                "R-WF-05: reply must be replicated into group {group_id}"
+            );
+        }
+
+        // 非成员（无反标）复刻 → 静默成功（不报错、不写任何群）。
+        let outsider = create_member_session_for_test(&coordinator, &workspace_str).await;
+        let before_turns = manager
+            .persistence_manager()
+            .load_session_turns(&workspace, &group_1)
+            .await
+            .expect("load group turns before outsider replicate");
+        GroupRoomTool::replicate_member_turn_to_groups(&coordinator, &outsider, "外部成员回复")
+            .await
+            .expect("outsider replicate must be a no-op success");
+        let after_turns = manager
+            .persistence_manager()
+            .load_session_turns(&workspace, &group_1)
+            .await
+            .expect("load group turns after outsider replicate");
+        assert_eq!(
+            before_turns.len(),
+            after_turns.len(),
+            "R-WF-05: non-member replicate must not write into any group"
+        );
+
+        // 空回复 → 静默跳过（不落盘）。
+        let before_empty = manager
+            .persistence_manager()
+            .load_session_turns(&workspace, &group_1)
+            .await
+            .expect("load group turns before empty replicate");
+        GroupRoomTool::replicate_member_turn_to_groups(&coordinator, &member, "")
+            .await
+            .expect("empty replicate must be a no-op success");
+        let after_empty = manager
+            .persistence_manager()
+            .load_session_turns(&workspace, &group_1)
+            .await
+            .expect("load group turns after empty replicate");
+        assert_eq!(
+            before_empty.len(),
+            after_empty.len(),
+            "R-WF-05: empty final reply must be skipped"
         );
     }
 }
