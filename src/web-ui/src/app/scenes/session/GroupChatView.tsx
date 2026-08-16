@@ -110,10 +110,11 @@ function groupMessageToDialogTurn(
     id,
     sessionId: groupId,
     kind,
-    // Group sessions are Claw conversations (backend builds them with
-    // ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator.rs:872); keep the rendered
-    // turn agentType aligned with the group session type.
-    agentType: 'Claw',
+    // Group sessions are agent_type="group" conversations (backend builds
+    // them with default_group_agent_type, group_room_tools.rs; R-WF-02 makes
+    // group a first-class agent type); keep the rendered turn agentType
+    // aligned with the group session type.
+    agentType: 'group',
     userMessage: {
       id,
       content: message.content,
@@ -403,20 +404,21 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
       }
       notificationService.success(t('nav.groupChats.forked', { name }), { duration: 3000 });
       // Jump to the child group view (R-GC-15 acceptance: fork -> child view).
-      // Child group = Claw session, same as the parent (branch_session forks
-      // the Claw group session; backend agent type is
-      // ASSISTANT_BOOTSTRAP_AGENT_TYPE, coordinator.rs:872).
+      // Child group = agent_type="group" session, same as the parent
+      // (branch_session forks the group session; backend agent type is
+      // default_group_agent_type, group_room_tools.rs — R-WF-02 first-class
+      // agent type).
       flowChatStore.createSession(
         childGroupId,
         {
           workspacePath,
           projectWorkspacePath: workspacePath,
-          agentType: 'Claw',
+          agentType: 'group',
         },
         undefined,
         name,
         1048576,
-        'Claw',
+        'group',
         workspacePath,
       );
       flowChatStore.markSessionAsGroupChat(childGroupId);

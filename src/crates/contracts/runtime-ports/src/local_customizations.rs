@@ -38,6 +38,9 @@ pub enum AgentType {
         alias = "DEEPRESEARCH"
     )]
     DeepResearch,
+    /// Known built-in variant: `group`.
+    #[serde(rename = "group", alias = "Group", alias = "GROUP")]
+    Group,
     /// Catch-all for any agent type string not in the known set (custom / external).
     #[serde(untagged)]
     Other(String),
@@ -51,6 +54,7 @@ impl AgentType {
             Self::Plan => "Plan",
             Self::Cowork => "Cowork",
             Self::DeepResearch => "DeepResearch",
+            Self::Group => "group",
             Self::Other(value) => value.as_str(),
         }
     }
@@ -64,7 +68,11 @@ impl AgentType {
     pub fn is_known_builtin(&self) -> bool {
         matches!(
             self,
-            Self::Agentic | Self::Plan | Self::Cowork | Self::DeepResearch
+            Self::Agentic
+                | Self::Plan
+                | Self::Cowork
+                | Self::DeepResearch
+                | Self::Group
         )
     }
 }
@@ -76,6 +84,7 @@ impl From<&str> for AgentType {
             "Plan" | "plan" | "PLAN" => Self::Plan,
             "Cowork" | "cowork" | "COWORK" => Self::Cowork,
             "DeepResearch" | "deepresearch" | "DEEPRESEARCH" => Self::DeepResearch,
+            "group" | "Group" | "GROUP" => Self::Group,
             other => Self::Other(other.to_string()),
         }
     }
@@ -156,9 +165,14 @@ mod tests {
         assert_eq!(AgentType::from("Plan"), AgentType::Plan);
         assert_eq!(AgentType::from("cowork"), AgentType::Cowork);
         assert_eq!(AgentType::from("DEEPRESEARCH"), AgentType::DeepResearch);
+        assert_eq!(AgentType::from("group"), AgentType::Group);
+        assert_eq!(AgentType::from("Group"), AgentType::Group);
+        assert_eq!(AgentType::from("GROUP"), AgentType::Group);
         assert_eq!(AgentType::from("custom-x"), AgentType::Other("custom-x".to_string()));
         assert_eq!(AgentType::default_value(), AgentType::Agentic);
         assert!(AgentType::Agentic.is_known_builtin());
+        assert!(AgentType::Group.is_known_builtin());
+        assert_eq!(AgentType::Group.as_str(), "group");
         assert!(!AgentType::Other("x".to_string()).is_known_builtin());
         assert_eq!(AgentType::Other("x".to_string()).to_string(), "x");
     }

@@ -1540,7 +1540,7 @@ describe('FlowChatStore historical session hydration state', () => {
       {
         sessionId: 'group-1',
         title: '项目群',
-        agentType: 'Claw',
+        agentType: 'group',
         modelName: 'auto',
         createdAt: 10,
         lastActiveAt: 20,
@@ -1568,7 +1568,7 @@ describe('FlowChatStore historical session hydration state', () => {
       {
         sessionId: 'empty-group',
         title: 'Empty group metadata',
-        agentType: 'Claw',
+        agentType: 'group',
         modelName: 'auto',
         createdAt: 10,
         lastActiveAt: 20,
@@ -2648,7 +2648,7 @@ describe('FlowChatStore historical session hydration state', () => {
         {
           sessionId: 'group-page-1',
           title: '项目群',
-          agentType: 'Claw',
+          agentType: 'group',
           modelName: 'auto',
           createdAt: 10,
           lastActiveAt: 20,

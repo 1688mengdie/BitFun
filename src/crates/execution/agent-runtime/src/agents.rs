@@ -86,6 +86,7 @@ pub fn builtin_agent_definition_specs() -> Vec<BuiltinAgentDefinitionSpec> {
         ),
         builtin_agent_spec("Plan", Mode, "auto", SubagentVisibilityPolicy::default()),
         builtin_agent_spec("Claw", Mode, "auto", SubagentVisibilityPolicy::default()),
+        builtin_agent_spec("group", Mode, "auto", SubagentVisibilityPolicy::default()),
         builtin_agent_spec(
             "DeepResearch",
             Mode,
@@ -178,8 +179,8 @@ pub fn builtin_agent_definition_specs() -> Vec<BuiltinAgentDefinitionSpec> {
 
 pub fn default_model_id_for_builtin_agent(agent_type: &str) -> &'static str {
     match agent_type {
-        "agentic" | "Cowork" | "ComputerUse" | "Plan" | "debug" | "Claw" | "DeepResearch"
-        | "Team" | "Multitask" | "Legion" => "auto",
+        "agentic" | "Cowork" | "ComputerUse" | "Plan" | "debug" | "Claw" | "group"
+        | "DeepResearch" | "Team" | "Multitask" | "Legion" => "auto",
         "Explore" | "FileFinder" | "CodeReview" | "GeneralPurpose" | "MemoryPhase2" => "primary",
         "GenerateDoc"
         | "ResearchSpecialist"

@@ -364,6 +364,36 @@ fn every_builtin_mode_with_control_hub_can_also_schedule_with_cron() {
     }
 }
 
+#[tokio::test]
+async fn group_is_a_first_class_builtin_mode_and_available_in_modes_info() {
+    // R-WF-02 验收断言：get_available_modes 含 group + 工厂不 panic
+    // （catalog.rs 缺失工厂会 panic!("missing legacy Agent factory ...")）。
+    let registry = AgentRegistry::new();
+    let specs = builtin_agent_specs();
+    let group_spec = specs
+        .iter()
+        .find(|spec| (spec.factory)().id() == "group")
+        .expect("builtin_agent_definition_specs must contain group");
+    assert_eq!(
+        group_spec.category,
+        AgentCategory::Mode,
+        "group must be a Mode"
+    );
+    let group_agent = (group_spec.factory)();
+    assert_eq!(group_agent.id(), "group");
+    assert_eq!(group_agent.name(), "group");
+
+    // get_modes_info（= get_available_modes 后端数据源）含 group。
+    let modes = registry.get_modes_info().await;
+    assert!(
+        modes.iter().any(|info| info.id == "group"),
+        "get_available_modes must include group"
+    );
+    let group_info = modes.iter().find(|info| info.id == "group").unwrap();
+    assert!(group_info.default_tools.contains(&"send_group_message".to_string()));
+    assert!(group_info.default_tools.contains(&"create_group_chat".to_string()));
+}
+
 #[test]
 fn non_deep_review_builtin_subagents_default_to_primary() {
     for agent_type in [

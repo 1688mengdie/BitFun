@@ -70,6 +70,10 @@ const CATALOG_PROMPT_SOURCES: &[(&str, &[u8])] = &[
         include_bytes!("../prompts/agents/generate_doc_agent.md"),
     ),
     (
+        "group_mode",
+        include_bytes!("../prompts/agents/group_mode.md"),
+    ),
+    (
         "init_agents_md",
         include_bytes!("../prompts/shared/init_agents_md.md"),
     ),

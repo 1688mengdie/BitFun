@@ -836,14 +836,15 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
       workspacePath: '/workspace-a',
     });
 
-    // fork 成功 → 登记子群 + 标记群聊 + 跳转子群视图（复用 R-GC-13 登记形态）
+    // fork 成功 → 登记子群 + 标记群聊 + 跳转子群视图（复用 R-GC-13 登记形态；
+    // R-WF-02：子群 = agent_type="group"）
     expect(flowChatMocks.createSession).toHaveBeenCalledWith(
       'group-child-1',
-      expect.objectContaining({ workspacePath: '/workspace-a', agentType: 'Claw' }),
+      expect.objectContaining({ workspacePath: '/workspace-a', agentType: 'group' }),
       undefined,
       '子群A',
       1048576,
-      'Claw',
+      'group',
       '/workspace-a',
     );
     expect(flowChatMocks.markSessionAsGroupChat).toHaveBeenCalledWith('group-child-1');
