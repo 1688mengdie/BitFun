@@ -41,7 +41,7 @@ use crate::agentic::tools::framework::{
 use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
-use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource, GROUP_MASTER_ACTOR};
+use bitfun_runtime_ports::GROUP_MASTER_ACTOR;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -498,20 +498,28 @@ impl GroupRoomTool {
             .map_err(BitFunError::tool)
     }
 
-    /// 发送群消息 = 路由到群主会话 turn（type-contract §二.4 + §三 + R-GC-26）。
+    /// 发送群消息 = 纯落盘群会话 turn（type-contract §二.4 + §三 + R-WF-04）。
     ///
-    /// R-GC-26 根因级修复：旧实现只手动落盘一条 turn（write_group_turn_with_metadata），
-    /// 群主 Claw 会话从未收到用户消息 → 用户发消息无人响应。现在复用
-    /// `coordinator.start_dialog_turn`（coordinator.rs:4213）把消息作为群主会话的
-    /// 真实 dialog turn 提交：turn 落盘由正常 turn 流完成（含 user_message.metadata
-    /// 五字段持久化，types.rs:662），群主 agent 真正运行并响应。turn_id 由本函数
-    /// 生成并作为 message_id 返回，保证 send 响应可对账。
+    /// R-GC-26 根因级修复（旧）→ R-WF-04 定稿（2026-08-16）：R-GC-26 曾把
+    /// 消息路由进 `coordinator.start_dialog_turn` 触发群主 agent 执行（大模型
+    /// 路径），使群主会话有模型响应能力。R-WF-04（Plan:115-121）落地
+    /// 「群聊会话无大模型响应 + 开放投递」：send 改走纯落盘
+    /// `write_group_turn_with_metadata`（深侦-群聊工具与复刻链路 §2.3 原语）——
+    /// 构造 UserDialog + status=Completed + finish_reason="complete" +
+    /// has_final_response=true 的宿主 turn 直接持久化，**不触发群主 agent
+    /// 执行、不调用大模型**（验收断言 Plan:120「群聊消息只落盘无模型调用」）。
+    /// 群消息 = 用户发到群里的消息（契约 §三语义），群主会话无自主模型输出；
+    /// 群成员通过各自会话响应，消息聚合复刻由 R-WF-05 承担。
     async fn send_message(
         coordinator: &ConversationCoordinator,
         group_id: &str,
         content: &str,
         sender_session_id: &str,
     ) -> BitFunResult<String> {
+        // 群会话存在性门（R-WF-04 简化后的唯一校验）：get_session（内存）+
+        // resolve_session_workspace_binding（磁盘回退，重启后未加载场景）；
+        // 群不存在 → 明确错误，禁静默跳过（R-3）。不做成员 ∈ groupChats
+        // 校验 = 开放投递（非成员可发）。
         let group_workspace = Self::group_workspace(coordinator, group_id).await?;
         let sender = Self::resolve_sender_identity(coordinator, sender_session_id, &group_workspace)
             .await;
@@ -544,31 +552,16 @@ impl GroupRoomTool {
                 .unwrap_or(sender_name_fallback)),
         );
 
-        // 生成 turn_id（= message_id）：start_dialog_turn 接受显式 turn_id，
-        // 落盘的 user turn 以该 id 持久化（get_history 按 turn_id 解析发言方）。
-        let message_id = uuid::Uuid::new_v4().to_string();
-        coordinator
-            .start_dialog_turn(
-                group_id.to_string(),
-                content.to_string(),
-                Some(content.to_string()),
-                Some(message_id.clone()),
-                Self::default_group_agent_type(),
-                // workspace_path = None：使用群主会话已加载的 storage 绑定
-                // （coordinator.rs:6044-6063 session_storage_workspace_locator
-                // None 分支 = 「已加载 session 绑定优先」）。显式传路径会在
-                // resolve_session_restore_scope 二次解析时与已绑定路径不一致
-                // （报 "Session ID is already bound to another workspace"）。
-                None,
-                None,
-                None,
-                DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
-                Some(serde_json::Value::Object(metadata)),
-            )
-            .await
-            .map_err(BitFunError::tool)?;
-
-        Ok(message_id)
+        // 纯落盘（无模型调用）：turn_id = message_id（get_history 按 turn_id
+        // 解析发言方）。turn 形态与 R-GC-25 欢迎 turn 同构（正常完成宿主 turn）。
+        Self::write_group_turn_with_metadata(
+            coordinator,
+            &group_workspace,
+            group_id,
+            content,
+            metadata,
+        )
+        .await
     }
 
     /// 群主欢迎 turn（R-GC-25）：建群 = 创建群主 Claw 会话，写群主欢迎
@@ -1231,6 +1224,9 @@ Arguments:
                 json!({ "groupId": group_id, "member": member, "status": "removed" })
             }
             GroupRoomAction::Send => {
+                // R-WF-04 开放投递：send 唯一校验 = 群会话存在（send_message 内
+                // group_workspace 内存 + 磁盘回退）；不校验发送者 ∈ groupChats
+                // （非成员可发）。群消息纯落盘无模型调用。
                 let group_id = parsed.group_id.as_deref().ok_or_else(|| {
                     BitFunError::tool("group_id is required for send".to_string())
                 })?;
@@ -1334,6 +1330,32 @@ mod tests {
             runtime_tool_restrictions: Default::default(),
             runtime_handles: bitfun_runtime_ports::ToolRuntimeHandles::default(),
         }
+    }
+
+    /// R-WF-04：经 call_impl 的 Send 分支调用（真实工具入口，校验简化 + 纯落盘
+    /// 全链路）。sender 缺省 → context.session_id 兜底（契约 §二.4）。
+    async fn call_send_impl(
+        coordinator: &std::sync::Arc<ConversationCoordinator>,
+        group_id: &str,
+        content: &str,
+        sender_session_id: Option<&str>,
+    ) -> BitFunResult<Value> {
+        let mut context = empty_context();
+        context.session_id = sender_session_id.map(|s| s.to_string());
+        let input = json!({
+            "action": "send",
+            "group_id": group_id,
+            "content": content,
+            "sender_session_id": sender_session_id,
+        });
+        let results = GroupRoomTool::new()
+            .call_impl(&input, &context)
+            .await?;
+        results
+            .into_iter()
+            .next()
+            .map(|result| result.content())
+            .ok_or_else(|| BitFunError::tool("send returned no output".to_string()))
     }
 
     fn turn_with_sender(turn_id: &str, sender_json: Value) -> bitfun_services_core::session::DialogTurnData {
@@ -2080,30 +2102,6 @@ mod tests {
         );
     }
 
-    /// 测试环境无全局 config service → 注入 TEST_MODEL_RESOLUTION_AI_CONFIG
-    /// 提供标准模型配置（与 scheduler.rs 测试同构）。send_message 经
-    /// start_dialog_turn → resolve_model_id_for_turn 需要 config service；
-    /// 每次 send（含 master send）都必须在该 scope 内，否则取不到 config
-    /// （CI ubuntu 时序：第一条 turn 完成快，master send 时群主已非
-    /// Processing → 走 config 解析路径 → scope 外报 "Failed to get config
-    /// service for model resolution"，与真实 busy 拒绝语义混淆）。
-    fn test_ai_config() -> crate::service::config::types::AIConfig {
-        crate::service::config::types::AIConfig {
-            models: vec![crate::service::config::types::AIModelConfig {
-                id: "model-original".to_string(),
-                name: "model-original".to_string(),
-                model_name: "model-original".to_string(),
-                enabled: true,
-                ..Default::default()
-            }],
-            default_models: crate::service::config::types::DefaultModelsConfig {
-                primary: Some("model-original".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
     /// create（建群=建会话，含成员）→ send（写群会话 turns）→ history（读回）
     /// → list（群聊列表过滤）全链路断言。
     /// 测试辅助：创建真实成员会话（契约 §二：成员 = 调用方传入的真实会话 ID，
@@ -2288,25 +2286,18 @@ mod tests {
         );
 
         // send：写群会话 turns → message_id（发送者 = 真实成员 A）。
-        // Upstream merge 91207f1de 引入 turn admission 模型解析：send_message
-        // 经 start_dialog_turn → resolve_model_id_for_turn 需要 config service。
-        // 测试环境无全局 config service → 注入 TEST_MODEL_RESOLUTION_AI_CONFIG
-        // 提供标准模型配置（与 scheduler.rs 测试同构）。
-        let message_id = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
-            .scope(
-                test_ai_config(),
-                GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a),
-            )
+        // R-WF-04：send 纯落盘（write_group_turn_with_metadata），不触发群主
+        // agent 执行 → 无需 TEST_MODEL_RESOLUTION_AI_CONFIG scope（config 只在
+        // start_dialog_turn 模型解析路径需要）。
+        let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a)
             .await
             .expect("send message");
         assert!(!message_id.is_empty());
 
-        // ── R-GC-26：send 把消息路由进群主会话真实 dialog turn
-        // （coordinator.start_dialog_turn，异步启动）。turn 已持久化；终态
-        // （finish_reason/has_final_response）由群主 agent 执行结果决定——
-        // 测试环境无真实 agent，turn 停在 Processing，不在此断言终态。
-        // R-GC-25 的「正常完成宿主 turn」语义由欢迎 turn（write_group_turn）
-        // 保留（上面 welcome 断言），send 的消息 turn 是真实执行 turn。
+        // ── R-WF-04：send 的消息 turn 为「正常完成宿主 turn」——纯落盘、
+        // 无模型轮次。status=Completed + finish_reason="complete" +
+        // has_final_response=true（前端 NORMAL_FINISH_REASONS 命中），
+        // model_rounds 空 = 无大模型调用（Plan:120「群聊消息只落盘无模型调用」）。
         let sent_turns = manager
             .persistence_manager()
             .load_session_turns(workspace, &group_id)
@@ -2318,7 +2309,35 @@ mod tests {
             .expect("sent turn persisted by message_id");
         assert_eq!(
             sent.user_message.content, "第一条群消息",
-            "R-GC-26: send routes the message into the group-owner session turn"
+            "R-WF-04: send persists the message into the group-owner session turn"
+        );
+        assert_eq!(
+            sent.status,
+            bitfun_services_core::session::TurnStatus::Completed,
+            "R-WF-04: sent turn must be persisted as Completed (pure persistence, no agent execution)"
+        );
+        assert_eq!(
+            sent.finish_reason.as_deref(),
+            Some("complete"),
+            "R-WF-04: sent turn must carry the normal finish code"
+        );
+        assert_eq!(
+            sent.has_final_response,
+            Some(true),
+            "R-WF-04: sent turn is itself the final response"
+        );
+        assert!(
+            sent.model_rounds.is_empty(),
+            "R-WF-04: sent turn must have no model rounds (no model invocation)"
+        );
+        // 群主会话保持 Idle：send 不触发大模型执行（Processing = 模型运行中）。
+        let group_session_after_send = manager
+            .get_session(&group_id)
+            .expect("group session in memory");
+        assert_eq!(
+            group_session_after_send.state,
+            crate::agentic::core::SessionState::Idle,
+            "R-WF-04: group session must stay Idle after send (no model invocation)"
         );
 
         // history：读回消息（author 从 turn metadata 解析 senderSessionId=member_a）。
@@ -2372,90 +2391,41 @@ mod tests {
         // ── 三形态之①：默认 BuiltIn 群主（assistant_id 空）──
         // 群主 = GROUP_MASTER_ACTOR（__master__，契约 §五），无底层 assistant
         // 会话支撑；history 侧 author.session_id 即 __master__。
-        // R-GC-26：send 触发群主会话真实 turn（异步执行）。测试环境无真实
-        // agent，第一条 send 的 turn 可能仍 Processing（执行引擎挂起于模型
-        // 解析）也可能已落盘完成——时序由调度器/平台决定（CI ubuntu 上
-        // 第一条 turn 完成快 → master send 时群主已非 Processing）。
-        // 断言必须消除该时序依赖：busy 拒绝（Processing）或明确错误
-        // （config 解析/执行失败）都接受，禁静默丢失（Ok = 第二条真实 turn
-        // 成功，同样说明 send 链路可用）。master 身份的 history author 解析
-        // 由 send_metadata_* 单测 + build_sender_by_turn 覆盖
-        // （GROUP_MASTER_ACTOR 作为 sender_session_id 透传）。
-        // master send 同样需要 config service（resolve_model_id_for_turn），
-        // 纳入 TEST_MODEL_RESOLUTION_AI_CONFIG scope（否则无论是否 busy，
-        // scope 外取不到 config → "Failed to get config service" 与环境无关
-        // 的报错，掩盖真实语义；CI ubuntu 时序即此）。
-        let master_send_result = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
-            .scope(
-                test_ai_config(),
-                GroupRoomTool::send_message(
-                    coordinator,
-                    &group_id,
-                    "群主发言",
-                    bitfun_runtime_ports::GROUP_MASTER_ACTOR,
-                ),
-            )
-            .await;
-        match master_send_result {
-            Ok(master_message_id) => {
-                assert!(
-                    !master_message_id.is_empty(),
-                    "master send must return a non-empty message id when it succeeds"
-                );
-            }
-            Err(master_error) => {
-                let master_error = master_error.to_string();
-                let is_busy_rejection = master_error.contains("Session state does not allow");
-                let is_clear_error = master_error.contains("Failed to get config service")
-                    || master_error.contains("AI configuration is unavailable");
-                assert!(
-                    is_busy_rejection || is_clear_error,
-                    "master send while the group-owner session is busy must fail with the \
-                     session-busy rejection (or a clear model-resolution error when the first \
-                     turn already completed), got: {master_error}"
-                );
-            }
-        }
-
-        // ── 模拟「群主 turn 完成快」时序（CI ubuntu run 31866716693 根因）──
-        // ubuntu 上第一条 send 的 turn 完成快 → master send 时群主已非
-        // Processing。此处显式把群主会话重置为 Idle（reset 仅当仍 Processing
-        // 时生效），确定性覆盖该时序：scope 内 config 就绪 → master send
-        // 要么成功（第二条真实 turn）要么返回非 busy 的明确错误，绝不因
-        // scope 外取不到 config 报 "Failed to get config service"。
-        // 断言成功（Ok）或明确错误（busy 拒绝 / config 解析错误）均可，
-        // 禁静默丢失。
-        manager.reset_session_state_if_processing(&group_id, &message_id);
-        let master_after_idle = crate::agentic::session::TEST_MODEL_RESOLUTION_AI_CONFIG
-            .scope(
-                test_ai_config(),
-                GroupRoomTool::send_message(
-                    coordinator,
-                    &group_id,
-                    "群主发言（turn 已完成时序）",
-                    bitfun_runtime_ports::GROUP_MASTER_ACTOR,
-                ),
-            )
-            .await;
-        match master_after_idle {
-            Ok(master_message_id) => {
-                assert!(
-                    !master_message_id.is_empty(),
-                    "master send after idle reset must return a non-empty message id when it succeeds"
-                );
-            }
-            Err(master_error) => {
-                let master_error = master_error.to_string();
-                let is_busy_rejection = master_error.contains("Session state does not allow");
-                let is_clear_error = master_error.contains("Failed to get config service")
-                    || master_error.contains("AI configuration is unavailable");
-                assert!(
-                    is_busy_rejection || is_clear_error,
-                    "master send after the first turn completed must not be a silent loss; \
-                     got: {master_error}"
-                );
-            }
-        }
+        // R-WF-04：master send 同样纯落盘（无模型路径）→ 确定性成功断言，
+        // 无 busy/config 时序依赖（R-GC-26 start_dialog_turn 时代的
+        // TEST_MODEL_RESOLUTION_AI_CONFIG scope 与 busy 拒绝语义已随移除）。
+        // master 身份的 history author 解析由 send_metadata_* 单测 +
+        // build_sender_by_turn 覆盖（GROUP_MASTER_ACTOR 作为 sender_session_id 透传）。
+        let master_message_id = GroupRoomTool::send_message(
+            coordinator,
+            &group_id,
+            "群主发言",
+            bitfun_runtime_ports::GROUP_MASTER_ACTOR,
+        )
+        .await
+        .expect("master send must succeed (pure persistence)");
+        assert!(
+            !master_message_id.is_empty(),
+            "master send must return a non-empty message id"
+        );
+        // master 消息同样以完成态落盘（无模型轮次）。
+        let master_turns = manager
+            .persistence_manager()
+            .load_session_turns(workspace, &group_id)
+            .await
+            .expect("load master turns");
+        let master_sent = master_turns
+            .iter()
+            .find(|t| t.turn_id == master_message_id)
+            .expect("master turn persisted by message_id");
+        assert_eq!(
+            master_sent.user_message.content, "群主发言",
+            "master send persists the message"
+        );
+        assert!(
+            master_sent.model_rounds.is_empty(),
+            "R-WF-04: master send must not invoke the model"
+        );
 
         // ── 三形态之③：fork 子群 → parent 关联（契约 §九/§八）──
         // fork 点 = 第一条群消息的持久化 turn_id（send 返回的 message_id 即 turn_id）。
@@ -2644,6 +2614,97 @@ mod tests {
         assert!(
             !fallback_workspace.trim().is_empty(),
             "empty workspace must resolve to a non-empty default Claw workspace"
+        );
+
+        // ── R-WF-04 验收断言（Plan:120）：开放投递 + 无模型调用 ──
+        // 建新群（专用验收组，避免与上面主链路删群后的状态耦合）。
+        let open_group_id = GroupRoomTool::create_group(
+            coordinator,
+            "R-WF-04 开放投递验收群",
+            &[member_a.clone()],
+            &workspace_str,
+        )
+        .await
+        .expect("create group for R-WF-04 acceptance");
+        // 1) 开放投递：非成员（member_b 未加入 open_group）经 send_group_message
+        //    工具入口发送成功（Plan:120「非成员发送成功」）——send 只查群会话
+        //    存在（get_session + 磁盘回退），不再校验发送者 ∈ groupChats。
+        let open_message_id = call_send_impl(coordinator, &open_group_id, "非成员开放投递", Some(&member_b))
+            .await
+            .expect("R-WF-04: non-member send must succeed (open delivery)")
+            .get("messageId")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+            .expect("messageId present");
+        assert!(!open_message_id.is_empty());
+        // 2) 群聊消息只落盘：turn 以完成态落盘（finish_reason="complete" +
+        //    has_final_response=true + status=Completed），前端正常渲染。
+        let open_turns = manager
+            .persistence_manager()
+            .load_session_turns(workspace, &open_group_id)
+            .await
+            .expect("load open-delivery turns");
+        let open_sent = open_turns
+            .iter()
+            .find(|t| t.user_message.content == "非成员开放投递")
+            .expect("open-delivery message must be persisted");
+        assert_eq!(
+            open_sent.status,
+            bitfun_services_core::session::TurnStatus::Completed,
+            "R-WF-04: group message turn must be persisted as Completed (no agent execution)"
+        );
+        assert_eq!(
+            open_sent.finish_reason.as_deref(),
+            Some("complete"),
+            "R-WF-04: group message turn must carry the normal finish code"
+        );
+        assert_eq!(
+            open_sent.has_final_response,
+            Some(true),
+            "R-WF-04: group message turn is itself the final response"
+        );
+        // 3) 群聊会话无大模型响应：send 纯落盘（write_group_turn_with_metadata），
+        //    不触发群主会话大模型执行 → 会话保持 Idle（Processing 即表示模型
+        //    运行中）。已持久化 turn 数量 = 欢迎 + 本条（无额外模型轮次 turn）。
+        let group_session = manager.get_session(&open_group_id).expect("open group in memory");
+        assert_eq!(
+            group_session.state,
+            crate::agentic::core::SessionState::Idle,
+            "R-WF-04: group session must stay Idle after send (no model invocation)"
+        );
+        // 4) 无模型调用 mock 断言（Plan:120「群聊消息只落盘无模型调用」）：
+        //    send 不再经 coordinator.start_dialog_turn（模型调度入口）→
+        //    群主会话 model_rounds 恒空；turn 的 model_rounds 为空即无模型轮次。
+        assert!(
+            open_sent.model_rounds.is_empty(),
+            "R-WF-04: persisted group message turn must have no model rounds"
+        );
+        // 5) 历史读回：开放投递消息 author = 非成员发送者 member_b。
+        let open_history = GroupRoomTool::get_history(coordinator, &open_group_id, None)
+            .await
+            .expect("open-delivery history");
+        let open_found = open_history
+            .iter()
+            .find(|m| m.content == "非成员开放投递")
+            .expect("open-delivery message present in history");
+        assert_eq!(
+            open_found.author.session_id, member_b,
+            "R-WF-04: open-delivery message author must be the non-member sender"
+        );
+        // 6) 群不存在 → 明确错误（群会话存在性门仍生效，禁静默跳过）。
+        let missing_group_err = call_send_impl(
+            coordinator,
+            "definitely-not-a-real-group",
+            "发给不存在群",
+            Some(&member_a),
+        )
+        .await
+        .expect_err("send to a non-existent group must fail");
+        assert!(
+            missing_group_err
+                .to_string()
+                .contains("does not exist"),
+            "R-WF-04: send to non-existent group must yield a clear error, got: {missing_group_err}"
         );
     }
 }
