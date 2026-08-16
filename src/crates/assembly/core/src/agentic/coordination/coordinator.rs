@@ -686,6 +686,14 @@ fn session_created_by_parent(session: &Session, parent_session_id: &str) -> bool
     session.created_by.as_deref() == Some(created_by_marker.as_str())
 }
 
+/// R-WF-09（2026-08-16）：主会话判定 = 会话无 creator 的顶层 Standard 会话
+/// （`created_by == None`）。独立于 RBAC（R-WF-01 已删 is_main_session 与
+/// get_session_role），落点在 coordinator 的会话元数据查询——群聊编排工具
+/// （建群/加成员/改接线/查状态）据此实现「指挥官专用」守卫。
+pub(crate) fn is_main_session_by_creator(session: &Session) -> bool {
+    session.created_by.is_none()
+}
+
 fn session_lineage_matches_parent(
     relationship: Option<&SessionRelationship>,
     parent_session_id: &str,
@@ -16414,7 +16422,8 @@ mod tests {
     use super::{
         apply_primary_agent_model_default, background_subagent_follow_up_message,
         btw_session_memory_mode, build_subagent_session_relationship,
-        commit_interrupted_turn_intent, lineage_active_turn_after_transcript,
+        commit_interrupted_turn_intent, is_main_session_by_creator,
+        lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
         logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
         normalize_subagent_max_concurrency_with_cap,
@@ -16437,7 +16446,7 @@ mod tests {
     };
     use crate::agentic::core::{
         InternalReminderKind, Message, MessageContent, MessageRole, MessageSemanticKind,
-        ProcessingPhase, SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy,
+        ProcessingPhase, Session, SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy,
         SessionKind, SessionModelBindingPolicy, SessionState, ToolCall, TurnStats,
     };
     use crate::agentic::events::{AgenticEvent, EventQueue, EventQueueConfig, EventRouter};
@@ -20807,6 +20816,86 @@ mod tests {
         assert_eq!(created.created_by.as_deref(), Some("session-parent"));
         assert_eq!(created.config.workspace_id.as_deref(), Some("workspace-1"));
         assert_eq!(created.config.model_id.as_deref(), Some("explicit-model"));
+
+        let _ = std::fs::remove_dir_all(workspace_path);
+    }
+
+    // ── R-WF-09（2026-08-16）：主会话判定 = created_by == None ──
+    #[test]
+    fn main_session_requires_absent_creator() {
+        let session = Session::new(
+            "main".to_string(),
+            "agentic".to_string(),
+            SessionConfig::default(),
+        );
+        assert!(
+            is_main_session_by_creator(&session),
+            "created_by=None top-level session must be a main session"
+        );
+
+        let mut child = session.clone();
+        child.created_by = Some("session-parent".to_string());
+        assert!(
+            !is_main_session_by_creator(&child),
+            "created_by=Some session must not be a main session"
+        );
+
+        let mut empty_marker = session;
+        empty_marker.created_by = Some(String::new());
+        assert!(
+            !is_main_session_by_creator(&empty_marker),
+            "created_by=Some(empty) session must not be a main session"
+        );
+    }
+
+    #[tokio::test]
+    async fn main_session_judgement_matches_creator_semantics() {
+        // 会话创建链：create_session_with_workspace（无 creator）= 主会话；
+        // create_session_with_workspace_and_creator（带 creator）= 非主会话。
+        let (coordinator, _) = test_coordinator();
+        let workspace_path = std::env::temp_dir().join(format!(
+            "bitfun-rwf09-main-session-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace_path).expect("workspace dir should exist");
+        let workspace = workspace_path.to_string_lossy().into_owned();
+
+        let main = coordinator
+            .create_session_with_workspace(
+                None,
+                "Main".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                workspace.clone(),
+            )
+            .await
+            .expect("main session should be created");
+        assert!(
+            is_main_session_by_creator(&main),
+            "creator-less session must be judged main"
+        );
+
+        let child = coordinator
+            .create_session_with_workspace_and_creator(
+                None,
+                "Child".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.clone()),
+                    ..Default::default()
+                },
+                workspace.clone(),
+                Some("session-parent".to_string()),
+            )
+            .await
+            .expect("child session should be created");
+        assert!(
+            !is_main_session_by_creator(&child),
+            "creator-marked session must NOT be judged main"
+        );
 
         let _ = std::fs::remove_dir_all(workspace_path);
     }

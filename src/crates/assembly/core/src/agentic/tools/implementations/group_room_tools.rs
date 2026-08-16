@@ -209,6 +209,23 @@ pub(crate) fn group_room_action_is_readonly(action: GroupRoomAction) -> bool {
     )
 }
 
+/// R-WF-09（2026-08-16）：编排工具 = 建群/加成员/改接线/查状态
+/// （Plan:168 编排工具清单）。查状态 = member_status（只读编排）。
+/// send/history/list 为普通消息动作（send 开放投递，Plan:169 不查指挥官）。
+fn group_room_action_is_orchestration(action: GroupRoomAction) -> bool {
+    matches!(
+        action,
+        GroupRoomAction::Create
+            | GroupRoomAction::Invite
+            | GroupRoomAction::Remove
+            | GroupRoomAction::Fork
+            | GroupRoomAction::Delete
+            | GroupRoomAction::UpdateMemberTools
+            | GroupRoomAction::UpdateWiring
+            | GroupRoomAction::MemberStatus
+    )
+}
+
 /// GroupRoomTool — 1 tool 9 action（materialization 注册 9 个名称 → 同一实例）。
 pub struct GroupRoomTool;
 
@@ -227,6 +244,38 @@ impl GroupRoomTool {
         get_global_coordinator().ok_or_else(|| {
             BitFunError::tool("group chat tools require an initialized coordinator".to_string())
         })
+    }
+
+    /// R-WF-09（2026-08-16）：编排工具「指挥官专用」守卫——只有主会话
+    /// （created_by == None 的顶层 Standard 会话，独立于 RBAC）可调用编排
+    /// action；非主会话（子会话/成员会话等带 creator 标记）拒绝并返回权限
+    /// 错误。普通消息动作（send/history/list）不查指挥官（开放投递 Plan:169）。
+    ///
+    /// 判定落点：coordinator::is_main_session_by_creator（会话元数据查询，
+    /// 不依赖 get_session_role——R-WF-01 已删 RBAC）。调用会话缺失 → 拒绝
+    /// （fail-closed，工具上下文必须带 session_id）。
+    async fn ensure_orchestration_main_session(
+        coordinator: &ConversationCoordinator,
+        context: &ToolUseContext,
+    ) -> BitFunResult<()> {
+        let session_id = context.session_id.as_deref().ok_or_else(|| {
+            BitFunError::tool(
+                "group orchestration actions require a caller session context (main session only)"
+                    .to_string(),
+            )
+        })?;
+        let manager = coordinator.get_session_manager();
+        let session = manager.get_session(session_id).ok_or_else(|| {
+            BitFunError::tool(format!(
+                "group orchestration actions require a main session but caller session '{session_id}' does not exist in memory"
+            ))
+        })?;
+        if !crate::agentic::coordination::coordinator::is_main_session_by_creator(&session) {
+            return Err(BitFunError::tool(format!(
+                "group orchestration actions are restricted to the main session; caller session '{session_id}' is not a main session (created_by is set)"
+            )));
+        }
+        Ok(())
     }
 
     fn now_ms() -> i64 {
@@ -1766,6 +1815,13 @@ Arguments:
         })?;
         let coordinator = Self::coordinator()?;
 
+        // R-WF-09（2026-08-16）：编排工具「指挥官专用」——主会话（created_by
+        // == None）可调编排；非主会话拒绝（权限错误）。send/history/list 普通
+        // 消息动作开放（不查指挥官，Plan:169 验收断言：send_group_message 仍开放）。
+        if group_room_action_is_orchestration(action) {
+            Self::ensure_orchestration_main_session(&coordinator, context).await?;
+        }
+
         let output = match action {
             GroupRoomAction::Create => {
                 let name = parsed.name.as_deref().ok_or_else(|| {
@@ -2074,6 +2130,256 @@ mod tests {
         // 非法 action → 保守非只读。
         let bad = json!({ "action": "nope" });
         assert!(!tool.is_concurrency_safe(Some(&bad)));
+    }
+
+    // ── R-WF-09（2026-08-16）：编排工具「指挥官专用」action 分类 ──
+    // 编排 = 建群/加成员/改接线/查状态（Plan:168）：create/invite/remove/
+    // fork/delete/update_member_tools/update_wiring/member_status；
+    // 普通消息动作 = send/history/list（开放，Plan:169 不查指挥官）。
+    #[test]
+    fn orchestration_action_classification() {
+        for name in [
+            "create",
+            "invite",
+            "remove",
+            "fork",
+            "delete",
+            "update_member_tools",
+            "update_wiring",
+            "member_status",
+        ] {
+            let action =
+                GroupRoomAction::from_str(name).unwrap_or_else(|| panic!("unknown {name}"));
+            assert!(
+                group_room_action_is_orchestration(action),
+                "action={name} must be orchestration"
+            );
+        }
+        for name in ["send", "history", "list"] {
+            let action =
+                GroupRoomAction::from_str(name).unwrap_or_else(|| panic!("unknown {name}"));
+            assert!(
+                !group_room_action_is_orchestration(action),
+                "action={name} must be open (not orchestration)"
+            );
+        }
+    }
+
+    // R-WF-09 守卫单测（不依赖全局 coordinator）：主会话放行、非主会话拒绝、
+    // 调用会话缺失拒绝。用隔离 coordinator + 直接调用守卫函数验证。
+    #[tokio::test]
+    async fn orchestration_guard_accepts_main_session_rejects_child() {
+        let coordinator = new_isolated_test_coordinator().await;
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-rwf09-guard-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        // 主会话（created_by=None）。
+        let main_id = coordinator
+            .create_session_with_workspace(
+                None,
+                "Main".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_str.clone()),
+                    ..Default::default()
+                },
+                workspace_str.clone(),
+            )
+            .await
+            .expect("create main session")
+            .session_id;
+        // 非主会话（created_by=Some）。
+        let non_main_id = coordinator
+            .create_session_with_workspace_and_creator(
+                None,
+                "Child".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_str.clone()),
+                    ..Default::default()
+                },
+                workspace_str.clone(),
+                Some(format!("session-{main_id}")),
+            )
+            .await
+            .expect("create child session")
+            .session_id;
+
+        // 主会话 → 放行。
+        let mut context = empty_context();
+        context.session_id = Some(main_id.clone());
+        GroupRoomTool::ensure_orchestration_main_session(&coordinator, &context)
+            .await
+            .expect("main session must pass the orchestration guard");
+
+        // 非主会话 → 拒绝（权限错误）。
+        context.session_id = Some(non_main_id.clone());
+        let error = GroupRoomTool::ensure_orchestration_main_session(&coordinator, &context)
+            .await
+            .expect_err("child session must be rejected by the orchestration guard");
+        let message = error.to_string();
+        assert!(
+            message.contains("restricted to the main session"),
+            "rejection must be a permission error, got: {message}"
+        );
+        assert!(
+            message.contains(&non_main_id),
+            "error must name the offending caller session, got: {message}"
+        );
+
+        // 调用会话缺失 → 拒绝（fail-closed）。
+        let no_session_context = empty_context();
+        let error = GroupRoomTool::ensure_orchestration_main_session(
+            &coordinator,
+            &no_session_context,
+        )
+        .await
+        .expect_err("missing caller session must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("caller session context"),
+            "missing-session rejection must be explicit, got: {error}"
+        );
+    }
+
+    // R-WF-09 集成（call_impl 全链路）：主会话可调编排（create 成功）；非主
+    // 会话调编排 → 权限错误；send 普通消息动作开放（非主会话可调）。call_impl
+    // 走全局 coordinator——按既有模式复用全局、否则 set_global 隔离
+    // coordinator（不嵌套 test_coordinator_access_lock_sync，防重入死锁）。
+    #[tokio::test]
+    async fn orchestration_actions_require_main_session() {
+        // call_impl 走全局 coordinator：复用既有全局（无论谁设置），否则
+        // 建隔离 coordinator 并 set_global 后重读全局（OnceLock 单次写入，
+        // 若被并行测试抢占则全局是别的实例——必须用全局实例建会话）。
+        let coordinator = match get_global_coordinator() {
+            Some(coordinator) => coordinator,
+            None => {
+                let isolated = new_isolated_test_coordinator().await;
+                ConversationCoordinator::set_global(isolated.clone());
+                get_global_coordinator().expect("global coordinator must be set")
+            }
+        };
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-rwf09-orch-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        // 主会话（created_by=None）。
+        let main_id = coordinator
+            .create_session_with_workspace(
+                None,
+                "Main".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_str.clone()),
+                    ..Default::default()
+                },
+                workspace_str.clone(),
+            )
+            .await
+            .expect("create main session")
+            .session_id;
+        // 非主会话（created_by=Some）。
+        let non_main_id = coordinator
+            .create_session_with_workspace_and_creator(
+                None,
+                "Child".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_str.clone()),
+                    ..Default::default()
+                },
+                workspace_str.clone(),
+                Some(format!("session-{main_id}")),
+            )
+            .await
+            .expect("create child session")
+            .session_id;
+
+        let tool = GroupRoomTool::new();
+
+        // 主会话可调编排（create 返回 groupId）。
+        let mut context = empty_context();
+        context.session_id = Some(main_id.clone());
+        let results = tool
+            .call_impl(
+                &json!({
+                    "action": "create",
+                    "name": "R-WF-09 群",
+                    "workspace": workspace_str,
+                    "members": [],
+                }),
+                &context,
+            )
+            .await
+            .expect("main session must be allowed to orchestrate");
+        let output = results
+            .first()
+            .map(ToolResult::content)
+            .expect("create output");
+        assert!(
+            output.get("groupId").and_then(Value::as_str).is_some(),
+            "main session create must succeed, got: {output}"
+        );
+
+        // 非主会话调编排 → 拒绝（权限错误）。
+        context.session_id = Some(non_main_id.clone());
+        let error = tool
+            .call_impl(
+                &json!({
+                    "action": "create",
+                    "name": "拒绝群",
+                    "workspace": workspace_str,
+                }),
+                &context,
+            )
+            .await
+            .expect_err("non-main session must be rejected for orchestration");
+        let message = error.to_string();
+        assert!(
+            message.contains("restricted to the main session"),
+            "non-main orchestration error must be a permission error, got: {message}"
+        );
+        assert!(
+            message.contains(&non_main_id),
+            "error must name the offending caller session, got: {message}"
+        );
+
+        // send 普通消息动作开放：非主会话可调（不查指挥官）。
+        let group_id = output
+            .get("groupId")
+            .and_then(Value::as_str)
+            .expect("group id")
+            .to_string();
+        context.session_id = Some(non_main_id.clone());
+        let send_results = tool
+            .call_impl(
+                &json!({
+                    "action": "send",
+                    "group_id": group_id,
+                    "content": "非主会话发送",
+                    "sender_session_id": non_main_id,
+                }),
+                &context,
+            )
+            .await
+            .expect("send must remain open for non-main sessions (Plan:169)");
+        let send_output = send_results
+            .first()
+            .map(ToolResult::content)
+            .expect("send output");
+        assert_eq!(
+            send_output.get("status").and_then(Value::as_str),
+            Some("sent"),
+            "send must succeed for non-main session, got: {send_output}"
+        );
     }
 
     // ── R-WF-02（2026-08-16）：群主/成员对话类型 = "group" 一等内置类型 ──
