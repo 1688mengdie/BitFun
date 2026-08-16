@@ -5,7 +5,6 @@ use crate::agentic::coordination::{
 use crate::agentic::core::{SessionContinuationPolicy, SessionModelBindingPolicy};
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::persistence::PersistenceManager;
-use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::infrastructure::PathManager;
 use crate::service::session::SessionTranscriptExportOptions;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
@@ -463,8 +462,6 @@ struct BackgroundTaskStartRequest<'a> {
     tool_call_id: String,
     session_id: String,
     dialog_turn_id: String,
-    /// Delegated RBAC role key (R-14 B4) for the child session.
-    parent_role: Option<String>,
     /// Lifecycle mode for the spawned subagent session (see
     /// [`TaskInvocation::persistent`]).
     persistent: bool,
@@ -1134,13 +1131,7 @@ impl TaskTool {
     ) -> BitFunResult<Vec<ToolResult>> {
         Self::ensure_delegation_allowed(context)?;
 
-        // R-14 B3: role-based delegation validation, fails fast on violation.
-        // The target role is the explicit `role` field when provided, otherwise
-        // the default subagent role (Executor); the creator's registered RBAC
-        // role is read from the session registry (B2).
-        let creator_role = context.session_id.as_deref().and_then(get_session_role);
-        let target_role = invocation.role.clone().unwrap_or(AgentRole::Executor);
-        validate_delegation(creator_role, target_role.clone())?;
+        // R-WF-01: RBAC role-based delegation validation removed.
 
         let coordinator = get_global_coordinator()
             .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
@@ -1679,7 +1670,6 @@ impl TaskTool {
                 tool_call_id,
                 session_id,
                 dialog_turn_id,
-                parent_role: Some(target_role.as_str().to_string()),
                 persistent: invocation.persistent,
                 external_generation_lease,
             })
@@ -1705,7 +1695,6 @@ impl TaskTool {
             tool_call_id,
             session_id,
             dialog_turn_id,
-            Some(target_role.as_str().to_string()),
             delegate_target_label,
             invocation.persistent,
             deep_review_subagent_role,
@@ -1745,7 +1734,6 @@ impl TaskTool {
             tool_call_id,
             session_id,
             dialog_turn_id,
-            parent_role,
             persistent,
             external_generation_lease,
         } = request;
@@ -1754,7 +1742,6 @@ impl TaskTool {
             session_id: session_id.clone(),
             dialog_turn_id,
             depth: coordinator.session_tree().get_depth(&session_id),
-            role: parent_role,
         };
         let request = SubagentExecutionRequest {
             task_description: prepared_prompt,
@@ -1824,7 +1811,6 @@ impl TaskTool {
         tool_call_id: String,
         session_id: String,
         dialog_turn_id: String,
-        parent_role: Option<String>,
         delegate_target_label: String,
         persistent: bool,
         deep_review_subagent_role: Option<DeepReviewSubagentRole>,
@@ -1849,7 +1835,6 @@ impl TaskTool {
                 session_id: session_id.clone(),
                 dialog_turn_id: dialog_turn_id.clone(),
                 depth: coordinator.session_tree().get_depth(&session_id),
-                role: parent_role.clone(),
             };
             let subagent_execution_started_at = Instant::now();
             debug!(

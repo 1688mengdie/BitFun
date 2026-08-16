@@ -1,5 +1,4 @@
 use super::*;
-use crate::agentic::tools::restrictions::AgentRole;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TaskAction {
@@ -101,11 +100,6 @@ pub(super) struct TaskInvocation {
     pub(super) is_retry: bool,
     pub(super) requested_auto_retry: bool,
     pub(super) max_turns: Option<u64>,
-    /// Optional explicit target role for the spawned subagent (R-14 B3).
-    /// When `None`, the target defaults to `Executor` (the subagent role
-    /// assigned by session creation); a specified role is validated against
-    /// the creator's role and fails fast on violation.
-    pub(super) role: Option<AgentRole>,
 }
 
 impl TaskTool {
@@ -159,7 +153,6 @@ impl TaskTool {
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
                 max_turns: None,
-                role: None,
             });
         }
 
@@ -214,15 +207,6 @@ impl TaskTool {
                 let (model_id, inherit_parent_model) = Self::optional_model_id(input)?;
                 let persistent = Self::optional_bool(input, "persistent")?.unwrap_or(true);
 
-                // R-14 B3: optional explicit target role. Unknown keys degrade
-                // to None (default executor target) so stale model output never
-                // errors at parse time; the delegation validation runs at the
-                // spawn entry point and fails fast on a role violation.
-                let role = input
-                    .get("role")
-                    .and_then(Value::as_str)
-                    .and_then(AgentRole::from_str_key);
-
                 Ok(TaskInvocation {
                     action,
                     description,
@@ -238,7 +222,6 @@ impl TaskTool {
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
-                    role,
                 })
             }
             TaskAction::SendInput => {
@@ -276,7 +259,6 @@ impl TaskTool {
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
-                    role: None,
                 })
             }
             TaskAction::Cancel => {
@@ -312,7 +294,6 @@ impl TaskTool {
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
-                    role: None,
                 })
             }
             TaskAction::List => {
@@ -349,7 +330,6 @@ impl TaskTool {
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns: None,
-                    role: None,
                 })
             }
             TaskAction::History => {
@@ -395,7 +375,6 @@ impl TaskTool {
                     is_retry: false,
                     requested_auto_retry: false,
                     max_turns,
-                    role: None,
                 })
             }
         }
