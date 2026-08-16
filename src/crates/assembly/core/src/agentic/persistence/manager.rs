@@ -2215,6 +2215,13 @@ impl PersistenceManager {
             last_submitted_agent_type: session.last_submitted_agent_type.clone(),
             compression_state: session.compression_state.clone(),
             runtime_state: sanitize_persisted_session_state(&session.state),
+            // R-WF-11: persist the display lifecycle markers so a rebuilt
+            // Session after restart keeps its seven-state projection.
+            last_progress_at: session.last_progress_at,
+            interrupt_reason: session.interrupt_reason.clone(),
+            last_completed_at: session.last_completed_at,
+            needs_attention: session.needs_attention,
+            viewed: session.viewed,
         };
         self.save_stored_session_state(workspace_path, &session.session_id, &state)
             .await
@@ -2287,6 +2294,26 @@ impl PersistenceManager {
                 .or(metadata.snapshot_session_id.clone()),
             dialog_turn_ids,
             state: runtime_state,
+            // R-WF-11: restore the display lifecycle markers from the persisted
+            // sidecar so a rebuilt Session after restart keeps its seven-state
+            // projection (hung / interrupted / completed-dot / viewed).
+            last_progress_at: stored_state
+                .as_ref()
+                .and_then(|value| value.last_progress_at),
+            interrupt_reason: stored_state
+                .as_ref()
+                .and_then(|value| value.interrupt_reason.clone()),
+            last_completed_at: stored_state
+                .as_ref()
+                .and_then(|value| value.last_completed_at),
+            needs_attention: stored_state
+                .as_ref()
+                .map(|value| value.needs_attention)
+                .unwrap_or(false),
+            viewed: stored_state
+                .as_ref()
+                .map(|value| value.viewed)
+                .unwrap_or(false),
             config,
             compression_state,
             created_at,
@@ -2559,6 +2586,11 @@ impl PersistenceManager {
                 last_submitted_agent_type: None,
                 compression_state: CompressionState::default(),
                 runtime_state: SessionState::Idle,
+                last_progress_at: None,
+                interrupt_reason: None,
+                last_completed_at: None,
+                needs_attention: false,
+                viewed: false,
             });
         stored_state.schema_version = SESSION_STORAGE_SCHEMA_VERSION;
         stored_state.runtime_state = sanitize_persisted_session_state(state);
@@ -2592,16 +2624,36 @@ impl PersistenceManager {
         let mut summaries = Vec::with_capacity(metadata_list.len());
 
         for metadata in metadata_list {
-            let (state, reasoning_preset) = self
+            let (state, reasoning_preset, display_markers) = self
                 .load_stored_session_state(workspace_path, &metadata.session_id)
                 .await?
                 .map(|value| {
-                    (
-                        sanitize_persisted_session_state(&value.runtime_state),
-                        value.config.reasoning_preset,
-                    )
+                    let state = sanitize_persisted_session_state(&value.runtime_state);
+                    let display_markers = (
+                        value.last_progress_at,
+                        value.interrupt_reason.clone(),
+                        value.last_completed_at,
+                        value.needs_attention,
+                        value.viewed,
+                    );
+                    (state, value.config.reasoning_preset, display_markers)
                 })
-                .unwrap_or((SessionState::Idle, None));
+                .unwrap_or((SessionState::Idle, None, (None, None, None, false, false)));
+
+            // R-WF-11: project the seven-state display value from the persisted
+            // lifecycle markers so a restart does not lose hung/interrupted/
+            // pending-attention/viewed.
+            let (last_progress_at, interrupt_reason, _last_completed_at, needs_attention, viewed) =
+                display_markers;
+            let display_state = crate::agentic::core::state::derive_display_state(
+                &state,
+                metadata.turn_count,
+                interrupt_reason.as_deref(),
+                needs_attention,
+                viewed,
+                last_progress_at,
+                SystemTime::now(),
+            );
 
             summaries.push(SessionSummary {
                 session_id: metadata.session_id,
@@ -2616,7 +2668,8 @@ impl PersistenceManager {
                 turn_count: metadata.turn_count,
                 created_at: Self::unix_ms_to_system_time(metadata.created_at),
                 last_activity_at: Self::unix_ms_to_system_time(metadata.last_active_at),
-                state,
+                state: state.clone(),
+                display_state,
                 parent_session_id: metadata
                     .relationship
                     .as_ref()
@@ -4171,7 +4224,38 @@ impl PersistenceManager {
             Ok(())
         })
         .await
-        .map(|_| ())
+        .map(|_| ())?;
+        // R-WF-11 P1-5: opening/activating a session marks it as viewed so the
+        // seven-state projection clears the green dot after the user has seen
+        // the completed result. Idempotent: the marker is only written when it
+        // changes, keeping the sidecar write traffic minimal.
+        let mut stored_state = self
+            .load_stored_session_state(workspace_path, session_id)
+            .await?
+            .unwrap_or(StoredSessionStateFile {
+                schema_version: SESSION_STORAGE_SCHEMA_VERSION,
+                config: SessionConfig {
+                    workspace_path: None,
+                    ..Default::default()
+                },
+                snapshot_session_id: None,
+                last_user_dialog_agent_type: None,
+                last_submitted_agent_type: None,
+                compression_state: CompressionState::default(),
+                runtime_state: SessionState::Idle,
+                last_progress_at: None,
+                interrupt_reason: None,
+                last_completed_at: None,
+                needs_attention: false,
+                viewed: false,
+            });
+        if !stored_state.viewed {
+            stored_state.viewed = true;
+            stored_state.schema_version = SESSION_STORAGE_SCHEMA_VERSION;
+            self.save_stored_session_state(workspace_path, session_id, &stored_state)
+                .await?;
+        }
+        Ok(())
     }
 }
 

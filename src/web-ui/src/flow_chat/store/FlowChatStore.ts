@@ -26,6 +26,10 @@ import {
   SessionHistoryState,
   TokenUsage,
 } from '../types/flow-chat';
+import {
+  SessionDisplayState,
+  SESSION_DISPLAY_STATES,
+} from '../state-machine/types';
 import { createLogger } from '@/shared/utils/logger';
 import {
   isRemoteTraceContext,
@@ -516,6 +520,21 @@ export function isBackendSessionActivelyProcessing(state: unknown): boolean {
     normalized.startsWith('processing {') ||
     normalized === 'waitingfortoolresponse' ||
     normalized === 'paused';
+}
+
+/**
+ * R-WF-11: normalize an opaque backend display-state string into the frontend
+ * seven-state union. Unknown values return undefined so the UI falls back to
+ * the event-driven unread markers instead of rendering a bogus projection.
+ */
+function normalizeSessionDisplayState(value: unknown): SessionDisplayState | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return SESSION_DISPLAY_STATES.includes(normalized as SessionDisplayState)
+    ? (normalized as SessionDisplayState)
+    : undefined;
 }
 
 function normalizeLiveTurnStatus(status: unknown): DialogTurn['status'] {
@@ -7049,6 +7068,7 @@ config: {
             btwThreads: [],
             btwOrigin: relationship.btwOrigin,
             hasUnreadCompletion: metadata.unreadCompletion,
+            displayState: metadata.displayState as SessionDisplayState | undefined,
             needsUserAttention: metadata.needsUserAttention,
             deepReviewRunManifest: metadata.deepReviewRunManifest,
             reviewTargetEvidence: metadata.reviewTargetEvidence,
@@ -7301,6 +7321,11 @@ config: {
         remoteSshHost,
         modelConfigPromise,
       );
+      await this.reconcileDisplayStateFromRuntimeList(
+        workspacePath,
+        remoteConnectionId,
+        remoteSshHost,
+      );
       startupTrace.markPhase('session_metadata_page_end', {
         remote,
         source: traceSource,
@@ -7522,6 +7547,7 @@ config: {
               btwOrigin: relationship.btwOrigin,
               hasUnreadCompletion: metadata.unreadCompletion,
               needsUserAttention: metadata.needsUserAttention,
+              displayState: metadata.displayState as SessionDisplayState | undefined,
               deepReviewRunManifest: metadata.deepReviewRunManifest,
               reviewTargetEvidence: metadata.reviewTargetEvidence,
               isTransient: false,
@@ -7548,6 +7574,11 @@ config: {
       };
 
       await Promise.all(sessions.map(processSession));
+      await this.reconcileDisplayStateFromRuntimeList(
+        workspacePath,
+        remoteConnectionId,
+        remoteSshHost,
+      );
       startupTrace.markPhase('session_metadata_list_end', {
         remote,
         source: traceSource,
@@ -7573,6 +7604,80 @@ config: {
       }
       log.error('Failed to load persisted sessions', error);
       return false;
+    }
+  }
+
+  /**
+   * R-WF-11: reconcile the backend runtime list (`list_sessions` →
+   * `AgentSessionSummary.displayState`) into the store's `Session.displayState`.
+   *
+   * The persisted-session metadata path (`list_persisted_sessions[_page]`)
+   * carries `displayState` only after the UI has saved it through
+   * `buildSessionMetadata`. Historical metadata written before this field
+   * existed (or by a peer host that never saved it) would otherwise project
+   * `undefined` forever. The runtime list is authoritative for every session
+   * the backend currently owns: it derives display_state from persisted
+   * lifecycle markers on every restart (manager.rs list_sessions), so this
+   * reconcile closes the "backend storage display_state → frontend Session →
+   * SessionsSection" chain without inventing a new backend field.
+   */
+  private async reconcileDisplayStateFromRuntimeList(
+    workspacePath: string,
+    remoteConnectionId?: string,
+    remoteSshHost?: string,
+  ): Promise<void> {
+    try {
+      if (typeof agentAPI.listSessions !== 'function') {
+        return;
+      }
+      const runtimeSessions = await agentAPI.listSessions(
+        workspacePath,
+        remoteConnectionId,
+        remoteSshHost,
+      );
+      if (!Array.isArray(runtimeSessions) || runtimeSessions.length === 0) {
+        return;
+      }
+      const scope = getActiveSurfaceScope();
+      const displayStateById = new Map<string, SessionDisplayState>();
+      for (const info of runtimeSessions) {
+        if (!info?.sessionId) {
+          continue;
+        }
+        const normalized = normalizeSessionDisplayState(info.displayState);
+        if (normalized) {
+          displayStateById.set(info.sessionId, normalized);
+        }
+      }
+      if (displayStateById.size === 0) {
+        return;
+      }
+      this.setState(prev => {
+        if (!scope.isCurrent()) {
+          return prev;
+        }
+        let changed = false;
+        const newSessions = new Map(prev.sessions);
+        for (const [sessionId, displayState] of displayStateById) {
+          const session = newSessions.get(sessionId);
+          if (!session || session.displayState === displayState) {
+            continue;
+          }
+          newSessions.set(sessionId, {
+            ...session,
+            displayState,
+          });
+          changed = true;
+        }
+        return changed ? { ...prev, sessions: newSessions } : prev;
+      });
+    } catch (error) {
+      // Non-fatal: the persisted-metadata path already carries displayState
+      // when it exists; this reconcile only upgrades stale historical rows.
+      log.debug('Failed to reconcile displayState from runtime session list', {
+        workspacePath,
+        error,
+      });
     }
   }
 
@@ -8289,6 +8394,13 @@ config: {
           lastUserDialogMode: restoredLastUserDialogMode,
           lastSubmittedMode:
             restoredSessionInfo?.lastSubmittedAgentType ?? session.lastSubmittedMode,
+          // R-WF-11: restore the backend seven-state projection from the
+          // restore response (`AgentSessionSummary.displayState`) so the
+          // sidebar main-nav projection survives a restart.
+          displayState:
+            restoredSessionInfo?.displayState
+              ? normalizeSessionDisplayState(restoredSessionInfo.displayState)
+              : session.displayState,
           currentTokenUsage: reconcileRestoreViewCurrentTokenUsage(
             session.currentTokenUsage,
             restoredCurrentContextUsage,

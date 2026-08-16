@@ -1,4 +1,4 @@
-use crate::session_state::SessionState;
+use crate::session_state::{derive_display_state, SessionDisplayState, SessionState};
 pub use bitfun_core_types::SessionKind;
 pub use bitfun_core_types::{
     SessionAgentRouteOwner, SessionContinuationPolicy, SessionExecutionTarget,
@@ -60,6 +60,27 @@ pub struct Session {
     /// Session state
     pub state: SessionState,
 
+    /// Time of the last observable progress while `Processing`. Drives the
+    /// hung/watchdog display projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<SystemTime>,
+
+    /// Why the last turn was interrupted, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_reason: Option<String>,
+
+    /// Time the last turn completed, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<SystemTime>,
+
+    /// Display flag: the session needs user attention (question mark).
+    #[serde(default)]
+    pub needs_attention: bool,
+
+    /// Display flag: the completed result has been viewed (green dot cleared).
+    #[serde(default)]
+    pub viewed: bool,
+
     /// Configuration
     pub config: SessionConfig,
 
@@ -102,6 +123,11 @@ impl Session {
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
             config,
             compression_state: CompressionState::default(),
             created_at: now,
@@ -128,12 +154,33 @@ impl Session {
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
             config,
             compression_state: CompressionState::default(),
             created_at: now,
             updated_at: now,
             last_activity_at: now,
         }
+    }
+}
+
+impl Session {
+    /// Derive the display/management state (seven-state projection) from this
+    /// session's runtime facts and lifecycle markers.
+    pub fn display_state(&self) -> SessionDisplayState {
+        derive_display_state(
+            &self.state,
+            self.dialog_turn_ids.len(),
+            self.interrupt_reason.as_deref(),
+            self.needs_attention,
+            self.viewed,
+            self.last_progress_at,
+            SystemTime::now(),
+        )
     }
 }
 
@@ -295,12 +342,34 @@ pub struct SessionSummary {
     pub created_at: SystemTime,
     pub last_activity_at: SystemTime,
     pub state: SessionState,
+    /// Derived display/management state (seven-state projection). Serialized
+    /// with `snake_case` so wire consumers read `standby`/`processing`/etc.
+    pub display_state: SessionDisplayState,
     /// Optional parent session ID for tree-structured display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
     /// Daemon session marker.
     #[serde(default)]
     pub is_daemon: bool,
+}
+
+impl SessionSummary {
+    /// Derive a display state from the runtime state and turn count alone.
+    ///
+    /// Used by listing paths that only have persisted runtime facts (no
+    /// lifecycle markers). Callers with full session facts should use
+    /// [`Session::display_state`] instead.
+    pub fn display_state_for(state: &SessionState, turn_count: usize) -> SessionDisplayState {
+        derive_display_state(
+            state,
+            turn_count,
+            None,
+            false,
+            false,
+            None,
+            SystemTime::now(),
+        )
+    }
 }
 
 /// Persisted session state sidecar used by product session storage.
@@ -323,13 +392,33 @@ pub struct PersistedSessionStateFile {
     pub last_submitted_agent_type: Option<String>,
     pub compression_state: CompressionState,
     pub runtime_state: SessionState,
+    /// R-WF-11: persisted display lifecycle markers so a rebuilt Session after
+    /// app restart keeps its seven-state projection (hung/interrupted/
+    /// completed-dot/viewed). All default to absent/false for older state files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<SystemTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<SystemTime>,
+    #[serde(default)]
+    pub needs_attention: bool,
+    #[serde(default)]
+    pub viewed: bool,
 }
 
+/// Normalize a runtime state before it is written to / read back from disk.
+///
+/// R-WF-11: `Processing` is intentionally preserved instead of being downgraded
+/// to `Idle`. A crashed-while-processing session restarts with its persisted
+/// `Processing` + `last_progress_at` markers so `derive_display_state` can
+/// project `Hung` instead of silently degrading to `Completed`. This is safe
+/// for the scheduler: `can_start_new_turn` only accepts `Idle`/recoverable
+/// `Error`, and the queued-turn dispatcher short-circuits on `Processing`, so a
+/// restored `Processing` session is never mistaken for one that is still
+/// running.
 pub fn sanitize_persisted_session_state(state: &SessionState) -> SessionState {
-    match state {
-        SessionState::Processing { .. } => SessionState::Idle,
-        other => other.clone(),
-    }
+    state.clone()
 }
 
 #[cfg(test)]
@@ -531,13 +620,20 @@ mod tests {
     }
 
     #[test]
-    fn persisted_session_state_sanitizes_processing_to_idle() {
-        let sanitized = sanitize_persisted_session_state(&SessionState::Processing {
+    fn persisted_session_state_preserves_processing_and_other_states() {
+        let processing = SessionState::Processing {
             current_turn_id: "turn-1".to_string(),
             phase: ProcessingPhase::Thinking,
-        });
-
-        assert_eq!(sanitized, SessionState::Idle);
+        };
+        assert_eq!(
+            sanitize_persisted_session_state(&processing),
+            processing,
+            "Processing must survive persistence so hung projection survives restart"
+        );
+        assert_eq!(
+            sanitize_persisted_session_state(&SessionState::Idle),
+            SessionState::Idle
+        );
         assert_eq!(
             sanitize_persisted_session_state(&SessionState::Error {
                 error: "boom".to_string(),
@@ -548,6 +644,53 @@ mod tests {
                 recoverable: true,
             }
         );
+    }
+
+    #[test]
+    fn hung_session_survives_restart_via_persisted_processing_and_stale_progress() {
+        use crate::session_state::{derive_display_state, SessionDisplayState, DEFAULT_HUNG_TIMEOUT};
+        use std::time::{Duration, SystemTime};
+
+        let now = SystemTime::now();
+        let stale_progress = now - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(1);
+        let processing = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::ToolCalling,
+        };
+
+        // Save path: Processing is persisted as-is (no Idle downgrade).
+        let persisted = sanitize_persisted_session_state(&processing);
+        assert_eq!(persisted, processing);
+
+        // Load path: persisted state file round-trips Processing unchanged.
+        let file = PersistedSessionStateFile {
+            schema_version: 1,
+            config: SessionConfig::default(),
+            snapshot_session_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            compression_state: CompressionState::default(),
+            runtime_state: persisted,
+            last_progress_at: Some(stale_progress),
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
+        };
+        let restored_state = sanitize_persisted_session_state(&file.runtime_state);
+        assert_eq!(restored_state, processing);
+
+        // After restart, the rebuilt Session still projects Hung (not Completed).
+        let display = derive_display_state(
+            &restored_state,
+            3,
+            file.interrupt_reason.as_deref(),
+            file.needs_attention,
+            file.viewed,
+            file.last_progress_at,
+            now,
+        );
+        assert_eq!(display, SessionDisplayState::Hung);
     }
 
     #[test]
@@ -567,6 +710,11 @@ mod tests {
                 compression_count: 2,
             },
             runtime_state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
         };
 
         let expected = json!({
@@ -589,7 +737,9 @@ mod tests {
                 "last_compression_at": null,
                 "compression_count": 2
             },
-            "runtime_state": "Idle"
+            "runtime_state": "Idle",
+            "needs_attention": false,
+            "viewed": false
         });
         assert_eq!(
             serde_json::to_value(file).expect("persisted session state should serialize"),

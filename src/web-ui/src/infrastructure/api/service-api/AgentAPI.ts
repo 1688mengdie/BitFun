@@ -210,6 +210,8 @@ export interface SessionInfo {
   /** Mode of the most recent user submission accepted by the runtime. */
   lastSubmittedAgentType?: string;
   state: string;
+  /** Display/management state (seven-state projection). */
+  displayState?: string;
   turnCount: number;
   createdAt: number;
 }

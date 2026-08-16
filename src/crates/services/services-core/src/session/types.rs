@@ -300,6 +300,20 @@ pub struct SessionMetadata {
     )]
     pub needs_user_attention: Option<String>,
 
+    /// Display/management state (seven-state projection) carried through the
+    /// persisted metadata so the frontend main-nav projection survives a
+    /// restart without re-deriving it from runtime state.
+    /// Mirrors the backend `SessionDisplayState` string values: 'standby' |
+    /// 'processing' | 'completed' | 'hung' | 'interrupted' |
+    /// 'pending_attention' | 'viewed'.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "display_state",
+        alias = "displayState"
+    )]
+    pub display_state: Option<String>,
+
     /// Cached runtime state (serialized SessionState) populated on save so list
     /// callers can avoid an extra per‑session state‑file read.
     #[serde(
@@ -1125,6 +1139,7 @@ impl SessionMetadata {
             workspace_hostname: None,
             unread_completion: None,
             needs_user_attention: None,
+            display_state: None,
             runtime_state: None,
             is_daemon: false,
             orphaned: false,

@@ -850,6 +850,7 @@ mod tests {
                 is_daemon: false,
                 parent_session_id: None,
                 status: None,
+                display_state: None,
             },
             state: SessionState::Idle,
         });

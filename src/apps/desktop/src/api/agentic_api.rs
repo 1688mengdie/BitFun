@@ -537,6 +537,9 @@ pub struct SessionResponse {
     /// Mode of the most recent user submission accepted by the scheduler.
     pub last_submitted_agent_type: Option<String>,
     pub state: String,
+    /// Display/management state (seven-state projection).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<String>,
     pub turn_count: usize,
     pub created_at: u64,
 }
@@ -3780,6 +3783,7 @@ pub async fn list_sessions(
             last_user_dialog_agent_type: summary.last_user_dialog_agent_type,
             last_submitted_agent_type: summary.last_submitted_agent_type,
             state: format!("{:?}", summary.state),
+            display_state: Some(summary.display_state.as_str().to_string()),
             turn_count: summary.turn_count,
             created_at: system_time_to_unix_secs(summary.created_at),
         })
@@ -3976,6 +3980,10 @@ fn session_to_response(session: Session) -> SessionResponse {
 }
 
 fn session_to_response_with_turn_count(session: Session, turn_count: usize) -> SessionResponse {
+    // R-WF-11: capture the seven-state projection before the session fields are
+    // moved into the response below (partial move would prevent borrowing
+    // `session` afterwards).
+    let display_state = session.display_state().as_str().to_string();
     SessionResponse {
         session_id: session.session_id,
         session_name: session.session_name,
@@ -3985,6 +3993,7 @@ fn session_to_response_with_turn_count(session: Session, turn_count: usize) -> S
         last_user_dialog_agent_type: session.last_user_dialog_agent_type,
         last_submitted_agent_type: session.last_submitted_agent_type,
         state: format!("{:?}", session.state),
+        display_state: Some(display_state),
         turn_count,
         created_at: system_time_to_unix_secs(session.created_at),
     }

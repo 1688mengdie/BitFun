@@ -37,7 +37,7 @@ import {
   sessionBelongsToWorkspaceNavRow,
 } from '@/flow_chat/utils/sessionOrdering';
 import { stateMachineManager } from '@/flow_chat/state-machine';
-import { SessionExecutionState } from '@/flow_chat/state-machine/types';
+import { SessionExecutionState, SessionDisplayState } from '@/flow_chat/state-machine/types';
 import { i18nService } from '@/infrastructure/i18n';
 import { resolveSessionTitle } from '@/flow_chat/utils/sessionTitle';
 import { isSessionNavRowActive } from './sessionNavSelection';
@@ -105,6 +105,36 @@ const resolveSessionModeType = (session: Session): SessionMode => {
   if (normalizedMode === 'cowork') return 'cowork';
   if (normalizedMode === 'claw') return 'claw';
   return 'code';
+};
+
+/**
+ * R-WF-11: derive the row notification dot from the backend seven-state
+ * `displayState` projection when the event-driven unread markers
+ * (`needsUserAttention` / `hasUnreadCompletion`) are absent. This closes the
+ * gap for historical sessions restored purely from `SessionMetadata`, where
+ * the local runtime never emitted an unread event.
+ */
+const resolveDisplayStateAttention = (
+  session: Session,
+): 'error' | 'interrupted' | 'completed' | 'ask_user' | 'tool_confirm' | undefined => {
+  const displayState = session.displayState;
+  if (!displayState) return undefined;
+  switch (displayState) {
+    case SessionDisplayState.PENDING_ATTENTION:
+      return 'ask_user';
+    case SessionDisplayState.INTERRUPTED:
+      return 'interrupted';
+    case SessionDisplayState.PROCESSING:
+    case SessionDisplayState.HUNG:
+    case SessionDisplayState.VIEWED:
+      return undefined;
+    case SessionDisplayState.COMPLETED:
+      return 'completed';
+    case SessionDisplayState.STANDBY:
+      return undefined;
+    default:
+      return undefined;
+  }
 };
 
 const getTitle = (session: Session): string =>
@@ -1347,9 +1377,14 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
             activeChildParentSessionId: activeBtwSessionData?.parentSessionId,
           });
           // Determine the notification state for this session row.
-          // Priority: needsUserAttention > hasUnreadCompletion.
+          // Priority: needsUserAttention > hasUnreadCompletion > displayState
+          // projection (R-WF-11: displayState covers restored historical
+          // sessions that never emitted a local unread event).
           const attentionKind = !isRunning && !isRowActive
-            ? (session.needsUserAttention || session.hasUnreadCompletion || undefined)
+            ? (session.needsUserAttention
+              || session.hasUnreadCompletion
+              || resolveDisplayStateAttention(session)
+              || undefined)
             : undefined;
           const row = (
             <div

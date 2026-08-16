@@ -14,6 +14,7 @@ export type UiSessionMetadataField =
   | 'reviewActionState'
   | 'unreadCompletion'
   | 'needsUserAttention'
+  | 'displayState'
   | 'titleMetadata';
 
 export interface SessionMetadataPageRequest {

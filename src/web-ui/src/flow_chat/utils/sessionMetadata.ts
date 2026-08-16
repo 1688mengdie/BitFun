@@ -397,6 +397,7 @@ export function buildSessionMetadata(
     | 'titleI18nParams'
     | 'hasUnreadCompletion'
     | 'needsUserAttention'
+    | 'displayState'
     | 'deepReviewRunManifest'
     | 'reviewTargetEvidence'
   >,
@@ -472,6 +473,12 @@ export function buildSessionMetadata(
     // `undefined ?? existingMetadata.unreadCompletion` would restore the old value.
     unreadCompletion: session.hasUnreadCompletion,
     needsUserAttention: session.needsUserAttention,
+    // Always use the in-memory session value as the source of truth (same
+    // rationale as unreadCompletion/needsUserAttention above): the store sets
+    // `displayState: undefined` to clear a stale projection, and a `??` fallback
+    // to existingMetadata would restore the old value and prevent the clear from
+    // reaching disk.
+    displayState: session.displayState,
     deepReviewRunManifest:
       session.deepReviewRunManifest ?? existingMetadata?.deepReviewRunManifest,
     reviewTargetEvidence:

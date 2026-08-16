@@ -676,6 +676,58 @@ describe('sessionMetadata', () => {
     });
   });
 
+  describe('displayState persistence (R-WF-11)', () => {
+    it('persists displayState from session to metadata', () => {
+      const session = createSession({
+        displayState: 'interrupted' as Session['displayState'],
+      });
+
+      const metadata = buildSessionMetadata(session);
+
+      expect(metadata.displayState).toBe('interrupted');
+    });
+
+    it('persists hung displayState from session to metadata', () => {
+      const session = createSession({
+        displayState: 'hung' as Session['displayState'],
+      });
+
+      const metadata = buildSessionMetadata(session);
+
+      expect(metadata.displayState).toBe('hung');
+    });
+
+    it('clears displayState when session has displayState undefined', () => {
+      const session = createSession({
+        displayState: undefined,
+      });
+
+      const existingMetadata: SessionMetadata = {
+        sessionId: 'session-1',
+        sessionName: 'Session Title',
+        agentType: 'agentic',
+        modelName: 'gpt-test',
+        createdAt: 1000,
+        lastActiveAt: 1000,
+        turnCount: 0,
+        messageCount: 0,
+        toolCallCount: 0,
+        status: 'active',
+        tags: [],
+        customMetadata: {},
+        todos: [],
+        workspacePath: '/workspace',
+        displayState: 'viewed',
+      };
+
+      const metadata = buildSessionMetadata(session, existingMetadata);
+
+      // The cleared value (undefined) must NOT fall back to
+      // existingMetadata.displayState (same contract as unreadCompletion).
+      expect(metadata.displayState).toBeUndefined();
+    });
+  });
+
   describe('orphan status (R-AD-08)', () => {
     it('normalizes only known orphan kinds', () => {
       expect(normalizeOrphanKind('DanglingChild')).toBe('DanglingChild');

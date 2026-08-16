@@ -4435,6 +4435,7 @@ mod tests {
             created_at: SystemTime::now(),
             last_activity_at: SystemTime::now(),
             state: SessionState::Idle,
+            display_state: crate::agentic::core::SessionDisplayState::Standby,
             parent_session_id: parent_session_id.map(ToOwned::to_owned),
             is_daemon: false,
         }

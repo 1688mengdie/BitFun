@@ -268,6 +268,7 @@ impl AgentSessionRestorePort for SessionControlProvider {
                 last_active_at_ms: 20,
                 parent_session_id: None,
                 status: None,
+                display_state: None,
                 is_daemon: false,
             },
             state: SessionState::Processing {
@@ -391,6 +392,7 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for Phase2Provider {
                 last_active_at_ms: 20,
                 parent_session_id: None,
                 status: None,
+                display_state: None,
                 is_daemon: false,
             },
             state: SessionState::Processing {

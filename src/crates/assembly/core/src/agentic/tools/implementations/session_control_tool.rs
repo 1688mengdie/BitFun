@@ -324,7 +324,7 @@ impl SessionControlTool {
         } else {
             // --- Compact tree text view (default) ---
             lines.push("## Sessions (compact)".to_string());
-            lines.push("format: [sessionId] agentType | status | name".to_string());
+            lines.push("format: [sessionId] agentType | status | display_state | name".to_string());
             lines.extend(build_compact_tree_lines(sessions, tree, short_names));
         }
         lines.join("\n")
@@ -1148,6 +1148,12 @@ pub(crate) fn build_session_tree_json_impl(
         map.insert("agentType".to_string(), json!(session.agent_type));
         map.insert("depth".to_string(), json!(depth));
         map.insert("status".to_string(), json!(status));
+        // R-WF-11: surface the seven-state display projection in the list JSON
+        // output so tree consumers can render dots/markers without re-deriving.
+        map.insert(
+            "display_state".to_string(),
+            json!(session.display_state.clone().unwrap_or_else(|| status.clone())),
+        );
         if orphaned.contains(session.session_id.as_str()) {
             map.insert("orphaned".to_string(), json!(true));
         }
@@ -1229,6 +1235,11 @@ fn build_compact_tree_lines(
             .status
             .clone()
             .unwrap_or_else(|| "active".to_string());
+        // R-WF-11: surface the seven-state display projection in the text tree.
+        let display_state = session
+            .display_state
+            .clone()
+            .unwrap_or_else(|| status.clone());
         let display_name = compact_session_display_name(
             &session.session_name,
             short_names
@@ -1241,8 +1252,8 @@ fn build_compact_tree_lines(
             ""
         };
         format!(
-            "- [{}] {} | {} | {}{}",
-            session.session_id, session.agent_type, status, display_name, orphan_marker
+            "- [{}] {} | {} | {} | {}{}",
+            session.session_id, session.agent_type, status, display_state, display_name, orphan_marker
         )
     }
 
@@ -3236,6 +3247,7 @@ mod tests {
             last_active_at_ms: created_at_ms,
             parent_session_id: parent.map(str::to_string),
             status: Some("active".to_string()),
+            display_state: None,
             is_daemon,
         }
     }
@@ -3330,6 +3342,301 @@ mod tests {
     // R-WF-01 精修：RBAC owner 豁免已删，caller_is_owner_session 改 created_by.is_none()（数据层 owner 判定），
     // 读取授权 = 同 workspace 归属 + created_by 匹配 + 树内双向祖先验证
     // （需求 §三「不影响会话树/父子拓扑」官方安全门，全部保留）。
+    #[test]
+    fn tree_marks_truncated_when_depth_budget_exhausted() {
+        // P2-S8: a subtree cut off at TREE_SERIALIZE_MAX_DEPTH carries a
+        // "truncated": true marker so consumers can tell a complete tree from
+        // a capped one (mirrors the orphaned marker).
+        let max_depth = bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH;
+        let tree = SessionTreeManager::new(max_depth as u32 + 4);
+        // Build a chain deeper than the serialization budget: root <- c1 <- c2 <- ...
+        let mut sessions = vec![summary("root", None, false, 1)];
+        let mut parent = "root".to_string();
+        for i in 0..(max_depth + 3) {
+            let id = format!("c{i}");
+            tree.register_child(&parent, &id, (i + 2) as u32).unwrap();
+            sessions.push(summary(&id, Some(&parent), false, (i + 2) as u64));
+            parent = id;
+        }
+
+        let tree_json = build_session_tree_json_impl(&sessions, Some(&tree));
+
+        // Structural checks on the raw JSON string: the serialized tree is
+        // deeper than serde_json's default 128-level recursion cap, so parse
+        // only the shallow prefix (the marker placement is what this test
+        // asserts; the production reader hits the same shape only for
+        // genuinely deep trees).
+        // 1. Exactly one root.
+        assert!(tree_json.starts_with("["), "tree json is a forest array");
+        // 2. The truncated marker appears exactly once (on the boundary node).
+        //    serde_json pretty-prints with a space after the colon.
+        let truncated_markers = tree_json.matches("\"truncated\": true").count();
+        assert_eq!(
+            truncated_markers, 1,
+            "exactly one boundary node is marked truncated: {tree_json}"
+        );
+        // 3. The boundary node (the one carrying "truncated") serializes an
+        //    empty children array. serde_json::Map orders keys
+        //    alphabetically, so `"children"` sorts BEFORE `"truncated"`;
+        //    the boundary node's object span therefore contains
+        //    `"children": []` before the marker.
+        let truncated_pos = tree_json
+            .find("\"truncated\": true")
+            .expect("boundary node marker present");
+        let before_truncated = &tree_json[..truncated_pos];
+        assert!(
+            before_truncated.contains("\"children\": []"),
+            "truncated node serializes no children: {}",
+            &before_truncated[before_truncated.len().saturating_sub(200)..]
+        );
+
+        // 4. Confirm the boundary node identity and that nodes within the
+        //    budget carry no truncated marker. The truncated boundary node
+        //    is c{max_depth - 1} (recursion_depth == MAX). Because the JSON
+        //    is deeper than serde_json's default recursion cap, verify on the
+        //    raw string.
+        let boundary_id = format!("\"c{}\"", max_depth - 1);
+        let boundary_marker_pos = truncated_pos;
+        let boundary_id_pos = tree_json
+            .rfind(&boundary_id)
+            .expect("boundary node id is serialized");
+        // The boundary node's sessionId sits inside the same object span as
+        // its truncated marker (no other truncated marker in between).
+        assert!(
+            boundary_id_pos < boundary_marker_pos,
+            "boundary node id precedes its truncated marker"
+        );
+        let between = &tree_json[boundary_id_pos..boundary_marker_pos];
+        assert!(
+            !between.contains("\"truncated\": true"),
+            "no other truncated marker between the boundary id and its marker"
+        );
+        // Every node above the boundary (recursion_depth < MAX) has children
+        // and no truncated marker; assert that no `"truncated": true` appears
+        // before the boundary node's own marker in the serialized string.
+        let chain_above = &tree_json[..truncated_pos];
+        assert!(
+            !chain_above.contains("\"truncated\": true"),
+            "nodes within the budget must not be marked truncated"
+        );
+        // The serialized tree is a single-root forest.
+        assert!(
+            tree_json
+                .trim_start()
+                .starts_with("[\n  {\n    \"agentType\""),
+            "tree json is a single-root forest"
+        );
+    }
+
+    // --- short_name / detail / compact output ---
+
+    #[tokio::test]
+    async fn validate_list_rejects_short_name() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "list",
+                    "workspace": workspace.as_string(),
+                    "short_name": "secretary",
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("short_name is only allowed for create")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_list_allows_detail_flag() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "list",
+                    "workspace": workspace.as_string(),
+                    "detail": true,
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_cancel_rejects_detail_flag() {
+        let tool = SessionControlTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "cancel",
+                    "session_id": "worker_1",
+                    "detail": true,
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("detail is only allowed for list")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_create_allows_short_name() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let mut context = empty_context();
+        context.session_id = Some("creator-1".to_string());
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "create",
+                    "workspace": workspace.as_string(),
+                    "short_name": "secretary-standing",
+                }),
+                Some(&context),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_create_rejects_detail_flag() {
+        let tool = SessionControlTool::new();
+        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let mut context = empty_context();
+        context.session_id = Some("creator-1".to_string());
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "create",
+                    "workspace": workspace.as_string(),
+                    "detail": true,
+                }),
+                Some(&context),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("detail is only allowed for list")
+        );
+    }
+
+    #[test]
+    fn compact_display_name_prefers_short_name_and_truncates() {
+        let long_name = "task-description".repeat(10); // 150 chars
+        assert_eq!(
+            compact_session_display_name("abc", Some("秘书·常驻")),
+            "秘书·常驻"
+        );
+        assert_eq!(compact_session_display_name("abc", Some("  ")), "abc");
+
+        let truncated = compact_session_display_name(&long_name, None);
+        assert!(truncated.ends_with("..."));
+        assert_eq!(truncated.chars().count(), 60 + 3);
+
+        assert_eq!(
+            compact_session_display_name("short name", None),
+            "short name"
+        );
+    }
+
+    #[test]
+    fn compact_list_uses_short_names_and_preserves_tree_indentation() {
+        let tool = SessionControlTool::new();
+        let sessions = vec![
+            summary("root", None, false, 1),
+            summary("child", Some("root"), false, 2),
+        ];
+        let mut short_names = HashMap::new();
+        short_names.insert("root".to_string(), Some("秘书·常驻".to_string()));
+        short_names.insert("child".to_string(), None);
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            false,
+        );
+
+        assert!(output.contains("[root] agentic | active | active | 秘书·常驻"));
+        assert!(output.contains("  - [child] agentic | active | active | Session child"));
+        assert!(output.contains("## Sessions (compact)"));
+        assert!(!output.contains("## Session Tree (JSON)"));
+    }
+
+    #[test]
+    fn compact_list_truncates_long_session_names_without_short_name() {
+        let tool = SessionControlTool::new();
+        let long_name = "派单提示词全文-".repeat(20); // 140 chars
+        let mut root = summary("root", None, false, 1);
+        root.session_name = long_name.clone();
+        let sessions = vec![root];
+        let short_names = HashMap::new();
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            false,
+        );
+
+        assert!(
+            !output.contains(&long_name),
+            "full session name must be omitted"
+        );
+        assert!(output.contains("..."));
+        assert!(output.contains("[root] agentic | active | "));
+    }
+
+    #[test]
+    fn detail_list_keeps_full_tree_json_output() {
+        let tool = SessionControlTool::new();
+        let sessions = vec![summary("root", None, false, 1)];
+        let short_names = HashMap::new();
+
+        let output = tool.build_list_result_for_assistant(
+            "/repo",
+            &sessions,
+            None,
+            None,
+            &short_names,
+            true,
+        );
+
+        assert!(output.contains("## Session Tree (JSON)"));
+        assert!(output.contains("\"sessionName\": \"Session root\""));
+        assert!(output.contains("\"sessionId\": \"root\""));
+    }
+
+    // ---------------------------------------------------------------------
+    // UX-P0-1: SessionHistory 读取授权门（resolve_session_read_authorization）
+    // 攻击者矩阵：unrelated 拒绝 / owner 豁免 / created_by 放行 /
+    // 祖先-后代双向放行 / 后代可导出祖先 / daemon 豁免 /
+    // 跨 workspace 拒绝 / 缺 metadata 拒绝。
+    // ---------------------------------------------------------------------
 
     fn read_authz_session_manager() -> Arc<crate::agentic::session::session_manager::SessionManager>
     {
