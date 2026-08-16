@@ -91,6 +91,7 @@ pub fn build_session_metadata(facts: SessionMetadataBuildFacts<'_>) -> SessionMe
         workspace_hostname: facts.workspace_hostname.map(str::to_string),
         unread_completion: existing.and_then(|value| value.unread_completion.clone()),
         needs_user_attention: existing.and_then(|value| value.needs_user_attention.clone()),
+        display_state: existing.and_then(|value| value.display_state.clone()),
         runtime_state: existing.and_then(|value| value.runtime_state.clone()),
         is_daemon: existing
             .map(|value| value.is_daemon)

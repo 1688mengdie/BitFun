@@ -3544,6 +3544,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 workspace_hostname: None,
                 unread_completion: None,
                 needs_user_attention: None,
+                display_state: None,
                 runtime_state: None,
                 is_daemon: false,
                 orphaned: false,

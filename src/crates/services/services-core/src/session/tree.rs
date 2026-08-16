@@ -426,6 +426,7 @@ mod tests {
             workspace_hostname: None,
             unread_completion: None,
             needs_user_attention: None,
+            display_state: None,
             runtime_state: None,
             project_workspace_path: None,
             execution_target: None,
