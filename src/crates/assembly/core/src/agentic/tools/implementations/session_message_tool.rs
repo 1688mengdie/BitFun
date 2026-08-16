@@ -2244,6 +2244,30 @@ impl SessionMessageTool {
                     context,
                 )?;
                 let workspace_target = self.workspace_target_from_context(workspace, context);
+                // R-WF-23: 会话创建层级权限链——create 默认继承创建者工作区
+                // （跨区 create 拒绝）+ L0/L1/L2 层级校验。与 SessionControl
+                // create 同款封装，复用 same_session_storage_dir /
+                // caller_is_owner_session / 会话树 depth（不新造校验函数）。
+                {
+                    let caller_session_id = context.session_id.as_deref().ok_or_else(|| {
+                        BitFunError::tool(
+                            "create requires a caller session in tool context".to_string(),
+                        )
+                    })?;
+                    let caller_workspace_path = context.workspace_root().ok_or_else(|| {
+                        BitFunError::tool(
+                            "create requires a caller workspace in tool context".to_string(),
+                        )
+                    })?;
+                    super::session_control_tool::enforce_session_create_workspace_hierarchy(
+                        coordinator.get_session_manager(),
+                        coordinator.session_tree(),
+                        caller_session_id,
+                        caller_workspace_path,
+                        std::path::Path::new(&workspace_target.workspace_path),
+                    )
+                    .await?;
+                }
                 let session_name = params
                     .session_name
                     .clone()
