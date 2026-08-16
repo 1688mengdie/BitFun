@@ -567,15 +567,20 @@ pub(crate) async fn get_available_agent_type_ids_for_creation(
         .await
 }
 
-/// R-WF-01 全删 RBAC 后的 owner 判定：RBAC role（get_session_role==Commander
-/// || !rbac_enabled）已随角色系统删除，owner 豁免概念不再存在——恒返回
-/// false，授权门退化为「created_by 匹配 OR 祖先验证」（官方会话归属安全，
-/// 需求 §三「不影响会话树/父子拓扑」）。
+/// R-26 owner 判定：顶层主会话（created_by=None，非 RBAC 角色判定）即 owner。
+///
+/// RBAC 角色系统（get_session_role==Commander || !rbac_enabled）已全删，owner
+/// 语义恢复为数据层事实——主会话无创建者（created_by.is_none()）。恢复后
+/// `resolve_session_mutation_authorization` 的 R-26 孤儿删除豁免
+/// （orphan_session_delete_authorized 依赖 caller_is_owner）与跨工作区
+/// worktree 授权（owner 兜底）重新生效。
 fn caller_is_owner_session(
-    _session_manager: &crate::agentic::session::session_manager::SessionManager,
-    _caller_session_id: &str,
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    caller_session_id: &str,
 ) -> bool {
-    false
+    session_manager
+        .get_session(caller_session_id)
+        .is_some_and(|session| session.created_by.is_none())
 }
 
 /// 无依赖的规范 uuid 形状守卫（8-4-4-4-12，36 字符），用于 ACP 流会话 id
@@ -3542,6 +3547,98 @@ mod tests {
         )
         .await
         .expect("daemon caller should bypass the read tree gate");
+    }
+
+    #[tokio::test]
+    async fn main_session_can_delete_orphan_session_end_to_end() {
+        // R-26 端到端：主会话（created_by=None）删除「无主孤儿」会话。
+        //
+        // 全链路（非单测孤函数）：
+        // 1. caller 是顶层主会话——`caller_is_owner_session` 经
+        //    `get_session(...).created_by.is_none()` 判定为 owner；
+        // 2. 目标会话 metadata 缺失（磁盘无记录，list 可见但无创建者/祖先链）——
+        //    `orphan_session_delete_authorized` 的「metadata 缺失即孤儿」分支放行；
+        // 3. `resolve_session_mutation_authorization` delete 返回 Ok——验证
+        //    R-26 孤儿删除豁免真正经授权门生效（防 caller_is_owner 恒 false 回退）。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-authz-main-orphan-delete");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+
+        // 主会话：created_by=None（create_session_with_id 不传 creator）。
+        let main_session = session_manager
+            .create_session_with_id(
+                Some("main-session-1".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+        assert!(
+            main_session.created_by.is_none(),
+            "main session must have no creator"
+        );
+
+        // 主会话在 SessionManager 中可见（owner 判定依赖 get_session 命中）。
+        assert!(
+            session_manager.get_session("main-session-1").is_some(),
+            "main session must be registered in the session manager"
+        );
+
+        // 孤儿目标：metadata 缺失（无 created_by 也无 relationship/祖先链）。
+        resolve_session_mutation_authorization(
+            &session_manager,
+            &tree,
+            "main-session-1",
+            "orphan-session-1",
+            workspace_path,
+            "delete",
+            SessionMutationAuthOptions::delete(),
+        )
+        .await
+        .expect("main session (owner) must be authorized to delete an orphan session");
+
+        // 对照组：非主会话（created_by 非 None）不能删除同一孤儿——owner 兜底
+        // 只对顶层主会话放行，防止任意会话越权删无主孤儿。
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("sub-session-1".to_string()),
+                "Sub".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("main-session-1".to_string()),
+            )
+            .await
+            .expect("create sub session");
+        assert!(
+            session_manager
+                .get_session("sub-session-1")
+                .is_some_and(|session| session.created_by.is_some()),
+            "sub session must have a creator so it is not treated as the main owner"
+        );
+        let error = resolve_session_mutation_authorization(
+            &session_manager,
+            &tree,
+            "sub-session-1",
+            "orphan-session-1",
+            workspace_path,
+            "delete",
+            SessionMutationAuthOptions::delete(),
+        )
+        .await
+        .expect_err("non-owner session must not delete an orphan session");
+        assert!(
+            error.to_string().contains("not authorized to delete"),
+            "{error}"
+        );
     }
 }
 
