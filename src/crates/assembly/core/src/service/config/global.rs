@@ -19,49 +19,6 @@ static GLOBAL_CONFIG_SERVICE: OnceLock<Arc<RwLock<Option<Arc<ConfigService>>>>> 
 static CONFIG_UPDATE_SENDER: OnceLock<tokio::sync::broadcast::Sender<ConfigUpdateEvent>> =
     OnceLock::new();
 
-/// Cached RBAC master switch (R-26).
-///
-/// Mirrors `ai.rbac_enabled` in the settings document. Kept as a process-level
-/// cache so synchronous hot paths (tool restriction gates) can read it without
-/// awaiting the config service. Refreshed on config initialize / reload /
-/// update; defaults to `true` (mechanism on).
-static RBAC_ENABLED_CACHE: AtomicBool = AtomicBool::new(true);
-
-/// Dot-path of the RBAC master switch inside the settings document.
-/// Config paths resolve against the serialized `GlobalConfig`, where `AIConfig`
-/// lives under `ai`.
-pub(crate) const RBAC_ENABLED_CONFIG_PATH: &str = "ai.rbac_enabled";
-
-/// Current value of the RBAC master switch (cached, synchronous).
-///
-/// Hot-path safe: never awaits the config service. The cache is refreshed from
-/// the settings document on config initialize / reload / update.
-pub fn rbac_enabled() -> bool {
-    RBAC_ENABLED_CACHE.load(Ordering::Relaxed)
-}
-
-/// Override the cached RBAC master switch.
-///
-/// Used by the config service when the settings document changes and by tests.
-pub fn set_rbac_enabled(enabled: bool) {
-    RBAC_ENABLED_CACHE.store(enabled, Ordering::Relaxed);
-}
-
-/// Refresh the cached RBAC master switch from the global config.
-///
-/// Best-effort: hosts without an initialized config service keep the default
-/// (`true`). Called after config initialize, reload, and service replacement.
-pub(crate) async fn refresh_rbac_enabled_cache() {
-    let enabled = match get_global_config_service().await {
-        Ok(service) => service
-            .get_config::<bool>(Some(RBAC_ENABLED_CONFIG_PATH))
-            .await
-            .unwrap_or(true),
-        Err(_) => true,
-    };
-    RBAC_ENABLED_CACHE.store(enabled, Ordering::Relaxed);
-}
-
 /// Cached master switch for external user instruction sources.
 ///
 /// Mirrors `ai.external_instruction_sources` in the settings document. Kept as
@@ -248,7 +205,6 @@ impl GlobalConfigManager {
         })?;
 
         info!("Global config service initialized");
-        refresh_rbac_enabled_cache().await;
         refresh_external_instruction_sources_enabled_cache().await;
         refresh_workspace_instruction_files_enabled_cache().await;
 
@@ -300,7 +256,6 @@ impl GlobalConfigManager {
         }
 
         Self::broadcast_update(ConfigUpdateEvent::ConfigReloaded).await;
-        refresh_rbac_enabled_cache().await;
         refresh_external_instruction_sources_enabled_cache().await;
         refresh_workspace_instruction_files_enabled_cache().await;
 
@@ -325,7 +280,6 @@ impl GlobalConfigManager {
             );
         }
         Self::broadcast_update(ConfigUpdateEvent::ConfigReloaded).await;
-        refresh_rbac_enabled_cache().await;
         refresh_external_instruction_sources_enabled_cache().await;
         refresh_workspace_instruction_files_enabled_cache().await;
         Ok(())
