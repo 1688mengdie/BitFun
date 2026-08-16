@@ -30,6 +30,7 @@ const apiMocks = vi.hoisted(() => ({
   onPermissionRequestEvent: vi.fn(() => () => {}),
   subscribePermissionRequests: vi.fn(async () => undefined),
   listPendingPermissionRequests: vi.fn(async () => []),
+  getAvailableModes: vi.fn(async () => []),
 }));
 
 const peerModeFlagMock = vi.hoisted(() => ({ active: false }));
@@ -94,6 +95,7 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
     onPermissionRequestEvent: apiMocks.onPermissionRequestEvent,
     subscribePermissionRequests: apiMocks.subscribePermissionRequests,
     listPendingPermissionRequests: apiMocks.listPendingPermissionRequests,
+    getAvailableModes: apiMocks.getAvailableModes,
   },
 }));
 
@@ -165,6 +167,10 @@ const resetStore = () => {
   ((flowChatStore as any).unsupportedRestoreCommands as Set<string> | undefined)?.clear();
   ((flowChatStore as any).pendingRemoveSessionOptions as Map<string, unknown> | undefined)?.clear();
   ((flowChatStore as any).userQuestionSnapshotRevisions as Map<string, number> | undefined)?.clear();
+  // R-WF-10: reset the mode tool catalog projection + in-flight request so
+  // tests observe a clean backend-default projection state.
+  (flowChatStore as any).modeToolCatalog = null;
+  (flowChatStore as any).modeToolCatalogRequest = null;
   flowChatStore.setState((): FlowChatState => ({
     sessions: new Map(),
     activeSessionId: null,
@@ -1332,6 +1338,57 @@ describe('FlowChatStore ACP context usage', () => {
       cost: { amount: 0.12, currency: 'USD' },
     });
     expect(stored?.currentTokenUsage).toBeUndefined();
+  });
+});
+
+describe('FlowChatStore ACP session tree tools (R-WF-10)', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('projects the backend default tools for an acp__ session (no hard-coded subset)', async () => {
+    const backendTools = ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'WebSearch', 'Git'];
+    apiMocks.getAvailableModes.mockResolvedValue([
+      {
+        id: 'acp__opencode',
+        name: 'OpenCode',
+        description: 'ACP agent',
+        isReadonly: false,
+        toolCount: backendTools.length,
+        defaultTools: backendTools,
+        promptCacheScopeKey: 'acp__opencode',
+        configProfileId: 'acp__opencode',
+        configProfileMemberModeIds: ['acp__opencode'],
+        source: 'builtin',
+      },
+    ]);
+
+    await flowChatStore.refreshModeToolCatalog();
+
+    const session = createSession({ mode: 'acp__opencode' });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    const tree = flowChatStore.getSessionTree(session.sessionId);
+    expect(tree?.tools).toEqual(backendTools);
+    expect(tree?.tools).not.toEqual(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'Task', 'SessionControl']);
+    expect(tree?.isAcpExternal).toBe(true);
+  });
+
+  it('keeps the acp: flow-session line untouched (single colon, no backend projection)', () => {
+    const session = createSession({ mode: 'acp:codex' });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    const tree = flowChatStore.getSessionTree(session.sessionId);
+    // The `acp:` single-colon flow-session line never matches `acp__`; it is
+    // not a backend registry id and keeps the plain empty fallback.
+    expect(tree?.tools).toEqual([]);
+    expect(tree?.isAcpExternal).toBe(false);
   });
 });
 

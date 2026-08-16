@@ -1873,10 +1873,28 @@ const SUBAGENT_TOOLS: Record<string, string[]> = {
   'ReviewJudge': ['Read', 'Grep', 'Glob'],
 };
 
-function inferSessionTools(session: Session): string[] {
+/**
+ * R-WF-10: infer the display tool list for a session-tree node.
+ *
+ * ACP sessions come in two naming lines (never unified):
+ * - `acp__` (double underscore) = backend AgentRegistry id, e.g.
+ *   `acp__opencode`. The tool projection comes from the backend
+ *   `AgentInfo.default_tools` (mode tool catalog), not a hard-coded subset.
+ * - `acp:` (single colon) = frontend flow-session agentType, e.g.
+ *   `acp:opencode`. It never matches `acp__`, so it keeps the plain fallback
+ *   (`[]`); there is no backend registry id to project from.
+ */
+function inferSessionTools(
+  session: Session,
+  modeToolCatalog: Map<string, string[]> | null,
+): string[] {
   const type = session.subagentType || session.mode || '';
   if (SUBAGENT_TOOLS[type]) return SUBAGENT_TOOLS[type];
-  if (type.startsWith('acp__')) return ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'Task', 'SessionControl'];
+  if (type.startsWith('acp__')) {
+    // Backend `AgentInfo.default_tools` projection keyed by the `acp__`
+    // registry id (double underscore, backend line).
+    return modeToolCatalog?.get(type) ?? [];
+  }
   if (type.startsWith('Review')) return ['Read', 'Grep', 'Glob', 'GetFileDiff'];
   return [];
 }
@@ -1940,10 +1958,22 @@ export class FlowChatStore {
   /** Requested intervals remain protected until every deduplicated caller processes the response. */
   private sessionTurnWindowProtections = new Map<string, SessionTurnWindowProtection>();
   private unsupportedRestoreCommands = new Set<string>();
+  /**
+   * R-WF-10: backend `AgentInfo.default_tools` projection (registry id →
+   * full tool list) used by `inferSessionTools` for session-tree display.
+   * Fetched from `get_available_modes` (ACP bridge agents are Mode-category
+   * entries keyed `acp__<client>`, double underscore), replacing the former
+   * hard-coded 8-tool subset for `acp__` sessions.
+   */
+  private modeToolCatalog: Map<string, string[]> | null = null;
+  private modeToolCatalogRequest: Promise<void> | null = null;
   private onPersistUnreadCompletion?: (sessionId: string, value: 'completed' | 'error' | 'interrupted' | undefined) => void;
 
   private constructor() {
     this.clearOldStorage();
+    // R-WF-10: warm the backend mode tool catalog so session-tree ACP tool
+    // projections are available before the first tree render.
+    void this.refreshModeToolCatalog();
     // Selecting another surface swaps the whole visible state; subscribers keep
     // rendering the previous device's sessions until they are told.
     onSurfaceActivated(() => {
@@ -2039,6 +2069,48 @@ export class FlowChatStore {
 
   public getState(): FlowChatState {
     return this.state;
+  }
+
+  /**
+   * R-WF-10: cached backend mode tool catalog (registry id → default tools).
+   * `null` while never fetched (callers fall back to `[]`).
+   */
+  public getModeToolCatalog(): Map<string, string[]> | null {
+    return this.modeToolCatalog;
+  }
+
+  /**
+   * R-WF-10: fetch the backend mode catalog (`get_available_modes` returns
+   * `AgentInfo.default_tools` per Mode entry; ACP bridge agents are Mode
+   * entries keyed `acp__<client>`). Deduplicated: concurrent callers share
+   * one in-flight request. Used by `inferSessionTools` so the session tree
+   * projects the backend full tool set instead of a hard-coded subset.
+   */
+  public async refreshModeToolCatalog(): Promise<void> {
+    if (this.modeToolCatalog) {
+      return;
+    }
+    if (!this.modeToolCatalogRequest) {
+      this.modeToolCatalogRequest = agentAPI
+        .getAvailableModes()
+        .then(modes => {
+          const catalog = new Map<string, string[]>();
+          for (const mode of modes) {
+            if (mode.defaultTools && mode.defaultTools.length > 0) {
+              catalog.set(mode.id, mode.defaultTools);
+            }
+          }
+          this.modeToolCatalog = catalog;
+        })
+        .catch(error => {
+          log.warn('Failed to load mode tool catalog for session tree display', { error });
+          this.modeToolCatalog = new Map();
+        })
+        .finally(() => {
+          this.modeToolCatalogRequest = null;
+        });
+    }
+    await this.modeToolCatalogRequest;
   }
 
   public getSessionHistoryViewState(sessionId: string): SessionHistoryViewState | undefined {
@@ -4058,7 +4130,7 @@ export class FlowChatStore {
         isAcpExternal: (s?.mode ?? '').startsWith('acp__'),
         externalProviderLabel: s?.subagentType ?? undefined,
         turnCount: s?.dialogTurns?.length ?? 0,
-        tools: s ? inferSessionTools(s) : undefined,
+        tools: s ? inferSessionTools(s, this.modeToolCatalog) : undefined,
       };
     }
 
@@ -4078,7 +4150,7 @@ export class FlowChatStore {
       isAcpExternal: (session.mode || '').startsWith('acp__'),
       externalProviderLabel: session.subagentType ?? undefined,
       turnCount: session.dialogTurns?.length ?? 0,
-      tools: inferSessionTools(session),
+      tools: inferSessionTools(session, this.modeToolCatalog),
     };
   }
 
