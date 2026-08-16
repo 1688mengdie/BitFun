@@ -3361,6 +3361,36 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         }
 
+        // R-WF-05（原子步 2）：成员 turn 最终回复 → 群会话实时聚合复刻。
+        // 持久化成功（turn 已落盘）后、scheduler notify 之前触发。异步
+        // spawn（不阻塞成员会话主流程——验收断言 Plan:132「异步；不阻塞
+        // 成员会话」）；复刻失败仅 warn（尽力而为的旁路，绝不影响成员
+        // turn 完成与通知）。走 get_global_coordinator 拿 coordinator
+        // （本函数为无 self 关联函数，group_room_tools 的复刻桥接依赖
+        // ConversationCoordinator）。
+        if !final_response.trim().is_empty() {
+            if let Some(coordinator) = get_global_coordinator() {
+                let replicate_member_session_id = session_id.to_string();
+                let replicate_final_response = final_response.clone();
+                tokio::spawn(async move {
+                    if let Err(error) =
+                        crate::agentic::tools::implementations::group_room_tools::GroupRoomTool::
+                            replicate_member_turn_to_groups(
+                                &coordinator,
+                                &replicate_member_session_id,
+                                &replicate_final_response,
+                            )
+                            .await
+                    {
+                        warn!(
+                            "Failed to replicate member turn to group log: member={}, error={}",
+                            replicate_member_session_id, error
+                        );
+                    }
+                });
+            }
+        }
+
         if recovery_generation.is_some() {
             if let Err(error) = event_queue
                 .enqueue(
