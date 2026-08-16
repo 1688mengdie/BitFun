@@ -328,7 +328,7 @@ impl SessionControlTool {
         } else {
             // --- Compact tree text view (default) ---
             lines.push("## Sessions (compact)".to_string());
-            lines.push("format: [sessionId] agentType | status | name".to_string());
+            lines.push("format: [sessionId] agentType | status | display_state | name".to_string());
             lines.extend(build_compact_tree_lines(sessions, tree, short_names));
         }
         lines.join("\n")
@@ -1166,6 +1166,12 @@ pub(crate) fn build_session_tree_json_impl(
         map.insert("agentType".to_string(), json!(session.agent_type));
         map.insert("depth".to_string(), json!(depth));
         map.insert("status".to_string(), json!(status));
+        // R-WF-11: surface the seven-state display projection in the list JSON
+        // output so tree consumers can render dots/markers without re-deriving.
+        map.insert(
+            "display_state".to_string(),
+            json!(session.display_state.clone().unwrap_or_else(|| status.clone())),
+        );
         if orphaned.contains(session.session_id.as_str()) {
             map.insert("orphaned".to_string(), json!(true));
         }
@@ -1247,6 +1253,11 @@ fn build_compact_tree_lines(
             .status
             .clone()
             .unwrap_or_else(|| "active".to_string());
+        // R-WF-11: surface the seven-state display projection in the text tree.
+        let display_state = session
+            .display_state
+            .clone()
+            .unwrap_or_else(|| status.clone());
         let display_name = compact_session_display_name(
             &session.session_name,
             short_names
@@ -1259,8 +1270,8 @@ fn build_compact_tree_lines(
             ""
         };
         format!(
-            "- [{}] {} | {} | {}{}",
-            session.session_id, session.agent_type, status, display_name, orphan_marker
+            "- [{}] {} | {} | {} | {}{}",
+            session.session_id, session.agent_type, status, display_state, display_name, orphan_marker
         )
     }
 
@@ -3671,8 +3682,8 @@ mod tests {
             false,
         );
 
-        assert!(output.contains("[root] agentic | active | 秘书·常驻"));
-        assert!(output.contains("  - [child] agentic | active | Session child"));
+        assert!(output.contains("[root] agentic | active | active | 秘书·常驻"));
+        assert!(output.contains("  - [child] agentic | active | active | Session child"));
         assert!(output.contains("## Sessions (compact)"));
         assert!(!output.contains("## Session Tree (JSON)"));
     }
