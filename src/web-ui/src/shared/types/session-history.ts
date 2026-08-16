@@ -13,6 +13,21 @@ export type PersistedSessionKind = 'standard' | 'subagent';
 export type SessionTitleSource = 'text' | 'i18n';
 export type SessionRelationshipKind = 'btw' | 'review' | 'deep_review' | 'miniapp' | 'subagent';
 
+/**
+ * Seven-state display projection, mirrored from the backend
+ * `SessionDisplayState` enum (agent-runtime session_state.rs).
+ * Kept as a local string union to avoid a cross-layer import from
+ * flow_chat state-machine types (persistence layer must stay dependency-free).
+ */
+export type SessionDisplayStateType =
+  | 'standby'
+  | 'processing'
+  | 'completed'
+  | 'hung'
+  | 'interrupted'
+  | 'pending_attention'
+  | 'viewed';
+
 export interface SessionRelationship {
   kind?: SessionRelationshipKind;
   parentSessionId?: string | null;
@@ -110,6 +125,12 @@ export interface SessionMetadata {
    * 'completed' → green dot, 'error' → red dot, 'interrupted' → red dot (partial stream recovery).
    */
   unreadCompletion?: 'completed' | 'error' | 'interrupted';
+  /**
+   * Display/management state (seven-state projection) from the backend
+   * `AgentSessionSummary.displayState`. Values: 'standby' | 'processing' |
+   * 'completed' | 'hung' | 'interrupted' | 'pending_attention' | 'viewed'.
+   */
+  displayState?: SessionDisplayStateType;
   /**
    * High-priority attention status for the session.
    * 'ask_user' → pending AskUserQuestion waiting for answer.

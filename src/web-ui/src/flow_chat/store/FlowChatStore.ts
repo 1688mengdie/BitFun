@@ -26,6 +26,7 @@ import {
   SessionHistoryState,
   TokenUsage,
 } from '../types/flow-chat';
+import type { SessionDisplayState } from '../state-machine/types';
 import { createLogger } from '@/shared/utils/logger';
 import {
   isRemoteTraceContext,
@@ -7049,6 +7050,7 @@ config: {
             btwThreads: [],
             btwOrigin: relationship.btwOrigin,
             hasUnreadCompletion: metadata.unreadCompletion,
+            displayState: metadata.displayState as SessionDisplayState | undefined,
             needsUserAttention: metadata.needsUserAttention,
             deepReviewRunManifest: metadata.deepReviewRunManifest,
             reviewTargetEvidence: metadata.reviewTargetEvidence,
