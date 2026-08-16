@@ -10,11 +10,15 @@ use super::util::normalize_path;
 use crate::agentic::agents::team_presets::{
     create_preset, delete_preset, get_preset, list_presets, LegionEdge, LegionNode, LegionPreset,
 };
-use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
+use crate::agentic::coordination::{
+    get_global_coordinator, ConversationCoordinator, ASSISTANT_BOOTSTRAP_AGENT_TYPE,
+};
 use crate::agentic::keyed_lock::KeyedAsyncLock;
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
+use crate::infrastructure::get_path_manager_arc;
+use crate::service::bootstrap::initialize_member_persona_files;
 use crate::service::config::{
     default_legion_deploy_frequency_per_hour, default_legion_max_nodes,
     default_legion_max_total_nodes, get_global_config_service,
@@ -24,7 +28,7 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_agent_runtime::session_control::session_control_creator_marker;
 use bitfun_runtime_ports::AgentSessionCreateRequest;
-use bitfun_services_core::session::types::{SessionRelationship, SessionRelationshipKind};
+use bitfun_services_core::session::types::SessionRelationship;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeSet, HashMap};
@@ -444,7 +448,12 @@ impl LegionControlTool {
         child_depth: u32,
     ) -> Result<(), BitFunError> {
         let relationship = SessionRelationship {
-            kind: Some(SessionRelationshipKind::Subagent),
+            // R-WF-07：成员 = Claw Standard 会话，不再是 subagent——lineage
+            // 只记录父子关系与深度（kind=None），不标记 Subagent。subagent
+            // 标记族（metadata subagent/parentSessionId/subagentType）已在
+            // 部署循环移除，这里同步去 Subagent kind，避免
+            // is_subagent_marked_metadata 对同一会话创建/恢复判定漂移。
+            kind: None,
             parent_session_id: parent_session_id.map(ToOwned::to_owned),
             depth: Some(child_depth),
             ..Default::default()
@@ -1018,7 +1027,6 @@ Related tools:
                     BitFunError::tool("workspace is required for LegionControl load".to_string())
                 })?;
                 let display_workspace = normalize_path(&workspace.root_path_string());
-                let project_workspace = normalize_path(&workspace.project_root_path_string());
 
                 // Resolve source topology: saved preset or inline input
                 let (preset_id, mut nodes, edges) = match (&params.preset_id, &params.nodes) {
@@ -1299,33 +1307,29 @@ Related tools:
                         )));
                     }
 
+                    // R-WF-07：成员 = Claw 会话（agent_type 固定
+                    // ASSISTANT_BOOTSTRAP_AGENT_TYPE = "Claw"），不再是
+                    // subagent——去 subagent 标记族（subagent / parentSessionId
+                    // / subagentType 不再写入），节点会话按 Standard 会话创建
+                    // （SessionKind::Standard，走正常上下文窗口刷新），成员
+                    // 身份完全由成员工作区 persona 四文件承载。parent 关系由
+                    // attach_session_to_tree 持久化 lineage 维护（kind=None，
+                    // 仅父子 + 深度，不再标记 Subagent）。
                     let mut metadata = serde_json::Map::new();
                     metadata.insert(
                         "createdBy".to_string(),
                         json!(session_control_creator_marker(creator_session_id)),
                     );
-                    // Legion 节点 = subagent 会话：必须带 subagent 标记族
-                    // （subagent=true / parentSessionId / subagentType），
-                    // 与 SessionControl create 对齐。缺失标记会导致创建与
-                    // restore 两条链路对会话 lineage 的判定不一致（同一会话
-                    // 生命周期内语义漂移），补齐后创建与恢复口径一致。
-                    metadata.insert("subagent".to_string(), json!(true));
-                    metadata.insert(
-                        "parentSessionId".to_string(),
-                        json!(parent_session_id.clone()),
-                    );
-                    metadata.insert("subagentType".to_string(), json!(node.agent));
                     metadata.insert("legionNodeId".to_string(), json!(node.id));
                     // legionRole 是预留元数据（d2-P2-2）：持久化进会话 metadata
                     // 供下游 SessionMessage 派发与 SessionControl 检视观察，但
                     // **不驱动权限**——节点会话的工具权限恒由上下文级限制决定，
                     // 绝不读取 legionRole 赋权。
                     metadata.insert("legionRole".to_string(), json!(node.role));
-                    // `prompt`/`gate` are reserved fields today — they
-                    // carry author intent but do not yet change runtime behavior.
-                    // Persist them into the session metadata so the data is
+                    // `prompt`/`gate` persist into metadata so the data is
                     // observable by downstream SessionMessage dispatch and
-                    // SessionControl inspection instead of being silently dropped.
+                    // SessionControl inspection; R-WF-07 additionally writes
+                    // them into the member workspace persona files below.
                     if !node.prompt.trim().is_empty() {
                         metadata.insert("legionNodePrompt".to_string(), json!(node.prompt));
                     }
@@ -1340,12 +1344,103 @@ Related tools:
                         metadata.insert("legionPresetId".to_string(), json!(pid));
                     }
 
+                    // R-WF-07 原子步 4：直属上级 = 拓扑父节点的 role（父节点
+                    // role 为空则回退父节点 id）；根节点（无父）= 建群者
+                    // （creator session，即 deploy 调用方）。
+                    let superior = match &resolved.parent {
+                        Some(parent_id) => topology
+                            .iter()
+                            .find(|parent| parent.node.id == *parent_id)
+                            .map(|parent| {
+                                if parent.node.role.trim().is_empty() {
+                                    parent.node.id.clone()
+                                } else {
+                                    parent.node.role.clone()
+                                }
+                            })
+                            .unwrap_or_else(|| parent_id.clone()),
+                        None => creator_session_id.clone(),
+                    };
+
+                    // R-WF-07 原子步 3：成员工作区 =
+                    // resolve_assistant_workspace_dir(Some(node.id)) →
+                    // ~/.bitfun/personal_assistant/workspace-<nodeId>（各自独立
+                    // 工作区，不共享部署 workspace 的根目录 persona 四文件）。
+                    // 成员会话 workspace_path = 成员工作区（执行 + persona 域），
+                    // project_workspace_path 保持 display_workspace（持久化域
+                    // 不变：会话落盘/群成员表/群计数仍以部署 workspace 为锚）。
+                    let member_workspace = get_path_manager_arc()
+                        .resolve_assistant_workspace_dir(Some(&node.id), None);
+                    if let Err(e) = std::fs::create_dir_all(&member_workspace) {
+                        // 成员工作区创建失败 = 部署失败：回滚已建会话 + 回滚
+                        // 频率预留戳（与 create_session 失败处理对称，禁泄漏）。
+                        let created: Vec<String> = session_by_node.values().cloned().collect();
+                        Self::cleanup_deployed_sessions(
+                            &coordinator,
+                            &std::path::PathBuf::from(&display_workspace),
+                            &created,
+                        )
+                        .await;
+                        if let Some(timestamp) = reserved_deploy_timestamp {
+                            Self::rollback_deploy_timestamp(
+                                &coordinator,
+                                &std::path::PathBuf::from(&display_workspace),
+                                creator_session_id,
+                                timestamp,
+                            )
+                            .await;
+                        }
+                        return Err(BitFunError::tool(format!(
+                            "LegionControl load: failed to create member workspace for node '{}' at {}: {}",
+                            node.id,
+                            member_workspace.display(),
+                            e
+                        )));
+                    }
+
+                    // R-WF-07 原子步 4：node.role/prompt/gate → 三文件
+                    // （SOUL/USER/IDENTITY），USER 写直属上级；BOOTSTRAP.md =
+                    // 引导临时文件，身份直接物化 → 不留引导、删除残留。
+                    // 已有身份文件绝不覆盖（幂等，重复部署不丢已确立身份）。
+                    if let Err(e) = initialize_member_persona_files(
+                        &member_workspace,
+                        &node.role,
+                        &node.prompt,
+                        node.gate,
+                        &superior,
+                    )
+                    .await
+                    {
+                        // persona 物化失败 = 部署失败：回滚已建会话 + 回滚
+                        // 频率预留戳（与 create_session 失败处理对称）。
+                        let created: Vec<String> = session_by_node.values().cloned().collect();
+                        Self::cleanup_deployed_sessions(
+                            &coordinator,
+                            &std::path::PathBuf::from(&display_workspace),
+                            &created,
+                        )
+                        .await;
+                        if let Some(timestamp) = reserved_deploy_timestamp {
+                            Self::rollback_deploy_timestamp(
+                                &coordinator,
+                                &std::path::PathBuf::from(&display_workspace),
+                                creator_session_id,
+                                timestamp,
+                            )
+                            .await;
+                        }
+                        return Err(BitFunError::tool(format!(
+                            "LegionControl load: failed to materialize member persona files for node '{}': {}",
+                            node.id, e
+                        )));
+                    }
+
                     let session = match runtime
                         .create_session(AgentSessionCreateRequest {
                             session_name,
-                            agent_type: node.agent.clone(),
-                            workspace_path: Some(display_workspace.clone()),
-                            project_workspace_path: Some(project_workspace.clone()),
+                            agent_type: ASSISTANT_BOOTSTRAP_AGENT_TYPE.to_string(),
+                            workspace_path: Some(member_workspace.to_string_lossy().to_string()),
+                            project_workspace_path: Some(display_workspace.clone()),
                             execution_target: workspace.execution_target.clone(),
                             workspace_id: workspace.workspace_id.clone(),
                             remote_connection_id: workspace.connection_id().map(ToOwned::to_owned),
@@ -1427,11 +1522,17 @@ Related tools:
                         "session_id": created_session_id,
                         "session_name": session.session_name,
                         "role": node.role,
-                        "agent": node.agent,
+                        // R-WF-07：成员固定为 Claw（agent_type 改
+                        // ASSISTANT_BOOTSTRAP_AGENT_TYPE），结果原样回显
+                        // 实际创建的成员类型。
+                        "agent": ASSISTANT_BOOTSTRAP_AGENT_TYPE,
                         "depth": child_depth,
+                        // R-WF-07：成员独立工作区 + 直属上级在结果中回显，
+                        // 供调用方观察每个成员的实际落点。
+                        "member_workspace": member_workspace,
+                        "superior": superior,
                         // 预留字段在结果中原样回显（与上方会话元数据持久化一致），
-                        // 供调用方观察每个节点预期携带的 prompt/gate/tools 语义；
-                        // 尚未改变运行时行为。
+                        // 供调用方观察每个节点预期携带的 prompt/gate/tools 语义。
                         "prompt": node.prompt,
                         "gate": node.gate,
                         "tools": node.tools,
@@ -2193,6 +2294,56 @@ mod tests {
                 continue;
             }
             panic!("the second load must hit the frequency cap");
+        }
+    }
+
+    // ── R-WF-07：成员=Claw + 三文件 + 各自工作区（Plan:146-153）──
+
+    #[test]
+    fn member_workspace_dir_is_workspace_node_id() {
+        // 原子步 3：成员工作区 resolve_assistant_workspace_dir(Some(nodeId))
+        // = ~/.bitfun/personal_assistant/workspace-<nodeId>（各自独立）。
+        let path_manager = crate::infrastructure::get_path_manager_arc();
+        let member_dir = path_manager.resolve_assistant_workspace_dir(Some("node-42"), None);
+        let expected = path_manager
+            .assistant_workspace_base_dir(None)
+            .join("workspace-node-42");
+        assert_eq!(member_dir, expected, "member workspace must be workspace-<nodeId>");
+    }
+
+    #[test]
+    fn resolved_node_superior_is_parent_role_or_creator_for_root() {
+        // Plan 原子步 4：USER 写直属上级——非根节点 = 拓扑父节点的 role；
+        // 根节点（无父） = 直属上级缺省为 creator（建群者）。
+        let nodes = vec![
+            node("commander"),
+            node("executor"),
+            node("writer"),
+        ];
+        let mut edges = Vec::new();
+        edges.push(edge("commander", "executor"));
+        edges.push(edge("executor", "writer"));
+        let resolved = LegionControlTool::resolve_legion_topology(nodes, edges, MAX_LEGION_NODES)
+            .expect("topology should resolve");
+
+        let by_id: HashMap<&str, &ResolvedLegionNode> =
+            resolved.iter().map(|r| (r.node.id.as_str(), r)).collect();
+        assert_eq!(by_id["commander"].parent, None);
+        assert_eq!(by_id["executor"].parent.as_deref(), Some("commander"));
+        assert_eq!(by_id["writer"].parent.as_deref(), Some("executor"));
+
+        for node in &resolved {
+            let superior = match &node.parent {
+                Some(parent_id) => by_id
+                    .get(parent_id.as_str())
+                    .map(|parent| parent.node.role.clone())
+                    .filter(|role| !role.trim().is_empty())
+                    .unwrap_or_else(|| parent_id.clone()),
+                // Root node: direct superior = the group creator (session id
+                // resolved by the deployment loop).
+                None => "creator".to_string(),
+            };
+            assert!(!superior.trim().is_empty(), "superior must not be empty");
         }
     }
 }
