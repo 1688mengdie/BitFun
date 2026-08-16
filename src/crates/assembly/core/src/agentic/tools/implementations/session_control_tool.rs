@@ -955,6 +955,97 @@ fn same_session_storage_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
     canonical(a) == canonical(b)
 }
 
+/// R-WF-23：会话创建层级权限链 + 强制校验（需求 §九 + 总纲 §2.7）。
+///
+/// 核心裁决（主人点破）：与 RBAC 无关——session 工具本就有祖先验证/权限
+/// 校验，只是 create action 没覆盖。本函数复用现有授权设施给 create 补
+/// 「继承创建者工作区 + 禁跨区 + 层级校验」，不新造校验函数、不绑 role：
+///
+/// 1. **继承创建者工作区 + 禁跨区**：复用 [`same_session_storage_dir`]
+///    ——create 默认继承创建者工作区；调用方显式传了跨区 workspace 时
+///    返回明确错误（非静默），防止「workspace 参数 = 会话归属树」被绕开。
+/// 2. **层级校验**：复用 [`caller_is_owner_session`]（created_by.is_none()
+///    即 L0 主会话，仅主人可建）+ 会话树/持久化 lineage 深度判定——
+///    - L0（created_by==None 主会话）：可创建 L1 子会话（挂自己工作区）；
+///    - L1（depth==1 的子会话，指挥官建）：只可创建 L2（depth==2，继承
+///      L1 工作区）；
+///    - L2+（depth>=2）：拒绝再向下创建（L1 只能建 L2）。
+///
+/// depth 语义 = 以 L0 主会话为根的绝对深度（create 分支
+/// `child_depth = parent_depth + 1`，L0 无 metadata → parent_depth 默认 0，
+/// 故 L1=1、L2=2）。判定只走 created_by + parent_session_id + depth
+/// （SessionTreeManager 内存树快路径 + 持久化 metadata 链回退），不触碰
+/// AgentRole/rbac。
+pub(crate) async fn enforce_session_create_workspace_hierarchy(
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    tree: &SessionTreeManager,
+    caller_session_id: &str,
+    caller_workspace_path: &std::path::Path,
+    target_workspace_path: &std::path::Path,
+) -> BitFunResult<()> {
+    // 1. 跨区拒绝：create 默认继承创建者工作区。调用方显式传了与创建者
+    //    不同 storage dir 的 workspace → 返回明确错误（非静默降级）。
+    if !same_session_storage_dir(caller_workspace_path, target_workspace_path) {
+        return Err(BitFunError::tool(format!(
+            "SessionControl create rejected: workspace '{}' is outside the caller session '{}' workspace '{}'; session create inherits the caller workspace (cross-workspace create is not allowed)",
+            target_workspace_path.display(),
+            caller_session_id,
+            caller_workspace_path.display(),
+        )));
+    }
+
+    // 2. 层级校验：L0 主会话（created_by==None）仅主人可建（主会话即用户
+    //    owner，见 R-26），可创建 L1；L1（depth==1）只能建 L2；L2+ 拒绝。
+    //    复用 caller_is_owner_session（R-WF-01 已改为 created_by.is_none()，
+    //    数据层 owner 判定，与 RBAC 无关）。
+    if caller_is_owner_session(session_manager, caller_session_id) {
+        // L0 主会话：允许创建（子会话挂主会话工作区，天然继承）。
+        return Ok(());
+    }
+
+    // 非 L0：caller 必须是 L1（depth==1 的子会话），才能创建 L2。
+    let caller_depth =
+        session_tree_depth(session_manager, tree, caller_workspace_path, caller_session_id).await;
+    match caller_depth {
+        Some(1) => {
+            // L1：只可创建 L2（depth==2，继承 L1 工作区）。同区已在上方
+            // 校验，此处天然继承 caller 工作区。
+            Ok(())
+        }
+        Some(depth) => Err(BitFunError::tool(format!(
+            "SessionControl create rejected: caller session '{}' is at depth {}; only L0 main sessions can create L1 children and L1 sessions can only create L2 (session hierarchy: L0 -> L1 -> L2)",
+            caller_session_id, depth
+        ))),
+        None => Err(BitFunError::tool(format!(
+            "SessionControl create rejected: caller session '{}' has no resolvable depth; session hierarchy cannot be verified",
+            caller_session_id
+        ))),
+    }
+}
+
+/// 解析会话在层级树中的 depth：内存树快路径 + 持久化 metadata 链回退
+/// （空树/未注册会话不能被利用来绕过层级校验——回退到持久化 lineage）。
+/// 语义 = 以 L0 主会话为根的绝对深度（L1=1、L2=2）。
+async fn session_tree_depth(
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    tree: &SessionTreeManager,
+    workspace_path: &std::path::Path,
+    session_id: &str,
+) -> Option<u32> {
+    // 快路径：内存树已注册。
+    if let Some(depth) = tree.get_depth(session_id) {
+        return Some(depth);
+    }
+    // 回退：持久化 metadata 的 relationship.depth（L0 主会话无 relationship
+    // 记录 → None，但 caller 已排除 L0，此处只可能命中 L1+ 的持久化记录）。
+    session_manager
+        .load_session_metadata(workspace_path, session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|m| m.relationship.and_then(|r| r.depth))
+}
+
 /// caller 是否为 daemon 会话（R-A.04 同源校验，含持久化回退）。
 async fn caller_is_daemon(
     session_manager: &crate::agentic::session::session_manager::SessionManager,
@@ -1526,6 +1617,30 @@ Arguments:
                     )
                     .await?;
                 // R-WF-01: RBAC role-based delegation validation removed.
+                // R-WF-23: 会话创建层级权限链——create 默认继承创建者工作区
+                // （跨区 create 拒绝）+ L0/L1/L2 层级校验。复用
+                // same_session_storage_dir / caller_is_owner_session /
+                // 会话树 depth（不新造校验函数、不绑 role）。
+                {
+                    let caller_session_id = context.session_id.as_deref().ok_or_else(|| {
+                        BitFunError::tool(
+                            "create requires a caller session in tool context".to_string(),
+                        )
+                    })?;
+                    let caller_workspace_path = context.workspace_root().ok_or_else(|| {
+                        BitFunError::tool(
+                            "create requires a caller workspace in tool context".to_string(),
+                        )
+                    })?;
+                    enforce_session_create_workspace_hierarchy(
+                        coordinator.get_session_manager(),
+                        coordinator.session_tree(),
+                        caller_session_id,
+                        caller_workspace_path,
+                        std::path::Path::new(&workspace.display_workspace),
+                    )
+                    .await?;
+                }
                 let session_name =
                     session_control_session_name_or_default(params.session_name.as_deref());
                 let agent_type = session_control_agent_type_or_default(params.agent_type.as_ref());
@@ -3944,6 +4059,285 @@ mod tests {
         .expect_err("non-owner session must not delete an orphan session");
         assert!(
             error.to_string().contains("not authorized to delete"),
+            "{error}"
+        );
+    }
+
+    // ── R-WF-23 会话创建层级权限链测试套件 ──
+    // 需求 §九 + 总纲 §2.7：create 默认继承创建者工作区（跨区 create 拒绝
+    // 返回明确错误非静默）；L0 仅主人可建、L1 指挥官建挂自己工作区、L1 只能
+    // 建 L2 继承工作区。判定走 created_by + parent_session_id + depth +
+    // SessionTreeManager，不碰 AgentRole/rbac。
+
+    #[tokio::test]
+    async fn create_hierarchy_allows_main_session_same_workspace() {
+        // L0 主会话（created_by=None）在自家工作区创建子会话：允许。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-l0-same");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+
+        session_manager
+            .create_session_with_id(
+                Some("main-session".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+
+        enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "main-session",
+            &workspace_path,
+            &workspace_path,
+        )
+        .await
+        .expect("L0 main session must be allowed to create in its own workspace");
+    }
+
+    #[tokio::test]
+    async fn create_hierarchy_rejects_cross_workspace_create() {
+        // L0 主会话显式传了跨区 workspace：拒绝并返回明确错误（非静默）。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-cross");
+        let other = TestTempDir::new("bitfun-rwf23-create-cross-other");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+        let other_path = std::path::PathBuf::from(other.as_string());
+
+        session_manager
+            .create_session_with_id(
+                Some("main-session".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+
+        let error = enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "main-session",
+            &workspace_path,
+            &other_path,
+        )
+        .await
+        .expect_err("cross-workspace create must be rejected");
+        assert!(
+            error.to_string().contains("cross-workspace create is not allowed"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_hierarchy_allows_l1_child_same_workspace() {
+        // L1（depth==0 子会话，created_by 非 None）在继承工作区创建 L2：允许。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-l1-same");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+
+        session_manager
+            .create_session_with_id(
+                Some("main-session".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("l1-session".to_string()),
+                "L1".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("main-session".to_string()),
+            )
+            .await
+            .expect("create L1 session");
+        tree.register_child("main-session", "l1-session", 1)
+            .expect("register L1 in tree");
+
+        enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "l1-session",
+            &workspace_path,
+            &workspace_path,
+        )
+        .await
+        .expect("L1 session must be allowed to create L2 in the inherited workspace");
+    }
+
+    #[tokio::test]
+    async fn create_hierarchy_rejects_l1_cross_workspace() {
+        // L1 尝试跨区创建：拒绝（即使 depth 合法，跨区仍禁）。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-l1-cross");
+        let other = TestTempDir::new("bitfun-rwf23-create-l1-cross-other");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+        let other_path = std::path::PathBuf::from(other.as_string());
+
+        session_manager
+            .create_session_with_id(
+                Some("main-session".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("l1-session".to_string()),
+                "L1".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("main-session".to_string()),
+            )
+            .await
+            .expect("create L1 session");
+        tree.register_child("main-session", "l1-session", 1)
+            .expect("register L1 in tree");
+
+        let error = enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "l1-session",
+            &workspace_path,
+            &other_path,
+        )
+        .await
+        .expect_err("L1 cross-workspace create must be rejected");
+        assert!(
+            error.to_string().contains("cross-workspace create is not allowed"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_hierarchy_rejects_l2_create() {
+        // L2（depth==1）尝试再创建：拒绝（L1 只能建 L2，L2 不可再建）。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-l2");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+
+        session_manager
+            .create_session_with_id(
+                Some("main-session".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("l1-session".to_string()),
+                "L1".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("main-session".to_string()),
+            )
+            .await
+            .expect("create L1 session");
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("l2-session".to_string()),
+                "L2".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("l1-session".to_string()),
+            )
+            .await
+            .expect("create L2 session");
+        tree.register_child("main-session", "l1-session", 1)
+            .expect("register L1 in tree");
+        tree.register_child("l1-session", "l2-session", 2)
+            .expect("register L2 in tree");
+
+        let error = enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "l2-session",
+            &workspace_path,
+            &workspace_path,
+        )
+        .await
+        .expect_err("L2 session must not create further children");
+        assert!(
+            error.to_string().contains("only L0 main sessions can create L1"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_hierarchy_rejects_unresolvable_depth() {
+        // 非 L0 且 depth 无法解析（树无记录 + metadata 无 lineage）：拒绝。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-rwf23-create-nodepth");
+        let workspace_path = std::path::PathBuf::from(workspace.as_string());
+
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("unregistered-child".to_string()),
+                "Child".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("some-parent".to_string()),
+            )
+            .await
+            .expect("create child session");
+
+        let error = enforce_session_create_workspace_hierarchy(
+            &session_manager,
+            &tree,
+            "unregistered-child",
+            &workspace_path,
+            &workspace_path,
+        )
+        .await
+        .expect_err("child without resolvable depth must be rejected");
+        assert!(
+            error.to_string().contains("no resolvable depth"),
             "{error}"
         );
     }
