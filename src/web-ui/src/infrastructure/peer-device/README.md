@@ -212,6 +212,15 @@ Controller-side React/transport layer for Peer Device Mode. Architecture:
     back to a controller-local or numeric rollback path. Never include catalog
     preview text in Peer request/response logs.
 
+15. **Git ownership trust is read on the peer, granted at the machine.**
+    `git_get_repository_trust` is a read-only probe and routes to the peer
+    host. `git_trust_repository` writes the peer user's global Git
+    configuration (`safe.directory`) and tells Git to run hooks from a tree
+    they do not own, so it is denied on both the desktop and CLI peer hosts.
+    Keep it out of the FE `LOCAL_ONLY` set: running it on the controller would
+    write an exception for a path that only exists on the peer. A controller
+    surfaces the probe's `manualCommand` instead.
+
 ## Related account-login guards
 
 Incomplete login (cloud vs local settings choice) must not persist a session
