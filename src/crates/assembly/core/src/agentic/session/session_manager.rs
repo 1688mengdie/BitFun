@@ -4130,10 +4130,12 @@ impl SessionManager {
 
     /// Sync the display/lifecycle markers that feed the seven-state projection.
     ///
-    /// - `Processing` advances `last_progress_at` and clears the completed
-    ///   marker so the watchdog timeout has a fresh baseline.
-    /// - `Idle` records completion (when a turn has ever run) and clears the
-    ///   interrupt reason so a later idle session is not stuck "interrupted".
+    /// - `Processing` advances `last_progress_at`, clears the completed marker
+    ///   (fresh watchdog baseline), and clears any stale interrupt reason so a
+    ///   brand-new turn is never stuck "interrupted".
+    /// - `Idle` records completion (when a turn has ever run) but KEEPS the
+    ///   interrupt reason: an interrupted turn settles to Idle yet must stay
+    ///   visible as `Interrupted` until the next turn starts (R-WF-11 P1-4).
     /// - `Error` marks the session as needing attention.
     fn sync_session_lifecycle_markers(&self, session: &mut Session, new_state: &SessionState) {
         let now = SystemTime::now();
@@ -4142,12 +4144,12 @@ impl SessionManager {
                 session.last_progress_at = Some(now);
                 session.last_completed_at = None;
                 session.needs_attention = false;
+                session.interrupt_reason = None;
             }
             SessionState::Idle => {
                 if !session.dialog_turn_ids.is_empty() {
                     session.last_completed_at = Some(now);
                 }
-                session.interrupt_reason = None;
             }
             SessionState::Error { .. } => {
                 session.needs_attention = true;
@@ -9331,8 +9333,15 @@ impl SessionManager {
         // Record the interruption on the in-memory session so the seven-state
         // display projection can surface `Interrupted` until the session is
         // reset to Idle. The mutation guard above serializes concurrent writes.
+        // R-WF-11 P1-4: persist the marker immediately so a restart between the
+        // interruption and the next turn does not lose the `Interrupted` state.
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.interrupt_reason = Some("interrupted".to_string());
+            if self.config.enable_persistence {
+                self.persistence_manager
+                    .save_session(&workspace_path, &session)
+                    .await?;
+            }
         }
 
         Ok(recovery)
