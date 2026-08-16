@@ -216,9 +216,15 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     // Sender identity badge for forwarded agent messages (R-23). Only present
     // when the backend attached sender metadata; historical messages without
     // it render no badge at all (graceful degradation).
+    // R-WF-08: group mode system prompt (turnRole=system, first turn) renders
+    // as a system badge (t('message.system') = "系统") — the group's mode
+    // prompt is the first timeline entry and must be visually distinct.
     const senderBadge = useMemo(() => {
       const meta = message?.metadata;
       if (!meta?.senderSessionId) return null;
+      if (meta.turnRole === 'system') {
+        return `[${t('message.system')}]`;
+      }
       const role = typeof meta.senderRole === 'string' ? meta.senderRole : 'Agent';
       const depth = typeof meta.senderDepth === 'number' ? ` L${meta.senderDepth}` : '';
       const name =
@@ -226,7 +232,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
           ? ` ${meta.senderName.trim()}`
           : '';
       return `[${role}${depth}]${name}`;
-    }, [message?.metadata]);
+    }, [message?.metadata, t]);
 
     // R-GC-14: group chat left/right indent offset (type-contract section 1.3 + 2).
     // Group message = user_message.metadata.groupId present; "self" = current

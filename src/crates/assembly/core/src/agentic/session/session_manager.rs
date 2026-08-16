@@ -2052,11 +2052,30 @@ impl SessionManager {
             } else {
                 Message::user(turn.user_message.content.clone())
             };
-            messages.push(
-                user_message
-                    .with_turn_id(turn.turn_id.clone())
-                    .with_semantic_kind(MessageSemanticKind::ActualUserInput),
-            );
+            // R-WF-08：群 mode 提示词以 system 第一条落盘（建群时写入，
+            // metadata turnRole="system" 标记）。重建消息时 system turn 投影为
+            // MessageRole::System（供 get_history 以 System 语义返回，验收断言
+            // 「群首 turn=system 提示词」）；不参与 ActualUserInput 语义标记
+            // （system 提示词不是用户输入，缓存保护：身份走 metadata 旁路）。
+            let is_system_turn = turn
+                .user_message
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("turnRole"))
+                .and_then(|value| value.as_str())
+                == Some("system");
+            if is_system_turn {
+                messages.push(
+                    Message::system(turn.user_message.content.clone())
+                        .with_turn_id(turn.turn_id.clone()),
+                );
+            } else {
+                messages.push(
+                    user_message
+                        .with_turn_id(turn.turn_id.clone())
+                        .with_semantic_kind(MessageSemanticKind::ActualUserInput),
+                );
+            }
 
             let assistant_text = turn
                 .model_rounds
@@ -18464,6 +18483,68 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert!(messages[0].is_actual_user_message());
+    }
+
+    // ── R-WF-08：群 mode 提示词 system 首 turn 投影 ──
+    // build_messages_from_turns 按 metadata turnRole="system" 把 turn 投影为
+    // MessageRole::System（验收断言「群首 turn=system 提示词」）；普通 turn
+    // 仍投影为 User。
+    #[test]
+    fn build_messages_from_turns_projects_system_role_for_turn_role_marker() {
+        use crate::service::session::{DialogTurnData, DialogTurnKind, UserMessageData};
+
+        let turns = vec![
+            DialogTurnData::new_with_kind(
+                DialogTurnKind::UserDialog,
+                "turn-system".to_string(),
+                0,
+                "session-1".to_string(),
+                None,
+                UserMessageData {
+                    id: "sys-1".to_string(),
+                    content: "群聊工作流 mode：本群为群聊容器会话。".to_string(),
+                    timestamp: 1,
+                    metadata: Some(serde_json::json!({ "turnRole": "system" })),
+                },
+            ),
+            DialogTurnData::new_with_kind(
+                DialogTurnKind::UserDialog,
+                "turn-user".to_string(),
+                1,
+                "session-1".to_string(),
+                None,
+                UserMessageData {
+                    id: "user-1".to_string(),
+                    content: "hello".to_string(),
+                    timestamp: 2,
+                    metadata: None,
+                },
+            ),
+        ];
+
+        let messages = SessionManager::build_messages_from_turns(&turns);
+
+        assert_eq!(messages.len(), 2, "system + user turns both project");
+        assert_eq!(
+            messages[0].role,
+            crate::agentic::core::MessageRole::System,
+            "turnRole=system turn must project as MessageRole::System"
+        );
+        assert_eq!(
+            messages[0].content.to_string(),
+            "群聊工作流 mode：本群为群聊容器会话。"
+        );
+        assert_eq!(
+            messages[1].role,
+            crate::agentic::core::MessageRole::User,
+            "plain user turn must stay MessageRole::User"
+        );
+        // system turn 不参与 ActualUserInput 语义标记（缓存保护：身份/标记走
+        // metadata 旁路，system 提示词不是用户输入）。
+        assert!(
+            !messages[0].is_actual_user_message(),
+            "system mode prompt must not be marked as actual user input"
+        );
     }
 
     #[test]
