@@ -48,6 +48,7 @@ pub enum UiSessionMetadataField {
     ReviewActionState,
     UnreadCompletion,
     NeedsUserAttention,
+    DisplayState,
     TitleMetadata,
 }
 
@@ -956,6 +957,9 @@ fn merge_ui_owned_session_metadata(
     }
     if fields.contains(&UiSessionMetadataField::NeedsUserAttention) {
         current.needs_user_attention = incoming.needs_user_attention.clone();
+    }
+    if fields.contains(&UiSessionMetadataField::DisplayState) {
+        current.display_state = incoming.display_state.clone();
     }
     if fields.contains(&UiSessionMetadataField::TitleMetadata) {
         let mut custom = current
