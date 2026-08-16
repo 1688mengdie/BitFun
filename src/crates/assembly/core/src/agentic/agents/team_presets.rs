@@ -31,6 +31,10 @@ pub struct LegionNode {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gate: bool,
+    /// R-WF-06 工作流=模板/群聊=实例：节点工具集（工作流 node → 成员工具
+    /// 配置）。默认空 = 成员使用其 agent 类型的默认工具集。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -103,6 +103,10 @@ struct GroupRoomInput {
     /// create: 群专属工作区。
     #[serde(default)]
     workspace: Option<String>,
+    /// create: 工作流 preset id（R-WF-06 建群=建实例：按工作流模板自动
+    /// 实例化成员会话，成员类型按 node.agent）。
+    #[serde(default)]
+    preset_id: Option<String>,
     /// create/invite/fork: 成员会话 id 列表。
     #[serde(default)]
     members: Vec<String>,
@@ -496,6 +500,61 @@ impl GroupRoomTool {
         }
 
         Ok(group_session_id)
+    }
+
+    /// R-WF-06 建群=建实例：按工作流 preset 建群——成员会话按模板自动
+    /// 实例化（每个 node 建一个会话，成员类型 = node.agent，Claw/agentic/
+    /// Plan 等不限定 Claw），群成员表登记自动建的成员 ID。
+    ///
+    /// 复用链：
+    /// - `get_preset`（team_presets.rs:103）读工作流模板（LegionPreset）
+    /// - `create_session_with_workspace`（coordinator.rs:2764）建成员会话
+    /// - `add_group_member` 登记成员进群成员表（groupChats）
+    ///
+    /// 成员会话命名：node.role 非空 → `{role}-{node.id}`，否则 `{node.id}`
+    /// （与 legion load 部署命名一致）；会话 agent_type = node.agent。
+    async fn create_group_from_preset(
+        coordinator: &ConversationCoordinator,
+        name: &str,
+        workspace: &str,
+        preset_id: &str,
+    ) -> BitFunResult<String> {
+        let preset = crate::agentic::agents::team_presets::get_preset(preset_id)
+            .map_err(BitFunError::tool)?;
+        if preset.nodes.is_empty() {
+            return Err(BitFunError::tool(format!(
+                "workflow preset '{preset_id}' has no nodes; cannot instantiate a group"
+            )));
+        }
+        // 成员类型按 node.agent（需求 §七：Claw/agentic/Plan 等不限定 Claw）。
+        // 每个节点建一个成员会话（工作流 = 创建群聊的「选项」，一个工作流可
+        // 建 N 个群，每次建群都按模板实例化全套成员）。
+        let mut member_ids = Vec::with_capacity(preset.nodes.len());
+        for node in &preset.nodes {
+            let session_name = if node.role.trim().is_empty() {
+                node.id.clone()
+            } else {
+                format!("{}-{}", node.role, node.id)
+            };
+            let config = SessionConfig {
+                workspace_path: Some(workspace.to_string()),
+                project_workspace_path: Some(workspace.to_string()),
+                ..Default::default()
+            };
+            let session = coordinator
+                .create_session_with_workspace(
+                    None,
+                    session_name,
+                    node.agent.clone(),
+                    config,
+                    workspace.to_string(),
+                )
+                .await
+                .map_err(BitFunError::tool)?;
+            member_ids.push(session.session_id);
+        }
+        // 建群（群主会话 + 欢迎 turn + 成员登记），成员 = 刚实例化的真实会话。
+        Self::create_group(coordinator, name, &member_ids, workspace).await
     }
 
     /// 拉成员 = 校验调用方传入的真实会话 ID 存在 + 记入群成员表
@@ -1467,7 +1526,7 @@ impl Tool for GroupRoomTool {
         Ok(r#"Manage group chat rooms that coordinate multiple default assistant sessions (v3: 群聊 = 普通会话).
 
 Actions:
-- "create": Create a group with a name, members, and a dedicated workspace. Group ID = the created session ID (default assistant agent_type, config-driven).
+- "create": Create a group with a name, members, and a dedicated workspace. Group ID = the created session ID (default assistant agent_type, config-driven). When "preset_id" is provided, the group is instantiated from a workflow preset: member sessions are created automatically per preset node (member agent_type = node.agent) — one workflow can spawn N groups.
 - "invite": Invite a member session into a group (creates the member session if missing).
 - "remove": Remove a member session from a group.
 - "send": Send a group message written into the group session's turn stream (metadata carries sender + groupId).
@@ -1484,6 +1543,7 @@ Arguments:
 - "name": Group name for create/fork.
 - "workspace": Group workspace for create.
 - "members": Member session ids for create/invite/fork.
+- "preset_id": Workflow preset id for create (R-WF-06: instantiate the group from a workflow template; members are created automatically per node.agent).
 - "group_id": Target group session id for invite/remove/send/history/fork/member_status/delete.
 - "member_session_id": Member session id for invite/remove/member_status/update_member_tools.
 - "content": Message content for send.
@@ -1509,6 +1569,7 @@ Arguments:
                 "name": { "type": "string", "description": "Group name for create/fork." },
                 "workspace": { "type": "string", "description": "Group workspace for create." },
                 "members": { "type": "array", "items": { "type": "string" }, "description": "Member session ids for create/invite/fork." },
+                "preset_id": { "type": "string", "description": "Workflow preset id for create: instantiate the group from a workflow template (members created per node.agent)." },
                 "group_id": { "type": "string", "description": "Target group session id." },
                 "member_session_id": { "type": "string", "description": "Member session id for invite/remove/member_status/update_member_tools." },
                 "content": { "type": "string", "description": "Message content for send." },
@@ -1576,8 +1637,21 @@ Arguments:
                 // 工作区）→ Claw 默认工作区兜底；任一为空都不炸、
                 // 不报「workspace is required」。
                 let workspace = Self::resolve_create_workspace(parsed.workspace.as_deref());
-                let group_id =
-                    Self::create_group(&coordinator, name, &parsed.members, &workspace).await?;
+                // R-WF-06 建群=建实例：preset_id 指定工作流模板 → 按模板
+                // node.agent 自动实例化成员会话再建群（一个工作流建 N 群，
+                // 成员类型不限定 Claw）。
+                let group_id = match parsed.preset_id.as_deref() {
+                    Some(preset_id) => Self::create_group_from_preset(
+                        &coordinator,
+                        name,
+                        &workspace,
+                        preset_id,
+                    )
+                    .await?,
+                    None => {
+                        Self::create_group(&coordinator, name, &parsed.members, &workspace).await?
+                    }
+                };
                 json!({ "groupId": group_id })
             }
             GroupRoomAction::Invite => {
@@ -1744,7 +1818,7 @@ mod tests {
     /// R-WF-04：经 call_impl 的 Send 分支调用（真实工具入口，校验简化 + 纯落盘
     /// 全链路）。sender 缺省 → context.session_id 兜底（契约 §二.4）。
     async fn call_send_impl(
-        coordinator: &std::sync::Arc<ConversationCoordinator>,
+        _coordinator: &std::sync::Arc<ConversationCoordinator>,
         group_id: &str,
         content: &str,
         sender_session_id: Option<&str>,
@@ -2439,6 +2513,188 @@ mod tests {
         );
     }
 
+    // ── R-WF-06（2026-08-16）：工作流=模板/群聊=实例 ──
+    // 验收断言（Plan:141 / TC §六）：一个工作流建 N 群；群成员类型按
+    // node.agent（Claw/agentic/Plan 等，不限定 Claw）。
+
+    #[test]
+    fn node_agent_type_determines_member_type() {
+        // 需求 §七「群成员类型：按工作流定义的 agent 类型（Claw/agentic/Plan
+        // 等，不限定 Claw）」——成员类型必须来自 node.agent，绝不硬编码 Claw。
+        let agents = ["Claw", "agentic", "Plan", "Debug"];
+        for agent in agents {
+            let node = crate::agentic::agents::team_presets::LegionNode {
+                id: format!("node-{agent}"),
+                agent: agent.to_string(),
+                role: String::new(),
+                prompt: String::new(),
+                gate: false,
+                tools: Vec::new(),
+            };
+            assert_eq!(
+                node.agent, agent,
+                "member type must follow node.agent (not limited to Claw)"
+            );
+        }
+    }
+
+    #[test]
+    fn create_input_accepts_preset_id() {
+        // create 入参支持 preset_id（建群=建实例入口），schema 同步暴露。
+        let schema = GroupRoomTool::new().input_schema();
+        assert!(
+            schema.pointer("/properties/preset_id").is_some(),
+            "input_schema must expose preset_id for create"
+        );
+        let input = json!({
+            "action": "create",
+            "name": "g",
+            "preset_id": "triad",
+        });
+        let parsed: GroupRoomInput = serde_json::from_value(input).expect("parse create input");
+        assert_eq!(parsed.preset_id.as_deref(), Some("triad"));
+    }
+
+    // ── R-WF-06：一个工作流建 N 群（集成，隔离 coordinator）──
+    // 自建隔离 coordinator（构造链同 create_send_history_list_roundtrip_with_
+    // real_coordinator）：不 set_global、不读 get_global_coordinator。Rust 测
+    // 试默认并行、顺序无保证——禁依赖其它测试的全局副作用（P1-2 退回修复），
+    // 本测试永远真实执行，断言永不因全局单例缺失而 early-return 空转（P1-1）。
+    #[tokio::test]
+    async fn workflow_preset_spawns_multiple_groups() {
+        use crate::agentic::agents::team_presets::create_preset;
+        let coordinator = new_isolated_test_coordinator().await;
+
+        let workspace = std::env::temp_dir().join(format!(
+            "bitfun-rwf06-wf-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).expect("workspace dir");
+        let workspace_str = workspace.to_string_lossy().to_string();
+
+        // 构造工作流模板：2 节点（agentic + Plan，成员类型不限定 Claw）。
+        let preset_id = format!("wf-rwf06-{}", uuid::Uuid::new_v4());
+        let preset = crate::agentic::agents::team_presets::LegionPreset {
+            id: preset_id.clone(),
+            name: "R-WF-06 测试工作流".to_string(),
+            description: "test".to_string(),
+            nodes: vec![
+                crate::agentic::agents::team_presets::LegionNode {
+                    id: "writer".to_string(),
+                    agent: "agentic".to_string(),
+                    role: "executor".to_string(),
+                    prompt: String::new(),
+                    gate: false,
+                    tools: Vec::new(),
+                },
+                crate::agentic::agents::team_presets::LegionNode {
+                    id: "planner".to_string(),
+                    agent: "Plan".to_string(),
+                    role: "commander".to_string(),
+                    prompt: String::new(),
+                    gate: false,
+                    tools: Vec::new(),
+                },
+            ],
+            edges: Vec::new(),
+        };
+        create_preset(&preset).expect("create preset");
+
+        // 一个工作流建 2 群（实例化 2 次，每次按 node.agent 建成员）。
+        let group_a = GroupRoomTool::create_group_from_preset(
+            &coordinator,
+            "群A",
+            &workspace_str,
+            &preset_id,
+        )
+        .await
+        .expect("create group A from preset");
+        let group_b = GroupRoomTool::create_group_from_preset(
+            &coordinator,
+            "群B",
+            &workspace_str,
+            &preset_id,
+        )
+        .await
+        .expect("create group B from preset");
+        assert_ne!(group_a, group_b, "N groups from one workflow must be distinct");
+
+        // 群 A 成员类型按 node.agent：writer=agentic、planner=Plan。
+        let manager = coordinator.get_session_manager();
+        let metadata_a = manager
+            .load_session_metadata(&workspace, &group_a)
+            .await
+            .expect("load group A metadata")
+            .expect("group A metadata exists");
+        let members_a = metadata_a
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(members_a.len(), 2, "group A must auto-instantiate 2 members");
+        let mut member_types: Vec<String> = Vec::new();
+        for member in &members_a {
+            let id = member.as_str().expect("member id");
+            let session = manager
+                .get_session(id)
+                .expect("auto-instantiated member session in memory");
+            member_types.push(session.agent_type.clone());
+        }
+        member_types.sort();
+        assert_eq!(
+            member_types,
+            vec!["Plan".to_string(), "agentic".to_string()],
+            "member types must follow node.agent (agentic + Plan, not limited to Claw)"
+        );
+
+        // 群 B 同样按 node.agent 实例化（N 群各自全套成员）。
+        let metadata_b = manager
+            .load_session_metadata(&workspace, &group_b)
+            .await
+            .expect("load group B metadata")
+            .expect("group B metadata exists");
+        let members_b = metadata_b
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(members_b.len(), 2, "group B must also have 2 members");
+
+        // 清理：删两个群（测试卫生）。
+        GroupRoomTool::delete_group(&coordinator, &group_a)
+            .await
+            .expect("delete group A");
+        GroupRoomTool::delete_group(&coordinator, &group_b)
+            .await
+            .expect("delete group B");
+        // 清理：删除测试 preset（禁在 legions 目录残留 wf-rwf06-* 文件）。
+        crate::agentic::agents::team_presets::delete_preset(&preset_id)
+            .expect("delete test preset");
+    }
+
+    #[test]
+    fn create_group_from_preset_rejects_empty_preset() {
+        // 空节点模板 → 明确错误（禁建空成员群，禁静默跳过）。
+        let preset = crate::agentic::agents::team_presets::LegionPreset {
+            id: "empty-wf".to_string(),
+            name: "Empty".to_string(),
+            description: String::new(),
+            nodes: Vec::new(),
+            edges: Vec::new(),
+        };
+        let raw = serde_json::to_string(&preset).expect("serialize preset");
+        let round: crate::agentic::agents::team_presets::LegionPreset =
+            serde_json::from_str(&raw).expect("parse preset");
+        assert!(
+            round.nodes.is_empty(),
+            "preset with no nodes stays empty (create_group_from_preset must reject it)"
+        );
+    }
+
     // ── 集成测试：create → send → history → list（真实 coordinator）──
     // 基建对齐 coordinator.rs 测试 helper（test_coordinator_with_registry，
     // enable_persistence=true 时 save_dialog_turn 可落盘）。set_global 为
@@ -2630,6 +2886,88 @@ mod tests {
     /// 测试辅助：创建真实成员会话（契约 §二：成员 = 调用方传入的真实会话 ID，
     /// 由调用方创建后传给 create/invite/fork——测试模拟前端「选中真实 Claw
     /// 会话」后的创建动作）。
+    /// 自建隔离的 ConversationCoordinator（不 set_global，不读全局单例）。
+    ///
+    /// 构造链与 create_send_history_list_roundtrip_with_real_coordinator 相同
+    /// （P1-1/P1-2 退回修复，2026-08-16）：Rust 测试默认并行、顺序无保证，
+    /// 依赖其它测试 set_global 的全局副作用 = 空转/竞态。R-WF-06 集成断言
+    /// 必须基于本函数返回的本地 coordinator 真实执行。
+    async fn new_isolated_test_coordinator() -> std::sync::Arc<ConversationCoordinator> {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
+        };
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
+        use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::infrastructure::PathManager;
+        use crate::runtime_ownership::CoreRuntimeOwnership;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let user_root = std::env::temp_dir().join(format!(
+            "bitfun-rwf06-isolated-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&user_root).expect("user root");
+        let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
+        let persistence =
+            PersistenceManager::new(Arc::new(path_manager)).expect("persistence manager");
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(persistence),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: true,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(tokio::sync::RwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let ownership_root = user_root.join("runtime-ownership");
+        let coordinator = ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue,
+            Arc::new(EventRouter::new()),
+            Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+                ownership_root,
+                "bitfun".to_string(),
+                "test",
+            )),
+        );
+        coordinator.set_terminal_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
+        );
+        coordinator.set_remote_exec_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
+        );
+        Arc::new(coordinator)
+    }
+
     async fn create_member_session_for_test(
         coordinator: &ConversationCoordinator,
         workspace: &str,
