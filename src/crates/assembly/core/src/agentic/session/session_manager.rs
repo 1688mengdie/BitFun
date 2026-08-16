@@ -548,7 +548,8 @@ impl SessionManager {
     ///   (historical behavior) or carries the durable `Processing` evidence
     ///   only for a crashed run;
     /// - an in-memory `Processing` session cannot be unloaded/evicted
-    ///   (`unload_session_from_memory` rejects it), so a restart can never find
+    ///   (`unload_session_from_memory` rejects it and the idle-eviction
+    ///   candidate filter excludes it), so a restart can never find
     ///   a "fresh Processing" that was being executed by this very process;
     /// - the view path overlays the live in-memory state when the current
     ///   process owns the session; when no live session exists, the disk
@@ -1113,8 +1114,17 @@ impl SessionManager {
                 // Idle eviction is a restore optimization for durable Sessions.
                 // Non-persistent Sessions have an explicit lifecycle owner and
                 // no on-disk state from which they could be restored.
+                // R-WF-11 复审⑤ P1-1: an in-memory `Processing` session is a live
+                // turn (the same guard `unload_session_from_memory` enforces).
+                // Evicting it would persist `Processing` to disk while the
+                // process is still alive, and a subsequent full restore would
+                // misclassify the live turn as a crash leftover and stamp it
+                // with an explicit interrupt marker. Processing sessions are
+                // therefore never idle-evicted: they keep their in-memory
+                // presence (and the disk evidence stays crash-leftover-only).
                 if !Self::should_persist_session_with_transient_ids(session, transient_session_ids)
                     || !Self::is_session_expired(session, now, timeout)
+                    || matches!(session.state, SessionState::Processing { .. })
                 {
                     return None;
                 }
@@ -11035,6 +11045,128 @@ mod tests {
             [durable_id.as_str()]
         );
         assert!(sessions.contains_key(&transient_id));
+    }
+
+    #[test]
+    fn idle_eviction_never_selects_a_processing_session_as_a_candidate() {
+        // R-WF-11 复审⑤ P1-1: an in-memory `Processing` session is a live turn.
+        // A long turn with no phase refresh (idle timeout exceeded) must NOT be
+        // picked up by `collect_expired_session_candidates`, otherwise the
+        // cleanup task would pre-evict-save the live `Processing` to disk and
+        // evict it from memory; a later full restore would then misclassify the
+        // live turn as a crash leftover and stamp it with an explicit interrupt
+        // marker (running turn killed by idle eviction).
+        let now = SystemTime::now();
+        let expired_at = now - Duration::from_secs(7200);
+        let mut durable = Session::new(
+            "Durable".to_string(),
+            "agentic".to_string(),
+            SessionConfig::default(),
+        );
+        durable.last_activity_at = expired_at;
+        let mut processing = Session::new(
+            "Processing".to_string(),
+            "agentic".to_string(),
+            SessionConfig::default(),
+        );
+        processing.last_activity_at = expired_at;
+        processing.state = SessionState::Processing {
+            current_turn_id: "long-turn".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+        let durable_id = durable.session_id.clone();
+        let processing_id = processing.session_id.clone();
+        let sessions = DashMap::new();
+        sessions.insert(durable_id.clone(), durable);
+        sessions.insert(processing_id.clone(), processing);
+        let transient_session_ids = DashMap::new();
+
+        let candidates = SessionManager::collect_expired_session_candidates(
+            &sessions,
+            &transient_session_ids,
+            now,
+            Duration::from_secs(3600),
+        );
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.session_id.as_str())
+                .collect::<Vec<_>>(),
+            [durable_id.as_str()],
+            "the expired Processing session must be excluded from idle-eviction candidates"
+        );
+        assert!(
+            sessions.contains_key(&processing_id),
+            "the Processing session must stay in memory"
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_task_does_not_pre_evict_save_or_evict_a_processing_session() {
+        // R-WF-11 复审⑤ P1-1: the full cleanup chain (candidate collection ->
+        // pre-eviction save -> remove_if) must leave an expired `Processing`
+        // session untouched: no disk write, no memory eviction, no runtime
+        // store clearing. This guards the exact path that previously bypassed
+        // the `unload_session_from_memory` Processing rejection.
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager.clone());
+        let session = manager
+            .create_session(
+                "Processing".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        let session_id = session.session_id.clone();
+        manager
+            .sessions
+            .get_mut(&session_id)
+            .expect("loaded Session")
+            .state = SessionState::Processing {
+            current_turn_id: "long-turn".to_string(),
+            phase: ProcessingPhase::Streaming,
+        };
+        manager
+            .sessions
+            .get_mut(&session_id)
+            .expect("loaded Session")
+            .last_activity_at = SystemTime::now() - Duration::from_secs(7200);
+
+        let now = SystemTime::now();
+        let candidates = SessionManager::collect_expired_session_candidates(
+            &manager.sessions,
+            &manager.transient_session_ids,
+            now,
+            Duration::from_secs(3600),
+        );
+        assert!(
+            candidates.is_empty(),
+            "expired Processing session must not be an idle-eviction candidate"
+        );
+
+        // Drive the same decision the cleanup task applies per candidate: the
+        // pre-eviction save + remove_if must not run when the candidate filter
+        // excludes the session. No disk Processing write and no memory eviction.
+        assert!(
+            manager.get_session(&session_id).is_some(),
+            "Processing session must remain in memory"
+        );
+        let persisted = persistence_manager
+            .load_session(workspace.path(), &session_id)
+            .await
+            .expect("load persisted session");
+        assert!(
+            !matches!(persisted.state, SessionState::Processing { .. }),
+            "the pre-eviction save must not have written Processing for a live session"
+        );
     }
 
     #[test]
