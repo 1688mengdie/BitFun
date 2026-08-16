@@ -4224,7 +4224,38 @@ impl PersistenceManager {
             Ok(())
         })
         .await
-        .map(|_| ())
+        .map(|_| ())?;
+        // R-WF-11 P1-5: opening/activating a session marks it as viewed so the
+        // seven-state projection clears the green dot after the user has seen
+        // the completed result. Idempotent: the marker is only written when it
+        // changes, keeping the sidecar write traffic minimal.
+        let mut stored_state = self
+            .load_stored_session_state(workspace_path, session_id)
+            .await?
+            .unwrap_or(StoredSessionStateFile {
+                schema_version: SESSION_STORAGE_SCHEMA_VERSION,
+                config: SessionConfig {
+                    workspace_path: None,
+                    ..Default::default()
+                },
+                snapshot_session_id: None,
+                last_user_dialog_agent_type: None,
+                last_submitted_agent_type: None,
+                compression_state: CompressionState::default(),
+                runtime_state: SessionState::Idle,
+                last_progress_at: None,
+                interrupt_reason: None,
+                last_completed_at: None,
+                needs_attention: false,
+                viewed: false,
+            });
+        if !stored_state.viewed {
+            stored_state.viewed = true;
+            stored_state.schema_version = SESSION_STORAGE_SCHEMA_VERSION;
+            self.save_stored_session_state(workspace_path, session_id, &stored_state)
+                .await?;
+        }
+        Ok(())
     }
 }
 

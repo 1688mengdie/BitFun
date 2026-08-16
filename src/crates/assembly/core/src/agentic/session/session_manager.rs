@@ -5035,6 +5035,10 @@ impl SessionManager {
     pub fn touch_session(&self, session_id: &str) {
         if let Some(mut session) = self.sessions.get_mut(session_id) {
             session.last_activity_at = SystemTime::now();
+            // R-WF-11 P1-5: opening/activating a session clears the green dot
+            // (viewed marker) on the in-memory copy as well, so the seven-state
+            // projection is consistent without waiting for a reload.
+            session.viewed = true;
         }
     }
 
