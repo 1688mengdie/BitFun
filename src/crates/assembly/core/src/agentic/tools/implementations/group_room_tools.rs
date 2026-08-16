@@ -2010,30 +2010,29 @@ mod tests {
         }
     }
 
-    /// R-WF-04：经 call_impl 的 Send 分支调用（真实工具入口，校验简化 + 纯落盘
-    /// 全链路）。sender 缺省 → context.session_id 兜底（契约 §二.4）。
+    /// R-WF-04：直接用传入 coordinator 调 `send_message`（根因级，R-WF-26b：
+    /// 不再经 call_impl → Self::coordinator() 读进程级全局单例——隔离
+    /// coordinator 的测试单跑不再 4110 panic；全局空校验语义由
+    /// `missing_coordinator_yields_clear_error` 单独覆盖）。输出形态与
+    /// call_impl Send 分支一致（groupId/messageId/status/urgent），
+    /// sender 缺省语义 = 本测试显式传入，无缺省路径。
     async fn call_send_impl(
-        _coordinator: &std::sync::Arc<ConversationCoordinator>,
+        coordinator: &std::sync::Arc<ConversationCoordinator>,
         group_id: &str,
         content: &str,
         sender_session_id: Option<&str>,
     ) -> BitFunResult<Value> {
-        let mut context = empty_context();
-        context.session_id = sender_session_id.map(|s| s.to_string());
-        let input = json!({
-            "action": "send",
-            "group_id": group_id,
-            "content": content,
-            "sender_session_id": sender_session_id,
-        });
-        let results = GroupRoomTool::new()
-            .call_impl(&input, &context)
-            .await?;
-        results
-            .into_iter()
-            .next()
-            .map(|result| result.content())
-            .ok_or_else(|| BitFunError::tool("send returned no output".to_string()))
+        let sender = sender_session_id.ok_or_else(|| {
+            BitFunError::tool("sender_session_id is required for send".to_string())
+        })?;
+        let message_id =
+            GroupRoomTool::send_message(coordinator, group_id, content, sender).await?;
+        Ok(json!({
+            "groupId": group_id,
+            "messageId": message_id,
+            "status": "sent",
+            "urgent": false,
+        }))
     }
 
     fn turn_with_sender(turn_id: &str, sender_json: Value) -> bitfun_services_core::session::DialogTurnData {
