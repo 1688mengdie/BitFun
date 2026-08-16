@@ -3199,18 +3199,13 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
-        // 已存在全局 coordinator（其它测试设置过）→ 直接复用。
-        if let Some(coordinator) = get_global_coordinator() {
-            let workspace = std::env::temp_dir().join(format!(
-                "bitfun-grouproom-reuse-{}",
-                uuid::Uuid::new_v4()
-            ));
-            std::fs::create_dir_all(&workspace).expect("workspace dir");
-            run_group_roundtrip(&coordinator, &workspace).await;
-            run_restart_unloaded_fallback(&coordinator, &workspace).await;
-            return;
-        }
-
+        // 自建隔离 coordinator：不读取/复用进程级全局 coordinator。
+        // 全局单例是 OnceLock 单次写入——并行测试先 set_global 的实例
+        // 拥有不同 user_root（~/.bitfun/projects），reuse 分支会让本测试的
+        // 会话落到别人 user_root 下，evict 后磁盘回退（resolve_session_
+        // workspace_binding 扫 projects_root）找不到 → get_history 空 →
+        // 「history must contain the group welcome turn after restart」失败
+        // （CI macos/windows 偶发，R-GC-38 flake 根因）。
         let user_root = std::env::temp_dir().join(format!(
             "bitfun-grouproom-test-{}",
             uuid::Uuid::new_v4()
@@ -3268,10 +3263,8 @@ mod tests {
             bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
         );
         let coordinator = Arc::new(coordinator);
-        // set_global 内部（cfg(test)）已持全局锁，与
-        // missing_coordinator_yields_clear_error 的检查原子串行。
-        ConversationCoordinator::set_global(coordinator.clone());
-
+        // 不再 set_global：本测试全链路用自建隔离 coordinator（Arc 引用），
+        // 不读取也不污染进程级全局单例——彻底消除并行测试间的全局竞态。
         let workspace = std::env::temp_dir().join(format!(
             "bitfun-grouproom-workspace-{}",
             uuid::Uuid::new_v4()
