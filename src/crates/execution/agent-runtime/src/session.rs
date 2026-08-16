@@ -407,11 +407,18 @@ pub struct PersistedSessionStateFile {
     pub viewed: bool,
 }
 
+/// Normalize a runtime state before it is written to / read back from disk.
+///
+/// R-WF-11: `Processing` is intentionally preserved instead of being downgraded
+/// to `Idle`. A crashed-while-processing session restarts with its persisted
+/// `Processing` + `last_progress_at` markers so `derive_display_state` can
+/// project `Hung` instead of silently degrading to `Completed`. This is safe
+/// for the scheduler: `can_start_new_turn` only accepts `Idle`/recoverable
+/// `Error`, and the queued-turn dispatcher short-circuits on `Processing`, so a
+/// restored `Processing` session is never mistaken for one that is still
+/// running.
 pub fn sanitize_persisted_session_state(state: &SessionState) -> SessionState {
-    match state {
-        SessionState::Processing { .. } => SessionState::Idle,
-        other => other.clone(),
-    }
+    state.clone()
 }
 
 #[cfg(test)]
@@ -613,13 +620,20 @@ mod tests {
     }
 
     #[test]
-    fn persisted_session_state_sanitizes_processing_to_idle() {
-        let sanitized = sanitize_persisted_session_state(&SessionState::Processing {
+    fn persisted_session_state_preserves_processing_and_other_states() {
+        let processing = SessionState::Processing {
             current_turn_id: "turn-1".to_string(),
             phase: ProcessingPhase::Thinking,
-        });
-
-        assert_eq!(sanitized, SessionState::Idle);
+        };
+        assert_eq!(
+            sanitize_persisted_session_state(&processing),
+            processing,
+            "Processing must survive persistence so hung projection survives restart"
+        );
+        assert_eq!(
+            sanitize_persisted_session_state(&SessionState::Idle),
+            SessionState::Idle
+        );
         assert_eq!(
             sanitize_persisted_session_state(&SessionState::Error {
                 error: "boom".to_string(),
@@ -630,6 +644,53 @@ mod tests {
                 recoverable: true,
             }
         );
+    }
+
+    #[test]
+    fn hung_session_survives_restart_via_persisted_processing_and_stale_progress() {
+        use crate::session_state::{derive_display_state, SessionDisplayState, DEFAULT_HUNG_TIMEOUT};
+        use std::time::{Duration, SystemTime};
+
+        let now = SystemTime::now();
+        let stale_progress = now - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(1);
+        let processing = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::ToolCalling,
+        };
+
+        // Save path: Processing is persisted as-is (no Idle downgrade).
+        let persisted = sanitize_persisted_session_state(&processing);
+        assert_eq!(persisted, processing);
+
+        // Load path: persisted state file round-trips Processing unchanged.
+        let file = PersistedSessionStateFile {
+            schema_version: 1,
+            config: SessionConfig::default(),
+            snapshot_session_id: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            compression_state: CompressionState::default(),
+            runtime_state: persisted,
+            last_progress_at: Some(stale_progress),
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
+        };
+        let restored_state = sanitize_persisted_session_state(&file.runtime_state);
+        assert_eq!(restored_state, processing);
+
+        // After restart, the rebuilt Session still projects Hung (not Completed).
+        let display = derive_display_state(
+            &restored_state,
+            3,
+            file.interrupt_reason.as_deref(),
+            file.needs_attention,
+            file.viewed,
+            file.last_progress_at,
+            now,
+        );
+        assert_eq!(display, SessionDisplayState::Hung);
     }
 
     #[test]
