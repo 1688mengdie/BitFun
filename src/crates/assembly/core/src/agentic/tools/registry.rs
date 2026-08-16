@@ -609,6 +609,8 @@ mod tests {
             "fork_group_chat",
             "group_member_status",
             "delete_group_chat",
+            "update_group_member_tools",
+            "update_group_wiring",
             "WebSearch",
             "WebFetch",
             "ListMCPResources",

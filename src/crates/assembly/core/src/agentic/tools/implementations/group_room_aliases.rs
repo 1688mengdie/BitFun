@@ -24,7 +24,8 @@ use crate::util::errors::BitFunResult;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-/// 9 个契约工具名（R-GC-09 §六 写死）。
+/// 9 + 2 契约工具名（R-GC-09 §六 + R-WF-03 编排扩展：update_group_member_tools/
+/// update_group_wiring）。
 pub const GROUP_ROOM_ALIAS_TOOL_NAMES: &[&str] = &[
     "create_group_chat",
     "invite_group_member",
@@ -35,9 +36,11 @@ pub const GROUP_ROOM_ALIAS_TOOL_NAMES: &[&str] = &[
     "fork_group_chat",
     "group_member_status",
     "delete_group_chat",
+    "update_group_member_tools",
+    "update_group_wiring",
 ];
 
-/// 契约名 → 本体 action（9 名全覆盖）。
+/// 契约名 → 本体 action（9+2 全覆盖）。
 pub(crate) fn group_room_alias_action(tool_name: &str) -> Option<GroupRoomAction> {
     match tool_name {
         "create_group_chat" => Some(GroupRoomAction::Create),
@@ -49,6 +52,8 @@ pub(crate) fn group_room_alias_action(tool_name: &str) -> Option<GroupRoomAction
         "fork_group_chat" => Some(GroupRoomAction::Fork),
         "group_member_status" => Some(GroupRoomAction::MemberStatus),
         "delete_group_chat" => Some(GroupRoomAction::Delete),
+        "update_group_member_tools" => Some(GroupRoomAction::UpdateMemberTools),
+        "update_group_wiring" => Some(GroupRoomAction::UpdateWiring),
         _ => None,
     }
 }
@@ -65,6 +70,8 @@ pub(crate) fn group_room_action_alias_name(action: GroupRoomAction) -> &'static 
         GroupRoomAction::Fork => "fork_group_chat",
         GroupRoomAction::MemberStatus => "group_member_status",
         GroupRoomAction::Delete => "delete_group_chat",
+        GroupRoomAction::UpdateMemberTools => "update_group_member_tools",
+        GroupRoomAction::UpdateWiring => "update_group_wiring",
     }
 }
 
@@ -80,6 +87,8 @@ fn group_room_action_serde_name(action: GroupRoomAction) -> &'static str {
         GroupRoomAction::Fork => "fork",
         GroupRoomAction::MemberStatus => "member_status",
         GroupRoomAction::Delete => "delete",
+        GroupRoomAction::UpdateMemberTools => "update_member_tools",
+        GroupRoomAction::UpdateWiring => "update_wiring",
     }
 }
 
@@ -123,6 +132,8 @@ impl Tool for GroupRoomAliasTool {
                 GroupRoomAction::Fork => "fork a child group from a turn",
                 GroupRoomAction::MemberStatus => "query a member session's state",
                 GroupRoomAction::Delete => "delete a group chat",
+                GroupRoomAction::UpdateMemberTools => "update a member session's tool set in a group (orchestration control)",
+                GroupRoomAction::UpdateWiring => "update the group wiring definition (orchestration control)",
             }
         )
     }
@@ -216,6 +227,8 @@ mod tests {
             ("fork_group_chat", GroupRoomAction::Fork),
             ("group_member_status", GroupRoomAction::MemberStatus),
             ("delete_group_chat", GroupRoomAction::Delete),
+            ("update_group_member_tools", GroupRoomAction::UpdateMemberTools),
+            ("update_group_wiring", GroupRoomAction::UpdateWiring),
         ] {
             assert_eq!(group_room_alias_action(tool_name), Some(action));
             assert_eq!(group_room_action_alias_name(action), tool_name);
@@ -235,6 +248,8 @@ mod tests {
             ("fork_group_chat", false),
             ("group_member_status", true),
             ("delete_group_chat", false),
+            ("update_group_member_tools", false),
+            ("update_group_wiring", false),
         ] {
             let action = group_room_alias_action(tool_name).expect(tool_name);
             assert_eq!(

@@ -97,6 +97,12 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
                 .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
             "delete_group_chat" => group_room_alias_tool_for_name("delete_group_chat")
                 .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
+            "update_group_member_tools" => {
+                group_room_alias_tool_for_name("update_group_member_tools")
+                    .map(|tool| Arc::new(tool) as Arc<dyn Tool>)
+            }
+            "update_group_wiring" => group_room_alias_tool_for_name("update_group_wiring")
+                .map(|tool| Arc::new(tool) as Arc<dyn Tool>),
             "SessionMessage" => Some(Arc::new(SessionMessageTool::new())),
             "SessionHistory" => Some(Arc::new(SessionHistoryTool::new())),
             "acp_control" => Some(Arc::new(AcpControlTool::new())),
