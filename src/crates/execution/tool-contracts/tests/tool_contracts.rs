@@ -138,20 +138,56 @@ fn effective_tool_invocation_borrows_deferred_identity_from_wire_call() {
 }
 
 #[test]
-fn call_deferred_tool_contract_rejects_flat_or_string_arguments() {
-    let flat = ResolvedToolInvocation::from_wire_call(
+fn call_deferred_tool_contract_normalizes_overflow_and_missing_args() {
+    let overflow = ResolvedToolInvocation::from_wire_call(
+        CALL_DEFERRED_TOOL_NAME,
+        json!({
+            "tool_name": "get_weather",
+            "args": {
+                "city": "Shanghai",
+                "unit": "celsius"
+            },
+            "city": "Beijing",
+            "language": "zh-CN"
+        }),
+    )
+    .expect("overflow target arguments should be normalized");
+    assert_eq!(
+        overflow.effective_arguments,
+        json!({
+            "city": "Shanghai",
+            "unit": "celsius",
+            "language": "zh-CN"
+        })
+    );
+    assert_eq!(
+        overflow.wire_arguments,
+        json!({
+            "tool_name": "get_weather",
+            "args": {
+                "city": "Shanghai",
+                "unit": "celsius",
+                "language": "zh-CN"
+            }
+        })
+    );
+
+    let missing_args = ResolvedToolInvocation::from_wire_call(
         CALL_DEFERRED_TOOL_NAME,
         json!({
             "tool_name": "get_weather",
             "city": "Shanghai"
         }),
     )
-    .expect_err("flat target arguments must be rejected");
+    .expect("missing args should be treated as an empty object");
     assert_eq!(
-        flat,
-        CallDeferredToolInputError::UnexpectedField("city".to_string())
+        missing_args.effective_arguments,
+        json!({ "city": "Shanghai" })
     );
+}
 
+#[test]
+fn call_deferred_tool_contract_rejects_non_object_arguments() {
     let encoded = ResolvedToolInvocation::from_wire_call(
         CALL_DEFERRED_TOOL_NAME,
         json!({
@@ -161,6 +197,34 @@ fn call_deferred_tool_contract_rejects_flat_or_string_arguments() {
     )
     .expect_err("JSON-encoded string arguments must be rejected");
     assert_eq!(encoded, CallDeferredToolInputError::ArgsMustBeObject);
+}
+
+#[test]
+fn call_deferred_tool_input_serializes_canonical_wire_shape() {
+    let parsed = bitfun_agent_tools::parse_call_deferred_tool_input(&json!({
+        "tool_name": "CreatePlan",
+        "overview": "outside",
+        "args": {
+            "overview": "inside",
+            "plan": "# Plan"
+        }
+    }))
+    .expect("overflow arguments should normalize");
+
+    assert_eq!(
+        parsed.canonical_wire_arguments(),
+        json!({
+            "tool_name": "CreatePlan",
+            "args": {
+                "overview": "inside",
+                "plan": "# Plan"
+            }
+        })
+    );
+    assert_eq!(
+        parsed.canonical_wire_json().expect("canonical JSON"),
+        r##"{"tool_name":"CreatePlan","args":{"overview":"inside","plan":"# Plan"}}"##
+    );
 }
 
 #[test]
@@ -1401,7 +1465,6 @@ fn deferred_tool_usage_gate_preserves_get_tool_spec_unlock_contract() {
 
     let err = validate_deferred_tool_usage(
         "WebFetch",
-        true,
         &deferred_tools,
         &loaded_deferred_tool_specs,
         0,
@@ -1410,7 +1473,7 @@ fn deferred_tool_usage_gate_preserves_get_tool_spec_unlock_contract() {
     .expect_err("deferred tool should require GetToolSpec unlock");
     assert_eq!(
         err.to_string(),
-        "Tool 'WebFetch' is deferred. Call GetToolSpec first with {\"tool_name\":\"WebFetch\"} to read its full usage instructions and input schema, then call it through CallDeferredTool."
+        "Tool 'WebFetch' is deferred. Call GetToolSpec first with {\"tool_name\":\"WebFetch\"} to read its full usage instructions and input schema before invoking it."
     );
 
     let loaded_deferred_tool_specs = vec![LoadedDeferredToolSpec {
@@ -1419,7 +1482,6 @@ fn deferred_tool_usage_gate_preserves_get_tool_spec_unlock_contract() {
     }];
     validate_deferred_tool_usage(
         "WebFetch",
-        true,
         &deferred_tools,
         &loaded_deferred_tool_specs,
         0,
@@ -1429,7 +1491,6 @@ fn deferred_tool_usage_gate_preserves_get_tool_spec_unlock_contract() {
 
     let stale = validate_deferred_tool_usage(
         "WebFetch",
-        true,
         &deferred_tools,
         &[LoadedDeferredToolSpec {
             tool_name: "WebFetch".to_string(),
@@ -1443,22 +1504,8 @@ fn deferred_tool_usage_gate_preserves_get_tool_spec_unlock_contract() {
         .to_string()
         .contains("loaded catalog generation 41, current generation 42"));
 
-    let direct = validate_deferred_tool_usage(
-        "WebFetch",
-        false,
-        &deferred_tools,
-        &loaded_deferred_tool_specs,
-        0,
-        GET_TOOL_SPEC_TOOL_NAME,
-    )
-    .expect_err("deferred tools must not be called directly");
-    assert!(direct
-        .to_string()
-        .contains("deferred and cannot be called directly"));
-
     validate_deferred_tool_usage(
         GET_TOOL_SPEC_TOOL_NAME,
-        false,
         &deferred_tools,
         &[],
         0,
@@ -1486,28 +1533,14 @@ fn deferred_stale_spec_error_classification_enables_auto_reload_only() {
         "RequiresGetToolSpec must keep requiring an explicit GetToolSpec call"
     );
 
-    let gateway = DeferredToolUsageError::RequiresGateway {
-        tool_name: "WebFetch".to_string(),
-        gateway_tool_name: CALL_DEFERRED_TOOL_NAME.to_string(),
-    };
-    assert!(
-        !gateway.is_stale_spec(),
-        "gateway contract violations must not be auto-recovered"
-    );
-
     let admission_stale = ToolExecutionAdmissionRejection::Deferred(stale);
     let admission_requires = ToolExecutionAdmissionRejection::Deferred(requires);
-    let admission_gateway = ToolExecutionAdmissionRejection::Deferred(gateway);
     assert!(matches!(
         &admission_stale,
         ToolExecutionAdmissionRejection::Deferred(error) if error.is_stale_spec()
     ));
     assert!(!matches!(
         &admission_requires,
-        ToolExecutionAdmissionRejection::Deferred(error) if error.is_stale_spec()
-    ));
-    assert!(!matches!(
-        &admission_gateway,
         ToolExecutionAdmissionRejection::Deferred(error) if error.is_stale_spec()
     ));
 }
@@ -1541,7 +1574,6 @@ fn tool_execution_admission_gate_preserves_pipeline_rejection_order() {
         runtime_tool_restrictions: &restrictions,
         user_enabled_tools: &[],
         tool_arguments: &json!({}),
-        invocation_is_deferred: true,
         deferred_tools: &["WebFetch".to_string()],
         loaded_deferred_tool_specs: &[],
         current_catalog_generation: 0,
@@ -1566,7 +1598,6 @@ fn tool_execution_admission_gate_preserves_pipeline_rejection_order() {
         runtime_tool_restrictions: &restrictions,
         user_enabled_tools: &[],
         tool_arguments: &json!({}),
-        invocation_is_deferred: true,
         deferred_tools: &["WebFetch".to_string()],
         loaded_deferred_tool_specs: &[],
         current_catalog_generation: 0,
@@ -1591,7 +1622,6 @@ fn tool_execution_admission_gate_preserves_pipeline_rejection_order() {
         runtime_tool_restrictions: &ToolRuntimeRestrictions::default(),
         user_enabled_tools: &[],
         tool_arguments: &json!({}),
-        invocation_is_deferred: true,
         deferred_tools: &["WebFetch".to_string()],
         loaded_deferred_tool_specs: &[],
         current_catalog_generation: 0,
@@ -1980,8 +2010,15 @@ fn get_tool_spec_contract_escapes_assistant_detail_for_xml_sections() {
     );
 
     assert!(detail.contains("<description>\nUse &lt;danger&gt; &amp; keep output valid."));
-    assert!(detail.contains("\"description\":\"Match &lt;tag&gt; &amp; symbols\""));
-    assert!(detail.contains("CallDeferredTool({\"tool_name\":\"Git\",\"args\":{...}})"));
+    assert!(
+        detail.contains("<calling>\nCall `CallDeferredTool` with arguments matching this schema:")
+    );
+    assert!(detail.contains("\"required\": [\"tool_name\", \"args\"]"));
+    assert!(detail.contains("\"tool_name\": {\n      \"const\": \"Git\"\n    }"));
+    assert!(detail.contains("\"args\": {"));
+    assert!(detail.contains("\"description\": \"Match &lt;tag&gt; &amp; symbols\""));
+    assert!(!detail.contains("<input_schema>"));
+    assert!(!detail.contains("<execution>"));
     assert!(!detail.contains("Use <danger> & keep output valid."));
 }
 
@@ -2052,6 +2089,10 @@ fn get_tool_spec_contract_builds_detail_result() {
     let assistant = result_for_assistant.expect("assistant detail");
     assert!(assistant.contains("Use &lt;repo&gt; &amp; inspect changes."));
     assert!(assistant.contains("Run &lt;safe&gt; git commands"));
+    assert!(assistant.contains("\"tool_name\": {\n      \"const\": \"Git\"\n    }"));
+    assert!(assistant.contains("\"args\": {"));
+    assert!(!assistant.contains("<input_schema>"));
+    assert!(!assistant.contains("<execution>"));
     assert_eq!(image_attachments, None);
 }
 

@@ -58,6 +58,7 @@ import {
   agentAPI,
   type LoadSessionTurnWindowResponse,
   type PendingUserQuestionSnapshot,
+  type SessionRuntimeEventSnapshot,
   type SessionInfo as AgentSessionInfo,
   type SessionViewRestoreTiming,
 } from '@/infrastructure/api/service-api/AgentAPI';
@@ -456,6 +457,12 @@ export interface PeerSessionSnapshotRefreshResult {
   backendState: string;
   latestTurnId?: string;
   latestTurnStatus?: DialogTurn['status'];
+  /** Present only when this refresh acquired a coherent running-Turn base. */
+  runtimeEventSnapshot?: SessionRuntimeEventSnapshot;
+  /** False when the rendered projection already includes this cursor. */
+  runtimeEventReplayRequired?: boolean;
+  /** Applied after Runtime event replay so the blocking card binds to its tool. */
+  pendingUserQuestions?: PendingUserQuestionSnapshot;
 }
 
 export interface DispatchSnapshotApplyResult {
@@ -7849,6 +7856,7 @@ config: {
       replaceRunningSnapshot?: boolean;
       requireActiveSession?: boolean;
       shouldApply?: () => boolean;
+      shouldReplayRuntimeSnapshot?: (snapshot: SessionRuntimeEventSnapshot) => boolean;
     },
   ): Promise<PeerSessionSnapshotRefreshResult> {
     const scope = getActiveSurfaceScope();
@@ -7884,10 +7892,47 @@ config: {
       );
     }
     const backendActive = isBackendSessionActivelyProcessing(restored.session.state);
+    const runtimeSnapshotCandidate =
+      restored.runtimeEventSnapshot?.sessionId === sessionId
+        ? restored.runtimeEventSnapshot
+        : undefined;
     const activeTurnId = backendActive
-      ? restored.turns[restored.turns.length - 1]?.turnId
+      ? runtimeSnapshotCandidate?.activeTurnId ?? restored.turns[restored.turns.length - 1]?.turnId
       : undefined;
-    const snapshotTurns = this.convertToDialogTurns(restored.turns, { activeTurnId });
+    const runtimeEventSnapshot =
+      backendActive &&
+      runtimeSnapshotCandidate !== undefined &&
+      runtimeSnapshotCandidate.activeTurnId === activeTurnId &&
+      typeof runtimeSnapshotCandidate.streamId === 'string' &&
+      Number.isSafeInteger(runtimeSnapshotCandidate.cursor) &&
+      Array.isArray(runtimeSnapshotCandidate.events)
+        ? runtimeSnapshotCandidate
+        : undefined;
+    const runtimeEventReplayRequired = runtimeEventSnapshot
+      ? options?.shouldReplayRuntimeSnapshot?.(runtimeEventSnapshot) ?? true
+      : false;
+    const runtimeReplaySnapshot = runtimeEventReplayRequired
+      ? runtimeEventSnapshot
+      : undefined;
+    const snapshotTurns = this.convertToDialogTurns(restored.turns, { activeTurnId }).map(turn =>
+      runtimeReplaySnapshot && turn.id === runtimeReplaySnapshot.activeTurnId
+        ? {
+            ...turn,
+            // Runtime event replay is authoritative for the current Turn.
+            // Start from the persisted identity/user message, never from a
+            // UI-written partial projection that may overlap the replay.
+            modelRounds: [],
+            status: 'pending' as const,
+            endTime: undefined,
+            error: undefined,
+            errorDetail: undefined,
+            success: undefined,
+            finishReason: undefined,
+            hasFinalResponse: undefined,
+            recovery: undefined,
+          }
+        : turn
+    );
     const pendingUserQuestions =
       restored.interactionSnapshot?.sessionId === sessionId
         ? restored.interactionSnapshot.userQuestions
@@ -7895,6 +7940,7 @@ config: {
     const replaceExistingTurns =
       !backendActive || options?.replaceRunningSnapshot === true;
     let applied = false;
+    let snapshotAccepted = false;
 
     this.setState(prev => {
       if (
@@ -7913,6 +7959,7 @@ config: {
       if (!session || session !== initialSession) {
         return prev;
       }
+      snapshotAccepted = true;
 
       let mergedTurns = [...session.dialogTurns];
       let turnsChanged = false;
@@ -7922,7 +7969,9 @@ config: {
           mergedTurns.push(snapshotTurn);
           turnsChanged = true;
         } else if (
-          replaceExistingTurns
+          (runtimeReplaySnapshot && snapshotTurn.id === runtimeReplaySnapshot.activeTurnId)
+            ? true
+            : replaceExistingTurns
             ? !snapshotDropsProjectedTurnContent(mergedTurns[existingIndex], snapshotTurn)
             : isRunningSnapshotForwardProgress(mergedTurns[existingIndex], snapshotTurn)
         ) {
@@ -7932,21 +7981,23 @@ config: {
       }
 
       mergedTurns.sort(compareDialogTurnOrder);
-      const previousQuestionRevision = this.userQuestionSnapshotRevisions.get(sessionId) ?? -1;
-      const questionReconciliation = reconcilePendingUserQuestionSnapshot(
-        mergedTurns,
-        pendingUserQuestions,
-        previousQuestionRevision,
-      );
-      if (questionReconciliation.changed) {
-        mergedTurns = questionReconciliation.turns;
-        turnsChanged = true;
-      }
-      if (questionReconciliation.revisionApplied && pendingUserQuestions) {
-        this.userQuestionSnapshotRevisions.set(
-          sessionId,
-          pendingUserQuestions.revision,
+      if (!runtimeReplaySnapshot) {
+        const previousQuestionRevision = this.userQuestionSnapshotRevisions.get(sessionId) ?? -1;
+        const questionReconciliation = reconcilePendingUserQuestionSnapshot(
+          mergedTurns,
+          pendingUserQuestions,
+          previousQuestionRevision,
         );
+        if (questionReconciliation.changed) {
+          mergedTurns = questionReconciliation.turns;
+          turnsChanged = true;
+        }
+        if (questionReconciliation.revisionApplied && pendingUserQuestions) {
+          this.userQuestionSnapshotRevisions.set(
+            sessionId,
+            pendingUserQuestions.revision,
+          );
+        }
       }
       const turnCatalog = restored.turnCatalog?.sessionId === sessionId
         ? selectPreferredTurnCatalog(session.turnCatalog, restored.turnCatalog)
@@ -8021,7 +8072,49 @@ config: {
       backendState: restored.session.state,
       latestTurnId: latestTurn?.id,
       latestTurnStatus: latestTurn?.status,
+      ...(snapshotAccepted && runtimeEventSnapshot
+        ? {
+            runtimeEventSnapshot,
+            runtimeEventReplayRequired,
+            pendingUserQuestions,
+          }
+        : {}),
     };
+  }
+
+  /** Reconcile blocking user questions after Runtime event replay. */
+  public reconcilePendingUserQuestions(
+    sessionId: string,
+    pendingUserQuestions: PendingUserQuestionSnapshot | undefined,
+  ): boolean {
+    let applied = false;
+    this.setState(prev => {
+      const session = prev.sessions.get(sessionId);
+      if (!session) {
+        return prev;
+      }
+      const previousRevision = this.userQuestionSnapshotRevisions.get(sessionId) ?? -1;
+      const reconciliation = reconcilePendingUserQuestionSnapshot(
+        session.dialogTurns,
+        pendingUserQuestions,
+        previousRevision,
+      );
+      if (reconciliation.revisionApplied && pendingUserQuestions) {
+        this.userQuestionSnapshotRevisions.set(sessionId, pendingUserQuestions.revision);
+      }
+      if (!reconciliation.changed) {
+        applied = reconciliation.revisionApplied;
+        return prev;
+      }
+      const sessions = new Map(prev.sessions);
+      sessions.set(sessionId, {
+        ...session,
+        dialogTurns: reconciliation.turns,
+      });
+      applied = true;
+      return { ...prev, sessions };
+    });
+    return applied;
   }
 
   /**

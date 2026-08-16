@@ -18,7 +18,6 @@ pub struct ToolExecutionAdmissionRequest<'a> {
     /// tool executes, an unchecked one stays blocked even when visible.
     pub user_enabled_tools: &'a [String],
     pub tool_arguments: &'a Value,
-    pub invocation_is_deferred: bool,
     pub deferred_tools: &'a [String],
     pub loaded_deferred_tool_specs: &'a [LoadedDeferredToolSpec],
     pub current_catalog_generation: u64,
@@ -89,7 +88,6 @@ pub fn validate_tool_execution_admission(
         .map_err(ToolExecutionAdmissionRejection::RuntimeRestriction)?;
     validate_deferred_tool_usage(
         request.tool_name,
-        request.invocation_is_deferred,
         request.deferred_tools,
         request.loaded_deferred_tool_specs,
         request.current_catalog_generation,
@@ -110,7 +108,6 @@ mod tests {
         restrictions: &ToolRuntimeRestrictions,
         user_enabled_tools: &[&str],
         allowed_tools: &[&str],
-        invocation_is_deferred: bool,
         deferred_tools: &[&str],
     ) -> Result<(), ToolExecutionAdmissionRejection> {
         let user_enabled: Vec<String> = user_enabled_tools.iter().map(|s| s.to_string()).collect();
@@ -122,7 +119,6 @@ mod tests {
             runtime_tool_restrictions: restrictions,
             user_enabled_tools: &user_enabled,
             tool_arguments: &json!({}),
-            invocation_is_deferred,
             deferred_tools: &deferred,
             loaded_deferred_tool_specs: &[],
             current_catalog_generation: 0,
@@ -157,7 +153,6 @@ mod tests {
             &restrictions,
             &["WorkspaceScan"],
             &["WorkspaceScan"],
-            false,
             &[],
         );
         assert!(result.is_ok(), "checked tool must execute: {result:?}");
@@ -173,7 +168,6 @@ mod tests {
             &restrictions,
             &[],
             &["mcp__github__search_repos"],
-            false,
             &[],
         );
         assert!(matches!(
@@ -190,7 +184,6 @@ mod tests {
             &restrictions,
             &["mcp__github__search_repos"],
             &["mcp__github__search_repos"],
-            false,
             &[],
         );
         assert!(result.is_ok(), "checked MCP tool must execute: {result:?}");
@@ -208,7 +201,6 @@ mod tests {
             &restrictions,
             &["ReviewPlatform"],
             &["ReviewPlatform"],
-            false,
             &[],
         );
         assert!(matches!(
@@ -221,10 +213,10 @@ mod tests {
     fn empty_user_enabled_preserves_template_behavior() {
         // user_enabled_tools 为空（SubAgent/无 profile）→ 行为与原来完全一致。
         let restrictions = commander_template();
-        assert!(admission("Read", &restrictions, &[], &["Read"], false, &[]).is_ok());
-        assert!(admission("Write", &restrictions, &[], &["Write"], false, &[]).is_ok());
+        assert!(admission("Read", &restrictions, &[], &["Read"], &[]).is_ok());
+        assert!(admission("Write", &restrictions, &[], &["Write"], &[]).is_ok());
         assert!(matches!(
-            admission("TodoWrite", &restrictions, &[], &["TodoWrite"], false, &[]),
+            admission("TodoWrite", &restrictions, &[], &["TodoWrite"], &[]),
             Err(ToolExecutionAdmissionRejection::RuntimeRestriction(_))
         ));
     }
@@ -238,7 +230,6 @@ mod tests {
             &restrictions,
             &["GetToolSpec"],
             &["GetToolSpec"],
-            false,
             &[],
         );
         assert!(matches!(
@@ -268,7 +259,6 @@ mod tests {
                 "GetToolSpec",
                 "CallDeferredTool",
             ],
-            false,
             &["WebFetch", "SessionMessage", "SessionControl", "ListModels"],
         );
         assert!(
@@ -281,7 +271,6 @@ mod tests {
             &restrictions,
             &["Read", "Write"],
             &["Read", "Write", "GetToolSpec", "CallDeferredTool"],
-            false,
             &["WebFetch"],
         );
         assert!(
@@ -302,7 +291,6 @@ mod tests {
             &restrictions,
             &["Read", "Write"],
             &["Read", "Write", "GetToolSpec", "CallDeferredTool"],
-            false,
             &["WebFetch"],
         );
         assert!(matches!(
@@ -323,7 +311,6 @@ mod tests {
             &restrictions,
             &["Read", "Write", "Grep", "Glob"], // 模式 default，未勾选 MCP
             &["Read", "Write", "Grep", "Glob", "mcp__github__search_repos"],
-            false,
             &[],
         );
         assert!(matches!(
@@ -337,7 +324,6 @@ mod tests {
             &restrictions,
             &["Read", "Write", "mcp__github__search_repos"],
             &["Read", "Write", "mcp__github__search_repos"],
-            false,
             &[],
         );
         assert!(

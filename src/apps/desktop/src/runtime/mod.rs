@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use bitfun_agent_runtime::sdk::SessionEventJournal;
 use bitfun_agent_runtime::sdk::{AgentRuntime, PermissionRequestEvent};
 use bitfun_core::agentic::coordination::{ConversationCoordinator, DialogScheduler};
 use bitfun_core::infrastructure::ai::AIClientFactory;
@@ -44,6 +45,7 @@ impl DesktopRuntimeContext {
         ssh_manager: Arc<RwLock<Option<SSHConnectionManager>>>,
         acp_client_service: Option<Arc<bitfun_acp::AcpClientService>>,
         _ai_client_factory: Arc<AIClientFactory>,
+        session_event_journal: Arc<SessionEventJournal>,
     ) -> Result<Self, String> {
         let host_effects = Arc::new(ProductionDesktopSessionHostEffects::new(acp_client_service));
         let session_application = DesktopSessionApplication::build(
@@ -53,6 +55,7 @@ impl DesktopRuntimeContext {
             workspace_service,
             ssh_manager,
             host_effects,
+            session_event_journal,
         )?;
         Ok(Self {
             session_application,
