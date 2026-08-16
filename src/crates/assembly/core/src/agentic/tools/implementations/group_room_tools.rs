@@ -190,6 +190,11 @@ pub struct GroupMessage {
     pub author: SenderIdentity,
     pub content: String,
     pub timestamp: i64,
+    /// R-WF-08：消息角色（"user" / "system"）。群首 turn = 群 mode 提示词，
+    /// 以 System 角色返回（验收断言「群首 turn=system 提示词」）；普通群
+    /// 消息为 User。前端据此渲染 mode 提示词为时间线首条 system 展示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     /// 群聊关联键（复用 GroupChatForwardMetadata，§三）。
     pub metadata: GroupChatForwardMetadata,
 }
@@ -468,6 +473,13 @@ impl GroupRoomTool {
             .await
             .map_err(BitFunError::tool)?;
 
+        // R-WF-08 原子步 2：群 mode 提示词 = 建群时 system 第一条
+        // （role=system，仅新建会话首次，缓存保护——不插入已有历史中间，
+        // 只作为本新会话的首条 turn 落盘）。mode 提示词 = 群整体一个 mode，
+        // 内容 = 群聊工作流模式说明（群聊 = 容器会话、成员经工具互发、无
+        // 大模型响应），随建群会话创建时写入，此后不动（禁重复写入）。
+        Self::write_group_mode_system_turn(coordinator, workspace, &group_session_id, name).await?;
+
         // R-GC-25 群主对话模型：建群 = 创建群主 Claw 会话 + 写入群主欢迎
         // turn（宿主 turn）。群聊 = 普通会话（契约 §一）：群主会话必须带
         // 真实对话 turn，否则开局为空字符串/空时间线、且无宿主 turn 支撑
@@ -536,8 +548,21 @@ impl GroupRoomTool {
             } else {
                 format!("{}-{}", node.role, node.id)
             };
+            // R-WF-08 原子步 3（mode 两层 · 成员各自一个）：成员工作区 =
+            // resolve_assistant_workspace_dir(Some(node.id)) → workspace-<nodeId>
+            // （与 R-WF-07 legion deploy 同口径，独立成员工作区）；成员会话
+            // workspace_path = 成员工作区（prompt_builder 据此读身份三文件），
+            // project_workspace_path 保持部署 workspace（持久化域不变）。
+            let member_workspace = crate::infrastructure::get_path_manager_arc()
+                .resolve_assistant_workspace_dir(Some(&node.id), None);
+            std::fs::create_dir_all(&member_workspace).map_err(|e| {
+                BitFunError::tool(format!(
+                    "failed to create member workspace for node '{}': {e}",
+                    node.id
+                ))
+            })?;
             let config = SessionConfig {
-                workspace_path: Some(workspace.to_string()),
+                workspace_path: Some(member_workspace.to_string_lossy().to_string()),
                 project_workspace_path: Some(workspace.to_string()),
                 ..Default::default()
             };
@@ -551,6 +576,22 @@ impl GroupRoomTool {
                 )
                 .await
                 .map_err(BitFunError::tool)?;
+            // R-WF-08 原子步 3：成员 mode 提示词 = 工作流 node 的 role/prompt/
+            // gate 物化为成员身份三文件（SOUL/USER/IDENTITY）+ BOOTSTRAP 临时
+            // 清理（复用 R-WF-07 的 initialize_member_persona_files，同一权威
+            // 实现）。node.prompt → SOUL（成员 mode 提示词本体），node.role →
+            // IDENTITY，直属上级缺省 = 节点 id（preset 无 edge 拓扑），
+            // node.gate → SOUL Gate 段。物化失败 = 建群失败（成员 mode 缺失
+            // = 身份不完整，禁静默跳过）。
+            crate::service::bootstrap::initialize_member_persona_files(
+                &member_workspace,
+                &node.role,
+                &node.prompt,
+                node.gate,
+                &node.id,
+            )
+            .await
+            .map_err(BitFunError::tool)?;
             member_ids.push(session.session_id);
         }
         // 建群（群主会话 + 欢迎 turn + 成员登记），成员 = 刚实例化的真实会话。
@@ -737,6 +778,43 @@ impl GroupRoomTool {
         .await
     }
 
+    /// 群 mode 提示词（R-WF-08 原子步 2）：建群时作为 system 第一条写入
+    /// 群会话（role=system，仅新建会话首次——群会话刚创建无历史，本条即首
+    /// turn，不插入已有历史中间，缓存保护）。内容 = 群整体一个 mode 的
+    /// 提示词（群聊工作流模式说明），落盘后不再变动（建群幂等：重复建群
+    /// = 新会话，各自独立首 turn）。
+    ///
+    /// 落盘形态与其它群消息同构（UserDialog + Completed + "complete" +
+    /// has_final_response=true），但 metadata 带 `turnRole="system"` 标记：
+    /// - `build_messages_from_turns`（session_manager.rs）按该标记把 turn
+    ///   投影为 MessageRole::System；
+    /// - `get_history` 的 User/System 过滤把首 turn 返回给前端（验收断言
+    ///   「群首 turn=system 提示词」）；
+    /// - 群 mode 提示词不参与大模型响应（R-WF-04 群聊无模型执行路径，纯落盘）。
+    async fn write_group_mode_system_turn(
+        coordinator: &ConversationCoordinator,
+        workspace: &str,
+        group_id: &str,
+        group_name: &str,
+    ) -> BitFunResult<String> {
+        // mode 提示词内容 = 群整体一个 mode（群聊工作流容器说明）。文案与
+        // group_mode.md prompt 模板同源语义（GroupMode::name() = "group"），
+        // 不走硬编码中文（群聊 v3 契约 §一：群 = agent_type="group" 容器
+        // 会话，成员经群聊工具互发，群会话无大模型响应）。
+        let content = format!(
+            "群聊工作流 mode：本群「{group_name}」为群聊容器会话。成员会话经群聊工具（create_group_chat/invite_group_member/send_group_message 等）互发消息，消息按发言人身份（senderName/senderType）聚合展示；群会话本身不产生大模型响应。"
+        );
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("groupId".to_string(), json!(group_id));
+        // R-WF-08：system 标记（build_messages_from_turns 据此投影
+        // MessageRole::System）。sender 字段照常写群主会话 id（与欢迎 turn
+        // 同构），前端据 turnRole 区分 system 展示。
+        metadata.insert("turnRole".to_string(), json!("system"));
+        metadata.insert("senderSessionId".to_string(), json!(group_id));
+        Self::write_group_turn_with_metadata(coordinator, workspace, group_id, &content, metadata)
+            .await
+    }
+
     /// 群主欢迎 turn（R-GC-25）：建群 = 创建群主 Claw 会话，写群主欢迎
     /// turn 作为会话首条宿主 turn（带 sender 身份 = 群主）。
     async fn write_group_turn(
@@ -886,11 +964,17 @@ impl GroupRoomTool {
                 .unwrap_or_default(),
         );
 
-        // R-GC-26：只保留用户发言（群消息历史 = 用户发到群里的消息）。
-        // Message.role 为 MessageRole 枚举（message.rs:24-29，User 变体）。
+        // R-GC-26：群消息历史只返回**用户发言**（MessageRole::User）。
+        // R-WF-08：群首 turn = 群 mode 提示词（MessageRole::System，
+        // build_messages_from_turns 按 metadata turnRole="system" 投影），
+        // 历史同样返回（验收断言「群首 turn=system 提示词」；前端据此把
+        // mode 提示词渲染为时间线首条）。
         let mut result = messages
             .into_iter()
-            .filter(|message| message.role == crate::agentic::core::MessageRole::User)
+            .filter(|message| {
+                message.role == crate::agentic::core::MessageRole::User
+                    || message.role == crate::agentic::core::MessageRole::System
+            })
             .map(|message| {
                 let sender = message
                     .metadata
@@ -916,6 +1000,9 @@ impl GroupRoomTool {
                         .duration_since(UNIX_EPOCH)
                         .map(|d| d.as_millis() as i64)
                         .unwrap_or_default(),
+                    // R-WF-08：消息角色（system 首 turn 投影为 MessageRole::System）。
+                    role: (message.role == crate::agentic::core::MessageRole::System)
+                        .then(|| "system".to_string()),
                     metadata: GroupChatForwardMetadata {
                         group_id: Some(group_session_id.clone()),
                         group_message_id: None,
@@ -2344,6 +2431,7 @@ mod tests {
             },
             content: "hi".to_string(),
             timestamp: 123,
+            role: None,
             metadata: GroupChatForwardMetadata {
                 group_id: Some("group-1".to_string()),
                 group_message_id: None,
@@ -2382,6 +2470,12 @@ mod tests {
                 .pointer("/metadata/groupAuthor")
                 .and_then(Value::as_str),
             Some("sender-1")
+        );
+        // R-WF-08：role=None（普通用户消息）不序列化（skip_serializing_if），
+        // 避免破坏既有 wire 形态；system 消息 role="system" 才出现。
+        assert!(
+            json_value.get("role").is_none(),
+            "role=None must be omitted from the wire (skip_serializing_if)"
         );
     }
 
@@ -2716,6 +2810,35 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(members_b.len(), 2, "group B must also have 2 members");
 
+        // ── R-WF-08 原子步 3（mode 两层 · 成员各自一个）：preset 实例化的
+        // 成员 = 独立工作区（workspace-<nodeId>）+ 身份三文件（SOUL/USER/
+        // IDENTITY）齐全 + BOOTSTRAP 临时清理。成员 mode 提示词由 node 的
+        // role/prompt 物化（验收断言「三文件齐全 + 各自工作区」）。
+        let path_manager = crate::infrastructure::get_path_manager_arc();
+        let writer_workspace = path_manager.resolve_assistant_workspace_dir(Some("writer"), None);
+        assert!(
+            writer_workspace.join("SOUL.md").exists(),
+            "R-WF-08: preset member must have SOUL.md (member mode prompt)"
+        );
+        assert!(
+            writer_workspace.join("USER.md").exists(),
+            "R-WF-08: preset member must have USER.md"
+        );
+        assert!(
+            writer_workspace.join("IDENTITY.md").exists(),
+            "R-WF-08: preset member must have IDENTITY.md"
+        );
+        assert!(
+            !writer_workspace.join("BOOTSTRAP.md").exists(),
+            "R-WF-08: BOOTSTRAP.md is a temporary bootstrap file and must be removed"
+        );
+        let identity = std::fs::read_to_string(writer_workspace.join("IDENTITY.md"))
+            .expect("read member IDENTITY.md");
+        assert!(
+            identity.contains("executor"),
+            "R-WF-08: member IDENTITY.md must carry the node role (executor)"
+        );
+
         // 清理：删两个群（测试卫生）。
         GroupRoomTool::delete_group(&coordinator, &group_a)
             .await
@@ -2930,6 +3053,16 @@ mod tests {
         assert!(
             !history.is_empty(),
             "history must contain the group welcome turn after restart"
+        );
+        // R-WF-08：群首 turn = system 提示词（get_history 返回 role=system，
+        // 验收断言「群首 turn=system 提示词」）。
+        let system_msg = history
+            .iter()
+            .find(|m| m.role.as_deref() == Some("system"))
+            .expect("R-WF-08: group history must contain the system mode prompt turn");
+        assert!(
+            system_msg.content.contains("群聊工作流 mode"),
+            "R-WF-08: system mode prompt content must be present in history"
         );
     }
 
@@ -3196,6 +3329,40 @@ mod tests {
             welcome.user_message.metadata.as_ref().and_then(|m| m.get("senderSessionId")).and_then(Value::as_str),
             Some(group_id.as_str()),
             "R-GC-25: welcome turn sender = 群主会话（群聊 ID = 群主会话 ID）"
+        );
+
+        // ── R-WF-08 原子步 2：群 mode 提示词 = 建群时 system 第一条 ──
+        // （role=system，仅新建会话首次；验收断言 Plan:161「群首 turn=system
+        // 提示词」）。mode 首 turn 早于欢迎 turn（turn_index 最小 = 群首），
+        // metadata 带 turnRole="system" 标记，供 build_messages_from_turns
+        // 投影为 MessageRole::System。
+        let system_turn = welcome_turns
+            .iter()
+            .find(|t| {
+                t.user_message
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("turnRole"))
+                    .and_then(Value::as_str)
+                    == Some("system")
+            })
+            .expect("R-WF-08: create must write a system mode prompt as first turn");
+        assert!(
+            system_turn.turn_index < welcome.turn_index,
+            "R-WF-08: system mode prompt must precede the welcome turn (group-first turn)"
+        );
+        assert!(
+            system_turn.user_message.content.contains("群聊工作流 mode"),
+            "R-WF-08: system mode prompt must carry the group workflow mode wording"
+        );
+        assert_eq!(
+            system_turn.status,
+            bitfun_services_core::session::TurnStatus::Completed,
+            "R-WF-08: system mode turn is a normal completed host turn"
+        );
+        assert!(
+            system_turn.model_rounds.is_empty(),
+            "R-WF-08: system mode prompt must not trigger model invocation"
         );
 
         // send：写群会话 turns → message_id（发送者 = 真实成员 A）。

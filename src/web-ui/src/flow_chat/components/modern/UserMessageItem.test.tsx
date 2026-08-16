@@ -95,6 +95,7 @@ vi.mock('react-i18next', () => ({
         'steering.statusInjected': '已触发',
         'message.copy': '复制',
         'message.copyFailed': '复制失败',
+        'message.system': '系统',
       };
       return labels[key] ?? key;
     },
@@ -810,6 +811,34 @@ describe('UserMessageItem steering tag', () => {
     });
 
     expect(container.querySelector('.user-message-item__sender-badge')).toBeNull();
+  });
+
+  it('renders a system badge for the group mode system prompt (R-WF-08)', () => {
+    act(() => {
+      root.render(
+        <FlowChatContext.Provider value={{ allowUserMessageRollback: false }}>
+          <UserMessageItem
+            message={{
+              id: 'group-mode-system-1',
+              content: '群聊工作流 mode：本群为群聊容器会话。',
+              timestamp: 1000,
+              metadata: {
+                groupId: 'group-1',
+                senderSessionId: 'group-1',
+                turnRole: 'system',
+              },
+            }}
+            turnId="turn-g0"
+          />
+        </FlowChatContext.Provider>,
+      );
+    });
+
+    // R-WF-08: 群首 turn = system 提示词，senderBadge 渲染为 [系统]。
+    const badge = container.querySelector('.user-message-item__sender-badge');
+    expect(badge?.textContent).toBe('[系统]');
+    const content = container.querySelector('.user-message-item__content');
+    expect(content?.textContent).toContain('群聊工作流 mode');
   });
 
   it('applies group-chat indent classes by senderSessionId (R-GC-14)', () => {
