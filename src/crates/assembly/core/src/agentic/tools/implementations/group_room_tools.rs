@@ -2166,12 +2166,15 @@ mod tests {
     // coordinator（不嵌套 test_coordinator_access_lock_sync，防重入死锁）。
     #[tokio::test]
     async fn orchestration_actions_require_main_session() {
+        // call_impl 走全局 coordinator：复用既有全局（无论谁设置），否则
+        // 建隔离 coordinator 并 set_global 后重读全局（OnceLock 单次写入，
+        // 若被并行测试抢占则全局是别的实例——必须用全局实例建会话）。
         let coordinator = match get_global_coordinator() {
             Some(coordinator) => coordinator,
             None => {
-                let coordinator = new_isolated_test_coordinator().await;
-                ConversationCoordinator::set_global(coordinator.clone());
-                coordinator
+                let isolated = new_isolated_test_coordinator().await;
+                ConversationCoordinator::set_global(isolated.clone());
+                get_global_coordinator().expect("global coordinator must be set")
             }
         };
         let workspace = std::env::temp_dir().join(format!(
