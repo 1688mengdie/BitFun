@@ -26,10 +26,6 @@ pub struct SubagentParentInfo {
     pub dialog_turn_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "depth")]
     pub depth: Option<u32>,
-    /// Delegated RBAC role key (R-14 B4); absent when the parent session has
-    /// no registered role.
-    #[serde(default, skip_serializing_if = "Option::is_none", rename = "role")]
-    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
