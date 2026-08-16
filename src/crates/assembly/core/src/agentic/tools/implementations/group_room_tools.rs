@@ -2325,18 +2325,15 @@ mod tests {
         assert_eq!(parsed.preset_id.as_deref(), Some("triad"));
     }
 
-    // ── R-WF-06：一个工作流建 N 群（集成，真实 coordinator）──
-    // 依赖既有集成测试基建（create_send_history_list_roundtrip 已 set_global
-    // 真实 coordinator；本测试在其后运行，直接复用 get_global_coordinator）。
+    // ── R-WF-06：一个工作流建 N 群（集成，隔离 coordinator）──
+    // 自建隔离 coordinator（构造链同 create_send_history_list_roundtrip_with_
+    // real_coordinator）：不 set_global、不读 get_global_coordinator。Rust 测
+    // 试默认并行、顺序无保证——禁依赖其它测试的全局副作用（P1-2 退回修复），
+    // 本测试永远真实执行，断言永不因全局单例缺失而 early-return 空转（P1-1）。
     #[tokio::test]
     async fn workflow_preset_spawns_multiple_groups() {
-        use crate::agentic::coordination::get_global_coordinator;
         use crate::agentic::agents::team_presets::create_preset;
-        let Some(coordinator) = get_global_coordinator() else {
-            // 无全局 coordinator（并行测试顺序），跳过集成断言——WF-2 由
-            // create_group_from_preset 的纯逻辑单测 + create_input 覆盖。
-            return;
-        };
+        let coordinator = new_isolated_test_coordinator().await;
 
         let workspace = std::env::temp_dir().join(format!(
             "bitfun-rwf06-wf-{}",
@@ -2444,6 +2441,9 @@ mod tests {
         GroupRoomTool::delete_group(&coordinator, &group_b)
             .await
             .expect("delete group B");
+        // 清理：删除测试 preset（禁在 legions 目录残留 wf-rwf06-* 文件）。
+        crate::agentic::agents::team_presets::delete_preset(&preset_id)
+            .expect("delete test preset");
     }
 
     #[test]
@@ -2656,6 +2656,88 @@ mod tests {
     /// 测试辅助：创建真实成员会话（契约 §二：成员 = 调用方传入的真实会话 ID，
     /// 由调用方创建后传给 create/invite/fork——测试模拟前端「选中真实 Claw
     /// 会话」后的创建动作）。
+    /// 自建隔离的 ConversationCoordinator（不 set_global，不读全局单例）。
+    ///
+    /// 构造链与 create_send_history_list_roundtrip_with_real_coordinator 相同
+    /// （P1-1/P1-2 退回修复，2026-08-16）：Rust 测试默认并行、顺序无保证，
+    /// 依赖其它测试 set_global 的全局副作用 = 空转/竞态。R-WF-06 集成断言
+    /// 必须基于本函数返回的本地 coordinator 真实执行。
+    async fn new_isolated_test_coordinator() -> std::sync::Arc<ConversationCoordinator> {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
+        };
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
+        use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::infrastructure::PathManager;
+        use crate::runtime_ownership::CoreRuntimeOwnership;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let user_root = std::env::temp_dir().join(format!(
+            "bitfun-rwf06-isolated-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&user_root).expect("user root");
+        let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
+        let persistence =
+            PersistenceManager::new(Arc::new(path_manager)).expect("persistence manager");
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(persistence),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: true,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(tokio::sync::RwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let ownership_root = user_root.join("runtime-ownership");
+        let coordinator = ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue,
+            Arc::new(EventRouter::new()),
+            Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+                ownership_root,
+                "bitfun".to_string(),
+                "test",
+            )),
+        );
+        coordinator.set_terminal_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
+        );
+        coordinator.set_remote_exec_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
+        );
+        Arc::new(coordinator)
+    }
+
     async fn create_member_session_for_test(
         coordinator: &ConversationCoordinator,
         workspace: &str,
