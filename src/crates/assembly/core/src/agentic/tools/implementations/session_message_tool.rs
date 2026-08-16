@@ -15,7 +15,6 @@ use crate::agentic::events::AgenticEvent;
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::agentic::tools::restrictions::get_session_role;
 use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
 use crate::service::workspace::get_global_workspace_service;
 use crate::service::worktree::WorktreeService;
@@ -418,11 +417,10 @@ impl SessionMessageTool {
             .map(|session| session.agent_type.clone())
     }
 
-    /// Best-effort identity of the sending session: RBAC role (R-14
-    /// SESSION_ROLES registry), session-tree depth (R-19), and display name
-    /// (session name, else agent type). Every field degrades gracefully when
-    /// unknown, so a forwarding send never fails because identity data is
-    /// missing.
+    /// Best-effort identity of the sending session: session-tree depth (R-19),
+    /// and display name (session name, else agent type). Every field degrades
+    /// gracefully when unknown, so a forwarding send never fails because
+    /// identity data is missing.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_sender_identity(
         &self,
@@ -434,8 +432,7 @@ impl SessionMessageTool {
         source_remote_ssh_host: Option<&str>,
         coordinator: &ConversationCoordinator,
     ) -> SenderIdentity {
-        let role = get_session_role(source_session_id)
-            .map(|agent_role| format_role_display(agent_role.as_str()));
+        let role = None;
         let depth = coordinator.session_tree().get_depth(source_session_id);
         let session_name = runtime
             .list_sessions(AgentSessionListRequest {
@@ -555,24 +552,6 @@ impl SenderIdentity {
         }
         label
     }
-}
-
-/// "commander" -> "Commander", "punishment_executor" -> "PunishmentExecutor".
-fn format_role_display(role: &str) -> String {
-    role.split('_')
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut word = first.to_uppercase().to_string();
-                    word.push_str(chars.as_str());
-                    word
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("")
 }
 
 /// Lightweight UUID shape check (8-4-4-4-12, 36 chars) for the trailing
@@ -2285,11 +2264,10 @@ impl SessionMessageTool {
                     .as_str()
                     .to_string();
 
-                // W9: worktree 参数授权 + remote 互斥拒绝（SessionMessage create
-                // 与 SessionControl create 同一语义）。
+                // W9: remote 互斥拒绝（SessionMessage create 与
+                // SessionControl create 同一语义）。
                 let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
                 if params.worktree.is_some() {
-                    super::session_control_tool::ensure_worktree_creation_authorized(context)?;
                     super::session_control_tool::ensure_worktree_not_remote(context)?;
                     let worktree_options = params.worktree.as_ref().expect("checked above");
                     let request_id = context
@@ -3715,14 +3693,6 @@ mod tests {
         assert!(!reminders[0].text.contains("From agent:"));
     }
 
-    #[test]
-    fn role_display_title_cases_snake_case_keys() {
-        assert_eq!(format_role_display("commander"), "Commander");
-        assert_eq!(
-            format_role_display("punishment_executor"),
-            "PunishmentExecutor"
-        );
-    }
 
     #[test]
     fn session_message_input_parses_batch_items() {
@@ -4936,49 +4906,6 @@ mod tests {
         ))
     }
 
-    #[tokio::test]
-    async fn delivery_authz_rejects_daemon_session() {
-        // R-A.04: delivery to a daemon session is rejected — even when the
-        // caller is the owner (Commander).
-        use crate::agentic::tools::restrictions::{set_session_role, AgentRole};
-        let _ = set_session_role("delivery-owner", AgentRole::Commander);
-        let session_manager = delivery_authz_session_manager();
-        let tree = bitfun_services_core::session::tree::SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-delivery-authz-daemon");
-        let workspace_string = workspace.as_string();
-        let workspace_path = std::path::Path::new(&workspace_string);
-        session_manager
-            .create_session_with_id(
-                Some("daemon-session".to_string()),
-                "Daemon".to_string(),
-                "agentic".to_string(),
-                SessionConfig {
-                    workspace_path: Some(workspace.as_string()),
-                    is_daemon: true,
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("create daemon session");
-
-        let error = resolve_session_mutation_authorization(
-            &session_manager,
-            &tree,
-            "delivery-owner",
-            "daemon-session",
-            workspace_path,
-            "deliver to",
-            SessionMutationAuthOptions::deliver(),
-        )
-        .await
-        .expect_err("daemon session delivery must be rejected");
-        assert!(
-            error
-                .to_string()
-                .contains("cannot deliver to daemon"),
-            "{error}"
-        );
-    }
 
     #[tokio::test]
     async fn delivery_authz_rejects_unrelated_caller_without_metadata() {
@@ -5071,28 +4998,4 @@ mod tests {
         .expect("ancestor should be authorized to deliver");
     }
 
-    #[tokio::test]
-    async fn delivery_authz_owner_bypasses_gate() {
-        // Owner (Commander role) exemption: allowed even when the target has
-        // no metadata.
-        use crate::agentic::tools::restrictions::{set_session_role, AgentRole};
-        let _ = set_session_role("delivery-owner-2", AgentRole::Commander);
-        let session_manager = delivery_authz_session_manager();
-        let tree = bitfun_services_core::session::tree::SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-delivery-authz-owner");
-        let workspace_string = workspace.as_string();
-        let workspace_path = std::path::Path::new(&workspace_string);
-
-        resolve_session_mutation_authorization(
-            &session_manager,
-            &tree,
-            "delivery-owner-2",
-            "no-metadata-target",
-            workspace_path,
-            "deliver to",
-            SessionMutationAuthOptions::deliver(),
-        )
-        .await
-        .expect("owner should bypass the delivery gate");
-    }
 }

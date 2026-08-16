@@ -119,9 +119,6 @@ impl ConfigService {
             .await;
         }
 
-        // Keep the cached RBAC master switch in sync with the settings
-        // document (R-26): the switch may be toggled via `ai.rbac_enabled`.
-        super::global::refresh_rbac_enabled_cache().await;
         // Keep the cached external user instruction sources switch in sync: it
         // may be toggled via `ai.external_instruction_sources`.
         super::global::refresh_external_instruction_sources_enabled_cache().await;
@@ -191,8 +188,6 @@ impl ConfigService {
             .await;
         }
 
-        // Keep the cached RBAC master switch in sync (R-26).
-        super::global::refresh_rbac_enabled_cache().await;
         // Keep the cached external user instruction sources switch in sync.
         super::global::refresh_external_instruction_sources_enabled_cache().await;
         // Keep the cached workspace instruction files switch in sync.
@@ -256,8 +251,6 @@ impl ConfigService {
                     super::global::ConfigUpdateEvent::ModelConfigurationUpdated,
                 )
                 .await;
-                // Keep the cached RBAC master switch in sync (R-26).
-                super::global::refresh_rbac_enabled_cache().await;
                 // Keep the cached external user instruction sources switch in sync.
                 super::global::refresh_external_instruction_sources_enabled_cache().await;
                 // Keep the cached workspace instruction files switch in sync.

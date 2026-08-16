@@ -17,7 +17,7 @@ use crate::agentic::tools::framework::{
 };
 use crate::agentic::tools::pipeline::{ToolExecutionContext, ToolTask};
 use crate::agentic::tools::post_call_hooks;
-use crate::agentic::tools::restrictions::{classify_tool_call, get_session_restrictions};
+use crate::agentic::tools::restrictions::classify_tool_call;
 use crate::agentic::tools::restrictions::{
     is_local_path_within_root, is_remote_posix_path_within_root, ToolPathOperation,
 };
@@ -508,20 +508,8 @@ impl ToolUseContext {
         tool_name: &str,
         input: &Value,
     ) -> BitFunResult<()> {
-        // R-26: the user-controllable RBAC master switch fully bypasses the
-        // runtime restriction gate when disabled (tools are unrestricted).
-        if !crate::service::config::rbac_enabled() {
-            return Ok(());
-        }
-
-        // Resolve which restrictions to apply: session-specific or context-level.
-        let session_override = self
-            .session_id
-            .as_deref()
-            .and_then(get_session_restrictions);
-        let restrictions: &ToolRuntimeRestrictions = session_override
-            .as_ref()
-            .unwrap_or(&self.runtime_tool_restrictions);
+        // Resolve which restrictions to apply.
+        let restrictions: &ToolRuntimeRestrictions = &self.runtime_tool_restrictions;
 
         // 1. Check tool name allow/deny lists.
         restrictions
@@ -542,14 +530,8 @@ impl ToolUseContext {
         operation: ToolPathOperation,
         resolution: &ToolPathResolution,
     ) -> BitFunResult<()> {
-        // 与 enforce_tool_runtime_restrictions 一致：先取会话级 override 的 path_policy 再检查。
-        let session_override = self
-            .session_id
-            .as_deref()
-            .and_then(get_session_restrictions);
-        let restrictions: &ToolRuntimeRestrictions = session_override
-            .as_ref()
-            .unwrap_or(&self.runtime_tool_restrictions);
+        // 与 enforce_tool_runtime_restrictions 一致：直接用上下文的 path_policy 检查。
+        let restrictions: &ToolRuntimeRestrictions = &self.runtime_tool_restrictions;
 
         let allowed_roots = restrictions.path_policy.roots_for(operation);
         if allowed_roots.is_empty() {
@@ -1585,7 +1567,6 @@ mod task_context_tests {
                     session_id: "parent_session".to_string(),
                     dialog_turn_id: "parent_turn".to_string(),
                     depth: None,
-                    role: None,
                 }),
                 permission_delegation: None,
                 delegation_policy: DelegationPolicy::top_level().spawn_child(),

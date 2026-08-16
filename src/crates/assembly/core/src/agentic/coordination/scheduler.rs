@@ -35,7 +35,6 @@ use crate::agentic::keyed_lock::{KeyedAsyncLock, KeyedAsyncLockGuard};
 use crate::agentic::round_preempt::{DialogRoundInjectionSource, SessionRoundInjectionBuffer};
 use crate::agentic::session::session_store_port::CoreSessionStorePort;
 use crate::agentic::session::SessionManager;
-use crate::agentic::tools::restrictions::get_session_role;
 use crate::infrastructure::PathManager;
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -3361,7 +3360,7 @@ impl DialogScheduler {
                 let _reply_guard = self.lock_session_operation(session_id).await;
                 match resolve_agent_session_reply_action(
                     session_id,
-                    get_session_role(session_id).map(|role| role.as_str()),
+                    None,
                     self.coordinator.session_tree().get_depth(session_id),
                     active_turn,
                     &outcome,

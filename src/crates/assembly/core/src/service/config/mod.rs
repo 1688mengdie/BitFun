@@ -22,7 +22,7 @@ pub use app_language::{
 pub use factory::ConfigFactory;
 pub use global::{
     external_instruction_sources_enabled, get_global_config_service, initialize_global_config,
-    rbac_enabled, reload_global_config, set_external_instruction_sources_enabled, set_rbac_enabled,
+    reload_global_config, set_external_instruction_sources_enabled,
     set_workspace_instruction_files_enabled, subscribe_config_updates,
     workspace_instruction_files_enabled, ConfigUpdateEvent, GlobalConfigManager,
 };

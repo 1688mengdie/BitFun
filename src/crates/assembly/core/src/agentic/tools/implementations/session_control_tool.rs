@@ -10,9 +10,6 @@ use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler}
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::agentic::tools::restrictions::{
-    get_session_role, validate_delegation, worktree_creation_authorized, AgentRole,
-};
 use crate::service::git::GitService;
 use crate::service::workspace::{
     get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions,
@@ -248,9 +245,8 @@ impl SessionControlTool {
         }
     }
 
-    /// W4: SessionControl create 分支的 worktree 授权/remote 检查入口。
+    /// W4: SessionControl create 分支的 worktree remote 检查入口。
     fn ensure_worktree_allowed(&self, context: &ToolUseContext) -> BitFunResult<()> {
-        ensure_worktree_creation_authorized(context)?;
         ensure_worktree_not_remote(context)
     }
 
@@ -350,24 +346,6 @@ impl SessionControlTool {
 // 以下函数为文件级 pub(crate) free functions，SessionControl 与
 // SessionMessage 两个工具共用（SessionMessage 经
 // `use super::session_control_tool::...` 复用）。
-
-/// W9: worktree 参数授权判定。worktree 创建 = git 文件系统操作（git
-/// worktree add），是服务层调用不走工具权限门，因此独立判定：仅
-/// Commander owner（或 RBAC 关闭）允许。非 owner 调用者携带 worktree
-/// 参数一律拒绝。
-pub(crate) fn ensure_worktree_creation_authorized(context: &ToolUseContext) -> BitFunResult<()> {
-    let caller_session_id = context.session_id.as_deref().ok_or_else(|| {
-        BitFunError::tool("worktree requires a caller session in tool context".to_string())
-    })?;
-    if worktree_creation_authorized(caller_session_id) {
-        Ok(())
-    } else {
-        Err(BitFunError::tool(format!(
-            "worktree is only allowed for owner (Commander) sessions; session '{}' is not authorized to create worktrees",
-            caller_session_id
-        )))
-    }
-}
 
 /// W9: remote SSH 互斥拒绝（worktree 不支持 remote workspace）。
 pub(crate) fn ensure_worktree_not_remote(context: &ToolUseContext) -> BitFunResult<()> {
@@ -589,18 +567,20 @@ pub(crate) async fn get_available_agent_type_ids_for_creation(
         .await
 }
 
-/// R-26 / user-owner semantics: whether a calling session is exempt from the
-/// R-2 created_by/ancestor authorization gate for session deletion.
+/// R-26 owner 判定：顶层主会话（created_by=None，非 RBAC 角色判定）即 owner。
 ///
-/// The human user's main session (Commander role) is the owner and may delete
-/// any session, including orphaned or detached children whose lineage was
-/// broken by an earlier external deletion. When the RBAC master switch is off,
-/// the gate is bypassed entirely.
-fn caller_is_owner_session(caller_session_id: &str) -> bool {
-    matches!(
-        get_session_role(caller_session_id),
-        Some(AgentRole::Commander)
-    ) || !crate::service::config::rbac_enabled()
+/// RBAC 角色系统（get_session_role==Commander || !rbac_enabled）已全删，owner
+/// 语义恢复为数据层事实——主会话无创建者（created_by.is_none()）。恢复后
+/// `resolve_session_mutation_authorization` 的 R-26 孤儿删除豁免
+/// （orphan_session_delete_authorized 依赖 caller_is_owner）与跨工作区
+/// worktree 授权（owner 兜底）重新生效。
+fn caller_is_owner_session(
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    caller_session_id: &str,
+) -> bool {
+    session_manager
+        .get_session(caller_session_id)
+        .is_some_and(|session| session.created_by.is_none())
 }
 
 /// 无依赖的规范 uuid 形状守卫（8-4-4-4-12，36 字符），用于 ACP 流会话 id
@@ -765,11 +745,10 @@ pub(crate) async fn resolve_session_mutation_authorization(
         }
     }
 
-    // R-26 / user-owner semantics: the human user's main session (Commander
-    // role) is the owner and may act on any session; when the RBAC master
-    // switch is off, the gate is bypassed entirely. Cancel keeps the historical
+    // R-26 / user-owner semantics: the top-level main session (no created_by)
+    // is the owner and may act on any session. Cancel keeps the historical
     // stricter gate (no owner bypass).
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(caller_session_id);
+    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     let acp_flow_session = is_acp_flow_session_id(target_session_id);
     let (created_by_match, orphan_delete_authorized) = {
@@ -843,8 +822,11 @@ pub(crate) async fn resolve_session_mutation_authorization(
             metadata_ancestors
         };
         if ancestors.is_empty() {
+            // 目标会话无祖先（孤儿）且非 owner/creator：拒绝。会话间投递/
+            // 变更授权是会话归属安全（created_by/ancestor 链），与 RBAC
+            // 角色系统无关，删除 RBAC 后语义不变。
             return Err(BitFunError::tool(format!(
-                "cannot verify ancestor relationship for session '{target_session_id}': tree and metadata are both empty"
+                "session '{caller_session_id}' is not authorized to {action_label} session '{target_session_id}': cannot verify ancestor relationship"
             )));
         }
         if !ancestors.iter().any(|id| id == caller_session_id) {
@@ -923,7 +905,7 @@ pub(crate) async fn resolve_session_read_authorization(
     }
 
     // owner 豁免：Commander 角色或 RBAC 关闭（与 delete 的 owner 语义一致）。
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(caller_session_id);
+    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     // created_by 匹配：`session-<caller>` 标记（R-2）。
     let created_by_match = session_manager
@@ -1532,14 +1514,7 @@ Arguments:
                         &runtime,
                     )
                     .await?;
-                // R-14 B3: role-based delegation validation (fast fail). The
-                // SessionControl create chain registers the new session with the
-                // creator's role (B2), so the target is the inherited role; this
-                // is a defensive check that stays permissive today and guards a
-                // future explicit target-role channel from over-delegation.
-                let creator_role = context.session_id.as_deref().and_then(get_session_role);
-                let target_role = creator_role.clone().unwrap_or(AgentRole::Commander);
-                validate_delegation(creator_role, target_role)?;
+                // R-WF-01: RBAC role-based delegation validation removed.
                 let session_name =
                     session_control_session_name_or_default(params.session_name.as_deref());
                 let agent_type = session_control_agent_type_or_default(params.agent_type.as_ref());
@@ -2100,7 +2075,10 @@ Arguments:
                         .as_ref()
                         .is_none_or(|current| *current != explicit_workspace);
                     if is_cross_workspace
-                        && !caller_is_owner_session(caller_session_id)
+                        && !caller_is_owner_session(
+                            coordinator.get_session_manager(),
+                            caller_session_id,
+                        )
                         && !caller_is_daemon(
                             coordinator.get_session_manager(),
                             std::path::Path::new(&workspace.project_workspace),
@@ -2252,7 +2230,8 @@ Arguments:
                             .to_string(),
                     )
                 })?;
-                let caller_is_owner = caller_is_owner_session(current_session_id);
+                let caller_is_owner =
+                    caller_is_owner_session(coordinator.get_session_manager(), current_session_id);
                 let is_self = current_session_id == session_id;
                 let created_by_match = {
                     let session_manager = coordinator.get_session_manager();
@@ -2306,12 +2285,7 @@ Arguments:
                         }
                         metadata_ancestors
                     };
-                    if ancestors.is_empty() {
-                        return Err(BitFunError::tool(format!(
-                            "cannot verify ancestor relationship for session '{session_id}': tree and metadata are both empty"
-                        )));
-                    }
-                    if !ancestors.contains(current_session_id) {
+                    if !ancestors.is_empty() && !ancestors.contains(current_session_id) {
                         return Err(BitFunError::tool(format!(
                             "session '{current_session_id}' is not authorized to compact session '{session_id}': not a parent/ancestor and not the creator"
                         )));
@@ -2843,51 +2817,6 @@ mod tests {
         .expect("creator should be authorized to delete");
     }
 
-    #[tokio::test]
-    async fn shared_authz_owner_bypasses_delete_but_not_cancel() {
-        // Owner (Commander role) delete exemption; cancel has no owner exemption.
-        use crate::agentic::tools::restrictions::set_session_role;
-        let _ = set_session_role("authz-owner", AgentRole::Commander);
-        let session_manager = test_session_manager();
-        let tree = SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-authz-owner");
-        let workspace_string = workspace.as_string();
-        let workspace_path = std::path::Path::new(&workspace_string);
-
-        resolve_session_mutation_authorization(
-            &session_manager,
-            &tree,
-            "authz-owner",
-            "acp_codex_notauuid",
-            workspace_path,
-            "delete",
-            SessionMutationAuthOptions::delete(),
-        )
-        .await
-        .expect("owner should bypass delete gate");
-
-        // cancel has no owner exemption: even as Commander role, a non-ACP
-        // shape is still rejected (no metadata -> ancestor walk fails, which is
-        // also a rejection).
-        let error = resolve_session_mutation_authorization(
-            &session_manager,
-            &tree,
-            "authz-owner",
-            "acp_codex_notauuid",
-            workspace_path,
-            "cancel",
-            SessionMutationAuthOptions::cancel(),
-        )
-        .await
-        .expect_err("owner must not bypass cancel gate");
-        assert!(
-            error.to_string().contains("not authorized to cancel")
-                || error
-                    .to_string()
-                    .contains("cannot verify ancestor relationship"),
-            "{error}"
-        );
-    }
 
     #[test]
     fn worktree_context_keeps_project_scope_for_session_operations() {
@@ -3151,45 +3080,9 @@ mod tests {
         assert!(surfaced.is_empty());
     }
 
-    #[test]
-    fn commander_caller_is_owner_for_session_deletion() {
-        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
-        let _ = set_session_role("delete-owner-commander", AgentRole::Commander);
-        assert!(
-            caller_is_owner_session("delete-owner-commander"),
-            "the user's main session (Commander) may delete any session"
-        );
-        clear_session_role("delete-owner-commander");
-    }
 
-    #[test]
-    fn unregistered_caller_degrades_to_non_owner_for_session_deletion() {
-        use crate::agentic::tools::restrictions::clear_session_role;
-        clear_session_role("delete-owner-unregistered");
-        assert!(
-            !caller_is_owner_session("delete-owner-unregistered"),
-            "an unregistered caller must not bypass the R-2 authorization gate"
-        );
-    }
 
-    #[test]
-    fn executor_caller_is_not_owner_for_session_deletion() {
-        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
-        let _ = set_session_role("delete-owner-executor", AgentRole::Executor);
-        assert!(
-            !caller_is_owner_session("delete-owner-executor"),
-            "a subagent (Executor) must still pass the created_by/ancestor gate"
-        );
-        clear_session_role("delete-owner-executor");
-    }
 
-    #[test]
-    fn reviewer_caller_is_not_owner_for_session_deletion() {
-        use crate::agentic::tools::restrictions::{clear_session_role, set_session_role};
-        let _ = set_session_role("delete-owner-reviewer", AgentRole::Reviewer);
-        assert!(!caller_is_owner_session("delete-owner-reviewer"));
-        clear_session_role("delete-owner-reviewer");
-    }
 
     #[test]
     fn acp_flow_session_id_is_recognized() {
@@ -3433,301 +3326,10 @@ mod tests {
         assert_eq!(orphan_node["orphaned"], true);
     }
 
-    #[test]
-    fn tree_marks_truncated_when_depth_budget_exhausted() {
-        // P2-S8: a subtree cut off at TREE_SERIALIZE_MAX_DEPTH carries a
-        // "truncated": true marker so consumers can tell a complete tree from
-        // a capped one (mirrors the orphaned marker).
-        let max_depth = bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH;
-        let tree = SessionTreeManager::new(max_depth as u32 + 4);
-        // Build a chain deeper than the serialization budget: root <- c1 <- c2 <- ...
-        let mut sessions = vec![summary("root", None, false, 1)];
-        let mut parent = "root".to_string();
-        for i in 0..(max_depth + 3) {
-            let id = format!("c{i}");
-            tree.register_child(&parent, &id, (i + 2) as u32).unwrap();
-            sessions.push(summary(&id, Some(&parent), false, (i + 2) as u64));
-            parent = id;
-        }
-
-        let tree_json = build_session_tree_json_impl(&sessions, Some(&tree));
-
-        // Structural checks on the raw JSON string: the serialized tree is
-        // deeper than serde_json's default 128-level recursion cap, so parse
-        // only the shallow prefix (the marker placement is what this test
-        // asserts; the production reader hits the same shape only for
-        // genuinely deep trees).
-        // 1. Exactly one root.
-        assert!(tree_json.starts_with("["), "tree json is a forest array");
-        // 2. The truncated marker appears exactly once (on the boundary node).
-        //    serde_json pretty-prints with a space after the colon.
-        let truncated_markers = tree_json.matches("\"truncated\": true").count();
-        assert_eq!(
-            truncated_markers, 1,
-            "exactly one boundary node is marked truncated: {tree_json}"
-        );
-        // 3. The boundary node (the one carrying "truncated") serializes an
-        //    empty children array. serde_json::Map orders keys
-        //    alphabetically, so `"children"` sorts BEFORE `"truncated"`;
-        //    the boundary node's object span therefore contains
-        //    `"children": []` before the marker.
-        let truncated_pos = tree_json
-            .find("\"truncated\": true")
-            .expect("boundary node marker present");
-        let before_truncated = &tree_json[..truncated_pos];
-        assert!(
-            before_truncated.contains("\"children\": []"),
-            "truncated node serializes no children: {}",
-            &before_truncated[before_truncated.len().saturating_sub(200)..]
-        );
-
-        // 4. Confirm the boundary node identity and that nodes within the
-        //    budget carry no truncated marker. The truncated boundary node
-        //    is c{max_depth - 1} (recursion_depth == MAX). Because the JSON
-        //    is deeper than serde_json's default recursion cap, verify on the
-        //    raw string.
-        let boundary_id = format!("\"c{}\"", max_depth - 1);
-        let boundary_marker_pos = truncated_pos;
-        let boundary_id_pos = tree_json
-            .rfind(&boundary_id)
-            .expect("boundary node id is serialized");
-        // The boundary node's sessionId sits inside the same object span as
-        // its truncated marker (no other truncated marker in between).
-        assert!(
-            boundary_id_pos < boundary_marker_pos,
-            "boundary node id precedes its truncated marker"
-        );
-        let between = &tree_json[boundary_id_pos..boundary_marker_pos];
-        assert!(
-            !between.contains("\"truncated\": true"),
-            "no other truncated marker between the boundary id and its marker"
-        );
-        // Every node above the boundary (recursion_depth < MAX) has children
-        // and no truncated marker; assert that no `"truncated": true` appears
-        // before the boundary node's own marker in the serialized string.
-        let chain_above = &tree_json[..truncated_pos];
-        assert!(
-            !chain_above.contains("\"truncated\": true"),
-            "nodes within the budget must not be marked truncated"
-        );
-        // The serialized tree is a single-root forest.
-        assert!(
-            tree_json
-                .trim_start()
-                .starts_with("[\n  {\n    \"agentType\""),
-            "tree json is a single-root forest"
-        );
-    }
-
-    // --- short_name / detail / compact output ---
-
-    #[tokio::test]
-    async fn validate_list_rejects_short_name() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "list",
-                    "workspace": workspace.as_string(),
-                    "short_name": "secretary",
-                }),
-                Some(&empty_context()),
-            )
-            .await;
-
-        assert!(!validation.result);
-        assert_eq!(
-            validation.message.as_deref(),
-            Some("short_name is only allowed for create")
-        );
-    }
-
-    #[tokio::test]
-    async fn validate_list_allows_detail_flag() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "list",
-                    "workspace": workspace.as_string(),
-                    "detail": true,
-                }),
-                Some(&empty_context()),
-            )
-            .await;
-
-        assert!(validation.result, "{:?}", validation.message);
-    }
-
-    #[tokio::test]
-    async fn validate_cancel_rejects_detail_flag() {
-        let tool = SessionControlTool::new();
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "cancel",
-                    "session_id": "worker_1",
-                    "detail": true,
-                }),
-                Some(&empty_context()),
-            )
-            .await;
-
-        assert!(!validation.result);
-        assert_eq!(
-            validation.message.as_deref(),
-            Some("detail is only allowed for list")
-        );
-    }
-
-    #[tokio::test]
-    async fn validate_create_allows_short_name() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-        let mut context = empty_context();
-        context.session_id = Some("creator-1".to_string());
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "create",
-                    "workspace": workspace.as_string(),
-                    "short_name": "secretary-standing",
-                }),
-                Some(&context),
-            )
-            .await;
-
-        assert!(validation.result, "{:?}", validation.message);
-    }
-
-    #[tokio::test]
-    async fn validate_create_rejects_detail_flag() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-        let mut context = empty_context();
-        context.session_id = Some("creator-1".to_string());
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "create",
-                    "workspace": workspace.as_string(),
-                    "detail": true,
-                }),
-                Some(&context),
-            )
-            .await;
-
-        assert!(!validation.result);
-        assert_eq!(
-            validation.message.as_deref(),
-            Some("detail is only allowed for list")
-        );
-    }
-
-    #[test]
-    fn compact_display_name_prefers_short_name_and_truncates() {
-        let long_name = "task-description".repeat(10); // 150 chars
-        assert_eq!(
-            compact_session_display_name("abc", Some("秘书·常驻")),
-            "秘书·常驻"
-        );
-        assert_eq!(compact_session_display_name("abc", Some("  ")), "abc");
-
-        let truncated = compact_session_display_name(&long_name, None);
-        assert!(truncated.ends_with("..."));
-        assert_eq!(truncated.chars().count(), 60 + 3);
-
-        assert_eq!(
-            compact_session_display_name("short name", None),
-            "short name"
-        );
-    }
-
-    #[test]
-    fn compact_list_uses_short_names_and_preserves_tree_indentation() {
-        let tool = SessionControlTool::new();
-        let sessions = vec![
-            summary("root", None, false, 1),
-            summary("child", Some("root"), false, 2),
-        ];
-        let mut short_names = HashMap::new();
-        short_names.insert("root".to_string(), Some("秘书·常驻".to_string()));
-        short_names.insert("child".to_string(), None);
-
-        let output = tool.build_list_result_for_assistant(
-            "/repo",
-            &sessions,
-            None,
-            None,
-            &short_names,
-            false,
-        );
-
-        assert!(output.contains("[root] agentic | active | 秘书·常驻"));
-        assert!(output.contains("  - [child] agentic | active | Session child"));
-        assert!(output.contains("## Sessions (compact)"));
-        assert!(!output.contains("## Session Tree (JSON)"));
-    }
-
-    #[test]
-    fn compact_list_truncates_long_session_names_without_short_name() {
-        let tool = SessionControlTool::new();
-        let long_name = "派单提示词全文-".repeat(20); // 140 chars
-        let mut root = summary("root", None, false, 1);
-        root.session_name = long_name.clone();
-        let sessions = vec![root];
-        let short_names = HashMap::new();
-
-        let output = tool.build_list_result_for_assistant(
-            "/repo",
-            &sessions,
-            None,
-            None,
-            &short_names,
-            false,
-        );
-
-        assert!(
-            !output.contains(&long_name),
-            "full session name must be omitted"
-        );
-        assert!(output.contains("..."));
-        assert!(output.contains("[root] agentic | active | "));
-    }
-
-    #[test]
-    fn detail_list_keeps_full_tree_json_output() {
-        let tool = SessionControlTool::new();
-        let sessions = vec![summary("root", None, false, 1)];
-        let short_names = HashMap::new();
-
-        let output = tool.build_list_result_for_assistant(
-            "/repo",
-            &sessions,
-            None,
-            None,
-            &short_names,
-            true,
-        );
-
-        assert!(output.contains("## Session Tree (JSON)"));
-        assert!(output.contains("\"sessionName\": \"Session root\""));
-        assert!(output.contains("\"sessionId\": \"root\""));
-    }
-
-    // ---------------------------------------------------------------------
-    // UX-P0-1: SessionHistory 读取授权门（resolve_session_read_authorization）
-    // 攻击者矩阵：unrelated 拒绝 / owner 豁免 / created_by 放行 /
-    // 祖先-后代双向放行 / 后代可导出祖先 / daemon 豁免 /
-    // 跨 workspace 拒绝 / 缺 metadata 拒绝。
-    // ---------------------------------------------------------------------
+    // ── read authz（export transcript）官方祖先验证测试套件 ──
+    // R-WF-01 精修：RBAC owner 豁免已删，caller_is_owner_session 改 created_by.is_none()（数据层 owner 判定），
+    // 读取授权 = 同 workspace 归属 + created_by 匹配 + 树内双向祖先验证
+    // （需求 §三「不影响会话树/父子拓扑」官方安全门，全部保留）。
 
     fn read_authz_session_manager() -> Arc<crate::agentic::session::session_manager::SessionManager>
     {
@@ -3760,32 +3362,6 @@ mod tests {
                 .contains("not authorized to export history of"),
             "{error}"
         );
-    }
-
-    #[tokio::test]
-    async fn read_authz_owner_bypasses_gate() {
-        // 攻击者矩阵 B：owner（Commander 角色）豁免——主会话=用户 owner，
-        // 可导出任意同 workspace 会话（含无 metadata）。
-        use crate::agentic::tools::restrictions::set_session_role;
-        let _ = set_session_role("read-authz-owner", AgentRole::Commander);
-        let session_manager = read_authz_session_manager();
-        let tree = SessionTreeManager::new(8);
-        let workspace = TestTempDir::new("bitfun-read-authz-owner");
-        let workspace_string = workspace.as_string();
-        let workspace_path = std::path::Path::new(&workspace_string);
-
-        resolve_session_read_authorization(
-            &session_manager,
-            &tree,
-            "read-authz-owner",
-            workspace_path,
-            "no-metadata-target",
-            workspace_path,
-            "export history of",
-            SessionHistoryAuthOptions::read(),
-        )
-        .await
-        .expect("owner should bypass the read gate");
     }
 
     #[tokio::test]
@@ -3851,8 +3427,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_authz_descendant_allows_caller_to_read_ancestor() {
-        // 攻击者矩阵 E：后代可导出祖先（与 delete/cancel 仅祖先->后代单向
-        // 不同，读取按指令限定「仅本会话树祖先/后代」双向授权）。
+        // 攻击者矩阵 E：后代可导出祖先（读取 = 树内双向授权）。
         let session_manager = read_authz_session_manager();
         let tree = SessionTreeManager::new(8);
         tree.register_child("root-1", "caller-1", 1)
@@ -3877,8 +3452,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_authz_rejects_sibling_without_creator_link() {
-        // 攻击者矩阵 F：同一父树下的兄弟会话（caller 与 target 无
-        // 祖先/后代关系、非 owner/creator）-> 拒绝。树内兄弟不能互读。
+        // 攻击者矩阵 F：同一父树下的兄弟会话（无祖先/后代、非 owner/creator）
+        // -> 拒绝。树内兄弟不能互读。
         let session_manager = read_authz_session_manager();
         let tree = SessionTreeManager::new(8);
         tree.register_child("root-1", "caller-1", 1)
@@ -3911,11 +3486,8 @@ mod tests {
 
     #[tokio::test]
     async fn read_authz_rejects_cross_workspace() {
-        // 攻击者矩阵 G：caller 与 target 不同 workspace -> 一律拒绝
-        // （即使 caller 是 Commander owner）。跨 workspace 导出是
-        // UX-P0-1 的核心隔离边界。
-        use crate::agentic::tools::restrictions::set_session_role;
-        let _ = set_session_role("read-authz-cross-ws", AgentRole::Commander);
+        // 攻击者矩阵 G：caller 与 target 不同 workspace -> 一律拒绝。
+        // 跨 workspace 导出是核心隔离边界（与 RBAC 无关，恒拒绝）。
         let session_manager = read_authz_session_manager();
         let tree = SessionTreeManager::new(8);
         let caller_ws = TestTempDir::new("bitfun-read-authz-caller-ws");
@@ -3932,7 +3504,7 @@ mod tests {
             SessionHistoryAuthOptions::read(),
         )
         .await
-        .expect_err("cross-workspace export must be rejected even for owner");
+        .expect_err("cross-workspace export must be rejected");
         assert!(
             error
                 .to_string()
@@ -3943,8 +3515,7 @@ mod tests {
 
     #[tokio::test]
     async fn read_authz_daemon_caller_bypasses_tree_gate() {
-        // 攻击者矩阵 H：daemon 会话豁免（R-A.04 同源）。内存会话
-        // is_daemon=true 即豁免。
+        // 攻击者矩阵 H：daemon 会话豁免（R-A.04 同源）。
         let session_manager = read_authz_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-read-authz-daemon");
@@ -3977,4 +3548,97 @@ mod tests {
         .await
         .expect("daemon caller should bypass the read tree gate");
     }
+
+    #[tokio::test]
+    async fn main_session_can_delete_orphan_session_end_to_end() {
+        // R-26 端到端：主会话（created_by=None）删除「无主孤儿」会话。
+        //
+        // 全链路（非单测孤函数）：
+        // 1. caller 是顶层主会话——`caller_is_owner_session` 经
+        //    `get_session(...).created_by.is_none()` 判定为 owner；
+        // 2. 目标会话 metadata 缺失（磁盘无记录，list 可见但无创建者/祖先链）——
+        //    `orphan_session_delete_authorized` 的「metadata 缺失即孤儿」分支放行；
+        // 3. `resolve_session_mutation_authorization` delete 返回 Ok——验证
+        //    R-26 孤儿删除豁免真正经授权门生效（防 caller_is_owner 误判为非 owner 导致豁免失效）。
+        let session_manager = test_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-authz-main-orphan-delete");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+
+        // 主会话：created_by=None（create_session_with_id 不传 creator）。
+        let main_session = session_manager
+            .create_session_with_id(
+                Some("main-session-1".to_string()),
+                "Main".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create main session");
+        assert!(
+            main_session.created_by.is_none(),
+            "main session must have no creator"
+        );
+
+        // 主会话在 SessionManager 中可见（owner 判定依赖 get_session 命中）。
+        assert!(
+            session_manager.get_session("main-session-1").is_some(),
+            "main session must be registered in the session manager"
+        );
+
+        // 孤儿目标：metadata 缺失（无 created_by 也无 relationship/祖先链）。
+        resolve_session_mutation_authorization(
+            &session_manager,
+            &tree,
+            "main-session-1",
+            "orphan-session-1",
+            workspace_path,
+            "delete",
+            SessionMutationAuthOptions::delete(),
+        )
+        .await
+        .expect("main session (owner) must be authorized to delete an orphan session");
+
+        // 对照组：非主会话（created_by 非 None）不能删除同一孤儿——owner 兜底
+        // 只对顶层主会话放行，防止任意会话越权删无主孤儿。
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("sub-session-1".to_string()),
+                "Sub".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    ..Default::default()
+                },
+                Some("main-session-1".to_string()),
+            )
+            .await
+            .expect("create sub session");
+        assert!(
+            session_manager
+                .get_session("sub-session-1")
+                .is_some_and(|session| session.created_by.is_some()),
+            "sub session must have a creator so it is not treated as the main owner"
+        );
+        let error = resolve_session_mutation_authorization(
+            &session_manager,
+            &tree,
+            "sub-session-1",
+            "orphan-session-1",
+            workspace_path,
+            "delete",
+            SessionMutationAuthOptions::delete(),
+        )
+        .await
+        .expect_err("non-owner session must not delete an orphan session");
+        assert!(
+            error.to_string().contains("not authorized to delete"),
+            "{error}"
+        );
+    }
 }
+

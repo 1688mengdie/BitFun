@@ -15,7 +15,6 @@ use crate::agentic::keyed_lock::KeyedAsyncLock;
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::agentic::tools::restrictions::{get_session_role, validate_delegation, AgentRole};
 use crate::service::config::{
     default_legion_deploy_frequency_per_hour, default_legion_max_nodes,
     default_legion_max_total_nodes, get_global_config_service,
@@ -621,7 +620,7 @@ Notes:
 - Agent types are validated against the available agent registry (same as SessionControl).
 - daemon agents cannot be deployed through LegionControl.
 - Nodes are sorted topologically (deterministic order) and deployed root-first.
-- node.role, node.prompt, node.gate, and edge.condition are reserved fields: they are persisted into the created session metadata (legionRole / legionNodePrompt / legionNodeGate) and echoed in the result for observability, but do not yet change runtime behavior. In particular node.role is metadata only — the deployed session's RBAC role is always determined by the standard subagent role resolution (Executor for subagent-marked sessions), never by legionRole (d2-P2-2).
+- node.role, node.prompt, node.gate, and edge.condition are reserved fields: they are persisted into the created session metadata (legionRole / legionNodePrompt / legionNodeGate) and echoed in the result for observability, but do not yet change runtime behavior. In particular node.role is metadata only — the deployed session's tool permissions are always determined by the standard context-level restrictions (subagent-marked sessions), never by legionRole (d2-P2-2).
 - Saving a preset via "save" persists the same reserved fields into the preset JSON file.
 
 Related tools:
@@ -1084,14 +1083,7 @@ Related tools:
                     BitFunError::tool("load requires a creator session in tool context".to_string())
                 })?;
 
-                // Role-based delegation validation before any session
-                // is created, using the same criteria as SessionControl create
-                // (R-14 B3). An executor/reviewer creator may only deploy its own
-                // role; the permissive commander baseline applies when the creator
-                // has no registered role.
-                let creator_role = context.session_id.as_deref().and_then(get_session_role);
-                let target_role = creator_role.clone().unwrap_or(AgentRole::Commander);
-                validate_delegation(creator_role, target_role)?;
+                // R-WF-01: role-based delegation validation removed.
 
                 // The creator session's tree depth anchors the deployed legion:
                 // every root node is a direct child of the creator, and each
@@ -1305,13 +1297,9 @@ Related tools:
                     );
                     // Legion 节点 = subagent 会话：必须带 subagent 标记族
                     // （subagent=true / parentSessionId / subagentType），
-                    // 与 SessionControl create 对齐。缺失时 coordinator 的
-                    // resolve_session_role 会因 created_by 是 marker 字符串
-                    // （creator 查询恒 None）把节点注册为 Commander（全工具），
-                    // 而 restore 时 is_subagent_marked_metadata 又命中
-                    // （lineage Subagent）翻为 Executor——同一会话生命周期内
-                    // 角色漂移，且 Executor/Reviewer 创建者可部署出高权限会话
-                    // （RBAC 越权面，d2-P1-1）。补齐标记后节点创建即 Executor。
+                    // 与 SessionControl create 对齐。缺失标记会导致创建与
+                    // restore 两条链路对会话 lineage 的判定不一致（同一会话
+                    // 生命周期内语义漂移），补齐后创建与恢复口径一致。
                     metadata.insert("subagent".to_string(), json!(true));
                     metadata.insert(
                         "parentSessionId".to_string(),
@@ -1321,11 +1309,8 @@ Related tools:
                     metadata.insert("legionNodeId".to_string(), json!(node.id));
                     // legionRole 是预留元数据（d2-P2-2）：持久化进会话 metadata
                     // 供下游 SessionMessage 派发与 SessionControl 检视观察，但
-                    // **不驱动 RBAC**——节点会话的角色恒由标准 subagent 角色解析
-                    // 决定（subagent 标记 → Executor），绝不读取 legionRole 赋权。
-                    // 三处语义一致：描述文本（description Notes）/ metadata 注释 /
-                    // 本注释。如需让 legionRole 驱动 RBAC，须先改 RBAC 角色解析
-                    // 并同步 12-legion军团.md。
+                    // **不驱动权限**——节点会话的工具权限恒由上下文级限制决定，
+                    // 绝不读取 legionRole 赋权。
                     metadata.insert("legionRole".to_string(), json!(node.role));
                     // `prompt`/`gate` are reserved fields today — they
                     // carry author intent but do not yet change runtime behavior.

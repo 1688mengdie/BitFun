@@ -313,11 +313,10 @@ mod tests {
 
     #[test]
     fn main_session_open_template_still_blocks_unchecked_tools() {
-        // 主会话语义（d1-P1-1 / L5-P1-1）：主会话注册时不落 RBAC 模板
-        // （register_main_session），context 级限制为空模板（全放行）。
-        // 门 2a 在 user_enabled_tools 非空（Mode 类 agent 恒非空 = 模式
-        // default 工具集）时并集出「精确勾选集合」，未勾选工具（含 MCP）
-        // 必须被拦截——"未勾选=禁用"在主会话同样成立。
+        // 主会话语义（d1-P1-1 / L5-P1-1）：主会话 context 级限制为空模板
+        // （全放行）。门 2a 在 user_enabled_tools 非空（Mode 类 agent 恒非空
+        // = 模式 default 工具集）时并集出「精确勾选集合」，未勾选工具（含
+        // MCP）必须被拦截——"未勾选=禁用"在主会话同样成立。
         let restrictions = ToolRuntimeRestrictions::default(); // 主会话 context 级空模板
         let result = admission(
             "mcp__github__search_repos",

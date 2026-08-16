@@ -1176,18 +1176,10 @@ impl ToolPipeline {
             }
             let tool = {
                 let registry = self.tool_registry.read().await;
-                // R-26: when the RBAC master switch is off, the runtime
-                // restriction gate is bypassed (empty restrictions allow all
-                // tools/operations); the mode-level allowed-tools list and
-                // deferred-tool loading checks still apply.
-                let effective_restrictions = if crate::service::config::rbac_enabled() {
-                    effective_runtime_tool_restrictions(
-                        &task.context.session_id,
-                        &task.context.runtime_tool_restrictions,
-                    )
-                } else {
-                    ToolRuntimeRestrictions::default()
-                };
+                let effective_restrictions = effective_runtime_tool_restrictions(
+                    &task.context.session_id,
+                    &task.context.runtime_tool_restrictions,
+                );
                 if validate_tool_execution_admission(ToolExecutionAdmissionRequest {
                     tool_name: &tool_name,
                     allowed_tools: &task.context.allowed_tools,
@@ -1831,10 +1823,6 @@ impl ToolPipeline {
     }
 
     /// Resolve the admission gate and registered tool for one invocation.
-    ///
-    /// The runtime restriction gate is bypassed when the RBAC master switch
-    /// is off (empty restrictions allow all tools/operations); the mode-level
-    /// allowed-tools list and deferred-tool loading checks still apply.
     async fn resolve_tool_admission(
         &self,
         task: &ToolTask,
@@ -1842,14 +1830,10 @@ impl ToolPipeline {
         tool_args: &serde_json::Value,
     ) -> (Result<(), ToolExecutionAdmissionRejection>, Option<ToolRef>) {
         let registry = self.tool_registry.read().await;
-        let effective_restrictions = if crate::service::config::rbac_enabled() {
-            effective_runtime_tool_restrictions(
-                &task.context.session_id,
-                &task.context.runtime_tool_restrictions,
-            )
-        } else {
-            ToolRuntimeRestrictions::default()
-        };
+        let effective_restrictions = effective_runtime_tool_restrictions(
+            &task.context.session_id,
+            &task.context.runtime_tool_restrictions,
+        );
         let admission = validate_tool_execution_admission(ToolExecutionAdmissionRequest {
             tool_name,
             allowed_tools: &task.context.allowed_tools,
@@ -3559,7 +3543,6 @@ mod tests {
             dialog_turn_id: "parent-turn".to_string(),
             tool_call_id: parent_tool_call_id.to_string(),
             depth: None,
-            role: None,
         });
         context
     }

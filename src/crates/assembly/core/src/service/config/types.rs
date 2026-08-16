@@ -883,13 +883,6 @@ pub struct AIConfig {
     #[serde(default = "default_max_rounds")]
     pub max_rounds: usize,
 
-    /// User-controllable master switch for the RBAC tool-restriction checks
-    /// (R-26). When `false`, the RBAC tool-restriction checks are fully
-    /// bypassed. Defaults to `true` (mechanism on). Users can turn it off in
-    /// the settings document under `ai.rbac_enabled`.
-    #[serde(default = "default_true")]
-    pub rbac_enabled: bool,
-
     /// Master switch for loading external user instruction sources
     /// (`~/.claude/CLAUDE.md` + `rules/`, OpenCode `AGENTS.md`, Codex
     /// `AGENTS.md`) into the User Context.
@@ -3077,7 +3070,6 @@ impl Default for AIConfig {
             browser_control_preferred_browser: String::new(),
             browser_control_auto_connect_on_startup: false,
             max_rounds: default_max_rounds(),
-            rbac_enabled: true,
             external_instruction_sources: false,
             workspace_instruction_files: false,
             knowledge_base_root: String::new(),
