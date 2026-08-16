@@ -5701,7 +5701,7 @@ mod tests {
         let err = result.expect_err("direct deferred invocation must be rejected");
         let message = err.to_string();
         assert!(
-            message.contains("cannot be called directly"),
+            message.contains("Call GetToolSpec first"),
             "unexpected error: {message}"
         );
     }

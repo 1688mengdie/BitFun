@@ -27,7 +27,7 @@ import type { ReviewTeamRunManifest } from '@/shared/services/reviewTeamService'
 const agentApiMocks = vi.hoisted(() => ({
   ensureCoordinatorSession: vi.fn(),
   createSession: vi.fn(),
-  getAvailableModes: vi.fn(),
+  getAvailableModes: vi.fn(async () => []),
 }));
 
 const configApiMocks = vi.hoisted(() => ({
