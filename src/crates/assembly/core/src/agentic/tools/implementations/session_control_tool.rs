@@ -3327,7 +3327,7 @@ mod tests {
     }
 
     // ── read authz（export transcript）官方祖先验证测试套件 ──
-    // R-WF-01 精修：RBAC owner 豁免已删（caller_is_owner_session 恒 false），
+    // R-WF-01 精修：RBAC owner 豁免已删，caller_is_owner_session 改 created_by.is_none()（数据层 owner 判定），
     // 读取授权 = 同 workspace 归属 + created_by 匹配 + 树内双向祖先验证
     // （需求 §三「不影响会话树/父子拓扑」官方安全门，全部保留）。
 
@@ -3559,7 +3559,7 @@ mod tests {
         // 2. 目标会话 metadata 缺失（磁盘无记录，list 可见但无创建者/祖先链）——
         //    `orphan_session_delete_authorized` 的「metadata 缺失即孤儿」分支放行；
         // 3. `resolve_session_mutation_authorization` delete 返回 Ok——验证
-        //    R-26 孤儿删除豁免真正经授权门生效（防 caller_is_owner 恒 false 回退）。
+        //    R-26 孤儿删除豁免真正经授权门生效（防 caller_is_owner 误判为非 owner 导致豁免失效）。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-main-orphan-delete");
