@@ -119,6 +119,7 @@ pub(crate) async fn dispatch(
 
         // Git (local workspace only)
         "git_is_repository" => git::git_is_repository(args).await,
+        "git_get_repository_trust" => git::git_get_repository_trust(args).await,
 
         // Soft empty / no-op for Desktop-only subsystems
         "notify_cron_host_ready" => soft::notify_cron_host_ready().await,
