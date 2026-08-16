@@ -119,7 +119,9 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         | "SessionHistory" | "Cron" | "create_group_chat" | "invite_group_member"
         | "remove_group_member" | "send_group_message" | "get_group_history"
         | "list_group_chats" | "fork_group_chat" | "group_member_status"
-        | "delete_group_chat" => Some(ToolPackFeatureGroup::AgentControl),
+        | "delete_group_chat" | "update_group_member_tools" | "update_group_wiring" => {
+            Some(ToolPackFeatureGroup::AgentControl)
+        }
         _ => None,
     }
 }
@@ -246,6 +248,8 @@ const PRODUCT_TOOL_PROVIDER_GROUP_PLAN: &[ToolProviderGroupPlan] = &[
             "fork_group_chat",
             "group_member_status",
             "delete_group_chat",
+            "update_group_member_tools",
+            "update_group_wiring",
         ],
     },
     ToolProviderGroupPlan {
@@ -551,6 +555,8 @@ mod tests {
                 "fork_group_chat",
                 "group_member_status",
                 "delete_group_chat",
+                "update_group_member_tools",
+                "update_group_wiring",
                 "WebSearch",
                 "WebFetch",
                 "ListMCPResources",

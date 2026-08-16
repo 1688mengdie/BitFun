@@ -51,7 +51,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// Tool name registered in the product tool pipeline（materialization 注册）。
 pub const GROUP_ROOM_TOOL_NAME: &str = "group_room";
 
-/// Actions supported by the tool（9 个，type-contract §二）。
+/// Actions supported by the tool（9 基础 + 2 编排扩展，type-contract §二 +
+/// R-WF-03 编排扩展：改成员工具集/改接线）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum GroupRoomAction {
@@ -64,6 +65,12 @@ pub(crate) enum GroupRoomAction {
     Fork,
     MemberStatus,
     Delete,
+    /// R-WF-03：改成员工具集（编排控制，复用 add_group_member 群成员表
+    /// 持久化 + validate_session_exists 存在性门）。
+    UpdateMemberTools,
+    /// R-WF-03：改接线（编排控制——数据流/执行顺序提示，非硬编码约束，
+    /// 需求 §七「DAG 画布节点连线创建页面，指挥官有工具可修改/查看」）。
+    UpdateWiring,
 }
 
 impl GroupRoomAction {
@@ -78,6 +85,8 @@ impl GroupRoomAction {
             "fork" => Some(Self::Fork),
             "member_status" => Some(Self::MemberStatus),
             "delete" => Some(Self::Delete),
+            "update_member_tools" => Some(Self::UpdateMemberTools),
+            "update_wiring" => Some(Self::UpdateWiring),
             _ => None,
         }
     }
@@ -121,23 +130,37 @@ struct GroupRoomInput {
     /// fork: 裂变点 turn id。
     #[serde(default)]
     turn_id: Option<String>,
+    /// update_member_tools: 成员会话的工具集（覆盖成员默认工具集）。
+    #[serde(default)]
+    tools: Vec<String>,
+    /// update_wiring: 接线定义（数据流/执行顺序，JSON 结构）。
+    #[serde(default)]
+    wiring: Option<Value>,
 }
 
 /// 发送者身份（契约 §三类型定义，字段对齐 session_message_tool.rs:485-496）。
 /// 契约要求「复用现成 SenderIdentity」，但该类型在 session_message_tool.rs 中为
 /// private 且不可跨模块复用；此处本地定义字段完全一致的等价类型（含 serde derive），
 /// 保证 GroupMessage 可序列化且 wire 形态与契约 §三一致。
+///
+/// R-WF-03（发言方标识 = SOUL.name + 类型）：`role` 随 R-WF-01 RBAC 全删
+/// 后恒 None（不再承载 Commander/Executor/Reviewer 身份）；`agent_type`
+/// 承载「智能体类型」（需求 §六.5：`三文件名 + 类型`——SOUL 里的身份名 +
+/// 智能体类型，不再显示 role）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SenderIdentity {
     /// 发送者会话 id；始终存在。
     pub session_id: String,
-    /// RBAC 角色展示标签（如 "Commander"）。
+    /// RBAC 角色展示标签（R-WF-01 后恒 None，保留字段兼容存量序列化）。
     pub role: Option<String>,
     /// 会话树深度（0 = L0 根）。
     pub depth: Option<u32>,
-    /// 会话名（或 agent_type 回退）。
+    /// 会话名（SOUL.name，身份本源名；回退链见 resolve_sender_identity）。
     pub name: Option<String>,
+    /// R-WF-03：智能体类型（agent_type，如 "group"/"agentic"/"Claw"）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
 }
 
 /// 群聊关联键（契约 §三，字段对齐 session_message_tool.rs:504-510
@@ -167,8 +190,9 @@ pub struct GroupMessage {
     pub metadata: GroupChatForwardMetadata,
 }
 
-/// action → 是否只读（type-contract §六.5：history/list/member_status 只读，
-/// create/invite/remove/send/fork/delete 非只读）。
+/// action → 是否只读（type-contract §六.5 + R-WF-03：history/list/member_status
+/// 只读，create/invite/remove/send/fork/delete/update_member_tools/update_wiring
+/// 非只读——编排工具 = 写操作）。
 pub(crate) fn group_room_action_is_readonly(action: GroupRoomAction) -> bool {
     matches!(
         action,
@@ -203,9 +227,14 @@ impl GroupRoomTool {
             .as_millis() as i64
     }
 
-    /// 构造 SenderIdentity（契约 §三）：会话树深度（coordinator.session_tree()
-    /// .get_depth）、会话名（内存会话 → 磁盘元数据回退）。所有字段优雅降级：
-    /// 缺失 → None，绝不阻塞发送/读取。RBAC role 已随 R-WF-01 删除，role 恒 None。
+    /// 构造 SenderIdentity（契约 §三 + R-WF-03 发言方标识 = SOUL.name + 类型）：
+    /// - 会话树深度（coordinator.session_tree().get_depth）
+    /// - name = SOUL.name（身份本源名，需求 §六.5/§七：成员 SOUL 里的身份名）
+    ///   ——优先读成员工作区 SOUL.md frontmatter 的 name 字段（FrontMatterMarkdown，
+    ///   与 IDENTITY.md frontmatter 同构）；缺失时回退内存会话名 → 磁盘元数据
+    ///   会话名 → None（绝不阻塞发送/读取）。
+    /// - agent_type = 会话 agent_type（智能体类型，不再用 role；R-WF-01 后
+    ///   role 恒 None，保留字段兼容存量序列化）。
     ///
     /// R-GC-34（主人身份错位 P0 修复，方案 B）：`__master__`（GROUP_MASTER_ACTOR
     /// 保留字，local_customizations.rs:96）特判 → 主人身份 = depth 0（L0）+
@@ -220,20 +249,35 @@ impl GroupRoomTool {
         }
         let role = None;
         let depth = coordinator.session_tree().get_depth(session_id);
-        // 内存会话名优先；缺失时回退磁盘元数据（重启后未加载场景）。
-        let name = coordinator
-            .get_session_manager()
-            .get_session(session_id)
-            .and_then(|session| {
-                let name = session.session_name.trim().to_string();
-                (!name.is_empty()).then_some(name)
-            });
-        let name = match name {
+        let manager = coordinator.get_session_manager();
+        // 会话 agent_type（智能体类型，R-WF-03 发言方标识的「类型」位）。
+        let agent_type = manager.get_session(session_id).map(|session| session.agent_type.clone());
+        // 内存会话名（次优先级，SOUL.name 之下）。
+        let session_name = manager.get_session(session_id).and_then(|session| {
+            let name = session.session_name.trim().to_string();
+            (!name.is_empty()).then_some(name)
+        });
+        // R-WF-03：身份本源名 = 工作区 SOUL.md frontmatter `name`（三文件
+        // 身份名，需求 §六.5）。SOUL 名优先于会话名——会话名是界面标题，
+        // SOUL.name 是智能体身份（军团三文件制唯一权威）。
+        let soul_name = async {
+            let soul_path = std::path::Path::new(workspace).join("SOUL.md");
+            let content = tokio::fs::read_to_string(soul_path).await.ok()?;
+            let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
+            let name = metadata
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .trim()
+                .to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        .await;
+        // 回退链：SOUL.name → 内存会话名 → 磁盘元数据会话名 → None。
+        let name = match soul_name.or(session_name) {
             Some(name) => Some(name),
             None => {
                 let disk_name = async {
-                    coordinator
-                        .get_session_manager()
+                    manager
                         .load_session_metadata(std::path::Path::new(workspace), session_id)
                         .await
                         .ok()
@@ -252,13 +296,14 @@ impl GroupRoomTool {
             role,
             depth,
             name,
+            agent_type,
         }
     }
 
     /// 主人 SenderIdentity（R-GC-34 方案 B）：L0 + i18n 主人名。
     ///
     /// - role：R-WF-01 全删 RBAC 后恒 None（不再硬编码 Commander，发言方标识
-    ///   由后续 R-WF-03/08 统一为「SOUL.name + 类型」）。
+    ///   由 R-WF-03 统一为「SOUL.name + 类型」）。
     /// - depth：0（L0 根，会话树语义）。
     /// - name：i18n shared term `agents.master`（按当前 locale 翻译；共享词条
     ///   在 shared/i18n/resources/shared/*/terms.json，经
@@ -267,6 +312,9 @@ impl GroupRoomTool {
     ///   「调用 I18nService 的 host 必须显式选择 i18n-runtime」）或全局服务
     ///   缺失/词条缺失 → 回退 "Master"（英文，i18n fallback 链语义的兜底）；
     ///   绝不返回空名（空值防御，不 crash）。
+    /// - agent_type：R-WF-03 发言方标识 = SOUL.name + 类型——主人无 SOUL 文件
+    ///   （L0 根），类型位恒 `Some("__master__")` 占位（GROUP_MASTER_ACTOR），
+    ///   与 senderSessionId 同源，前端据 session_id 识别主人。
     async fn master_sender_identity() -> SenderIdentity {
         let role = None;
         let depth = Some(0u32);
@@ -290,6 +338,7 @@ impl GroupRoomTool {
             role,
             depth,
             name,
+            agent_type: Some(GROUP_MASTER_ACTOR.to_string()),
         }
     }
 
@@ -516,8 +565,9 @@ impl GroupRoomTool {
         let sender = Self::resolve_sender_identity(coordinator, sender_session_id, &group_workspace)
             .await;
 
-        // 消息 metadata：五字段（契约 §三，B-2 修复）：
-        // { groupId, senderSessionId, senderRole, senderDepth, senderName }。
+        // 消息 metadata：五字段 + senderType（契约 §三 + R-WF-03 发言方标识
+        // = SOUL.name + 类型）：
+        // { groupId, senderSessionId, senderRole, senderDepth, senderName, senderType }。
         let mut metadata = serde_json::Map::new();
         metadata.insert("groupId".to_string(), json!(group_id));
         metadata.insert("senderSessionId".to_string(), json!(sender.session_id));
@@ -527,7 +577,9 @@ impl GroupRoomTool {
         if let Some(depth) = sender.depth {
             metadata.insert("senderDepth".to_string(), json!(depth));
         }
-        // senderName 取真实会话名（B-2 修复）；无会话名时回退 sender_session_id 占位。
+        // senderName 取 SOUL.name（R-WF-03：发言方标识 = SOUL.name + 类型；
+        // resolve_sender_identity 已按 SOUL.name → 会话名 → sender id 回退）。
+        // 无会话名时回退 sender_session_id 占位。
         // R-GC-34（方案 B，空值防御）：主人（sender_session_id == __master__）
         // 会话名不可得（i18n 服务缺失等）时回退 group_id，绝不 crash。
         let sender_name_fallback = if sender.session_id == GROUP_MASTER_ACTOR {
@@ -542,6 +594,17 @@ impl GroupRoomTool {
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(sender_name_fallback)),
+        );
+        // senderType = 智能体类型（R-WF-03 发言方标识「类型」位，metadata
+        // 旁路不进 text——缓存保护，总纲 §〇.6）。主人无 agent_type →
+        // 回退 senderSessionId（__master__ 同源占位，前端据 session_id 识别）。
+        metadata.insert(
+            "senderType".to_string(),
+            json!(sender
+                .agent_type
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(sender.session_id.as_str())),
         );
 
         // 生成 turn_id（= message_id）：start_dialog_turn 接受显式 turn_id，
@@ -580,8 +643,9 @@ impl GroupRoomTool {
         sender_session_id: &str,
         content: &str,
     ) -> BitFunResult<String> {
-        // 与 send_message 同构的五字段 metadata（契约 §三）：解析群主
-        // 会话身份（role/depth/name），让欢迎 turn 的 senderBadge 正常显示。
+        // 与 send_message 同构的五字段 + senderType metadata（契约 §三 +
+        // R-WF-03）：解析群主会话身份（role/depth/name/agent_type），让欢迎
+        // turn 的 senderBadge 正常显示。
         let sender = Self::resolve_sender_identity(coordinator, sender_session_id, workspace).await;
         let mut metadata = serde_json::Map::new();
         metadata.insert("groupId".to_string(), json!(group_id));
@@ -599,6 +663,14 @@ impl GroupRoomTool {
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(sender_session_id)),
+        );
+        metadata.insert(
+            "senderType".to_string(),
+            json!(sender
+                .agent_type
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(sender.session_id.as_str())),
         );
         Self::write_group_turn_with_metadata(
             coordinator,
@@ -727,6 +799,7 @@ impl GroupRoomTool {
                         role: None,
                         depth: None,
                         name: None,
+                        agent_type: None,
                     });
                 let group_author = (sender.session_id != "unknown")
                     .then(|| sender.session_id.clone());
@@ -778,7 +851,8 @@ impl GroupRoomTool {
     }
 
     /// 从持久化 turn 的 user_message.metadata（JSON）解析 SenderIdentity
-    /// （契约 §三：senderSessionId/senderRole/senderDepth/senderName）。
+    /// （契约 §三 + R-WF-03：senderSessionId/senderRole/senderDepth/senderName/
+    /// senderType）。
     fn parse_sender_identity_from_json(
         metadata: &Value,
     ) -> SenderIdentity {
@@ -791,6 +865,7 @@ impl GroupRoomTool {
                 .and_then(|v| v.as_u64())
                 .map(|d| d as u32),
             name: get("senderName").filter(|value| !value.trim().is_empty()),
+            agent_type: get("senderType").filter(|value| !value.trim().is_empty()),
         }
     }
 
@@ -1023,6 +1098,72 @@ impl GroupRoomTool {
             .map_err(BitFunError::tool)
     }
 
+    /// R-WF-03 编排扩展：改成员工具集——把成员会话的工具集写入群会话
+    /// custom_metadata.groupMemberTools（{ memberSessionId: [tool,...] }）。
+    ///
+    /// 复用现成门（深侦 §1.3）：
+    /// - `group_workspace`：群 workspace 解析（内存 config → 磁盘 binding 回退）
+    /// - `validate_session_exists`：成员存在性校验（内存 → 磁盘回退，禁静默跳过）
+    ///
+    /// 工具集为「编排控制提示」（需求 §七：DAG 画布可更改接线 + 指挥官有工具
+    /// 可修改/查看）——存储于群会话元数据，供前端/指挥官读取；运行时工具
+    /// 授权仍由官方 ToolRuntimeRestrictions 门把关（不在此重复实现）。
+    /// 幂等：重复设置同集合直接覆盖，不报错。
+    async fn update_member_tools(
+        coordinator: &ConversationCoordinator,
+        group_id: &str,
+        member_session_id: &str,
+        tools: &[String],
+    ) -> BitFunResult<()> {
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
+        Self::validate_session_exists(coordinator, member_session_id).await?;
+        let manager = coordinator.get_session_manager();
+        manager
+            .update_session_metadata(&PathBuf::from(&group_workspace), group_id, |metadata| {
+                let custom = metadata
+                    .custom_metadata
+                    .get_or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .expect("custom_metadata is always an object");
+                let tool_map = custom
+                    .entry("groupMemberTools".to_string())
+                    .or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .expect("groupMemberTools is always an object");
+                tool_map.insert(member_session_id.to_string(), json!(tools));
+            })
+            .await
+            .map_err(BitFunError::tool)
+    }
+
+    /// R-WF-03 编排扩展：改接线——把接线定义（数据流/执行顺序提示）写入群
+    /// 会话 custom_metadata.groupWiring。
+    ///
+    /// 需求 §七「工作流接线：数据流 + 执行顺序，但**不是硬编码约束**——
+    /// 前端 DAG 画布展示，可更改，指挥官有工具可修改/查看」：本工具 =
+    /// 指挥官侧的接线修改/查看落点。wiring 为任意 JSON 结构（{ nodes:[], edges:[] }
+    /// 形态由前端 DAG 画布约定），后端仅持久化透传，不解析不约束。
+    /// 幂等：重复设置直接覆盖，不报错。
+    async fn update_wiring(
+        coordinator: &ConversationCoordinator,
+        group_id: &str,
+        wiring: &Value,
+    ) -> BitFunResult<()> {
+        let group_workspace = Self::group_workspace(coordinator, group_id).await?;
+        let manager = coordinator.get_session_manager();
+        manager
+            .update_session_metadata(&PathBuf::from(&group_workspace), group_id, |metadata| {
+                let custom = metadata
+                    .custom_metadata
+                    .get_or_insert_with(|| json!({}))
+                    .as_object_mut()
+                    .expect("custom_metadata is always an object");
+                custom.insert("groupWiring".to_string(), wiring.clone());
+            })
+            .await
+            .map_err(BitFunError::tool)
+    }
+
     /// 记成员进群成员表（幂等：已存在则跳过）。
     async fn add_group_member(
         coordinator: &ConversationCoordinator,
@@ -1112,6 +1253,8 @@ Actions:
 - "fork": Fork a child group (规划/审查/执行小群) via session branch.
 - "member_status": Query a member session's state.
 - "delete": Delete a group (session delete).
+- "update_member_tools": Update a member session's tool set within a group (orchestration control; stored in group metadata).
+- "update_wiring": Update the group wiring definition (data flow / execution order hints for the DAG canvas; stored in group metadata).
 
 Arguments:
 - "action": One of the actions above.
@@ -1119,13 +1262,15 @@ Arguments:
 - "workspace": Group workspace for create.
 - "members": Member session ids for create/invite/fork.
 - "group_id": Target group session id for invite/remove/send/history/fork/member_status/delete.
-- "member_session_id": Member session id for invite/remove/member_status.
+- "member_session_id": Member session id for invite/remove/member_status/update_member_tools.
 - "content": Message content for send.
 - "sender_session_id": Sender session id for send.
 - "urgent": Urgent delivery for send.
 - "limit": History read limit.
 - "cursor": History page cursor.
-- "turn_id": Fork point turn id."#
+- "turn_id": Fork point turn id.
+- "tools": Tool set for update_member_tools.
+- "wiring": Wiring definition for update_wiring."#
             .to_string())
     }
 
@@ -1135,20 +1280,22 @@ Arguments:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "invite", "remove", "send", "history", "list", "fork", "member_status", "delete"],
+                    "enum": ["create", "invite", "remove", "send", "history", "list", "fork", "member_status", "delete", "update_member_tools", "update_wiring"],
                     "description": "The group chat action to perform."
                 },
                 "name": { "type": "string", "description": "Group name for create/fork." },
                 "workspace": { "type": "string", "description": "Group workspace for create." },
                 "members": { "type": "array", "items": { "type": "string" }, "description": "Member session ids for create/invite/fork." },
                 "group_id": { "type": "string", "description": "Target group session id." },
-                "member_session_id": { "type": "string", "description": "Member session id for invite/remove/member_status." },
+                "member_session_id": { "type": "string", "description": "Member session id for invite/remove/member_status/update_member_tools." },
                 "content": { "type": "string", "description": "Message content for send." },
                 "sender_session_id": { "type": "string", "description": "Sender session id for send." },
                 "urgent": { "type": "boolean", "description": "Urgent delivery for send." },
                 "limit": { "type": "integer", "description": "History read limit." },
                 "cursor": { "type": "integer", "description": "History page cursor." },
-                "turn_id": { "type": "string", "description": "Fork point turn id." }
+                "turn_id": { "type": "string", "description": "Fork point turn id." },
+                "tools": { "type": "array", "items": { "type": "string" }, "description": "Tool set for update_member_tools." },
+                "wiring": { "description": "Wiring definition for update_wiring (data flow / execution order hints)." }
             },
             "required": ["action"]
         })
@@ -1309,6 +1456,38 @@ Arguments:
                 Self::delete_group(&coordinator, group_id).await?;
                 json!({ "groupId": group_id, "status": "deleted" })
             }
+            GroupRoomAction::UpdateMemberTools => {
+                let group_id = parsed.group_id.as_deref().ok_or_else(|| {
+                    BitFunError::tool("group_id is required for update_member_tools".to_string())
+                })?;
+                let member = parsed.member_session_id.as_deref().ok_or_else(|| {
+                    BitFunError::tool(
+                        "member_session_id is required for update_member_tools".to_string(),
+                    )
+                })?;
+                if parsed.tools.is_empty() {
+                    return Err(BitFunError::tool(
+                        "tools must not be empty for update_member_tools".to_string(),
+                    ));
+                }
+                Self::update_member_tools(&coordinator, group_id, member, &parsed.tools).await?;
+                json!({
+                    "groupId": group_id,
+                    "member": member,
+                    "tools": parsed.tools,
+                    "status": "updated",
+                })
+            }
+            GroupRoomAction::UpdateWiring => {
+                let group_id = parsed.group_id.as_deref().ok_or_else(|| {
+                    BitFunError::tool("group_id is required for update_wiring".to_string())
+                })?;
+                let wiring = parsed.wiring.clone().ok_or_else(|| {
+                    BitFunError::tool("wiring is required for update_wiring".to_string())
+                })?;
+                Self::update_wiring(&coordinator, group_id, &wiring).await?;
+                json!({ "groupId": group_id, "wiring": wiring, "status": "updated" })
+            }
         };
 
         Ok(vec![ToolResult::ok(output, None)])
@@ -1365,7 +1544,7 @@ mod tests {
         }
     }
 
-    // ── B-3（契约 §六.5）：readonly 按 action 区分 ──
+    // ── B-3（契约 §六.5 + R-WF-03）：readonly 按 action 区分 ──
     #[test]
     fn readonly_only_history_list_member_status() {
         for (name, expected) in [
@@ -1378,6 +1557,8 @@ mod tests {
             ("fork", false),
             ("member_status", true),
             ("delete", false),
+            ("update_member_tools", false),
+            ("update_wiring", false),
         ] {
             let action =
                 GroupRoomAction::from_str(name).unwrap_or_else(|| panic!("unknown {name}"));
@@ -1406,7 +1587,16 @@ mod tests {
             );
         }
         // 非只读 action：非并发安全 + 有权限意图。
-        for action in ["create", "invite", "remove", "send", "fork", "delete"] {
+        for action in [
+            "create",
+            "invite",
+            "remove",
+            "send",
+            "fork",
+            "delete",
+            "update_member_tools",
+            "update_wiring",
+        ] {
             let input = json!({ "action": action, "group_id": "g-1" });
             assert!(!tool.is_concurrency_safe(Some(&input)), "action={action}");
             assert!(
@@ -1453,11 +1643,19 @@ mod tests {
         );
     }
 
-    // ── B-2（契约 §三）：send metadata 五字段 + senderName 回退 ──
+    // ── B-2（契约 §三 + R-WF-03）：send metadata 五字段 + senderName 回退 + senderType ──
     #[test]
     fn send_metadata_contract_shape_is_five_fields() {
-        // send 构造的 metadata 键集合 = 契约 §三 五字段（role/depth 缺失时省略）。
-        let keys = ["groupId", "senderSessionId", "senderRole", "senderDepth", "senderName"];
+        // send 构造的 metadata 键集合 = 契约 §三 五字段 + senderType（R-WF-03
+        // 发言方标识 = SOUL.name + 类型；role/depth 缺失时省略）。
+        let keys = [
+            "groupId",
+            "senderSessionId",
+            "senderRole",
+            "senderDepth",
+            "senderName",
+            "senderType",
+        ];
         // 全字段形态（B-2 完整断言）。
         let metadata = json!({
             "groupId": "group-1",
@@ -1465,6 +1663,7 @@ mod tests {
             "senderRole": "commander",
             "senderDepth": 3,
             "senderName": "小群主",
+            "senderType": "agentic",
         });
         for key in keys {
             assert!(metadata.get(key).is_some(), "missing key {key}");
@@ -1483,6 +1682,10 @@ mod tests {
             metadata.get("senderName").and_then(Value::as_str),
             Some("小群主")
         );
+        assert_eq!(
+            metadata.get("senderType").and_then(Value::as_str),
+            Some("agentic")
+        );
     }
 
     #[test]
@@ -1497,6 +1700,76 @@ mod tests {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(sender_session_id);
         assert_eq!(effective, "sender-x");
+    }
+
+    // ── R-WF-03：senderType 回退（智能体类型缺失 → sender session id 占位）──
+    #[test]
+    fn send_metadata_sender_type_falls_back_to_session_id() {
+        // 与 send_message/write_group_turn 的 senderType 组装逻辑同构：
+        // agent_type 缺失（如 __master__ 无会话）→ 回退 sender.session_id。
+        let session_id = bitfun_runtime_ports::GROUP_MASTER_ACTOR;
+        let agent_type: Option<String> = None;
+        let effective = agent_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(session_id);
+        assert_eq!(effective, bitfun_runtime_ports::GROUP_MASTER_ACTOR);
+        // 对照：普通成员有类型时用类型。
+        let member_type = Some("agentic".to_string());
+        let member_effective = member_type
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("sender-x");
+        assert_eq!(member_effective, "agentic");
+    }
+
+    // ── R-WF-03：发言方标识 = SOUL.name + 类型（metadata，不进 text）──
+    // SOUL.name 解析 = 工作区 SOUL.md frontmatter `name` 字段（FrontMatterMarkdown，
+    // 与 IDENTITY.md frontmatter 同构）。本测试覆盖解析链（不依赖 coordinator）：
+    // frontmatter name 命中 → SOUL.name 优先于会话名。
+    #[tokio::test]
+    async fn soul_name_resolution_prefers_frontmatter_name() {
+        let temp = std::env::temp_dir().join(format!("bitfun-soul-name-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp).expect("temp dir");
+        // 无 SOUL.md → None（优雅降级，不炸）。
+        let soul_path = temp.join("SOUL.md");
+        let content = std::fs::read_to_string(&soul_path).unwrap_or_default();
+        let soul_name = async {
+            let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
+            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        .await;
+        assert_eq!(soul_name, None, "missing SOUL.md must degrade to None");
+
+        // 写入 SOUL.md frontmatter name → 命中。
+        std::fs::write(
+            &soul_path,
+            "---\nname: 姬码锋\ncreature: bee\n---\n\n# SOUL.md\n",
+        )
+        .expect("write SOUL.md");
+        let content = std::fs::read_to_string(&soul_path).expect("read SOUL.md");
+        let soul_name = async {
+            let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
+            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        .await;
+        assert_eq!(
+            soul_name.as_deref(),
+            Some("姬码锋"),
+            "SOUL.name must be the frontmatter name field"
+        );
+        // 空 name → None（优雅降级）。
+        std::fs::write(&soul_path, "---\nname:\n---\n").expect("write empty SOUL.md");
+        let content = std::fs::read_to_string(&soul_path).expect("read SOUL.md");
+        let soul_name = async {
+            let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
+            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            (!name.is_empty()).then_some(name)
+        }
+        .await;
+        assert_eq!(soul_name, None, "empty frontmatter name must degrade to None");
     }
 
     // ── R-GC-34（主人身份错位 P0 修复，方案 B）：__master__ 特判 ──
@@ -1516,6 +1789,12 @@ mod tests {
         assert!(
             !name.trim().is_empty(),
             "master name must never be empty (empty-value defense)"
+        );
+        // R-WF-03：主人类型位 = __master__（GROUP_MASTER_ACTOR 同源占位）。
+        assert_eq!(
+            identity.agent_type.as_deref(),
+            Some(bitfun_runtime_ports::GROUP_MASTER_ACTOR),
+            "master senderType must be the __master__ reserved word"
         );
     }
 
@@ -1587,7 +1866,7 @@ mod tests {
         assert_eq!(identity.depth, Some(0));
     }
 
-    // ── B-1（契约 §三）：GroupMessage author/metadata 结构 + history author 解析 ──
+    // ── B-1（契约 §三 + R-WF-03）：GroupMessage author/metadata 结构 + history author 解析 ──
     #[test]
     fn parse_sender_identity_from_json_full() {
         let parsed = GroupRoomTool::parse_sender_identity_from_json(&json!({
@@ -1596,11 +1875,13 @@ mod tests {
             "senderRole": "Executor",
             "senderDepth": 2,
             "senderName": "九号助手",
+            "senderType": "agentic",
         }));
         assert_eq!(parsed.session_id, "sender-9");
         assert_eq!(parsed.role.as_deref(), Some("Executor"));
         assert_eq!(parsed.depth, Some(2));
         assert_eq!(parsed.name.as_deref(), Some("九号助手"));
+        assert_eq!(parsed.agent_type.as_deref(), Some("agentic"));
     }
 
     #[test]
@@ -1610,13 +1891,16 @@ mod tests {
         assert_eq!(parsed.role, None);
         assert_eq!(parsed.depth, None);
         assert_eq!(parsed.name, None);
+        assert_eq!(parsed.agent_type, None);
 
         let whitespace = GroupRoomTool::parse_sender_identity_from_json(&json!({
             "senderSessionId": "sender-1",
             "senderName": "   ",
+            "senderType": "  ",
         }));
         assert_eq!(whitespace.session_id, "sender-1");
         assert_eq!(whitespace.name, None);
+        assert_eq!(whitespace.agent_type, None);
     }
 
     #[test]
@@ -1661,6 +1945,7 @@ mod tests {
                 role: None,
                 depth: None,
                 name: None,
+                agent_type: None,
             });
         assert_eq!(sender.session_id, "unknown");
         assert_eq!(sender.role, None);
@@ -1677,6 +1962,7 @@ mod tests {
                 role: Some("Commander".to_string()),
                 depth: Some(0),
                 name: Some("群主".to_string()),
+                agent_type: Some("group".to_string()),
             },
             content: "hi".to_string(),
             timestamp: 123,
@@ -1701,6 +1987,11 @@ mod tests {
         assert_eq!(
             json_value.pointer("/author/name").and_then(Value::as_str),
             Some("群主")
+        );
+        // R-WF-03：author.agentType（智能体类型）随序列化暴露。
+        assert_eq!(
+            json_value.pointer("/author/agentType").and_then(Value::as_str),
+            Some("group")
         );
         assert_eq!(
             json_value
@@ -1808,7 +2099,7 @@ mod tests {
 
     #[test]
     fn action_round_trip_all_nine_actions() {
-        let cases: [(GroupRoomAction, &str); 9] = [
+        let cases: [(GroupRoomAction, &str); 11] = [
             (GroupRoomAction::Create, "create"),
             (GroupRoomAction::Invite, "invite"),
             (GroupRoomAction::Remove, "remove"),
@@ -1818,6 +2109,8 @@ mod tests {
             (GroupRoomAction::Fork, "fork"),
             (GroupRoomAction::MemberStatus, "member_status"),
             (GroupRoomAction::Delete, "delete"),
+            (GroupRoomAction::UpdateMemberTools, "update_member_tools"),
+            (GroupRoomAction::UpdateWiring, "update_wiring"),
         ];
         for (expected, name) in cases {
             let parsed = GroupRoomAction::from_str(name)
@@ -1839,9 +2132,9 @@ mod tests {
             .expect("action enum array");
         let expected = [
             "create", "invite", "remove", "send", "history", "list", "fork", "member_status",
-            "delete",
+            "delete", "update_member_tools", "update_wiring",
         ];
-        assert_eq!(enums.len(), 9, "exactly 9 enum values");
+        assert_eq!(enums.len(), 11, "exactly 11 enum values (9 + 2 orchestration)");
         for name in expected {
             assert!(
                 enums.iter().any(|v| v.as_str() == Some(name)),
@@ -2471,6 +2764,20 @@ mod tests {
         .expect("fork group");
         assert!(!child_id.is_empty());
         assert_ne!(child_id, group_id, "child must differ from parent");
+        // R-WF-03（fork 只读语义）：branch_session 继承 source agent_type
+        // （session_branch.rs:72/208）→ 子群 agent_type=group（非 Claw 非
+        // agentic），子群同样无大模型响应 + 只读（契约 §二.7）。子群由
+        // branch_session 落盘（不注册内存）→ 从磁盘元数据断言。
+        let child_metadata_for_type = manager
+            .load_session_metadata(workspace, &child_id)
+            .await
+            .expect("load child metadata")
+            .expect("child metadata exists");
+        assert_eq!(
+            child_metadata_for_type.agent_type,
+            GroupRoomTool::default_group_agent_type(),
+            "R-WF-03: fork child must keep agent_type=group (readonly fork semantics)"
+        );
 
         // 契约 §四：fork 传不存在 ID → 明确错误（禁静默跳过）。
         let fork_missing_err = GroupRoomTool::fork_group(
@@ -2604,7 +2911,90 @@ mod tests {
             "R-GC-38: empty-member fork child must be recognized by list_group_chats"
         );
 
-        // ── R-GC-38（P2）：delete_group 级联清成员反标 ──
+        // ── R-WF-03：编排扩展——改成员工具集 + 改接线（持久化于群会话
+        // custom_metadata）──
+        // update_member_tools：成员存在性校验（validate_session_exists 复用）
+        // → groupMemberTools 写入 { memberId: [tool,...] }；重复设置幂等覆盖。
+        let member_tools = vec![
+            "Read".to_string(),
+            "Grep".to_string(),
+            "Write".to_string(),
+        ];
+        GroupRoomTool::update_member_tools(coordinator, &group_id, &member_a, &member_tools)
+            .await
+            .expect("update member tools");
+        let meta_after_tools = manager
+            .load_session_metadata(workspace, &group_id)
+            .await
+            .expect("load group metadata")
+            .expect("metadata exists");
+        let member_tool_map = meta_after_tools
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupMemberTools"))
+            .expect("groupMemberTools must exist after update_member_tools");
+        let member_tools_stored = member_tool_map
+            .get(&member_a)
+            .and_then(|v| v.as_array())
+            .and_then(|a| {
+                a.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
+            })
+            .expect("member A tool set stored");
+        assert_eq!(
+            member_tools_stored,
+            vec!["Read", "Grep", "Write"],
+            "update_member_tools must persist the tool set"
+        );
+        // 成员不存在 → 明确错误（复用 validate_session_exists 门，禁静默跳过）。
+        let tools_missing_err = GroupRoomTool::update_member_tools(
+            coordinator,
+            &group_id,
+            "not-a-real-member",
+            &["Read".to_string()],
+        )
+        .await
+        .expect_err("update_member_tools with a non-existent member must fail");
+        assert!(
+            tools_missing_err
+                .to_string()
+                .contains("member session not found"),
+            "non-existent member must yield a clear error, got: {tools_missing_err}"
+        );
+
+        // update_wiring：接线定义（数据流/执行顺序提示，非硬编码约束）
+        // 持久化于 groupWiring；幂等覆盖。
+        let wiring = json!({
+            "nodes": ["member_a", "member_b"],
+            "edges": [["member_a", "member_b"]],
+        });
+        GroupRoomTool::update_wiring(coordinator, &group_id, &wiring)
+            .await
+            .expect("update wiring");
+        let meta_after_wiring = manager
+            .load_session_metadata(workspace, &group_id)
+            .await
+            .expect("load group metadata")
+            .expect("metadata exists");
+        let stored_wiring = meta_after_wiring
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupWiring"))
+            .expect("groupWiring must exist after update_wiring");
+        assert_eq!(
+            stored_wiring.get("nodes").and_then(Value::as_array).map(|a| a.len()),
+            Some(2),
+            "update_wiring must persist the wiring definition"
+        );
+        assert_eq!(
+            stored_wiring
+                .get("edges")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
+            Some(1),
+            "update_wiring must persist edges"
+        );
+
+        // ── R-WF-03（P2）：delete_group 级联清成员反标 ──
         // 删除群前遍历群成员表清反标（成员会话 custom_metadata.groupChats
         // 移除本群 ID；清空后整个键移除）→ 删除后成员会话无本群反标残留。
         GroupRoomTool::delete_group(coordinator, &group_id)

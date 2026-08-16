@@ -199,7 +199,8 @@ pub fn subagent_default_tools() -> Vec<String> {
     tools
 }
 
-/// R-GC-09（契约 §六.6，姬码锋 CEO 裁决）群聊 9 工具名：单一权威源。
+/// R-GC-09（契约 §六.6，姬码锋 CEO 裁决）+ R-WF-03（编排扩展）群聊工具名：
+/// 单一权威源。
 ///
 /// 默认可见：经 `shared_coding_mode_tools()` 进入主 agent（Agentic/
 /// Multitask/Plan/Debug）共享工具集，`subagent_default_tools()` 兜底追加
@@ -215,6 +216,8 @@ pub const GROUP_CHAT_TOOL_NAMES: &[&str] = &[
     "fork_group_chat",
     "group_member_status",
     "delete_group_chat",
+    "update_group_member_tools",
+    "update_group_wiring",
 ];
 
 /// Agent trait defining the interface for all agents
@@ -477,7 +480,7 @@ mod tests {
                 "{tool_name} must default into subagent tools"
             );
         }
-        assert_eq!(super::GROUP_CHAT_TOOL_NAMES.len(), 9);
+        assert_eq!(super::GROUP_CHAT_TOOL_NAMES.len(), 11);
     }
 
     #[test]
