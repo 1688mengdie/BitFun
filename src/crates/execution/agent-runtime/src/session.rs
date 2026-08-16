@@ -392,6 +392,19 @@ pub struct PersistedSessionStateFile {
     pub last_submitted_agent_type: Option<String>,
     pub compression_state: CompressionState,
     pub runtime_state: SessionState,
+    /// R-WF-11: persisted display lifecycle markers so a rebuilt Session after
+    /// app restart keeps its seven-state projection (hung/interrupted/
+    /// completed-dot/viewed). All default to absent/false for older state files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<SystemTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<SystemTime>,
+    #[serde(default)]
+    pub needs_attention: bool,
+    #[serde(default)]
+    pub viewed: bool,
 }
 
 pub fn sanitize_persisted_session_state(state: &SessionState) -> SessionState {
@@ -636,6 +649,11 @@ mod tests {
                 compression_count: 2,
             },
             runtime_state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
         };
 
         let expected = json!({
@@ -658,7 +676,9 @@ mod tests {
                 "last_compression_at": null,
                 "compression_count": 2
             },
-            "runtime_state": "Idle"
+            "runtime_state": "Idle",
+            "needs_attention": false,
+            "viewed": false
         });
         assert_eq!(
             serde_json::to_value(file).expect("persisted session state should serialize"),

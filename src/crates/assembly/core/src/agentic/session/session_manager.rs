@@ -7460,11 +7460,39 @@ impl SessionManager {
                     .load_stored_session_state(workspace_path, &metadata.session_id)
                     .await?
                     .and_then(|value| value.config.reasoning_preset);
+                let stored_state = self
+                    .persistence_manager
+                    .load_stored_session_state(workspace_path, &metadata.session_id)
+                    .await?;
                 let state = metadata
                     .runtime_state
                     .as_ref()
                     .and_then(|v| serde_json::from_value::<SessionState>(v.clone()).ok())
                     .unwrap_or(SessionState::Idle);
+                // R-WF-11: project the seven-state display value from persisted
+                // lifecycle markers so restarts keep hung/interrupted/
+                // pending-attention/viewed.
+                let (last_progress_at, interrupt_reason, needs_attention, viewed) =
+                    stored_state.as_ref().map_or(
+                        (None, None, false, false),
+                        |value| {
+                            (
+                                value.last_progress_at,
+                                value.interrupt_reason.clone(),
+                                value.needs_attention,
+                                value.viewed,
+                            )
+                        },
+                    );
+                let display_state = crate::agentic::core::state::derive_display_state(
+                    &state,
+                    metadata.turn_count,
+                    interrupt_reason.as_deref(),
+                    needs_attention,
+                    viewed,
+                    last_progress_at,
+                    SystemTime::now(),
+                );
                 summaries.push(SessionSummary {
                     session_id: metadata.session_id,
                     session_name: metadata.session_name,
@@ -7482,7 +7510,7 @@ impl SessionManager {
                     last_activity_at: std::time::UNIX_EPOCH
                         + std::time::Duration::from_millis(metadata.last_active_at),
                     state: state.clone(),
-                    display_state: SessionSummary::display_state_for(&state, metadata.turn_count),
+                    display_state,
                     parent_session_id: metadata
                         .relationship
                         .as_ref()
