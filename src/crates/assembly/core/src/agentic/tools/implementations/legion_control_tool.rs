@@ -193,6 +193,9 @@ pub(crate) struct LegionNodeOverride {
     pub role: Option<String>,
     pub prompt: Option<String>,
     pub gate: Option<bool>,
+    /// R-WF-06：节点工具集覆盖（工作流 node → 成员工具配置）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -253,6 +256,9 @@ impl LegionControlTool {
                 }
                 if let Some(gate) = over.gate {
                     node.gate = gate;
+                }
+                if let Some(tools) = &over.tools {
+                    node.tools = tools.clone();
                 }
             }
         }
@@ -613,14 +619,14 @@ Arguments:
 - "preset_id": Id of a saved legion preset. Used by load/delete; mutually exclusive with "nodes" for load.
 - "preset": Full inline preset definition for "save": {id, name, description, nodes, edges}.
 - "overrides": Optional per-node overrides keyed by node id. Each value may set agent, role, prompt, and/or gate.
-- "nodes": Inline topology nodes when preset_id is omitted: [{id, agent, role, prompt, gate}]. The per-topology node cap is configurable via `ai.legion_max_nodes` (default 20).
+- "nodes": Inline topology nodes when preset_id is omitted: [{id, agent, role, prompt, gate, tools}]. The per-topology node cap is configurable via `ai.legion_max_nodes` (default 20).
 - "edges": Optional parent-child edges: [{from, to, condition}]. Each node may have at most one parent; cycles are rejected.
 
 Notes:
 - Agent types are validated against the available agent registry (same as SessionControl).
 - daemon agents cannot be deployed through LegionControl.
 - Nodes are sorted topologically (deterministic order) and deployed root-first.
-- node.role, node.prompt, node.gate, and edge.condition are reserved fields: they are persisted into the created session metadata (legionRole / legionNodePrompt / legionNodeGate) and echoed in the result for observability, but do not yet change runtime behavior. In particular node.role is metadata only — the deployed session's tool permissions are always determined by the standard context-level restrictions (subagent-marked sessions), never by legionRole (d2-P2-2).
+- node.role, node.prompt, node.gate, edge.condition, and node.tools are reserved fields today: they are persisted into the created session metadata (legionRole / legionNodePrompt / legionNodeGate / legionNodeTools) and echoed in the result for observability, but do not yet change runtime behavior. In particular node.role is metadata only — the deployed session's tool permissions are always determined by the standard context-level restrictions (subagent-marked sessions), never by legionRole (d2-P2-2). node.tools carries the workflow member tool-set intent (R-WF-06: workflow node → member tool configuration); the authoritative tool authorization remains gated by the official ToolRuntimeRestrictions.
 - Saving a preset via "save" persists the same reserved fields into the preset JSON file.
 
 Related tools:
@@ -668,7 +674,8 @@ Related tools:
                                     "agent": { "type": "string" },
                                     "role": { "type": "string" },
                                     "prompt": { "type": "string" },
-                                    "gate": { "type": "boolean" }
+                                    "gate": { "type": "boolean" },
+                                    "tools": { "type": "array", "items": { "type": "string" } }
                                 },
                                 "required": ["id", "agent"]
                             }
@@ -690,20 +697,21 @@ Related tools:
                 },
                 "overrides": {
                     "type": "object",
-                    "description": "Optional per-node overrides keyed by node id. Each value may set agent, role, prompt, and/or gate.",
+                    "description": "Optional per-node overrides keyed by node id. Each value may set agent, role, prompt, gate, and/or tools.",
                     "additionalProperties": {
                         "type": "object",
                         "properties": {
                             "agent": { "type": "string" },
                             "role": { "type": "string" },
                             "prompt": { "type": "string" },
-                            "gate": { "type": "boolean" }
+                            "gate": { "type": "boolean" },
+                            "tools": { "type": "array", "items": { "type": "string" } }
                         }
                     }
                 },
                 "nodes": {
                     "type": "array",
-                    "description": "Inline topology nodes when preset_id is not given: [{id, agent, role, prompt, gate}].",
+                    "description": "Inline topology nodes when preset_id is not given: [{id, agent, role, prompt, gate, tools}].",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -711,7 +719,8 @@ Related tools:
                             "agent": { "type": "string" },
                             "role": { "type": "string" },
                             "prompt": { "type": "string" },
-                            "gate": { "type": "boolean" }
+                            "gate": { "type": "boolean" },
+                            "tools": { "type": "array", "items": { "type": "string" } }
                         },
                         "required": ["id", "agent"]
                     }
@@ -1321,6 +1330,12 @@ Related tools:
                         metadata.insert("legionNodePrompt".to_string(), json!(node.prompt));
                     }
                     metadata.insert("legionNodeGate".to_string(), json!(node.gate));
+                    // R-WF-06：node.tools 为预留元数据——持久化进会话 metadata
+                    // 供下游成员工具配置观察（legionNodeTools）；非空才写，
+                    // 空集（成员用 agent 类型默认工具集）不落键。
+                    if !node.tools.is_empty() {
+                        metadata.insert("legionNodeTools".to_string(), json!(node.tools));
+                    }
                     if let Some(ref pid) = preset_id {
                         metadata.insert("legionPresetId".to_string(), json!(pid));
                     }
@@ -1415,9 +1430,11 @@ Related tools:
                         "agent": node.agent,
                         "depth": child_depth,
                         // 预留字段在结果中原样回显（与上方会话元数据持久化一致），
-                        // 供调用方观察每个节点预期携带的 prompt/gate 语义；尚未改变运行时行为。
+                        // 供调用方观察每个节点预期携带的 prompt/gate/tools 语义；
+                        // 尚未改变运行时行为。
                         "prompt": node.prompt,
                         "gate": node.gate,
+                        "tools": node.tools,
                     }));
                 }
 
@@ -1494,6 +1511,7 @@ mod tests {
             role: String::new(),
             prompt: String::new(),
             gate: false,
+            tools: Vec::new(),
         }
     }
 
@@ -1686,6 +1704,70 @@ mod tests {
         assert!(applied[0].gate);
         assert_eq!(applied[1].agent, "agentic");
         assert!(!applied[1].gate);
+    }
+
+    // ── R-WF-06：工作流=模板/群聊=实例——node.tools 全链路 ──
+
+    #[test]
+    fn node_tools_round_trip_through_serde() {
+        // R-WF-06 契约（TC §六）：LegionPreset node 扩展 tools 字段；
+        // 模板 JSON 往返不丢 tools（成员工具配置 = 工作流 node.tools）。
+        let node = LegionNode {
+            id: "writer".to_string(),
+            agent: "agentic".to_string(),
+            role: "executor".to_string(),
+            prompt: "write code".to_string(),
+            gate: true,
+            tools: vec!["Read".to_string(), "Write".to_string(), "Edit".to_string()],
+        };
+        let json_value = serde_json::to_value(&node).expect("serialize node");
+        assert_eq!(
+            json_value.get("tools").and_then(Value::as_array).map(|a| a.len()),
+            Some(3),
+            "node.tools must be serialized"
+        );
+        let back: LegionNode = serde_json::from_value(json_value).expect("deserialize node");
+        assert_eq!(back.tools, node.tools, "node.tools must round-trip");
+    }
+
+    #[test]
+    fn node_tools_defaults_to_empty() {
+        // 存量模板无 tools 字段 → 反序列化为空集（不炸、不要求必填）。
+        let node: LegionNode = serde_json::from_str(r#"{"id":"a","agent":"agentic"}"#)
+            .expect("legacy node without tools must parse");
+        assert!(node.tools.is_empty(), "missing tools must default to empty");
+    }
+
+    #[test]
+    fn node_tools_empty_omitted_on_serialize() {
+        // 空工具集 = 成员使用 agent 类型默认工具集 → 序列化时省略该键
+        //（存量 JSON 形态不变，WF-1 模板保留回归）。
+        let node = node("a");
+        let json_value = serde_json::to_value(&node).expect("serialize node");
+        assert!(
+            json_value.get("tools").is_none(),
+            "empty tools must be skipped in serialized JSON"
+        );
+    }
+
+    #[test]
+    fn node_tools_overridable_per_node() {
+        // R-WF-06：overrides 可覆盖节点工具集（工作流 node → 成员工具配置）。
+        let nodes = vec![node("a")];
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "a".to_string(),
+            LegionNodeOverride {
+                tools: Some(vec!["Read".to_string(), "Grep".to_string()]),
+                ..Default::default()
+            },
+        );
+        let applied = LegionControlTool::apply_legion_node_overrides(nodes, &overrides);
+        assert_eq!(
+            applied[0].tools,
+            vec!["Read".to_string(), "Grep".to_string()],
+            "node.tools must be overridable"
+        );
     }
 
     // ── validate_input tests ───────────────────────────────────────────
