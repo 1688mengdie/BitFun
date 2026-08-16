@@ -3343,6 +3343,7 @@ mod tests {
             last_active_at_ms: created_at_ms,
             parent_session_id: parent.map(str::to_string),
             status: Some("active".to_string()),
+            display_state: None,
             is_daemon,
         }
     }

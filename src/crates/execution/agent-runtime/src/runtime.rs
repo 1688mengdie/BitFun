@@ -1986,6 +1986,7 @@ mod tests {
                 last_active_at_ms: 2000,
                 parent_session_id: None,
                 status: None,
+                display_state: None,
                 is_daemon: false,
             }])
         }
@@ -2166,6 +2167,7 @@ mod tests {
                     last_active_at_ms: 2000,
                     parent_session_id: None,
                     status: None,
+                    display_state: None,
                     is_daemon: false,
                 },
                 state: SessionState::Idle,
@@ -3349,6 +3351,7 @@ mod tests {
                 last_active_at_ms: 2000,
                 parent_session_id: None,
                 status: None,
+                display_state: None,
                 is_daemon: false,
             },
             state: SessionState::Error {
