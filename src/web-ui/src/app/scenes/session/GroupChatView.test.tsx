@@ -397,7 +397,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
       sessionId: 'group-1',
       sessionName: '项目群',
-      agentType: 'Claw',
+      agentType: 'group',
       modelName: 'auto',
       createdAt: 0,
       lastActiveAt: 0,
@@ -439,7 +439,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
       sessionId: 'group-1',
       sessionName: '项目群',
-      agentType: 'Claw',
+      agentType: 'group',
       modelName: 'auto',
       createdAt: 0,
       lastActiveAt: 0,
@@ -504,7 +504,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
       sessionId: 'group-1',
       sessionName: '项目群',
-      agentType: 'Claw',
+      agentType: 'group',
       modelName: 'auto',
       createdAt: 0,
       lastActiveAt: 0,
@@ -689,7 +689,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
       sessionId: 'group-1',
       sessionName: '项目群',
-      agentType: 'Claw',
+      agentType: 'group',
       modelName: 'auto',
       createdAt: 0,
       lastActiveAt: 0,
