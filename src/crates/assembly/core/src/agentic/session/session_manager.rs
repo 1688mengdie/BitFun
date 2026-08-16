@@ -9900,7 +9900,17 @@ impl SessionManager {
     /// canonical turn history instead of the runtime context cache.
     pub async fn get_messages(&self, session_id: &str) -> BitFunResult<Vec<Message>> {
         if self.config.enable_persistence {
-            if let Some(workspace_path) = self.effective_session_storage_path(session_id).await {
+            let workspace_path = match self.effective_session_storage_path(session_id).await {
+                Some(path) => Some(path),
+                // Restart/eviction disk fallback: the session is not loaded in
+                // memory, but a committed storage-path binding still resolves
+                // the canonical on-disk turns directory (R-GC-38 semantics).
+                None => self
+                    .session_storage_path_index
+                    .get(session_id)
+                    .map(|binding| binding.value().path.clone()),
+            };
+            if let Some(workspace_path) = workspace_path {
                 let _history_read = self.acquire_session_mutation(session_id).await?;
                 let messages = self
                     .rebuild_messages_from_turns(&workspace_path, session_id)

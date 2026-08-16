@@ -567,9 +567,15 @@ pub(crate) async fn get_available_agent_type_ids_for_creation(
         .await
 }
 
-/// R-WF-01 全删 RBAC 后恒返回 true，任意会话可删除/投递/读取任意会话。
-fn caller_is_owner_session(_caller_session_id: &str) -> bool {
-    true
+/// R-WF-01 全删 RBAC 后的 owner 判定：RBAC role（get_session_role==Commander
+/// || !rbac_enabled）已随角色系统删除，owner 豁免概念不再存在——恒返回
+/// false，授权门退化为「created_by 匹配 OR 祖先验证」（官方会话归属安全，
+/// 需求 §三「不影响会话树/父子拓扑」）。
+fn caller_is_owner_session(
+    _session_manager: &crate::agentic::session::session_manager::SessionManager,
+    _caller_session_id: &str,
+) -> bool {
+    false
 }
 
 /// 无依赖的规范 uuid 形状守卫（8-4-4-4-12，36 字符），用于 ACP 流会话 id
@@ -734,11 +740,10 @@ pub(crate) async fn resolve_session_mutation_authorization(
         }
     }
 
-    // R-26 / user-owner semantics: the human user's main session (Commander
-    // role) is the owner and may act on any session; when the RBAC master
-    // switch is off, the gate is bypassed entirely. Cancel keeps the historical
+    // R-26 / user-owner semantics: the top-level main session (no created_by)
+    // is the owner and may act on any session. Cancel keeps the historical
     // stricter gate (no owner bypass).
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(caller_session_id);
+    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     let acp_flow_session = is_acp_flow_session_id(target_session_id);
     let (created_by_match, orphan_delete_authorized) = {
@@ -812,10 +817,12 @@ pub(crate) async fn resolve_session_mutation_authorization(
             metadata_ancestors
         };
         if ancestors.is_empty() {
-            // R-WF-01 fail-open: an orphaned target (tree and metadata both
-            // empty) is no longer rejected. The official two-layer gate
-            // (session existence + workspace path) still applies elsewhere.
-            return Ok(());
+            // 目标会话无祖先（孤儿）且非 owner/creator：拒绝。会话间投递/
+            // 变更授权是会话归属安全（created_by/ancestor 链），与 RBAC
+            // 角色系统无关，删除 RBAC 后语义不变。
+            return Err(BitFunError::tool(format!(
+                "session '{caller_session_id}' is not authorized to {action_label} session '{target_session_id}': cannot verify ancestor relationship"
+            )));
         }
         if !ancestors.iter().any(|id| id == caller_session_id) {
             return Err(BitFunError::tool(format!(
@@ -893,7 +900,7 @@ pub(crate) async fn resolve_session_read_authorization(
     }
 
     // owner 豁免：Commander 角色或 RBAC 关闭（与 delete 的 owner 语义一致）。
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(caller_session_id);
+    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     // created_by 匹配：`session-<caller>` 标记（R-2）。
     let created_by_match = session_manager
@@ -2063,7 +2070,10 @@ Arguments:
                         .as_ref()
                         .is_none_or(|current| *current != explicit_workspace);
                     if is_cross_workspace
-                        && !caller_is_owner_session(caller_session_id)
+                        && !caller_is_owner_session(
+                            coordinator.get_session_manager(),
+                            caller_session_id,
+                        )
                         && !caller_is_daemon(
                             coordinator.get_session_manager(),
                             std::path::Path::new(&workspace.project_workspace),
@@ -2215,7 +2225,8 @@ Arguments:
                             .to_string(),
                     )
                 })?;
-                let caller_is_owner = caller_is_owner_session(current_session_id);
+                let caller_is_owner =
+                    caller_is_owner_session(coordinator.get_session_manager(), current_session_id);
                 let is_self = current_session_id == session_id;
                 let created_by_match = {
                     let session_manager = coordinator.get_session_manager();
@@ -2664,14 +2675,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_authz_allows_unrelated_caller_delete_without_metadata() {
-        // R-WF-01 fail-open: owner bypass is always on after RBAC removal, so
-        // delete of a target with no created_by and no ACP shape is released.
+    async fn shared_authz_rejects_unrelated_caller_delete_without_metadata() {
+        // Unauthorized: caller is not owner, target has no created_by and is
+        // not an ACP flow session shape (tail is not a uuid) -> reject delete.
+        // Non-ACP shape -> ghost release does not apply; no created_by ->
+        // ancestor walk fails (tree and metadata both empty), consistent with
+        // the existing SessionControl delete semantics (reject; no arbitrary
+        // acp_ prefix bypass).
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-reject-delete");
         let workspace_string = workspace.as_string();
-        resolve_session_mutation_authorization(
+        let error = resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
@@ -2681,18 +2696,27 @@ mod tests {
             SessionMutationAuthOptions::delete(),
         )
         .await
-        .expect("owner bypass must release delete after RBAC removal");
+        .expect_err("unrelated caller without metadata must be rejected");
+        assert!(
+            error.to_string().contains("not authorized to delete")
+                || error
+                    .to_string()
+                    .contains("cannot verify ancestor relationship"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
-    async fn shared_authz_allows_unrelated_caller_cancel_without_metadata() {
-        // R-WF-01 fail-open: an orphaned target (tree and metadata both empty)
-        // is no longer rejected, so cancel also succeeds.
+    async fn shared_authz_rejects_unrelated_caller_cancel() {
+        // Unauthorized: caller is not owner, target has no created_by and is
+        // not an ACP flow session shape -> reject cancel (cancel has no owner
+        // exemption and no ghost ACP release). Missing metadata makes the
+        // ancestor walk fail, which is also a rejection.
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-reject-cancel");
         let workspace_string = workspace.as_string();
-        resolve_session_mutation_authorization(
+        let error = resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
@@ -2702,7 +2726,14 @@ mod tests {
             SessionMutationAuthOptions::cancel(),
         )
         .await
-        .expect("orphaned target must be released after RBAC removal");
+        .expect_err("unrelated caller without metadata must be rejected");
+        assert!(
+            error.to_string().contains("not authorized to cancel")
+                || error
+                    .to_string()
+                    .contains("cannot verify ancestor relationship"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -3288,6 +3319,229 @@ mod tests {
 
         let orphan_node = roots.iter().find(|r| r["sessionId"] == "child").unwrap();
         assert_eq!(orphan_node["orphaned"], true);
+    }
+
+    // ── read authz（export transcript）官方祖先验证测试套件 ──
+    // R-WF-01 精修：RBAC owner 豁免已删（caller_is_owner_session 恒 false），
+    // 读取授权 = 同 workspace 归属 + created_by 匹配 + 树内双向祖先验证
+    // （需求 §三「不影响会话树/父子拓扑」官方安全门，全部保留）。
+
+    fn read_authz_session_manager() -> Arc<crate::agentic::session::session_manager::SessionManager>
+    {
+        test_session_manager()
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_unrelated_caller_without_metadata() {
+        // 攻击者矩阵 A：非 owner、无 created_by、树内外均无关系 -> 拒绝。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-read-authz-unrelated");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("unrelated caller without metadata must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_created_by_match_allows_caller() {
+        // 攻击者矩阵 C：created_by == session-<caller> -> 放行。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-read-authz-created-by");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let target_id = "target-1";
+        let metadata = crate::service::session::SessionMetadata::new(
+            target_id.to_string(),
+            "target".to_string(),
+            "agentic".to_string(),
+            "auto".to_string(),
+        );
+        let mut created_metadata = metadata.clone();
+        created_metadata.created_by = Some(session_control_creator_marker("caller-1"));
+        session_manager
+            .save_session_metadata(workspace_path, &created_metadata)
+            .await
+            .expect("save metadata");
+
+        resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "caller-1",
+            workspace_path,
+            target_id,
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("creator should be authorized to read");
+    }
+
+    #[tokio::test]
+    async fn read_authz_ancestor_allows_caller_to_read_descendant() {
+        // 攻击者矩阵 D：祖先可导出后代（树注册关系）。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        tree.register_child("caller-1", "child-1", 1)
+            .expect("register child");
+        let workspace = TestTempDir::new("bitfun-read-authz-ancestor");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+
+        resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "caller-1",
+            workspace_path,
+            "child-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("ancestor should be authorized to read descendant");
+    }
+
+    #[tokio::test]
+    async fn read_authz_descendant_allows_caller_to_read_ancestor() {
+        // 攻击者矩阵 E：后代可导出祖先（读取 = 树内双向授权）。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        tree.register_child("root-1", "caller-1", 1)
+            .expect("register child");
+        let workspace = TestTempDir::new("bitfun-read-authz-descendant");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+
+        resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "caller-1",
+            workspace_path,
+            "root-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("descendant should be authorized to read ancestor");
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_sibling_without_creator_link() {
+        // 攻击者矩阵 F：同一父树下的兄弟会话（无祖先/后代、非 owner/creator）
+        // -> 拒绝。树内兄弟不能互读。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        tree.register_child("root-1", "caller-1", 1)
+            .expect("register child");
+        tree.register_child("root-1", "target-1", 1)
+            .expect("register child");
+        let workspace = TestTempDir::new("bitfun-read-authz-sibling");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("sibling sessions must not read each other");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_cross_workspace() {
+        // 攻击者矩阵 G：caller 与 target 不同 workspace -> 一律拒绝。
+        // 跨 workspace 导出是核心隔离边界（与 RBAC 无关，恒拒绝）。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let caller_ws = TestTempDir::new("bitfun-read-authz-caller-ws");
+        let target_ws = TestTempDir::new("bitfun-read-authz-target-ws");
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "read-authz-cross-ws",
+            std::path::Path::new(&caller_ws.as_string()),
+            "target-1",
+            std::path::Path::new(&target_ws.as_string()),
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("cross-workspace export must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("belongs to a different workspace"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_daemon_caller_bypasses_tree_gate() {
+        // 攻击者矩阵 H：daemon 会话豁免（R-A.04 同源）。
+        let session_manager = read_authz_session_manager();
+        let tree = SessionTreeManager::new(8);
+        let workspace = TestTempDir::new("bitfun-read-authz-daemon");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        session_manager
+            .create_session_with_id(
+                Some("daemon-session".to_string()),
+                "Daemon".to_string(),
+                "agentic".to_string(),
+                crate::agentic::core::SessionConfig {
+                    workspace_path: Some(workspace.as_string()),
+                    is_daemon: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create daemon session");
+
+        resolve_session_read_authorization(
+            &session_manager,
+            &tree,
+            "daemon-session",
+            workspace_path,
+            "any-target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("daemon caller should bypass the read tree gate");
     }
 }
 
