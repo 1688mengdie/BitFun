@@ -7,7 +7,7 @@ use crate::agentic::core::{
     new_turn_id, CompressionContract, CompressionState, InternalReminderKind, Message,
     MessageContent, MessageRole, MessageSemanticKind, ProcessingPhase, Session,
     SessionAgentRouteOwner, SessionConfig, SessionKind, SessionModelBindingPolicy, SessionState,
-    SessionSummary, TurnStats,
+    SessionSummary, TurnStats, DEFAULT_HUNG_TIMEOUT,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::keyed_lock::{KeyedAsyncLock, KeyedAsyncLockGuard};
@@ -531,6 +531,30 @@ impl SessionManager {
                 debug_assert!(false, "Session write lock already existed");
             }
         }
+    }
+
+    /// R-WF-11 P0-1: detect a `Processing` session whose progress stopped beyond
+    /// [`DEFAULT_HUNG_TIMEOUT`] — i.e. a crash leftover that the seven-state
+    /// projection renders as `Hung`.
+    ///
+    /// Restore paths must never silently downgrade such a session to `Idle`
+    /// (which would project `Completed` and erase the user-visible stuck
+    /// indicator) nor write that downgrade back to disk (which would lose the
+    /// durable Hung evidence). Fresh `Processing` and other non-Idle states are
+    /// deliberately not treated as hung here: they keep the historical
+    /// reset-to-Idle behavior on the full restore path.
+    fn is_crash_leftover_hung_processing(session: &Session) -> bool {
+        if !matches!(session.state, SessionState::Processing { .. }) {
+            return false;
+        }
+        let Some(last_progress_at) = session.last_progress_at else {
+            // No progress marker at all: cannot prove staleness. Treat as a
+            // normal restore (legacy data or a session with unknown liveness).
+            return false;
+        };
+        SystemTime::now()
+            .duration_since(last_progress_at)
+            .is_ok_and(|elapsed| elapsed >= DEFAULT_HUNG_TIMEOUT)
     }
 
     fn release_session_write_lock(&self, session_id: &str) {
@@ -6401,12 +6425,25 @@ impl SessionManager {
             load_session_with_turns_duration_ms
         );
 
-        if !matches!(session.state, SessionState::Idle) {
+        // R-WF-11 P0-1: a crash-leftover `Processing` session (progress stopped
+        // beyond DEFAULT_HUNG_TIMEOUT) must keep its runtime state on the
+        // read-only view path so `display_state()` still projects `Hung` when
+        // the user opens a stuck session. Silently resetting it to Idle would
+        // project `Completed` and hide the stuck indicator. Other non-Idle
+        // states (fresh Processing, Error) keep the historical reset so the
+        // view never carries a live-looking state.
+        let view_hung_leftover = Self::is_crash_leftover_hung_processing(&session);
+        if !matches!(session.state, SessionState::Idle) && !view_hung_leftover {
             let old_state = session.state.clone();
             session.state = SessionState::Idle;
             debug!(
                 "Resetting session state during view restore: session_id={}, state={:?} -> Idle",
                 session_id, old_state
+            );
+        } else if view_hung_leftover {
+            debug!(
+                "Preserving hung Processing state during view restore: session_id={}, state={:?}, last_progress_at={:?}",
+                session_id, session.state, session.last_progress_at
             );
         }
 
@@ -6787,17 +6824,53 @@ impl SessionManager {
         }
 
         // Reset session state to Idle
-        // After application restart, previous Processing state is invalid and must be reset
+        // After application restart, previous Processing state is invalid and must be reset.
+        // R-WF-11 P0-1: a crash-leftover Processing session (progress stopped
+        // beyond DEFAULT_HUNG_TIMEOUT) is never downgraded silently. The runtime
+        // state becomes Idle so a new user submission can start a turn, but the
+        // explicit interrupt marker is recorded and the session is NOT persisted
+        // just to erase the hung evidence: the durable `Processing` +
+        // `last_progress_at` sidecar stays on disk until the user explicitly
+        // resumes or cancels. In-memory projection flips to `Interrupted` (an
+        // explicit handled state) instead of `Completed`.
         let previous_state_was_not_idle = !matches!(session.state, SessionState::Idle);
+        let crash_leftover_hung = Self::is_crash_leftover_hung_processing(&session);
+        // R-WF-11 P0-1: when a crash-leftover hung session is recovered, keep the
+        // original durable `Processing` + `last_progress_at` evidence on disk so
+        // a later restart/listing can still surface the stuck history. Other
+        // restore migrations may legitimately trigger a persist (e.g. turn-id
+        // normalization); in that case the disk write must carry the original
+        // Processing state instead of the in-memory Idle unlock.
+        let hung_persisted_state = if crash_leftover_hung {
+            Some(session.state.clone())
+        } else {
+            None
+        };
         let mut interrupted_recovery_restored_turn = None;
         if previous_state_was_not_idle {
             let old_state = session.state.clone();
             session.state = SessionState::Idle;
-            should_persist_restored_session = true;
-            debug!(
-                "Resetting session state during restore: session_id={}, state={:?} -> Idle",
-                session_id, old_state
-            );
+            if crash_leftover_hung {
+                // Explicit handling marker: the hung turn is surfaced as
+                // `Interrupted` (not silently `Completed`) and the on-disk hung
+                // evidence is left intact (no should_persist flag from the state
+                // downgrade itself).
+                if session.interrupt_reason.is_none() {
+                    session.interrupt_reason = Some(
+                        "recovered_after_hung_restore".to_string(),
+                    );
+                }
+                warn!(
+                    "Recovering crash-leftover hung session to Idle with explicit interrupt marker: session_id={}, state={:?} -> Idle, disk Processing evidence preserved",
+                    session_id, old_state
+                );
+            } else {
+                should_persist_restored_session = true;
+                debug!(
+                    "Resetting session state during restore: session_id={}, state={:?} -> Idle",
+                    session_id, old_state
+                );
+            }
         }
 
         // A process exit can happen after the recovering Turn write but before
@@ -6968,9 +7041,23 @@ impl SessionManager {
                 .await?;
         }
         if should_persist_restored_session && self.should_persist_session_id(session_id) {
-            self.persistence_manager
-                .save_session(session_storage_path, &session)
-                .await?;
+            // R-WF-11 P0-1: for a recovered crash-leftover hung session, persist
+            // the ORIGINAL Processing state so the durable hung evidence is not
+            // silently replaced by the in-memory Idle unlock. The in-memory
+            // session keeps Idle + interrupt marker (explicit handled state);
+            // only the disk write carries the preserved Processing evidence.
+            if let Some(hung_state) = hung_persisted_state.as_ref() {
+                let memory_state = session.state.clone();
+                session.state = hung_state.clone();
+                self.persistence_manager
+                    .save_session(session_storage_path, &session)
+                    .await?;
+                session.state = memory_state;
+            } else {
+                self.persistence_manager
+                    .save_session(session_storage_path, &session)
+                    .await?;
+            }
         }
 
         // Finish async notifications before publishing runtime state. If restore is
@@ -10733,7 +10820,8 @@ mod tests {
     use crate::agentic::core::{
         CompressionState, InternalReminderKind, Message, MessageContent, MessageRole,
         MessageSemanticKind, ProcessingPhase, Session, SessionAgentRouteOwner, SessionConfig,
-        SessionModelBindingPolicy, SessionState, ToolCall, ToolResult, TurnStats,
+        SessionDisplayState, SessionModelBindingPolicy, SessionState, ToolCall, ToolResult,
+        TurnStats, DEFAULT_HUNG_TIMEOUT,
     };
     use crate::agentic::persistence::PersistenceManager;
     use crate::agentic::session::{
@@ -15101,6 +15189,136 @@ mod tests {
 
         assert!(matches!(restored.state, SessionState::Idle));
         assert_eq!(metadata.unread_completion, None);
+    }
+
+    #[tokio::test]
+    async fn view_restore_of_crash_leftover_hung_session_keeps_hung_projection() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let session_id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            session_id.clone(),
+            "Crashed while processing".to_string(),
+            "agent".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        session.dialog_turn_ids = vec!["turn-1".to_string()];
+        session.state = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+        // Crash leftover: last observable progress predates the hung timeout.
+        session.last_progress_at = Some(
+            SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60),
+        );
+
+        persistence_manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+        persistence_manager
+            .save_session_state(workspace.path(), &session_id, &session.state)
+            .await
+            .expect("processing state should save");
+
+        let manager = test_manager(persistence_manager.clone());
+        let (view_session, _) = manager
+            .restore_session_view(workspace.path(), &session_id)
+            .await
+            .expect("session view should restore");
+
+        // R-WF-11 P0-1: opening a stuck session must not silently downgrade it
+        // to Idle (which would project Completed). The runtime state stays
+        // Processing and the display projection stays Hung.
+        assert!(
+            matches!(view_session.state, SessionState::Processing { .. }),
+            "view restore must keep the crash-leftover Processing state"
+        );
+        assert_eq!(
+            view_session.display_state(),
+            SessionDisplayState::Hung,
+            "view restore of a stuck session must project Hung, not Completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn full_restore_of_crash_leftover_hung_session_records_explicit_handling_and_keeps_disk_evidence()
+    {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let session_id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            session_id.clone(),
+            "Crashed while processing".to_string(),
+            "agent".to_string(),
+            SessionConfig {
+                workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                ..Default::default()
+            },
+        );
+        session.dialog_turn_ids = vec!["turn-1".to_string()];
+        session.state = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+        // Crash leftover: stale progress beyond the hung timeout.
+        session.last_progress_at = Some(
+            SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60),
+        );
+
+        persistence_manager
+            .save_session(workspace.path(), &session)
+            .await
+            .expect("session should save");
+        persistence_manager
+            .save_session_state(workspace.path(), &session_id, &session.state)
+            .await
+            .expect("processing state should save");
+
+        let manager = test_manager(persistence_manager.clone());
+        let restored = manager
+            .restore_session(workspace.path(), &session_id)
+            .await
+            .expect("session should restore");
+
+        // The runtime state unlocks to Idle (so a new submission can start a
+        // turn) but the handling is explicit: the hung turn surfaces as
+        // Interrupted, never silently as Completed.
+        assert!(matches!(restored.state, SessionState::Idle));
+        assert_eq!(
+            restored.interrupt_reason.as_deref(),
+            Some("recovered_after_hung_restore"),
+            "full restore must record an explicit interrupt marker for the recovered hung turn"
+        );
+        assert_eq!(
+            restored.display_state(),
+            SessionDisplayState::Interrupted,
+            "the recovered hung session must project Interrupted, not Completed"
+        );
+
+        // The durable hung evidence is NOT silently erased: the on-disk state
+        // sidecar still carries Processing + stale last_progress_at so a later
+        // listing/restart can still surface the stuck history.
+        let stored_state = persistence_manager
+            .load_stored_session_state(workspace.path(), &session_id)
+            .await
+            .expect("stored state should load")
+            .expect("stored state should exist");
+        assert!(
+            matches!(stored_state.runtime_state, SessionState::Processing { .. }),
+            "full restore must not erase the on-disk Processing hung evidence"
+        );
+        assert!(
+            stored_state.last_progress_at.is_some(),
+            "full restore must keep the stale last_progress_at on disk"
+        );
     }
 
     #[tokio::test]
