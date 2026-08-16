@@ -574,7 +574,16 @@ impl GroupRoomTool {
         Self::add_group_member(coordinator, &group_workspace, group_id, member_session_id).await
     }
 
-    /// 移除成员 = 从群会话 custom_metadata.groupChats 移除。
+    /// 移除成员 = 从群会话 custom_metadata.groupChats 移除 + 清理成员侧反标
+    /// （R-WF-05 P1-A：与 add_group_member 写反标/delete_group 清反标对称）。
+    ///
+    /// R-WF-05（原子步 3）成员侧反标真实写入成员 workspace 域（P0-1 批次4
+    /// 退回修复）后，remove 若只清群侧成员表 → 成员反标残留 → replicate
+    /// 遍历成员反标仍含已移除群 → 复刻投递到已移除成员的群（幽灵复刻，
+    /// 审查批次4 §四 P1-A 增量）。本函数补清成员域反标：与 add_group_member
+    /// 写反标同域（resolve_member_workspace → update_session_metadata 成员域
+    /// groupChats 过滤掉 group_id）。成员 workspace 不可解析 → warn 继续
+    /// （与 delete_group:1280-1288 一致，不阻断移除主流程）。
     async fn remove_member(
         coordinator: &ConversationCoordinator,
         group_id: &str,
@@ -603,7 +612,49 @@ impl GroupRoomTool {
                 custom.insert("groupChats".to_string(), json!(filtered));
             })
             .await
-            .map_err(BitFunError::tool)
+            .map_err(BitFunError::tool)?;
+        // 成员侧反标清理（P1-A）：成员会话 groupChats 过滤掉本群 ID。存储域 =
+        // 成员会话真实 workspace（与 add_group_member 写反标同域）。解析失败
+        // → warn 继续（不阻断移除）；写入失败 → warn 继续（尽力而为）。
+        let member_workspace =
+            match Self::resolve_member_workspace(manager, member_session_id).await {
+                Some(workspace) => workspace,
+                None => {
+                    warn!(
+                        "Failed to resolve member workspace to clear back-mark during remove: member={}, group={}",
+                        member_session_id, group_id
+                    );
+                    return Ok(());
+                }
+            };
+        if let Err(error) = manager
+            .update_session_metadata(
+                &PathBuf::from(&member_workspace),
+                member_session_id,
+                |metadata| {
+                    let custom = metadata
+                        .custom_metadata
+                        .get_or_insert_with(|| json!({}))
+                        .as_object_mut()
+                        .expect("custom_metadata is always an object");
+                    if let Some(members) =
+                        custom.get_mut("groupChats").and_then(|v| v.as_array_mut())
+                    {
+                        members.retain(|v| v.as_str() != Some(group_id));
+                        if members.is_empty() {
+                            custom.remove("groupChats");
+                        }
+                    }
+                },
+            )
+            .await
+        {
+            warn!(
+                "Failed to clear member back-mark during remove: member={}, group={}, error={}",
+                member_session_id, group_id, error
+            );
+        }
+        Ok(())
     }
 
     /// 发送群消息 = 纯落盘群会话 turn（type-contract §二.4 + §三 + R-WF-04）。
@@ -1442,7 +1493,10 @@ impl GroupRoomTool {
                     return Ok(());
                 }
             };
-        manager
+        // 写入失败 → warn 继续（与注释一致 + delete_group 清反标对称；若上抛
+        // Err，群侧成员表已写入成功 → create_group/invite 返回失败但群已创建
+        // = 孤儿群，S-38 防幽灵先例）。
+        if let Err(error) = manager
             .update_session_metadata(
                 &PathBuf::from(&member_workspace),
                 member_session_id,
@@ -1466,14 +1520,12 @@ impl GroupRoomTool {
                 },
             )
             .await
-            .map_err(|error| {
-                warn!(
-                    "Failed to write member back-mark (groupChats) for member={}, group={}, error={}",
-                    member_session_id, group_id, error
-                );
-                error
-            })
-            .map_err(BitFunError::tool)?;
+        {
+            warn!(
+                "Failed to write member back-mark (groupChats) for member={}, group={}, error={}",
+                member_session_id, group_id, error
+            );
+        }
         Ok(())
     }
 
@@ -4093,6 +4145,202 @@ mod tests {
         );
     }
 
+    /// R-WF-05 P1-A（审查批次4 §四增量 P1）：remove_member 清理成员侧反标。
+    ///
+    /// P0-1 批次4退回修复后反标真实写入成员 workspace 域，remove 若只清群侧
+    /// 成员表 → 成员反标残留 → replicate 遍历成员反标仍含已移除群 → 复刻投递
+    /// 到已移除成员的群（幽灵复刻）。本用例：
+    /// - 成员/群 workspace 强制分域（assert_ne，模拟 R-WF-07 workspace-<nodeId>）；
+    /// - 建群（反标写入成员域）→ remove_member → 断言成员域反标不含 group_id；
+    /// - 群域成员表不再含成员 id（群侧移除仍生效）；
+    /// - 移除后复刻不再投递到该群（反标清空 → replicate 空遍历，群 turns 无回复）。
+    ///   旧实现（只清群侧）此用例必失败：反标残留 → 复刻仍投递。
+    #[tokio::test]
+    async fn remove_member_clears_member_backmark_across_workspaces() {
+        use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
+        use crate::agentic::execution::{
+            ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
+        };
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::{
+            PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
+        };
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
+        use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
+        use crate::agentic::tools::registry::ToolRegistry;
+        use crate::infrastructure::PathManager;
+        use crate::runtime_ownership::CoreRuntimeOwnership;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let user_root = std::env::temp_dir().join(format!(
+            "bitfun-grouproom-rwf05p1-remove-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&user_root).expect("user root");
+        let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
+        let persistence =
+            PersistenceManager::new(Arc::new(path_manager)).expect("persistence manager");
+        let session_manager = Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(persistence),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                enable_persistence: true,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ));
+        let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
+        let tool_pipeline = Arc::new(ToolPipeline::new(
+            Arc::new(tokio::sync::RwLock::new(ToolRegistry::new())),
+            Arc::new(ToolStateManager::new(event_queue.clone())),
+            None,
+        ));
+        let execution_engine = Arc::new(ExecutionEngine::new(
+            Arc::new(RoundExecutor::new(
+                Arc::new(StreamProcessor::new(event_queue.clone())),
+                event_queue.clone(),
+                tool_pipeline.clone(),
+            )),
+            event_queue.clone(),
+            session_manager.clone(),
+            Arc::new(ContextCompressor::new(CompressionConfig::default())),
+            ExecutionEngineConfig::default(),
+        ));
+        let ownership_root = user_root.join("runtime-ownership");
+        let coordinator = Arc::new(ConversationCoordinator::new(
+            session_manager.clone(),
+            execution_engine,
+            tool_pipeline,
+            event_queue,
+            Arc::new(EventRouter::new()),
+            Arc::new(CoreRuntimeOwnership::embedded_with_facts(
+                ownership_root,
+                "bitfun".to_string(),
+                "test",
+            )),
+        ));
+        coordinator.set_terminal_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::terminal_port(),
+        );
+        coordinator.set_remote_exec_port(
+            bitfun_runtime_services::test_support::FakeRuntimeServicesProvider::remote_exec_port(),
+        );
+        ConversationCoordinator::set_global(coordinator.clone());
+        let manager = coordinator.get_session_manager();
+
+        // 群 workspace 与成员 workspace 分离（R-WF-07:151 成员 = workspace-<nodeId>）。
+        let group_workspace = std::env::temp_dir().join(format!(
+            "bitfun-grouproom-rwf05p1-remove-group-ws-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&group_workspace).expect("group workspace dir");
+        let group_workspace_str = group_workspace.to_string_lossy().to_string();
+        let member_workspace = std::env::temp_dir().join(format!(
+            "bitfun-grouproom-rwf05p1-remove-member-ws-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&member_workspace).expect("member workspace dir");
+        let member_workspace_str = member_workspace.to_string_lossy().to_string();
+        assert_ne!(
+            member_workspace_str, group_workspace_str,
+            "setup: member workspace must differ from group workspace (R-WF-07)"
+        );
+
+        // 成员会话建在成员独立 workspace；建群（跨域）。
+        let member = create_member_session_for_test(&coordinator, &member_workspace_str).await;
+        let group_id = GroupRoomTool::create_group(
+            &coordinator,
+            "remove 反标清理群",
+            &[member.clone()],
+            &group_workspace_str,
+        )
+        .await
+        .expect("create group across workspaces");
+
+        // 1) 前置：成员反标在成员域（P0-1 已真写）。
+        let member_meta = manager
+            .load_session_metadata(&member_workspace, &member)
+            .await
+            .expect("load member metadata in member workspace")
+            .expect("member metadata exists in member workspace");
+        let member_groups = member_meta
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            member_groups.len(),
+            1,
+            "setup: member back-mark must exist before remove"
+        );
+
+        // 2) remove_member → 成员域反标清空（不含 group_id）。
+        GroupRoomTool::remove_member(&coordinator, &group_id, &member)
+            .await
+            .expect("remove member must succeed");
+        let member_meta_after = manager
+            .load_session_metadata(&member_workspace, &member)
+            .await
+            .expect("load member metadata after remove")
+            .expect("member metadata still exists after remove");
+        let member_groups_after = member_meta_after
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            member_groups_after.len(),
+            0,
+            "P1-A: member back-mark must be cleared after remove"
+        );
+        assert!(
+            !member_groups_after
+                .iter()
+                .any(|v| v.as_str() == Some(group_id.as_str())),
+            "P1-A: removed group id must NOT remain in member back-mark"
+        );
+
+        // 3) 群侧成员表也不再含该成员（移除仍生效）。
+        let group_meta = manager
+            .load_session_metadata(&group_workspace, &group_id)
+            .await
+            .expect("load group metadata")
+            .expect("group metadata exists");
+        let group_members = group_meta
+            .custom_metadata
+            .as_ref()
+            .and_then(|m| m.get("groupChats"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !group_members.iter().any(|v| v.as_str() == Some(member.as_str())),
+            "remove must also clear the group-side member table"
+        );
+
+        // 4) 移除后复刻不再投递到该群（反标已清 → 空遍历，群 turns 无该回复）。
+        let reply = "remove 后幽灵复刻检查";
+        GroupRoomTool::replicate_member_turn_to_groups(&coordinator, &member, reply)
+            .await
+            .expect("replicate after remove must succeed (no-op path)");
+        let turns = manager
+            .persistence_manager()
+            .load_session_turns(&group_workspace, &group_id)
+            .await
+            .expect("load group turns");
+        assert!(
+            !turns.iter().any(|t| t.user_message.content == reply),
+            "P1-A: no ghost replicate after remove (back-mark cleared)"
+        );
+    }
+
     /// R-WF-05 批次4退回 P1-1 修复验收：异步不阻塞成员会话。
     ///
     /// hook（coordinator.rs:3375）以 tokio::spawn 异步调用桥接函数——成员
@@ -4100,6 +4348,10 @@ mod tests {
     /// 断言 spawn 的句柄立即返回（未 await 复刻结果）、复刻在后台完成、且
     /// 复刻结果正确落盘——模拟 hook 的异步路径（成员 turn 主流程不等复刻）。
     /// 同时断言桥接函数本身不 panic、不吞错误（Ok）。
+    /// P1-B 补强（审查批次4 §四 P1 残留）：tokio::time::timeout + channel
+    /// 信号严格断言「spawn 后主流程不等复刻」（AG-3）——复刻任务先发「已
+    /// 开始」信号再延迟执行，主流程收到信号时观测到复刻仍在进行（群 turns
+    /// 尚无回复）；若主流程阻塞在复刻上，收到信号时复刻必已完成 → 断言失败。
     #[tokio::test]
     async fn replicate_is_non_blocking_async() {
         use crate::agentic::events::{EventQueue, EventQueueConfig, EventRouter};
@@ -4192,11 +4444,21 @@ mod tests {
         .await
         .expect("create group for async test");
 
-        // 模拟 hook 的 spawn 路径：spawn 立即返回 JoinHandle，不等复刻完成。
+        // P1-B 严格时序断言：barrier 同步「复刻任务已启动」信号，让主流程在
+        // 复刻进行中观测——复刻任务先等 barrier（保证「尚未完成」的观测
+        // 窗口）再执行写盘；主流程拿到 barrier 信号后断言群 turns 尚无回复
+        // （主流程未阻塞在复刻上，AG-3）。若实现退化为阻塞等待复刻完成，
+        // 主流程不可能在复刻完成前观测到「无回复」→ 断言失败。
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let barrier_for_spawn = barrier.clone();
         let coordinator_for_spawn = coordinator.clone();
         let member_for_spawn = member.clone();
         let reply = "异步复刻回复";
         let handle = tokio::spawn(async move {
+            // 1) 先发「复刻已开始」信号（复刻尚未落盘）。
+            barrier_for_spawn.wait().await;
+            // 2) 短暂让出执行权，确保主流程拿到信号后在观测点运行。
+            tokio::task::yield_now().await;
             GroupRoomTool::replicate_member_turn_to_groups(
                 &coordinator_for_spawn,
                 &member_for_spawn,
@@ -4204,8 +4466,26 @@ mod tests {
             )
             .await
         });
-        // spawn 已返回（主流程不阻塞在复刻上）；join 拿复刻结果并断言成功。
-        let replicate_result = handle.await.expect("replicate task must not panic");
+        // 主流程：spawn 已返回（不阻塞在复刻上）。barrier 信号确认复刻任务
+        // 已开始但未完成 → 观测此刻群 turns 尚无该回复（复刻未投递）。
+        tokio::time::timeout(Duration::from_secs(5), barrier.wait())
+            .await
+            .expect("replicate task must start within timeout");
+        // 3) 复刻仍在进行（barrier 同步点 = 复刻尚未写盘）→ 主流程不等复刻。
+        let turns_during = manager
+            .persistence_manager()
+            .load_session_turns(&workspace, &group_id)
+            .await
+            .expect("load group turns during replicate");
+        assert!(
+            !turns_during.iter().any(|t| t.user_message.content == reply),
+            "P1-B: main flow must not block on replicate (AG-3): reply must NOT be present while replicate is still running"
+        );
+        // 4) join 拿复刻结果并断言成功（后台复刻最终完成）。
+        let replicate_result = tokio::time::timeout(Duration::from_secs(5), handle)
+            .await
+            .expect("replicate task must finish within timeout")
+            .expect("replicate task must not panic");
         replicate_result.expect("replicate must succeed (best-effort side path)");
 
         let turns = manager
