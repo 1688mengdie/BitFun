@@ -1,4 +1,4 @@
-use crate::session_state::SessionState;
+use crate::session_state::{derive_display_state, SessionDisplayState, SessionState};
 pub use bitfun_core_types::SessionKind;
 pub use bitfun_core_types::{
     SessionAgentRouteOwner, SessionContinuationPolicy, SessionExecutionTarget,
@@ -60,6 +60,27 @@ pub struct Session {
     /// Session state
     pub state: SessionState,
 
+    /// Time of the last observable progress while `Processing`. Drives the
+    /// hung/watchdog display projection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_at: Option<SystemTime>,
+
+    /// Why the last turn was interrupted, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interrupt_reason: Option<String>,
+
+    /// Time the last turn completed, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_completed_at: Option<SystemTime>,
+
+    /// Display flag: the session needs user attention (question mark).
+    #[serde(default)]
+    pub needs_attention: bool,
+
+    /// Display flag: the completed result has been viewed (green dot cleared).
+    #[serde(default)]
+    pub viewed: bool,
+
     /// Configuration
     pub config: SessionConfig,
 
@@ -102,6 +123,11 @@ impl Session {
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
             config,
             compression_state: CompressionState::default(),
             created_at: now,
@@ -128,12 +154,33 @@ impl Session {
             snapshot_session_id: None,
             dialog_turn_ids: vec![],
             state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
             config,
             compression_state: CompressionState::default(),
             created_at: now,
             updated_at: now,
             last_activity_at: now,
         }
+    }
+}
+
+impl Session {
+    /// Derive the display/management state (seven-state projection) from this
+    /// session's runtime facts and lifecycle markers.
+    pub fn display_state(&self) -> SessionDisplayState {
+        derive_display_state(
+            &self.state,
+            self.dialog_turn_ids.len(),
+            self.interrupt_reason.as_deref(),
+            self.needs_attention,
+            self.viewed,
+            self.last_progress_at,
+            SystemTime::now(),
+        )
     }
 }
 
@@ -295,12 +342,34 @@ pub struct SessionSummary {
     pub created_at: SystemTime,
     pub last_activity_at: SystemTime,
     pub state: SessionState,
+    /// Derived display/management state (seven-state projection). Serialized
+    /// with `snake_case` so wire consumers read `standby`/`processing`/etc.
+    pub display_state: SessionDisplayState,
     /// Optional parent session ID for tree-structured display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
     /// Daemon session marker.
     #[serde(default)]
     pub is_daemon: bool,
+}
+
+impl SessionSummary {
+    /// Derive a display state from the runtime state and turn count alone.
+    ///
+    /// Used by listing paths that only have persisted runtime facts (no
+    /// lifecycle markers). Callers with full session facts should use
+    /// [`Session::display_state`] instead.
+    pub fn display_state_for(state: &SessionState, turn_count: usize) -> SessionDisplayState {
+        derive_display_state(
+            state,
+            turn_count,
+            None,
+            false,
+            false,
+            None,
+            SystemTime::now(),
+        )
+    }
 }
 
 /// Persisted session state sidecar used by product session storage.

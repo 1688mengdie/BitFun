@@ -2287,6 +2287,11 @@ impl PersistenceManager {
                 .or(metadata.snapshot_session_id.clone()),
             dialog_turn_ids,
             state: runtime_state,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
             config,
             compression_state,
             created_at,
@@ -2616,7 +2621,8 @@ impl PersistenceManager {
                 turn_count: metadata.turn_count,
                 created_at: Self::unix_ms_to_system_time(metadata.created_at),
                 last_activity_at: Self::unix_ms_to_system_time(metadata.last_active_at),
-                state,
+                state: state.clone(),
+                display_state: SessionSummary::display_state_for(&state, metadata.turn_count),
                 parent_session_id: metadata
                     .relationship
                     .as_ref()

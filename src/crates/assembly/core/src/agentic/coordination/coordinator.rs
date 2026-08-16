@@ -15020,6 +15020,7 @@ fn runtime_session_summary(session: SessionSummary) -> bitfun_runtime_ports::Age
         last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
         parent_session_id: session.parent_session_id,
         status,
+        display_state: Some(session.display_state.as_str().to_string()),
         is_daemon: session.is_daemon,
     }
 }
@@ -15646,6 +15647,7 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for ConversationCoordina
         }
         .map_err(runtime_port_error_preserving_message)?;
 
+        let display_state = session.display_state().as_str().to_string();
         Ok(bitfun_agent_runtime::sdk::AgentSessionRestoreResult {
             session: bitfun_runtime_ports::AgentSessionSummary {
                 session_id: session.session_id,
@@ -15660,6 +15662,7 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for ConversationCoordina
                 last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
                 parent_session_id: None,
                 status: None,
+                display_state: Some(display_state),
                 is_daemon: session.config.is_daemon,
             },
             state: session.state,
@@ -17982,6 +17985,7 @@ mod tests {
             created_at: std::time::UNIX_EPOCH,
             last_activity_at: std::time::UNIX_EPOCH,
             state: bitfun_agent_runtime::session_state::SessionState::Idle,
+            display_state: bitfun_agent_runtime::session_state::SessionDisplayState::Standby,
             parent_session_id: None,
             is_daemon: false,
         });

@@ -4100,6 +4100,7 @@ impl SessionManager {
             session.state = new_state.clone();
             session.updated_at = SystemTime::now();
             session.last_activity_at = SystemTime::now();
+            self.sync_session_lifecycle_markers(&mut session, &new_state);
 
             self.config.enable_persistence && self.should_persist_session(&session)
         } else {
@@ -4125,6 +4126,33 @@ impl SessionManager {
         );
 
         Ok(())
+    }
+
+    /// Sync the display/lifecycle markers that feed the seven-state projection.
+    ///
+    /// - `Processing` advances `last_progress_at` and clears the completed
+    ///   marker so the watchdog timeout has a fresh baseline.
+    /// - `Idle` records completion (when a turn has ever run) and clears the
+    ///   interrupt reason so a later idle session is not stuck "interrupted".
+    /// - `Error` marks the session as needing attention.
+    fn sync_session_lifecycle_markers(&self, session: &mut Session, new_state: &SessionState) {
+        let now = SystemTime::now();
+        match new_state {
+            SessionState::Processing { .. } => {
+                session.last_progress_at = Some(now);
+                session.last_completed_at = None;
+                session.needs_attention = false;
+            }
+            SessionState::Idle => {
+                if !session.dialog_turn_ids.is_empty() {
+                    session.last_completed_at = Some(now);
+                }
+                session.interrupt_reason = None;
+            }
+            SessionState::Error { .. } => {
+                session.needs_attention = true;
+            }
+        }
     }
 
     /// Update session state only when the session is still processing the
@@ -4157,6 +4185,7 @@ impl SessionManager {
             session.state = new_state.clone();
             session.updated_at = SystemTime::now();
             session.last_activity_at = SystemTime::now();
+            self.sync_session_lifecycle_markers(&mut session, &new_state);
 
             self.config.enable_persistence && self.should_persist_session(&session)
         } else {
@@ -7452,7 +7481,8 @@ impl SessionManager {
                         + std::time::Duration::from_millis(metadata.created_at),
                     last_activity_at: std::time::UNIX_EPOCH
                         + std::time::Duration::from_millis(metadata.last_active_at),
-                    state,
+                    state: state.clone(),
+                    display_state: SessionSummary::display_state_for(&state, metadata.turn_count),
                     parent_session_id: metadata
                         .relationship
                         .as_ref()
@@ -7504,6 +7534,7 @@ impl SessionManager {
                         created_at: session.created_at,
                         last_activity_at: session.last_activity_at,
                         state: session.state.clone(),
+                        display_state: session.display_state(),
                         parent_session_id: None,
                         is_daemon: session.config.is_daemon,
                     }
@@ -9268,6 +9299,14 @@ impl SessionManager {
         self.persistence_manager
             .save_dialog_turn(&workspace_path, &turn)
             .await?;
+
+        // Record the interruption on the in-memory session so the seven-state
+        // display projection can surface `Interrupted` until the session is
+        // reset to Idle. The mutation guard above serializes concurrent writes.
+        if let Some(mut session) = self.sessions.get_mut(session_id) {
+            session.interrupt_reason = Some("interrupted".to_string());
+        }
+
         Ok(recovery)
     }
 
