@@ -12,6 +12,7 @@ import type {
 } from '@/shared/types/session-history';
 import type { AiErrorDetail } from '@/shared/ai-errors/aiErrorPresenter';
 import type { ReviewTargetEvidence, ReviewTeamRunManifest } from '@/shared/services/reviewTeamService';
+import type { SessionDisplayState } from '../state-machine/types';
 
 export type ModelRoundAttemptDiagnostic = import('@/shared/types/session-history').ModelRoundAttemptDiagnostic;
 
@@ -406,6 +407,12 @@ export interface Session {
   // - 'error': state machine state === ERROR
   // - 'idle': otherwise
   status: 'active' | 'idle' | 'error';
+  /**
+   * Display/management state (seven-state projection) from the backend
+   * `AgentSessionSummary.displayState`, when available. Falls back to
+   * `undefined` for sessions that never reported it.
+   */
+  displayState?: SessionDisplayState;
   /** Persisted backend status retained while historical turns are metadata-only. */
   persistedStatus?: 'active' | 'archived' | 'completed';
   
