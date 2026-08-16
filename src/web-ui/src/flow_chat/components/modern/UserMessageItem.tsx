@@ -217,7 +217,7 @@ export const UserMessageItem = React.memo<UserMessageItemProps>(
     // when the backend attached sender metadata; historical messages without
     // it render no badge at all (graceful degradation).
     // R-WF-08: group mode system prompt (turnRole=system, first turn) renders
-    // as a system badge (t('message.system') = "系统") — the group's mode
+    // as a system badge (t('message.system') = "System") — the group's mode
     // prompt is the first timeline entry and must be visually distinct.
     const senderBadge = useMemo(() => {
       const meta = message?.metadata;

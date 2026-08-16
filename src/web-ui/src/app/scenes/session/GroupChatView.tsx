@@ -126,9 +126,10 @@ function groupMessageToDialogTurn(
         ...(author.role ? { senderRole: author.role } : {}),
         ...(typeof author.depth === 'number' ? { senderDepth: author.depth } : {}),
         ...(author.name ? { senderName: author.name } : {}),
-        // R-WF-08: senderType = 智能体类型（发言方标识「类型」位），后端
-        // author.agentType 透传；群首 turn（role=system）以 turnRole=system
-        // 标记，供消息渲染区分 mode 提示词（验收断言「群首 turn=system」）。
+        // R-WF-08: senderType = agent type slot of the sender identity badge,
+        // passed through from backend author.agentType; the group-lead turn
+        // (role=system) is marked turnRole=system so message rendering can
+        // distinguish the group mode prompt (acceptance: group-lead turn=system).
         ...(author.agentType ? { senderType: author.agentType } : {}),
         ...(message.role === 'system' ? { turnRole: 'system' } : {}),
       },
