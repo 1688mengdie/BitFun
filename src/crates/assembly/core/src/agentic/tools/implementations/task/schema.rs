@@ -140,11 +140,6 @@ The two modes are mutually exclusive: do not provide `subagent_type` when `fork_
 - Special values: `inherit` explicitly uses the same model as yours; `primary` and `fast` use the user's configured model slots.
 - For a configured model, call ListModels first and use its returned `model_id`.
 
-`role` usage (action='spawn', R-14 B3 security parameter):
-- Optional explicit RBAC role for the child session: "commander", "executor", or "reviewer". Defaults to "executor" when omitted.
-- A caller may only delegate to its own role (or, as commander, to any role); delegation to a different role is rejected with an error at the spawn entry point. Unknown role keys are ignored and fall back to the default.
-- Only set this when the target subagent genuinely needs a different role baseline; prefer omitting it for ordinary delegation.
-
 Usage notes:
 - Include a short description of what the agent will do for this round (for `spawn` and `send_input`).
 - Provide a clear prompt for `spawn` and `send_input` so the agent can work autonomously and return the information you need.
