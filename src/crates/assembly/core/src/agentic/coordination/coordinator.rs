@@ -158,7 +158,9 @@ use std::sync::OnceLock;
 use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, RwLock, Semaphore};
 use tokio::time::{sleep, Duration, Instant};
 use tokio_util::sync::CancellationToken;
-
+use tool_runtime::background_command_output::{
+    background_command_output_capture, BackgroundCommandOutputStatus, ListBackgroundCommandOutputRequest,
+};
 const MANUAL_COMPACTION_COMMAND: &str = "/compact";
 const CONTEXT_COMPRESSION_TOOL_NAME: &str = "ContextCompression";
 const TASK_TOOL_NAME: &str = "Task";
@@ -200,6 +202,15 @@ const SESSION_REFERENCE_ARTIFACT_STEM_EXTENSION_LENGTH: usize = 4;
 const SESSION_REFERENCE_NAME_CHAR_LIMIT: usize = 96;
 const USER_SHELL_COMMAND_MAX_BYTES: usize = 64 * 1024;
 const USER_SHELL_TOOL_NAME: &str = "ExecCommand";
+
+/// How often the keep-processing watchdog re-checks the background command
+/// registry for a session pinned to `Processing` by a still-running child.
+const BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// Hard ceiling for how long a session may stay `Processing` solely because of
+/// a running background command. After this the watchdog settles it to `Idle`
+/// and logs a warning (large compiles can legitimately exceed this, tune the
+/// constant instead of hard-coding magic numbers at call sites).
+const BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 fn comparable_workspace_path(path: &str) -> String {
     let path = path.trim();
@@ -3425,22 +3436,45 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         }
 
-        match session_manager
-            .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                debug!(
-                    "Skipped setting session Idle after completion for stale turn: session_id={}, turn_id={}",
-                    session_id, turn_id
-                );
-            }
-            Err(error) => {
-                error!(
-                    "Failed to set session state to Idle after completion: session_id={}, turn_id={}, error={}",
-                    session_id, turn_id, error
-                );
+        if has_running_background_command(session_id).await {
+            // A background ExecCommand child is still running for this session:
+            // keep the session Processing so SessionControl list and the
+            // frontend continue to show it active. The child's terminal
+            // lifecycle event (or the watchdog) will settle it back to Idle.
+            debug!(
+                "Turn completed but background command still running; keeping session Processing: session_id={}, turn_id={}",
+                session_id, turn_id
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Processing {
+                        current_turn_id: turn_id.to_string(),
+                        phase: ProcessingPhase::ToolCalling,
+                    },
+                )
+                .await;
+            session_manager.set_keep_processing_turn(session_id, turn_id);
+            spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
+        } else {
+            match session_manager
+                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    debug!(
+                        "Skipped setting session Idle after completion for stale turn: session_id={}, turn_id={}",
+                        session_id, turn_id
+                    );
+                }
+                Err(error) => {
+                    error!(
+                        "Failed to set session state to Idle after completion: session_id={}, turn_id={}, error={}",
+                        session_id, turn_id, error
+                    );
+                }
             }
         }
 
@@ -3647,22 +3681,41 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         }
 
-        match session_manager
-            .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => {
-                debug!(
-                    "Skipped setting session Idle after cancellation for stale turn: session_id={}, turn_id={}",
-                    session_id, turn_id
-                );
-            }
-            Err(error) => {
-                error!(
-                    "Failed to set session state to Idle after cancellation: session_id={}, turn_id={}, error={}",
-                    session_id, turn_id, error
-                );
+        if has_running_background_command(session_id).await {
+            debug!(
+                "Turn cancelled but background command still running; keeping session Processing: session_id={}, turn_id={}",
+                session_id, turn_id
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Processing {
+                        current_turn_id: turn_id.to_string(),
+                        phase: ProcessingPhase::ToolCalling,
+                    },
+                )
+                .await;
+            session_manager.set_keep_processing_turn(session_id, turn_id);
+            spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
+        } else {
+            match session_manager
+                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    debug!(
+                        "Skipped setting session Idle after cancellation for stale turn: session_id={}, turn_id={}",
+                        session_id, turn_id
+                    );
+                }
+                Err(error) => {
+                    error!(
+                        "Failed to set session state to Idle after cancellation: session_id={}, turn_id={}, error={}",
+                        session_id, turn_id, error
+                    );
+                }
             }
         }
 
@@ -3719,19 +3772,38 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             }
         };
 
-        match session_manager
-            .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
-            .await
-        {
-            Ok(true) => {}
-            Ok(false) => debug!(
-                "Interrupted turn no longer owns Processing state: session_id={}, turn_id={}",
+        if has_running_background_command(session_id).await {
+            debug!(
+                "Turn interrupted but background command still running; keeping session Processing: session_id={}, turn_id={}",
                 session_id, turn_id
-            ),
-            Err(error) => error!(
-                "Failed to settle interrupted Session as Idle: session_id={}, turn_id={}, error={}",
-                session_id, turn_id, error
-            ),
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Processing {
+                        current_turn_id: turn_id.to_string(),
+                        phase: ProcessingPhase::ToolCalling,
+                    },
+                )
+                .await;
+            session_manager.set_keep_processing_turn(session_id, turn_id);
+            spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
+        } else {
+            match session_manager
+                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => debug!(
+                    "Interrupted turn no longer owns Processing state: session_id={}, turn_id={}",
+                    session_id, turn_id
+                ),
+                Err(error) => error!(
+                    "Failed to settle interrupted Session as Idle: session_id={}, turn_id={}, error={}",
+                    session_id, turn_id, error
+                ),
+            }
         }
 
         if let Some(interruption_intents) = interruption_intents {
@@ -5923,7 +5995,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
     #[allow(clippy::too_many_arguments)]
     async fn finalize_manual_compaction_success(
-        session_manager: &SessionManager,
+        session_manager: Arc<SessionManager>,
         event_queue: &EventQueue,
         session_id: &str,
         turn_id: &str,
@@ -5940,9 +6012,30 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 outcome.duration_ms,
             )
             .await;
-        let idle_persistence = session_manager
-            .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
-            .await;
+        let keep_processing = has_running_background_command(session_id).await;
+        let idle_persistence = if keep_processing {
+            debug!(
+                "Manual compaction finished but background command still running; keeping session Processing: session_id={}, turn_id={}",
+                session_id, turn_id
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Processing {
+                        current_turn_id: turn_id.to_string(),
+                        phase: ProcessingPhase::ToolCalling,
+                    },
+                )
+                .await;
+            session_manager.set_keep_processing_turn(session_id, turn_id);
+            spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
+            Ok(true)
+        } else {
+            session_manager
+                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .await
+        };
 
         let finalization_error = match (turn_persistence, idle_persistence) {
             (Ok(()), Ok(true)) => None,
@@ -6077,7 +6170,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         {
             Ok(outcome) => {
                 Self::finalize_manual_compaction_success(
-                    session_manager.as_ref(),
+                    session_manager.clone(),
                     event_queue.as_ref(),
                     &session_id,
                     &turn_id,
@@ -7150,9 +7243,24 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 fn drop(&mut self) {
                     self.active_counter.fetch_sub(1, Ordering::SeqCst);
                     // If the session is still in Processing (abnormal exit),
-                    // synchronously reset to Idle so the user is never stuck.
-                    self.session_manager
-                        .reset_session_state_if_processing(&self.session_id, &self.turn_id);
+                    // synchronously reset to Idle so the user is never stuck --
+                    // unless a background command is still running and pinned
+                    // this turn to stay Processing (keep_processing_turns).
+                    let keep_processing =
+                        self.session_manager.keep_processing_turn(&self.session_id)
+                            == Some(self.turn_id.clone());
+                    if !keep_processing {
+                        self.session_manager
+                            .reset_session_state_if_processing(&self.session_id, &self.turn_id);
+                    } else {
+                        // Leave Processing intact; the settle side (lifecycle
+                        // subscriber / watchdog) owns the transition back to
+                        // Idle and clears the marker.
+                        debug!(
+                            "SessionExecutionGuard skipping Idle reset while background command running: session_id={}, turn_id={}",
+                            self.session_id, self.turn_id
+                        );
+                    }
                     // Clear after the state transition. This ordering prevents
                     // an overlapping API update from validating Processing
                     // immediately after cleanup and publishing a stale entry.
@@ -7597,8 +7705,20 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             impl Drop for RecoveredExecutionGuard {
                 fn drop(&mut self) {
                     self.active_counter.fetch_sub(1, Ordering::SeqCst);
-                    self.session_manager
-                        .reset_session_state_if_processing(&self.session_id, &self.turn_id);
+                    // Mirrors SessionExecutionGuard::drop: skip the Idle reset
+                    // while a background command keeps this turn Processing.
+                    let keep_processing =
+                        self.session_manager.keep_processing_turn(&self.session_id)
+                            == Some(self.turn_id.clone());
+                    if !keep_processing {
+                        self.session_manager
+                            .reset_session_state_if_processing(&self.session_id, &self.turn_id);
+                    } else {
+                        debug!(
+                            "RecoveredExecutionGuard skipping Idle reset while background command running: session_id={}, turn_id={}",
+                            self.session_id, self.turn_id
+                        );
+                    }
                     self.session_manager
                         .clear_active_turn_permission_mode(&self.session_id, &self.turn_id);
                 }
@@ -16424,6 +16544,87 @@ pub fn get_global_coordinator() -> Option<Arc<ConversationCoordinator>> {
     GLOBAL_COORDINATOR.get().cloned()
 }
 
+/// Returns `true` when at least one background ExecCommand child process
+/// belonging to `session_id` is still `Running`.
+///
+/// The capture registry is the authoritative cross-turn signal source
+/// (tool-execution `BackgroundCommandOutputCapture`); `list` filters by
+/// `agent_session_id`. This helper is async because the registry lock is an
+/// async mutex.
+async fn has_running_background_command(session_id: &str) -> bool {
+    let response = background_command_output_capture()
+        .list(ListBackgroundCommandOutputRequest {
+            agent_session_id: Some(session_id.to_string()),
+        })
+        .await;
+    response
+        .activities
+        .iter()
+        .any(|metadata| metadata.status == BackgroundCommandOutputStatus::Running)
+}
+
+/// Spawns the keep-processing watchdog for a session pinned to `Processing`
+/// because a background command is still running.
+///
+/// The watchdog polls the capture registry on a fixed interval. It settles the
+/// session back to `Idle` (and clears the marker) when:
+/// - no Running command remains (the lifecycle-event track may have missed the
+///   terminal update), or
+/// - the pin outlives [`BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME`] (guards
+///   against a permanently stuck `Processing` when a child never exits).
+fn spawn_background_command_watchdog(session_id: String, turn_id: String) {
+    tokio::spawn(async move {
+        // Resolve the session manager through the global coordinator so callers
+        // with only a `&SessionManager` reference can still arm the watchdog.
+        let Some(coordinator) = get_global_coordinator() else {
+            return;
+        };
+        let session_manager = coordinator.session_manager.clone();
+        let started = Instant::now();
+        let mut interval = tokio::time::interval(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            // Only act while the pin still belongs to this turn.
+            let keep = session_manager.keep_processing_turn(&session_id) == Some(turn_id.clone());
+            if !keep {
+                return;
+            }
+            let still_running = has_running_background_command(&session_id).await;
+            if !still_running {
+                debug!(
+                    "Background command watchdog settling session to Idle: session_id={}, turn_id={}",
+                    session_id, turn_id
+                );
+                let _ = session_manager
+                    .update_session_state_for_turn_if_processing(
+                        &session_id,
+                        &turn_id,
+                        SessionState::Idle,
+                    )
+                    .await;
+                session_manager.clear_keep_processing_turn(&session_id);
+                return;
+            }
+            if started.elapsed() >= BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME {
+                warn!(
+                    "Background command still running after {:?}; force-settling session to Idle to avoid permanent Processing: session_id={}, turn_id={}",
+                    BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME, session_id, turn_id
+                );
+                let _ = session_manager
+                    .update_session_state_for_turn_if_processing(
+                        &session_id,
+                        &turn_id,
+                        SessionState::Idle,
+                    )
+                    .await;
+                session_manager.clear_keep_processing_turn(&session_id);
+                return;
+            }
+        }
+    });
+}
+
 fn merge_prepended_messages_for_turn(
     additional_prepended_messages: Vec<Message>,
     wrapped_prepended_messages: Vec<Message>,
@@ -16463,7 +16664,7 @@ mod tests {
         apply_primary_agent_model_default, apply_scheduler_busy_projection,
         background_subagent_follow_up_message, btw_session_memory_mode,
         build_subagent_session_relationship, commit_interrupted_turn_intent, is_main_session_by_creator,
-        lineage_active_turn_after_transcript,
+        has_running_background_command, lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
         logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
         normalize_subagent_max_concurrency_with_cap,
@@ -17371,7 +17572,7 @@ mod tests {
         ));
         let persistence =
             Arc::new(PersistenceManager::new(path_manager.clone()).expect("persistence manager"));
-        let session_manager = SessionManager::new(
+        let session_manager = Arc::new(SessionManager::new(
             Arc::new(SessionContextStore::new()),
             persistence,
             SessionManagerConfig {
@@ -17381,7 +17582,7 @@ mod tests {
                 enable_persistence: true,
                 prompt_cache_policy: PromptCachePolicy::default(),
             },
-        );
+        ));
         let session = session_manager
             .create_session(
                 "Persistence failure".to_string(),
@@ -17413,7 +17614,7 @@ mod tests {
 
         let event_queue = EventQueue::new(EventQueueConfig::default());
         let result = ConversationCoordinator::finalize_manual_compaction_success(
-            &session_manager,
+            session_manager.clone(),
             &event_queue,
             &session.session_id,
             &turn_id,
@@ -23344,5 +23545,62 @@ mod tests {
         let fallback = background_subagent_follow_up_message("flow-session-8", "", None);
         assert!(fallback.contains("flow-session-8"));
         assert!(fallback.contains("(agent)"));
+    }
+
+    #[tokio::test]
+    async fn has_running_background_command_detects_running_child() {
+        // R-WF-25 assertion 1 (registry-backed detection, mock template from
+        // background_command_output.rs:462-538): a capture in Running state
+        // must be detected as "background command still running" for the
+        // session, and a terminal state must flip the detection to false.
+        use tool_runtime::background_command_output::{
+            background_command_output_capture, BackgroundCommandOutputStatus,
+            StartBackgroundCommandOutputCapture,
+        };
+        let capture_id = format!(
+            "rwf25-test-capture-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        );
+        let session_id = format!("rwf25-session-{}", &capture_id);
+        let capture = background_command_output_capture();
+        let _tx = capture
+            .start_capture(StartBackgroundCommandOutputCapture {
+                capture_id: capture_id.clone(),
+                agent_session_id: Some(session_id.clone()),
+                command: "sleep 30".to_string(),
+                workdir: None,
+                remote: false,
+                tty: false,
+            })
+            .await;
+        capture
+            .update_lifecycle(
+                &capture_id,
+                9999,
+                BackgroundCommandOutputStatus::Running,
+                None,
+            )
+            .await
+            .expect("record exists");
+
+        assert!(has_running_background_command(&session_id).await);
+
+        // Terminal state flips detection off (status != Running).
+        capture
+            .update_lifecycle(
+                &capture_id,
+                9999,
+                BackgroundCommandOutputStatus::Exited,
+                Some(0),
+            )
+            .await
+            .expect("record exists");
+        assert!(!has_running_background_command(&session_id).await);
+
+        // Sessions without any capture are never reported as running.
+        assert!(!has_running_background_command("rwf25-session-unknown").await);
     }
 }

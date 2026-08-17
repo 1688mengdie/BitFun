@@ -10,6 +10,8 @@ use super::shell_kind::{exec_command_shell_kind, terminal_shell_type};
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolResult, ToolUseContext, ValidationResult,
 };
+use crate::agentic::coordination::get_global_coordinator;
+use crate::agentic::events::AgenticEvent;
 use crate::infrastructure::events::event_system::{
     get_global_event_system, BackendEvent::BackgroundCommandLifecycle,
 };
@@ -341,23 +343,39 @@ impl ExecCommandTool {
                     .await
                 {
                     let timestamp = Self::now_unix_seconds();
+                    let lifecycle_status_name = exec_command_lifecycle_status_name(status).to_string();
+                    let resolved_session_id = metadata.agent_session_id.or(agent_session_id.clone());
                     let _ = event_system
                         .emit(BackgroundCommandLifecycle(BackgroundCommandLifecycleInfo {
-                            agent_session_id: metadata
-                                .agent_session_id
-                                .or(agent_session_id.clone()),
+                            agent_session_id: resolved_session_id.clone(),
                             exec_session_id: event.session_id,
-                            command: metadata.command,
-                            workdir: metadata.workdir,
+                            command: metadata.command.clone(),
+                            workdir: metadata.workdir.clone(),
                             remote: false,
                             tty: metadata.tty,
-                            status: exec_command_lifecycle_status_name(status).to_string(),
+                            status: lifecycle_status_name.clone(),
                             exit_code: event.exit_code,
                             started_at: metadata.started_at,
                             ended_at: metadata.ended_at,
                             timestamp,
                         }))
                         .await;
+                    // Mirror the lifecycle transition into the agentic event
+                    // channel so internal subscribers (e.g. the background
+                    // command settler) can settle the owning session back to
+                    // Idle once no Running command remains. The global
+                    // coordinator owns the event queue (P 工位实证: this
+                    // static bridge has no event_queue handle).
+                    if let Some(session_id) = resolved_session_id {
+                        if let Some(coordinator) = get_global_coordinator() {
+                            coordinator
+                                .emit_event(AgenticEvent::BackgroundCommandLifecycleChanged {
+                                    session_id,
+                                    status: lifecycle_status_name,
+                                })
+                                .await;
+                        }
+                    }
                 }
             }
         });
@@ -387,23 +405,34 @@ impl ExecCommandTool {
                     .await
                 {
                     let timestamp = Self::now_unix_seconds();
+                    let lifecycle_status_name = exec_command_lifecycle_status_name(status).to_string();
+                    let resolved_session_id = metadata.agent_session_id.or(agent_session_id.clone());
                     let _ = event_system
                         .emit(BackgroundCommandLifecycle(BackgroundCommandLifecycleInfo {
-                            agent_session_id: metadata
-                                .agent_session_id
-                                .or(agent_session_id.clone()),
+                            agent_session_id: resolved_session_id.clone(),
                             exec_session_id: event.session_id,
-                            command: metadata.command,
-                            workdir: metadata.workdir,
+                            command: metadata.command.clone(),
+                            workdir: metadata.workdir.clone(),
                             remote: true,
                             tty: metadata.tty,
-                            status: exec_command_lifecycle_status_name(status).to_string(),
+                            status: lifecycle_status_name.clone(),
                             exit_code: event.exit_code,
                             started_at: metadata.started_at,
                             ended_at: metadata.ended_at,
                             timestamp,
                         }))
                         .await;
+                    // Mirror into the agentic event channel (see local bridge).
+                    if let Some(session_id) = resolved_session_id {
+                        if let Some(coordinator) = get_global_coordinator() {
+                            coordinator
+                                .emit_event(AgenticEvent::BackgroundCommandLifecycleChanged {
+                                    session_id,
+                                    status: lifecycle_status_name,
+                                })
+                                .await;
+                        }
+                    }
                 }
             }
         });

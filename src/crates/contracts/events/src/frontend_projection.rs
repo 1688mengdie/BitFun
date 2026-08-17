@@ -420,6 +420,10 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "reason": reason,
             }),
         )),
+        // Internal-only lifecycle signal (R-WF-25): the frontend already
+        // consumes the `backend-event-backgroundcommandlifecycle` event for
+        // background activity display, so no frontend projection is needed.
+        AgenticEvent::BackgroundCommandLifecycleChanged { .. } => None,
         AgenticEvent::DeepReviewQueueStateChanged {
             session_id,
             turn_id,
