@@ -8,6 +8,20 @@ export class ConversationLayoutCrease {
   }
 }
 
+export class ConversationLayoutRect {
+  readonly left: number;
+  readonly top: number;
+  readonly width: number;
+  readonly height: number;
+
+  constructor(left: number, top: number, width: number, height: number) {
+    this.left = left;
+    this.top = top;
+    this.width = width;
+    this.height = height;
+  }
+}
+
 export class ConversationLayoutGeometry {
   readonly masterPaneWidth: number;
   readonly masterDetailGap: number;
@@ -57,6 +71,91 @@ export class ConversationLayoutPolicy {
   static readonly MIN_MASTER_PANE_WIDTH: number = 280;
   static readonly MIN_DETAIL_PANE_WIDTH: number = 360;
   static readonly SYNTHETIC_HINGE_WIDTH: number = 16;
+  static readonly FOLD_STATUS_UNKNOWN: number = 0;
+  static readonly FOLD_STATUS_EXPANDED: number = 1;
+  static readonly FOLD_STATUS_FOLDED: number = 2;
+  static readonly FOLD_STATUS_HALF_FOLDED: number = 3;
+  static readonly FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED: number = 11;
+  static readonly FOLD_STATUS_FOLDED_WITH_SECOND_EXPANDED: number = 12;
+  static readonly FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED: number = 13;
+  static readonly FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED: number = 21;
+  static readonly FOLD_STATUS_FOLDED_WITH_SECOND_HALF_FOLDED: number = 22;
+  static readonly FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED: number = 23;
+
+  static isFoldedStatus(status: number): boolean {
+    return status === ConversationLayoutPolicy.FOLD_STATUS_FOLDED;
+  }
+
+  static isExpandedFoldableStatus(status: number): boolean {
+    return status !== ConversationLayoutPolicy.FOLD_STATUS_UNKNOWN &&
+      status !== ConversationLayoutPolicy.FOLD_STATUS_FOLDED;
+  }
+
+  static isHoverStatus(status: number): boolean {
+    return status === ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED ||
+      status === ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED;
+  }
+
+  static useHoverOperate(
+    status: number,
+    viewportWidth: number,
+    viewportHeight: number
+  ): boolean {
+    if (!ConversationLayoutPolicy.isHoverStatus(status)) {
+      return false;
+    }
+    if (viewportWidth >= ConversationLayoutPolicy.MD_MIN_WIDTH &&
+      viewportWidth >= viewportHeight) {
+      return false;
+    }
+    return true;
+  }
+
+  static isLandscapeRotation(rotation: number): boolean {
+    return rotation === 1 || rotation === 3 || rotation === 90 || rotation === 270;
+  }
+
+  static resolveLayoutViewportWidth(
+    areaWidth: number,
+    areaHeight: number,
+    displayWidth: number,
+    displayHeight: number,
+    rotation: number = 0
+  ): number {
+    const landscape = ConversationLayoutPolicy.isLandscapeRotation(rotation) ||
+      (displayWidth > 0 && displayWidth >= displayHeight);
+    const layoutWidth = landscape ? Math.max(displayWidth, displayHeight) : displayWidth;
+    if (layoutWidth > 0 && areaWidth > 0 && areaWidth < layoutWidth * 0.8) {
+      return layoutWidth;
+    }
+    return areaWidth > 0 ? areaWidth : layoutWidth;
+  }
+
+  static verticalCreasesFromRects(
+    viewportWidth: number,
+    viewportHeight: number,
+    rects: ConversationLayoutRect[]
+  ): ConversationLayoutCrease[] {
+    const mapped: ConversationLayoutCrease[] = [];
+    rects.forEach((rect: ConversationLayoutRect): void => {
+      if (rect.width < 0 || rect.height < 0) {
+        return;
+      }
+      if (rect.height > rect.width) {
+        mapped.push(new ConversationLayoutCrease(rect.left, rect.width));
+        return;
+      }
+      if (viewportWidth <= 0 || viewportHeight <= 0) {
+        return;
+      }
+      const spansViewportWidth = rect.width >= viewportWidth * 0.8;
+      const spansViewportHeight = rect.width >= viewportHeight * 0.8;
+      if (!spansViewportWidth && spansViewportHeight) {
+        mapped.push(new ConversationLayoutCrease(rect.top, rect.height));
+      }
+    });
+    return ConversationLayoutPolicy.visibleCreases(viewportWidth, mapped);
+  }
 
   static useMasterDetail(
     viewportWidth: number,
@@ -93,18 +192,19 @@ export class ConversationLayoutPolicy {
       ConversationLayoutPolicy.fallbackMasterPaneWidth(viewportWidth);
     const masterDetailGap = firstCrease ? Math.max(0, firstCrease.width) : 0;
     const detailStart = masterPaneWidth + masterDetailGap;
-    const detailSegments = ConversationLayoutPolicy.detailSegments(viewportWidth, detailStart, visibleCreases);
-    const contentSegment = ConversationLayoutPolicy.widestSegment(detailSegments);
+    const detailWidth = Math.max(0, viewportWidth - detailStart);
     const collapsedContentSegment = ConversationLayoutPolicy.collapsedContentSegment(
       viewportWidth,
-      visibleCreases
+      visibleCreases,
+      detailStart,
+      detailWidth
     );
     return new ConversationLayoutGeometry(
       masterPaneWidth,
       masterDetailGap,
       visibleCreases.length > 1 || viewportWidth >= ConversationLayoutPolicy.LG_MIN_WIDTH,
-      contentSegment ? contentSegment.left - detailStart : 0,
-      contentSegment ? contentSegment.width : 0,
+      0,
+      detailWidth,
       collapsedContentSegment.left,
       collapsedContentSegment.width
     );
@@ -112,15 +212,22 @@ export class ConversationLayoutPolicy {
 
   private static collapsedContentSegment(
     viewportWidth: number,
-    visibleCreases: ConversationLayoutCrease[]
+    visibleCreases: ConversationLayoutCrease[],
+    detailStart: number,
+    detailWidth: number
   ): ConversationLayoutSegment {
-    if (visibleCreases.length <= 1) {
+    if (visibleCreases.length === 0) {
       return new ConversationLayoutSegment(0, Math.max(0, viewportWidth));
     }
-    const widest = ConversationLayoutPolicy.widestSegment(
-      ConversationLayoutPolicy.detailSegments(viewportWidth, 0, visibleCreases)
-    );
-    return widest ? widest : new ConversationLayoutSegment(0, Math.max(0, viewportWidth));
+    if (visibleCreases.length === 1) {
+      const widest = ConversationLayoutPolicy.widestSegment(
+        ConversationLayoutPolicy.detailSegments(viewportWidth, 0, visibleCreases)
+      );
+      if (widest && widest.width <= viewportWidth * 0.55) {
+        return new ConversationLayoutSegment(0, Math.max(0, viewportWidth));
+      }
+    }
+    return new ConversationLayoutSegment(detailStart, detailWidth);
   }
 
   static effectiveVerticalCreases(
