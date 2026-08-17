@@ -691,7 +691,11 @@ fn write_tail_closure_notice_preserves_write_like_guidance() {
     assert!(is_write_like_tool_name("Write"));
     assert!(is_write_like_tool_name("file_write"));
     assert!(is_write_like_tool_name("write_notebook"));
+    assert!(is_write_like_tool_name("Edit"));
+    assert!(is_write_like_tool_name("Delete"));
+    assert!(is_write_like_tool_name("ExecCommand"));
     assert!(!is_write_like_tool_name("Read"));
+    assert!(!is_write_like_tool_name("AskUserQuestion"));
 
     let notice = bitfun_agent_tools::build_write_tail_closure_notice("Write");
 
