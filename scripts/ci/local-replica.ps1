@@ -3,21 +3,24 @@
     本地 CI 全量复刻脚本：按 .github/workflows/ci.yml 逐 job 逐 step 在本地 Windows 上完整预演。
 
 .DESCRIPTION
-    固化 5 个 job / 28 步（shell-scripts / cli-test / cargo-deny / rust-build-check / frontend-build），
-    与远程 CI（ubuntu-latest 主线）对齐。已知 Windows 平台差异项显式标注、不判整体失败，
-    其余步骤严格判失败（核心失败 → 退出码非 0）。
+    固化 6 个 job / 36 步（shell-scripts / cli-test / cargo-deny / rust-build-check /
+    dsh-profile-windows / frontend-build），与远程 CI（ubuntu-latest 主线 + windows-latest
+    dsh/rust）对齐。已知 Windows 平台差异项显式标注、不判整体失败，其余步骤严格判失败
+    （核心失败 → 退出码非 0）。
 
     环境预处理（关键）：
       - PATH 前置 Git Bash：系统 bash.exe 可能是 WSL stub（无发行版），会让所有 bash 脚本/契约测试
         误报失败。本脚本探测 %ProgramFiles%\Git\bin 等常见安装位置，找不到则报错退出。
       - NODE_OPTIONS=--max-old-space-size=6144（对齐 CI frontend-build env）。
+      - RUSTFLAGS=-D warnings：rust-build-check job 级设置（对齐 CI.yml:192），warning = error；
+        cli-test 保持 platform-warn（Windows 平台差异项不加严，避免掩盖 CLI 平台信号）。
       - cargo-deny：已安装则直接使用，未安装则提示安装命令（不自动装）。
 
 .PARAMETER SkipFrontend
     跳过 frontend-build job（构建耗时较长，可选）。
 
 .EXAMPLE
-    .\scripts\ci\local-replica.ps1            # 全量 28 步
+    .\scripts\ci\local-replica.ps1            # 全量 36 步
     .\scripts\ci\local-replica.ps1 -SkipFrontend   # 跳过前端 job
 #>
 [CmdletBinding()]
@@ -133,6 +136,10 @@ Write-Host "  版本: $bashVer" -ForegroundColor DarkGray
 $env:NODE_OPTIONS = '--max-old-space-size=6144'
 Write-Host "  NODE_OPTIONS=$env:NODE_OPTIONS" -ForegroundColor Green
 
+# 0b1. RUSTFLAGS=-D warnings（对齐 CI.yml:192 rust-build-check env，warning = error）
+$env:RUSTFLAGS = '-D warnings'
+Write-Host "  RUSTFLAGS=$env:RUSTFLAGS（对齐 CI rust job warning 门禁；cli-test job 保持 platform-warn）" -ForegroundColor Green
+
 # 0c. cargo-deny 检查
 $cargoDeny = Get-Command cargo-deny -ErrorAction SilentlyContinue
 if ($cargoDeny) {
@@ -245,6 +252,16 @@ Invoke-CIStep 'rust-build-check' 'workspace 编译检查' `
     return $LASTEXITCODE
 }
 
+# 实际 feature 组合验证（C-13）：--all-features/裸默认 feature 均掩盖 feature 装配缺口。
+# 裸 `cargo check -p bitfun-core`（default=[]）下 configured_* 消费点在 feature 门控后 → 7 dead_code warning
+# （C-10 -D warnings 下必挂）；CI 合约组合 = desktop 依赖 product-full（src/apps/desktop/Cargo.toml:23），
+# 消费点全激活 → 0e0w。此 step 对齐 CI 合约实际 feature 组合，复现并守住 bitfun-core 0e0w 门禁。
+Invoke-CIStep 'rust-build-check' 'bitfun-core 实际 feature 组合验证（product-full 对齐 CI 合约）' `
+    "cargo check -p bitfun-core --features product-full --jobs 4" -Mode strict -Body {
+    cargo check -p bitfun-core --features product-full --jobs 4 2>&1 | Select-Object -Last 2
+    return $LASTEXITCODE
+}
+
 Invoke-CIStep 'rust-build-check' 'installer 编译检查（Windows 专属步骤）' `
     "cargo check --manifest-path BitFun-Installer/src-tauri/Cargo.toml" -Mode strict -Body {
     cargo check --manifest-path BitFun-Installer/src-tauri/Cargo.toml 2>&1 | Select-Object -Last 2
@@ -287,9 +304,44 @@ Invoke-CIStep 'rust-build-check' 'search 工具测试' `
     return $LASTEXITCODE
 }
 
-# ── 5. frontend-build ─────────────────────────────────────────────────────
+# ── 5. dsh-profile-windows ────────────────────────────────────────────────
+# 远程 CI.yml:377-422 全 job：prepare-dsh-profile.mjs 打包 + profile 完整性验证。
+# 本地 Windows 主机 = 远程 windows-latest 同类平台，全量复刻（strict）。
+Write-Host "`n===== Job 5: dsh-profile-windows =====" -ForegroundColor Magenta
+
+Invoke-CIStep 'dsh-profile-windows' 'build profile（npm install/tsc/npm pack/tar/tree copy）' `
+    "node scripts/prepare-dsh-profile.mjs" -Mode strict -Body {
+    node scripts/prepare-dsh-profile.mjs 2>&1 | Select-Object -Last 4 | ForEach-Object { Write-Host "  $_" }
+    return $LASTEXITCODE
+}
+
+Invoke-CIStep 'dsh-profile-windows' 'profile 完整性 + stamp 验证（对齐 CI.yml:393-422）' `
+    "bash 验证 dist-profile 必需文件 + nested node_modules/*.map 零残留 + .bitfun-bridge.json stamp" -Mode strict -Body {
+    $profileRoot = 'packages/dsh-acp/dist-profile'
+    $required = @(
+        "$profileRoot/.bitfun-bridge.json",
+        "$profileRoot/cordis.patch.yml",
+        "$profileRoot/package.json",
+        "$profileRoot/lib/app.js",
+        "$profileRoot/node_modules/@agentclientprotocol/sdk/package.json",
+        "$profileRoot/node_modules/@deepseek-ai/dsh-agent-spine-demo/package.json"
+    )
+    foreach ($p in $required) {
+        if (-not (Test-Path $p)) { Write-Host "  [ERROR] missing $p"; return 1 }
+    }
+    # 对齐 CI：lib/presets 下不得残留 node_modules / *.map
+    $nested = Get-ChildItem "$profileRoot/lib", "$profileRoot/presets" -Recurse -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq 'node_modules' -or $_.Extension -eq '.map' }
+    if ($nested) { Write-Host "  [ERROR] profile carries files it must not ship:"; $nested | ForEach-Object { Write-Host "    $($_.FullName)" }; return 1 }
+    # stamp 校验：profile=bitfun-acp + content=64 位 hex digest
+    node -e "const s=require('./$profileRoot/.bitfun-bridge.json'); if(s.profile!=='bitfun-acp') throw new Error('wrong profile: '+s.profile); if(!/^[0-9a-f]{64}$/.test(s.content)) throw new Error('no content digest'); process.stdout.write('profile '+s.profile+' @ '+s.bridge+', min dsh '+s.minDshVersion+'\n');" 2>&1 | ForEach-Object { Write-Host "  $_" }
+    if ($LASTEXITCODE -ne 0) { return $LASTEXITCODE }
+    Write-Host "  [OK] profile complete and stamped"
+}
+
+# ── 6. frontend-build ─────────────────────────────────────────────────────
 if (-not $SkipFrontend) {
-    Write-Host "`n===== Job 5: frontend-build =====" -ForegroundColor Magenta
+    Write-Host "`n===== Job 6: frontend-build =====" -ForegroundColor Magenta
 
     Invoke-CIStep 'frontend-build' 'repo 卫生检查' 'pnpm run check:repo-hygiene' -Mode strict -Body {
         pnpm run check:repo-hygiene 2>&1 | Select-String -Pattern 'passed|valid|error' | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
@@ -338,8 +390,15 @@ if (-not $SkipFrontend) {
         return $LASTEXITCODE
     }
 
-    Invoke-CIStep 'frontend-build' 'web-ui lint' 'pnpm run lint:web' -Mode strict -Body {
-        pnpm run lint:web 2>&1 | Select-Object -Last 2
+    # webkit 兼容契约测试（对齐 CI.yml:484-485 verify:webkit-compatibility:test）
+    Invoke-CIStep 'frontend-build' 'webkit 兼容契约测试' 'pnpm run verify:webkit-compatibility:test' -Mode strict -Body {
+        pnpm run verify:webkit-compatibility:test 2>&1 | Select-String -Pattern 'pass |fail ' | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" }
+        return $LASTEXITCODE
+    }
+
+    # web-ui lint：eslint 硬门禁（--max-warnings=0，对齐 CI.yml:490，warning 即失败）
+    Invoke-CIStep 'frontend-build' 'web-ui lint（--max-warnings=0）' 'pnpm --dir src/web-ui exec eslint . --max-warnings=0' -Mode strict -Body {
+        pnpm --dir src/web-ui exec eslint . --max-warnings=0 2>&1 | Select-Object -Last 3
         return $LASTEXITCODE
     }
 
