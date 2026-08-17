@@ -329,6 +329,19 @@ impl RoundExecutor {
         }
     }
 
+    /// Rebuilds the AI client for the round's model from the factory. After a
+    /// subscription force-refresh the factory cache is invalidated, so this
+    /// returns a client whose auth headers carry the rotated token.
+    async fn rebuild_client(context: &RoundContext) -> anyhow::Result<Arc<AIClient>> {
+        let factory = crate::infrastructure::ai::get_global_ai_client_factory().await?;
+        factory
+            .get_client_resolved(&context.model_config_id)
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("rebuild client for {}: {error:#}", context.model_config_id)
+            })
+    }
+
     pub fn new(
         stream_processor: Arc<StreamProcessor>,
         event_queue: Arc<EventQueue>,
@@ -378,6 +391,10 @@ impl RoundExecutor {
         context_window: Option<usize>,
         lifecycle: &mut ModelRoundLifecycle,
     ) -> BitFunResult<RoundResult> {
+        // The client is rebound after a 401/403 subscription credential
+        // refresh so the retry uses the fresh token instead of the stale
+        // credential baked into the original client.
+        let mut ai_client = ai_client;
         let round_started_at = lifecycle.started_at;
         let subagent_parent_info = context.subagent_parent_info.clone();
         let is_subagent = subagent_parent_info.is_some();
@@ -495,6 +512,28 @@ impl RoundExecutor {
                                     round_id,
                                     context.model_config_id
                                 );
+                                // Rebind the retry client from the factory: the
+                                // force-refresh rotated the credential in the
+                                // store and invalidated the cache, so a fresh
+                                // `get_client_resolved` rebuilds the client with
+                                // the new token. Retrying with the original
+                                // client would reuse the stale token and fail
+                                // with 401/403 again.
+                                match Self::rebuild_client(&context).await {
+                                    Ok(rebuilt) => {
+                                        ai_client = rebuilt;
+                                    }
+                                    Err(rebuild_error) => {
+                                        warn!(
+                                            "Rebuild client after subscription refresh failed: {}",
+                                            rebuild_error
+                                        );
+                                        // Fall through to the ordinary retry path
+                                        // below; the stale client will still be
+                                        // tried, but the credential is fresh in
+                                        // the store for the next turn.
+                                    }
+                                }
                                 local_attempt_index += 1;
                                 continue;
                             }

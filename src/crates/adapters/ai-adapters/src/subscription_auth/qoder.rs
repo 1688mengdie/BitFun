@@ -284,13 +284,39 @@ async fn persist_tokens(tokens: DeviceTokenResponse, expected_revision: u64) -> 
     Ok(())
 }
 
+fn openapi_base_url() -> &'static str {
+    // Test override hook: the refresh integration test points the refresh
+    // endpoint at a local mock server. In production builds the override is
+    // never set, so the hard-coded production endpoint is always used.
+    if let Some(override_url) = openapi_base_override() {
+        return override_url;
+    }
+    OPENAPI_URL
+}
+
+fn openapi_base_override() -> Option<&'static str> {
+    openapi_base_override_slot().lock().unwrap().clone()
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn set_openapi_base_override(url: Option<String>) {
+    let leaked = url.map(|value| Box::leak(value.into_boxed_str()) as &'static str);
+    *openapi_base_override_slot().lock().unwrap() = leaked;
+}
+
+fn openapi_base_override_slot() -> &'static std::sync::Mutex<Option<&'static str>> {
+    static OVERRIDE: std::sync::OnceLock<std::sync::Mutex<Option<&'static str>>> =
+        std::sync::OnceLock::new();
+    OVERRIDE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
 async fn refresh(
     refresh_token: &str,
     options: &SubscriptionHttpOptions,
 ) -> Result<RefreshTokenResponse> {
     let client = http_client(options)?;
     let resp = client
-        .post(format!("{OPENAPI_URL}/api/v1/deviceToken/refresh"))
+        .post(format!("{}/api/v1/deviceToken/refresh", openapi_base_url()))
         .json(&serde_json::json!({ "refresh_token": refresh_token }))
         .send()
         .await
@@ -628,5 +654,87 @@ mod tests {
                 Some("https://api2-v2.qoder.sh/model/v1/chat/completions")
             );
         });
+    }
+
+    #[tokio::test]
+    async fn force_refresh_rotates_credential_and_resolve_returns_new_token() {
+        // Integration contract: after a 401/403 the force-refresh must rotate
+        // the credential in the store, and the next resolve (which backs the
+        // rebuilt client's Authorization header) must return the new token.
+        let _guard = super::super::tests::test_lock().lock().await;
+        store::set_store_path_for_test(
+            std::env::temp_dir()
+                .join(format!(
+                    "bitfun-subauth-qoder-rotate-{}",
+                    uuid::Uuid::new_v4()
+                ))
+                .join("subscription_auth.json"),
+        );
+
+        // Local mock of the device-token refresh endpoint returning a rotated
+        // device_token (CLI field shape: device_token/refresh_token/expires_at).
+        let app = axum::Router::new().route(
+            "/api/v1/deviceToken/refresh",
+            axum::routing::post(|| async {
+                axum::Json(serde_json::json!({
+                    "device_token": "rotated-token-9",
+                    "refresh_token": "rotated-refresh-9",
+                    "expires_at": "2099-01-01T00:00:00+00:00"
+                }))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind qoder refresh fixture");
+        let address = listener
+            .local_addr()
+            .expect("qoder refresh fixture address");
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("qoder refresh fixture should run");
+        });
+        set_openapi_base_override(Some(format!("http://{address}")));
+
+        store::upsert(
+            STORE_KEY,
+            StoredCredential::Oauth {
+                refresh: "old-refresh".to_string(),
+                access: "old-token".to_string(),
+                expires: now_ms() + 3_600_000,
+                account_id: None,
+                metadata: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        // force refresh must rotate the stored credential.
+        refresh_profile(&SubscriptionHttpOptions::default())
+            .await
+            .expect("force refresh should succeed against the mock");
+        let stored = store::load_entry(STORE_KEY)
+            .await
+            .unwrap()
+            .expect("credential present");
+        match stored {
+            StoredCredential::Oauth {
+                access, refresh, ..
+            } => {
+                assert_eq!(access, "rotated-token-9");
+                assert_eq!(refresh, "rotated-refresh-9");
+            }
+            _ => panic!("expected oauth credential"),
+        }
+
+        // The next resolve (backing a rebuilt client's Authorization header)
+        // must return the rotated token.
+        let resolved = resolve(&SubscriptionHttpOptions::default())
+            .await
+            .expect("resolve rotated credential");
+        assert_eq!(resolved.api_key, "rotated-token-9");
+
+        server_task.abort();
+        set_openapi_base_override(None);
     }
 }
