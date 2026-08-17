@@ -14,7 +14,7 @@
 import React, { useCallback, useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getAppearanceOverlayHost } from '@/infrastructure/appearance/runtime/AppearanceOverlayHost';
-import { Plus, FolderOpen, FolderPlus, History, Check, User, Users, Puzzle, Blocks, CalendarClock, ChevronDown, Search } from 'lucide-react';
+import { Plus, FolderOpen, FolderPlus, History, Check, User, Users, Puzzle, Blocks, CalendarClock, ChevronDown, Search, GitBranch, Wrench } from 'lucide-react';
 // import { PanelsTopLeft } from 'lucide-react'; // temporarily hidden: Pages nav entry
 import { Tooltip } from '@/component-library';
 import { useApp } from '../../hooks/useApp';
@@ -463,14 +463,23 @@ const MainNav: React.FC<MainNavProps> = ({
     openScene('skills');
   }, [openScene]);
 
+  const handleOpenTools = useCallback(() => {
+    openScene('tools');
+  }, [openScene]);
+
+  const handleOpenWorkflow = useCallback(() => {
+    openScene('agents');
+  }, [openScene]);
+
   const isAgentsActive = activeTabId === 'agents';
   const isSkillsActive = activeTabId === 'skills';
+  const isToolsActive = activeTabId === 'tools';
 
   useEffect(() => {
-    if (isAgentsActive || isSkillsActive) {
+    if (isAgentsActive || isSkillsActive || isToolsActive) {
       setIsExtensionsOpen(true);
     }
-  }, [isAgentsActive, isSkillsActive]);
+  }, [isAgentsActive, isSkillsActive, isToolsActive]);
 
   const workspaceMenuPortal = workspaceMenuOpen ? createPortal(
     <div
@@ -572,6 +581,8 @@ const MainNav: React.FC<MainNavProps> = ({
   const isTodosActive = activeTabId === 'todos';
   const agentsTooltip = t('nav.tooltips.agents');
   const skillsTooltip = t('nav.tooltips.skills');
+  const toolsTooltip = t('nav.tooltips.tools');
+  const workflowTooltip = t('nav.tooltips.workflow');
   const extensionsLabel = t('nav.sections.extensions');
 
   return (
@@ -758,6 +769,52 @@ const MainNav: React.FC<MainNavProps> = ({
                   <Puzzle size={15} />
                 </span>
                 <span>{t('nav.items.skills')}</span>
+              </button>
+            </Tooltip>
+
+            <Tooltip content={workflowTooltip} placement="right" followCursor>
+              <button
+                type="button"
+                className={[
+                  'bitfun-nav-panel__top-action-btn',
+                  'bitfun-nav-panel__top-action-btn--sub',
+                  isAgentsActive ? 'is-active' : '',
+                ].filter(Boolean).join(' ')}
+                data-bf-component="nav-panel"
+                data-bf-part="topAction"
+                data-bf-action="workflow"
+                data-bf-state={isAgentsActive ? 'active' : ''}
+                onClick={handleOpenWorkflow}
+                aria-label={workflowTooltip}
+                data-testid="workflow-tab"
+              >
+                <span className="bitfun-nav-panel__top-action-icon-slot" aria-hidden="true">
+                  <GitBranch size={15} />
+                </span>
+                <span>{t('nav.items.workflow')}</span>
+              </button>
+            </Tooltip>
+
+            <Tooltip content={toolsTooltip} placement="right" followCursor>
+              <button
+                type="button"
+                className={[
+                  'bitfun-nav-panel__top-action-btn',
+                  'bitfun-nav-panel__top-action-btn--sub',
+                  isToolsActive ? 'is-active' : '',
+                ].filter(Boolean).join(' ')}
+                data-bf-component="nav-panel"
+                data-bf-part="topAction"
+                data-bf-action="tools"
+                data-bf-state={isToolsActive ? 'active' : ''}
+                onClick={handleOpenTools}
+                aria-label={toolsTooltip}
+                data-testid="tool-tab"
+              >
+                <span className="bitfun-nav-panel__top-action-icon-slot" aria-hidden="true">
+                  <Wrench size={15} />
+                </span>
+                <span>{t('nav.items.tools')}</span>
               </button>
             </Tooltip>
           </div>

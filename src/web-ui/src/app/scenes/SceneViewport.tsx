@@ -35,6 +35,7 @@ const FileViewerScene = lazy(() => import('./file-viewer/FileViewerScene'));
 const ProfileScene    = lazy(() => import('./profile/ProfileScene'));
 const AgentsScene       = lazy(() => import('./agents/AgentsScene'));
 const SkillsScene     = lazy(() => import('./skills/SkillsScene'));
+const ToolsScene       = lazy(() => import('./tools/ToolsScene'));
 const MiniAppGalleryScene = lazy(() => import('./miniapps/MiniAppGalleryScene'));
 const PagesScene      = lazy(() => import('./pages/PagesScene'));
 const BrowserScene    = lazy(() => import('./browser/BrowserScene'));
@@ -312,6 +313,8 @@ function renderScene(
       return <AgentsScene />;
     case 'skills':
       return <SkillsScene />;
+    case 'tools':
+      return <ToolsScene />;
     case 'miniapps':
       return <MiniAppGalleryScene />;
     case 'pages':

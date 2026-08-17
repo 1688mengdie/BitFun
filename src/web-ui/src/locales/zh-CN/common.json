@@ -81,6 +81,7 @@
       "agents": "专业智能体",
       "skills": "技能",
       "tools": "工具",
+      "workflow": "工作流",
       "terminal": "Shell",
       "git": "Git",
       "miniApps": "小应用",
@@ -92,6 +93,7 @@
       "agents": "它能调用哪些 Agent",
       "skills": "它懂什么专项知识 — 技能知识文件",
       "tools": "它能用什么工具 — 内置工具与 MCP 服务",
+      "workflow": "工作流 — 编排多智能体协作完成复杂任务",
       "addWorkspace": "添加工作区"
     },
     "sections": {
@@ -1239,6 +1241,7 @@
     "fileViewer": "文件查看",
     "agents": "智能体",
     "skills": "技能",
+    "tools": "工具",
     "miniApps": "小应用",
     "browser": "浏览器",
     "insights": "洞察",

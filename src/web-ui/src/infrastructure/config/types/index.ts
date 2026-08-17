@@ -455,6 +455,10 @@ export interface GlobalSkillSettings {
   globallyDisabledUserSkillKeys: string[];
 }
 
+export interface GlobalToolSettings {
+  globallyDisabledUserToolNames: string[];
+}
+
 export interface SkillMarketItem {
   id: string;
   name: string;

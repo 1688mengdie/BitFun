@@ -230,6 +230,10 @@
       "deleteMessage": "Delete \"{{name}}\"? This does not change any Agent tool selection.",
       "deleteConfirm": "Delete",
       "saveFailed": "Failed to save tool groups",
+      "suiteTitle": "Tools",
+      "suiteSubtitle": "Manage which tools each agent can use per mode — toggles apply live",
+      "saveFirst": "Save your pending changes first",
+      "refreshFailed": "Failed to refresh tool configs: {{error}}",
       "validation": {
         "nameRequired": "Enter a group name",
         "nameDuplicate": "A group with this name already exists",
@@ -594,5 +598,69 @@
     "warning": "Missing capabilities: {{cats}}",
     "coverage": "Coverage",
     "none": "None"
+  },
+  "suite": {
+    "title": "Tools",
+    "subtitle": "Pick a mode to control each tool group's availability, or adjust tools individually and save per group.",
+    "modeLabel": "Mode",
+    "refreshTooltip": "Refresh current mode",
+    "refreshAction": "Refresh",
+    "loading": "Loading tool suite...",
+    "empty": "No tools available.",
+    "sections": {
+      "myGroups": "My groups",
+      "builtin": "Built-in groups",
+      "otherSkills": "Other tools"
+    },
+    "manageGroups": "Manage tool groups",
+    "modes": {
+      "agentic": "agentic",
+      "cowork": "Cowork",
+      "team": "Team"
+    },
+    "modeDescriptions": {
+      "agentic": "Coding-first default mode",
+      "cowork": "Office collaboration mode",
+      "claw": "Assistant mode",
+      "team": "Team mode"
+    },
+    "modeActions": {
+      "reset": "Reset {{mode}}",
+      "resetShort": "Reset"
+    },
+    "groupActions": {
+      "save": "Save",
+      "enableGroup": "Enable group",
+      "disableGroup": "Disable group"
+    },
+    "resetDialog": {
+      "title": "Reset {{mode}}?",
+      "message": "This restores the mode's tool availability to its default state.",
+      "messageWithUnsaved": "This restores the mode's tool availability to its default state and discards unsaved changes.",
+      "confirm": "Reset",
+      "cancel": "Cancel"
+    },
+    "groupState": {
+      "enabled": "Enabled",
+      "disabled": "Disabled",
+      "partial": "Partial"
+    },
+    "skillState": {
+      "enabled": "Enabled for this mode",
+      "disabled": "Disabled for this mode",
+      "pending": "Unsaved",
+      "covered": "Covered · {{source}}",
+      "coveredDetail": "Enabled, but this mode uses a tool with the same name from {{source}}.",
+      "globalDisabled": "Globally disabled"
+    },
+    "groupCount": "{{total}} tools",
+    "messages": {
+      "saveSuccess": "Updated {{mode}} tool visibility",
+      "saveFailed": "Failed to update tools: {{error}}",
+      "resetSuccess": "Restored {{mode}} tool defaults",
+      "resetFailed": "Failed to reset tools: {{error}}",
+      "refreshFailed": "Failed to refresh tools: {{error}}",
+      "saveFirst": "Save your current tool changes first."
+    }
   }
 }

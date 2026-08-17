@@ -72,6 +72,7 @@ pub mod task;
 pub mod terminal_control_tool;
 pub mod thread_goal_tools;
 pub mod todo_write_tool;
+pub mod tools;
 pub mod util;
 #[cfg(feature = "tools-image-analysis")]
 pub mod view_image_tool;
