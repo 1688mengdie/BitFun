@@ -73,7 +73,7 @@ impl Agent for AcpAgent {
     }
 
     fn description(&self) -> &str {
-        "ACP agent"
+        "External ACP coding agent: run delegated implementation and analysis through the configured ACP client"
     }
 
     fn prompt_template_name(&self, _model_name: Option<&str>) -> &str {
