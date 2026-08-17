@@ -274,16 +274,16 @@
   },
   "legion": {
     "sections": {
-      "title": "Legion deployment limits",
-      "hint": "Node caps and deployment frequency for LEGION deployments. Changes apply immediately."
+      "title": "Workflow deployment limits",
+      "hint": "Node caps and deployment frequency for workflow deployments. Changes apply immediately."
     },
     "maxNodes": {
       "label": "Max nodes per topology",
-      "description": "Maximum nodes a single LegionControl deployment may contain (default 20)."
+      "description": "Maximum nodes a single workflow deployment may contain (default 20)."
     },
     "maxTotalNodes": {
       "label": "Max total nodes across deployments",
-      "description": "Maximum total legion node sessions a single creator session may own (default 60)."
+      "description": "Maximum total workflow node sessions a single creator session may own (default 60)."
     },
     "frequency": {
       "label": "Max deployments per hour",
@@ -291,9 +291,9 @@
     },
     "messages": {
       "loading": "Loading...",
-      "loadFailed": "Failed to load legion deployment limits",
-      "saved": "Legion deployment limits saved",
-      "saveFailed": "Failed to save legion deployment limits",
+      "loadFailed": "Failed to load workflow deployment limits",
+      "saved": "Workflow deployment limits saved",
+      "saveFailed": "Failed to save workflow deployment limits",
       "invalidNodeCap": "Max nodes per topology must be at least 1",
       "invalidTotalCap": "Max total nodes must be at least 1"
     }

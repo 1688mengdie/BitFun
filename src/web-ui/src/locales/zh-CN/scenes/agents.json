@@ -12,7 +12,7 @@
     "subtitle": "查看与管理核心模式、Agent 与 Sub-Agent，配置工具与 Skills。",
     "searchPlaceholder": "搜索 Agent 名称或描述…",
     "newAgent": "新建 Agent",
-    "newLegion": "新建军团"
+    "newLegion": "新建工作流"
   },
   "nav": {
     "coreAgents": "核心智能体",
@@ -455,15 +455,15 @@
     "Team": "团队模式：协调多个智能体协同完成复杂任务"
   },
   "legionsZone": {
-    "title": "军团",
-    "subtitle": "已保存的军团预设",
-    "loadFailed": "加载军团预设失败："
+    "title": "工作流",
+    "subtitle": "已保存的工作流预设",
+    "loadFailed": "加载工作流预设失败："
   },
   "legionPattern": {
     "gate": "闸门",
     "back": "返回",
     "choosePattern": "选择编排模式",
-    "orchestrationPatterns": "军团编排模式",
+    "orchestrationPatterns": "工作流编排模式",
     "overview": "概览",
     "complexity": "复杂度 L{{level}}",
     "nodesCount": "{{count}} 个节点",
@@ -473,10 +473,10 @@
     "noEdges": "无连线",
     "usePattern": "使用此模式",
     "planning": "规划中",
-    "saved": "军团编排模式「{{name}}」已保存",
-    "saveFailed": "保存军团编排模式失败",
+    "saved": "工作流编排模式「{{name}}」已保存",
+    "saveFailed": "保存工作流编排模式失败",
     "roleAnnotation": "仅展示",
-    "roleAnnotationTooltip": "该角色标签仅用于军团编排的组织语义。部署出的会话实际权限恒由标准子代理角色解析（Executor）决定，绝不依据此标签。",
+    "roleAnnotationTooltip": "该角色标签仅用于工作流编排的组织语义。部署出的会话实际权限恒由标准子代理角色解析（Executor）决定，绝不依据此标签。",
     "meta": {
       "gate": "个闸门"
     },

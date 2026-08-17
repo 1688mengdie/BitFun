@@ -12,7 +12,7 @@
     "subtitle": "Review and manage core modes, agents, and sub-agents, including tools and skills.",
     "searchPlaceholder": "Search agents by name or description…",
     "newAgent": "New Agent",
-    "newLegion": "New Legion"
+    "newLegion": "New workflow"
   },
   "nav": {
     "coreAgents": "Core Agents",
@@ -455,9 +455,9 @@
     "Team": "Team mode: coordinate multiple agents to collaboratively complete complex tasks"
   },
   "legionsZone": {
-    "title": "Legions",
-    "subtitle": "Saved legion presets",
-    "loadFailed": "Failed to load legion presets: "
+    "title": "Workflows",
+    "subtitle": "Saved workflow presets",
+    "loadFailed": "Failed to load workflow presets: "
   },
   "legionPattern": {
     "gate": "Gate",
@@ -473,10 +473,10 @@
     "noEdges": "No edges",
     "usePattern": "Use this pattern",
     "planning": "Planning",
-    "saved": "Legion preset \"{{name}}\" saved",
-    "saveFailed": "Failed to save legion preset",
+    "saved": "Workflow preset \"{{name}}\" saved",
+    "saveFailed": "Failed to save workflow preset",
     "roleAnnotation": "display only",
-    "roleAnnotationTooltip": "This role label is orchestration metadata for organizing the legion. The deployed session's actual permissions are always resolved by the standard subagent role (Executor), never by this label.",
+    "roleAnnotationTooltip": "This role label is orchestration metadata for organizing the workflow. The deployed session's actual permissions are always resolved by the standard subagent role (Executor), never by this label.",
     "meta": {
       "gate": "gates"
     },
