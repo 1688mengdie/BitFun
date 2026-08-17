@@ -259,6 +259,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    // Ellipsis tooltip: the row-level tooltip already shows the full title on
+    // hover when rich tooltip content is present; keep the title itself
+    // truncated so badges stay visible (P1-① sidebar truncation).
   }
 
   &__inline-item-btw-badge {

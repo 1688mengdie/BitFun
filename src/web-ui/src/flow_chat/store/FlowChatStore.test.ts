@@ -1352,7 +1352,7 @@ describe('FlowChatStore ACP session tree tools (R-WF-10)', () => {
       {
         id: 'acp__opencode',
         name: 'OpenCode',
-        description: 'ACP agent',
+        description: 'External ACP coding agent: run delegated implementation and analysis through the configured ACP client',
         isReadonly: false,
         toolCount: backendTools.length,
         defaultTools: backendTools,

@@ -63,7 +63,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, isMember, onAdd, onRemove 
   const { t } = useTranslation('scenes/agents');
   const [expanded, setExpanded] = useState(false);
   const primaryCap = agent.capabilities[0]?.category;
-  const badge = getAgentBadge(t, agent.agentKind, agent.source ?? agent.subagentSource);
+  const badge = getAgentBadge(t, agent.agentKind, agent.source ?? agent.subagentSource, agent.id);
   const isDisabled = agent.effectiveEnabled === false;
 
   return (

@@ -1543,7 +1543,12 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
               ) : (
                 <>
                   <span className="bitfun-nav-panel__inline-item-main" data-bf-component="sessions-section" data-bf-part="rowMain">
-                    <span className="bitfun-nav-panel__inline-item-label">{sessionTitle}</span>
+                    <span
+                      className="bitfun-nav-panel__inline-item-label"
+                      title={sessionTitle}
+                    >
+                      {sessionTitle}
+                    </span>
                     {isChildSession ? (
                       <span className="bitfun-nav-panel__inline-item-btw-badge">{childSessionBadge}</span>
                     ) : null}
