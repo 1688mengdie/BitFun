@@ -24,6 +24,7 @@ import { useDialogCompletionNotify } from '../hooks/useDialogCompletionNotify';
 import { DotMatrixLoader } from '@/component-library';
 import SettingsScene from './settings/SettingsScene';
 import AssistantScene from './assistant/AssistantScene';
+import WorkflowClawScene from './workflow-claw/WorkflowClawScene';
 import SessionScene from './session/SessionScene';
 import './SceneViewport.scss';
 
@@ -323,6 +324,8 @@ function renderScene(
       return <BrowserScene />;
     case 'assistant':
       return <AssistantScene workspacePath={workspacePath} />;
+    case 'workflow-claw':
+      return <WorkflowClawScene />;
     case 'todos':
       return <TodosScene />;
     case 'insights':

@@ -100,6 +100,7 @@ import { welcomeAppearanceDescriptor } from '@/app/scenes/welcome/appearance';
 import { shellAppearanceDescriptor } from '@/app/scenes/shell/appearance';
 import { agentsAppearanceDescriptor } from '@/app/scenes/agents/appearance';
 import { assistantAppearanceDescriptor } from '@/app/scenes/assistant/appearance';
+import { workflowClawAppearanceDescriptor } from '@/app/scenes/workflow-claw/appearance';
 import { browserAppearanceDescriptor } from '@/app/scenes/browser/appearance';
 import { fileViewerAppearanceDescriptor } from '@/app/scenes/file-viewer/appearance';
 import { gitAppearanceDescriptor } from '@/app/scenes/git/appearance';
@@ -139,6 +140,8 @@ import { mcpToolsConfigAppearanceDescriptor } from '@/infrastructure/config/comp
 import { externalMcpOverviewAppearanceDescriptor } from '@/infrastructure/config/components/ExternalMcpOverview.appearance';
 import { voiceInputDiagnosticsAppearanceDescriptor } from '@/infrastructure/config/components/VoiceInputDiagnostics.appearance';
 import { assistantCardAppearanceDescriptor } from '@/app/scenes/profile/views/AssistantCard.appearance';
+import { workflowClawCardAppearanceDescriptor } from '@/app/scenes/workflow-claw/WorkflowClawCard.appearance';
+import { workflowClawGalleryAppearanceDescriptor } from '@/app/scenes/workflow-claw/WorkflowClawGallery.appearance';
 import { miniAppCustomizePanelAppearanceDescriptor } from '@/app/scenes/miniapps/customization/MiniAppCustomizePanel.appearance';
 import { userMessageEditComposerAppearanceDescriptor } from '@/flow_chat/components/modern/UserMessageEditComposer.appearance';
 import { monacoAppearanceAdapter } from '../adapters/MonacoAppearanceAdapter';
@@ -463,6 +466,8 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(externalMcpOverviewAppearanceDescriptor)
     .registerComponent(voiceInputDiagnosticsAppearanceDescriptor)
     .registerComponent(assistantCardAppearanceDescriptor)
+    .registerComponent(workflowClawCardAppearanceDescriptor)
+    .registerComponent(workflowClawGalleryAppearanceDescriptor)
     .registerComponent(miniAppCustomizePanelAppearanceDescriptor)
     .registerComponent(userMessageEditComposerAppearanceDescriptor)
     .registerComponent(tiptapEditorAppearanceDescriptor)
@@ -572,6 +577,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerScene(shellAppearanceDescriptor)
     .registerScene(agentsAppearanceDescriptor)
     .registerScene(assistantAppearanceDescriptor)
+    .registerScene(workflowClawAppearanceDescriptor)
     .registerScene(browserAppearanceDescriptor)
     .registerScene(fileViewerAppearanceDescriptor)
     .registerScene(gitAppearanceDescriptor)

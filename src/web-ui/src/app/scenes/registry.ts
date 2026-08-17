@@ -154,6 +154,15 @@ export const SCENE_TAB_REGISTRY: SceneTabDef[] = [
     defaultOpen: false,
   },
   {
+    id: 'workflow-claw' as SceneTabId,
+    label: 'Workflow Claw',
+    labelKey: 'scenes.workflowClaw',
+    Icon: GitBranch,
+    pinned: false,
+    singleton: true,
+    defaultOpen: false,
+  },
+  {
     id: 'todos' as SceneTabId,
     label: 'Todos',
     labelKey: 'scenes.todos',
