@@ -12,7 +12,8 @@ import {
 import { AppShellState } from '../state/AppShellState';
 import {
   ConversationLayoutCrease,
-  ConversationLayoutPolicy
+  ConversationLayoutPolicy,
+  ConversationLayoutRect
 } from '../policy/ConversationLayoutPolicy';
 import { GeneralChatPageState } from '../state/GeneralChatPageState';
 import { RemotePageState } from '../state/RemotePageState';
@@ -55,6 +56,7 @@ export struct AppRootPresentation {
   @Param filePreviewState: FilePreviewState = new FilePreviewState();
   @Param deviceId: string = '';
   @Local viewportWidth: number = 0;
+  @Local viewportHeight: number = 0;
   @Local wideLayoutMatched: boolean = false;
   @Local foldStatus: display.FoldStatus = safeFoldStatus();
   @Local largeScreenLayout: boolean = false;
@@ -119,16 +121,48 @@ export struct AppRootPresentation {
     }.width('100%').height('100%')
     .bindSheet($$this.showRemoteViewSettings, this.RemoteViewSettingsSheet(), this.remoteViewSettingsSheetOptions())
     .onAreaChange((_oldArea: Area, newArea: Area) => {
-      this.viewportWidth = this.areaWidth(newArea.width);
+      const areaWidth = this.areaWidth(newArea.width);
+      const areaHeight = this.areaWidth(newArea.height);
+      const displaySize = this.currentDisplaySize();
+      this.viewportWidth = ConversationLayoutPolicy.resolveLayoutViewportWidth(
+        areaWidth,
+        areaHeight,
+        displaySize[0],
+        displaySize[1],
+        displaySize[2]
+      );
+      this.viewportHeight = areaHeight > 0 ? areaHeight : displaySize[1];
+      if (this.viewportWidth === Math.max(displaySize[0], displaySize[1]) &&
+        areaWidth !== this.viewportWidth) {
+        this.viewportHeight = Math.min(displaySize[0], displaySize[1]);
+      }
       this.refreshWideGeometry();
     })
   }
 
   @Builder
   NavigationContent() {
-    Navigation(this.navigationStack) { this.RouteContent(AppRoute.ChatHome) }
-      .width('100%').height('100%').hideTitleBar(true).mode(NavigationMode.Stack)
-      .navDestination(this.NavigationDestination)
+    Stack() {
+      Navigation(this.navigationStack) { this.RouteContent(AppRoute.ChatHome) }
+        .id('bitfunHomeNavigation')
+        .width('100%').height('100%').hideTitleBar(true)
+        .mode(NavigationMode.Stack)
+        .navBarWidth('100%')
+        .minContentWidth(0)
+        .navDestination(this.NavigationDestination)
+        .visibility(this.isWideLayout() ? Visibility.Hidden : Visibility.Visible)
+
+      if (this.isWideLayout()) {
+        Column() {
+          this.RouteContent(this.shellState.activeRoute)
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor(PAGE_BG)
+      }
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
@@ -315,7 +349,7 @@ export struct AppRootPresentation {
     this.largeScreenLayout = ConversationLayoutPolicy.useMasterDetail(
       this.viewportWidth,
       this.wideLayoutMatched,
-      this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED,
+      ConversationLayoutPolicy.isFoldedStatus(this.foldStatus),
       verticalCreases,
       this.isExpandedFoldable(),
       this.isHoverLayout()
@@ -337,25 +371,41 @@ export struct AppRootPresentation {
   }
 
   private isHoverLayout(): boolean {
-    return this.foldStatus === display.FoldStatus.FOLD_STATUS_HALF_FOLDED;
+    return ConversationLayoutPolicy.useHoverOperate(
+      this.foldStatus,
+      this.viewportWidth,
+      this.viewportHeight
+    );
   }
 
   private isExpandedFoldable(): boolean {
-    return this.foldStatus === display.FoldStatus.FOLD_STATUS_EXPANDED && this.isFoldableDevice();
+    return ConversationLayoutPolicy.isExpandedFoldableStatus(this.foldStatus) && this.isFoldableDevice();
+  }
+
+  private currentDisplaySize(): [number, number, number] {
+    try {
+      const metrics = display.getDefaultDisplaySync();
+      return [
+        this.getUIContext().px2vp(metrics.width),
+        this.getUIContext().px2vp(metrics.height),
+        metrics.rotation
+      ];
+    } catch (_err) {
+      return [0, 0, 0];
+    }
   }
 
   private isFoldableDevice(): boolean {
     try {
       return display.isFoldable();
     } catch (_err) {
-      return this.foldStatus === display.FoldStatus.FOLD_STATUS_EXPANDED ||
-        this.foldStatus === display.FoldStatus.FOLD_STATUS_HALF_FOLDED ||
-        this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED;
+      return ConversationLayoutPolicy.isExpandedFoldableStatus(this.foldStatus) ||
+        ConversationLayoutPolicy.isFoldedStatus(this.foldStatus);
     }
   }
 
   private currentVerticalCreases(): ConversationLayoutCrease[] {
-    if (this.foldStatus === display.FoldStatus.FOLD_STATUS_FOLDED || this.isHoverLayout()) {
+    if (ConversationLayoutPolicy.isFoldedStatus(this.foldStatus) || this.isHoverLayout()) {
       return [];
     }
     return ConversationLayoutPolicy.effectiveVerticalCreases(
@@ -372,14 +422,19 @@ export struct AppRootPresentation {
       if (!creaseRects) {
         return [];
       }
-      return creaseRects
-        .filter((rect: display.Rect): boolean => rect.height > rect.width)
-        .map((rect: display.Rect): ConversationLayoutCrease => {
-          return new ConversationLayoutCrease(
-            this.getUIContext().px2vp(rect.left),
-            this.getUIContext().px2vp(rect.width)
-          );
-        });
+      const rects = creaseRects.map((rect: display.Rect): ConversationLayoutRect => {
+        return new ConversationLayoutRect(
+          this.getUIContext().px2vp(rect.left),
+          this.getUIContext().px2vp(rect.top),
+          this.getUIContext().px2vp(rect.width),
+          this.getUIContext().px2vp(rect.height)
+        );
+      });
+      return ConversationLayoutPolicy.verticalCreasesFromRects(
+        this.viewportWidth,
+        this.viewportHeight,
+        rects
+      );
     } catch (_err) {
       return [];
     }

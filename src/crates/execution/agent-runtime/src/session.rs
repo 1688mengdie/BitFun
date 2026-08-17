@@ -166,6 +166,18 @@ impl Session {
             last_activity_at: now,
         }
     }
+
+    /// Stable routing identity for provider-side prompt-prefix caches.
+    ///
+    /// Legacy and independent sessions use their own session ID. Derived
+    /// sessions that preserve a parent prompt prefix persist the parent's
+    /// effective lineage in `SessionConfig`.
+    pub fn effective_prompt_cache_lineage_id(&self) -> &str {
+        self.config
+            .prompt_cache_lineage_id
+            .as_deref()
+            .unwrap_or(&self.session_id)
+    }
 }
 
 impl Session {
@@ -264,6 +276,11 @@ pub struct SessionConfig {
     /// deleted via SessionControl(delete).
     #[serde(default)]
     pub is_daemon: bool,
+    /// Stable provider-cache lineage shared only by sessions that preserve an
+    /// exact prompt prefix. `None` keeps legacy and independent sessions scoped
+    /// to their own session ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_lineage_id: Option<String>,
     /// Durable owner of the logical main-agent route. External ownership is
     /// revalidated for every turn and never falls back by name alone.
     #[serde(default, skip_serializing_if = "is_local_agent_route_owner")]
@@ -304,6 +321,7 @@ impl Default for SessionConfig {
             model_binding_policy: SessionModelBindingPolicy::default(),
             model_binding_fingerprint: None,
             is_daemon: false,
+            prompt_cache_lineage_id: None,
             agent_route_owner: SessionAgentRouteOwner::Local,
         }
     }
@@ -472,6 +490,37 @@ mod tests {
     fn unset_permission_mode_keeps_persisted_config_bytes_unchanged() {
         let serialized = serde_json::to_value(SessionConfig::default()).expect("serialize");
         assert!(serialized.get("permission_mode").is_none());
+    }
+
+    #[test]
+    fn prompt_cache_lineage_defaults_to_the_session_id_and_round_trips() {
+        let mut legacy_value = serde_json::to_value(SessionConfig::default()).expect("serialize");
+        legacy_value
+            .as_object_mut()
+            .expect("config should serialize as an object")
+            .remove("prompt_cache_lineage_id");
+        let legacy_config: SessionConfig =
+            serde_json::from_value(legacy_value).expect("deserialize legacy config");
+        let mut session = Session::new("Session".to_string(), "agentic".to_string(), legacy_config);
+        assert!(session.config.prompt_cache_lineage_id.is_none());
+        assert_eq!(
+            session.effective_prompt_cache_lineage_id(),
+            session.session_id
+        );
+
+        session.config.prompt_cache_lineage_id = Some("root-session".to_string());
+        assert_eq!(session.effective_prompt_cache_lineage_id(), "root-session");
+
+        let serialized = serde_json::to_value(&session.config).expect("serialize");
+        assert_eq!(
+            serialized["prompt_cache_lineage_id"],
+            serde_json::json!("root-session")
+        );
+        let restored: SessionConfig = serde_json::from_value(serialized).expect("deserialize");
+        assert_eq!(
+            restored.prompt_cache_lineage_id.as_deref(),
+            Some("root-session")
+        );
     }
     use bitfun_core_types::{
         SessionExecutionTarget, SessionExecutionTargetKind, WorktreeLifecycle,

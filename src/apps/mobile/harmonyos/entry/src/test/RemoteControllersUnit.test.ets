@@ -115,7 +115,8 @@ import {
 } from '../main/ets/pages/policy/FilePreviewPlacementPolicy';
 import {
   ConversationLayoutCrease,
-  ConversationLayoutPolicy
+  ConversationLayoutPolicy,
+  ConversationLayoutRect
 } from '../main/ets/pages/policy/ConversationLayoutPolicy';
 import { SessionActionPolicy, SessionActionScope } from '../main/ets/pages/policy/SessionActionPolicy';
 import { ConversationSessionFilterPolicy } from '../main/ets/pages/policy/ConversationSessionFilterPolicy';
@@ -787,6 +788,25 @@ export default function remoteControllersUnitTest() {
       expect(layout.conversationPaneWidth).assertEqual(1100);
       expect(layout.conversationPreviewGap).assertEqual(16);
       expect(layout.previewPaneWidth).assertEqual(1094);
+    });
+
+    it('keeps tri-fold preview on a crease instead of splitting the full window in half', 0, () => {
+      const single = FilePreviewPlacementPolicy.resolveLayout(true, true, 1107, [
+        new ConversationLayoutCrease(351, 44)
+      ]);
+      expect(single.placement).assertEqual(FilePreviewPlacement.WideFocusSplit);
+      expect(single.conversationPaneWidth).assertEqual(351);
+      expect(single.conversationPreviewGap).assertEqual(44);
+      expect(single.previewPaneWidth).assertEqual(712);
+
+      const dual = FilePreviewPlacementPolicy.resolveLayout(true, true, 1107, [
+        new ConversationLayoutCrease(351, 44),
+        new ConversationLayoutCrease(773, 44)
+      ]);
+      expect(dual.placement).assertEqual(FilePreviewPlacement.WideFocusSplit);
+      expect(dual.conversationPaneWidth).assertEqual(773);
+      expect(dual.conversationPreviewGap).assertEqual(44);
+      expect(dual.previewPaneWidth).assertEqual(290);
     });
 
     it('falls back from crease-aligned focus when one side is too narrow', 0, () => {
@@ -2477,6 +2497,62 @@ export default function remoteControllersUnitTest() {
   });
 
   describe('ConversationLayoutPolicy', () => {
+    it('treats only tent statuses as hover candidates', 0, () => {
+      expect(ConversationLayoutPolicy.isHoverStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.isHoverStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.isHoverStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED
+      )).assertFalse();
+      expect(ConversationLayoutPolicy.isHoverStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED
+      )).assertFalse();
+      expect(ConversationLayoutPolicy.isHoverStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED
+      )).assertFalse();
+    });
+
+    it('keeps one-axis half-fold landscape windows on master-detail', 0, () => {
+      expect(ConversationLayoutPolicy.useHoverOperate(
+        ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED,
+        1107,
+        776
+      )).assertFalse();
+      expect(ConversationLayoutPolicy.useHoverOperate(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED,
+        1107,
+        776
+      )).assertFalse();
+      expect(ConversationLayoutPolicy.useMasterDetail(
+        1107,
+        true,
+        false,
+        [new ConversationLayoutCrease(351, 44)],
+        true,
+        ConversationLayoutPolicy.useHoverOperate(
+          ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED,
+          1107,
+          776
+        )
+      )).assertTrue();
+    });
+
+    it('uses FolderStack only for tent hover that is not still landscape-wide', 0, () => {
+      expect(ConversationLayoutPolicy.useHoverOperate(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED,
+        480,
+        800
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.useHoverOperate(
+        ConversationLayoutPolicy.FOLD_STATUS_HALF_FOLDED,
+        1107,
+        776
+      )).assertFalse();
+    });
+
     it('keeps folded, hover and narrow surfaces compact', 0, () => {
       expect(ConversationLayoutPolicy.useMasterDetail(480, false, false, [])).assertFalse();
       expect(ConversationLayoutPolicy.useMasterDetail(900, true, true, [])).assertFalse();
@@ -2626,6 +2702,50 @@ export default function remoteControllersUnitTest() {
       expect(geometry.collapsedDetailContentWidth).assertEqual(2210);
     });
 
+    it('keeps collapsed tri-fold content on the dominant hinge-free band', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        1107,
+        [new ConversationLayoutCrease(351, 44)]
+      );
+      expect(geometry.collapsedDetailContentOffset).assertEqual(395);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(712);
+    });
+
+    it('treats dual-axis expanded fold status as an unfolded foldable', 0, () => {
+      expect(ConversationLayoutPolicy.isFoldedStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_FOLDED
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.isFoldedStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED
+      )).assertFalse();
+      expect(ConversationLayoutPolicy.isExpandedFoldableStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED
+      )).assertTrue();
+      expect(ConversationLayoutPolicy.isExpandedFoldableStatus(
+        ConversationLayoutPolicy.FOLD_STATUS_FOLDED
+      )).assertFalse();
+    });
+
+    it('uses the landscape display width when area reports the short side', 0, () => {
+      expect(ConversationLayoutPolicy.resolveLayoutViewportWidth(776, 1107, 1107, 776))
+        .assertEqual(1107);
+      expect(ConversationLayoutPolicy.resolveLayoutViewportWidth(776, 1107, 776, 1107, 270))
+        .assertEqual(1107);
+      expect(ConversationLayoutPolicy.resolveLayoutViewportWidth(360, 780, 360, 780, 0))
+        .assertEqual(360);
+    });
+
+    it('rotates a physical horizontal crease into a vertical layout crease', 0, () => {
+      const creases = ConversationLayoutPolicy.verticalCreasesFromRects(
+        1107,
+        776,
+        [new ConversationLayoutRect(0, 351, 776, 44)]
+      );
+      expect(creases.length).assertEqual(1);
+      expect(creases[0].left).assertEqual(351);
+      expect(creases[0].width).assertEqual(44);
+    });
+
     it('accepts a zero-width crease without creating an empty detail segment', 0, () => {
       const geometry = ConversationLayoutPolicy.resolveWideGeometry(
         900,
@@ -2637,7 +2757,7 @@ export default function remoteControllersUnitTest() {
       expect(geometry.detailContentWidth).assertEqual(548);
     });
 
-    it('treats two creases as an extra-wide master-detail surface', 0, () => {
+    it('keeps tri-fold detail across both remaining screens instead of one hinge-free band', 0, () => {
       const geometry = ConversationLayoutPolicy.resolveWideGeometry(
         1080,
         [new ConversationLayoutCrease(352, 8), new ConversationLayoutCrease(712, 8)]
@@ -2645,21 +2765,34 @@ export default function remoteControllersUnitTest() {
       expect(geometry.masterPaneWidth).assertEqual(352);
       expect(geometry.masterDetailGap).assertEqual(8);
       expect(geometry.isExtraWide).assertTrue();
-      expect(geometry.detailContentOffset).assertEqual(360);
-      expect(geometry.detailContentWidth).assertEqual(360);
-      expect(geometry.collapsedDetailContentOffset).assertEqual(720);
-      expect(geometry.collapsedDetailContentWidth).assertEqual(360);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(720);
+      expect(geometry.collapsedDetailContentOffset).assertEqual(360);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(720);
     });
 
-    it('selects the widest hinge-free detail band on asymmetric three-screen geometry', 0, () => {
+    it('keeps asymmetric tri-fold detail on the full remaining span after the first crease', 0, () => {
       const geometry = ConversationLayoutPolicy.resolveWideGeometry(
         1080,
         [new ConversationLayoutCrease(352, 8), new ConversationLayoutCrease(800, 8)]
       );
       expect(geometry.detailContentOffset).assertEqual(0);
-      expect(geometry.detailContentWidth).assertEqual(440);
+      expect(geometry.detailContentWidth).assertEqual(720);
       expect(geometry.collapsedDetailContentOffset).assertEqual(360);
-      expect(geometry.collapsedDetailContentWidth).assertEqual(440);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(720);
+    });
+
+    it('spans remaining screens when a second crease sits inside the detail pane', 0, () => {
+      const geometry = ConversationLayoutPolicy.resolveWideGeometry(
+        1107,
+        [new ConversationLayoutCrease(351, 44), new ConversationLayoutCrease(773, 44)]
+      );
+      expect(geometry.masterPaneWidth).assertEqual(351);
+      expect(geometry.masterDetailGap).assertEqual(44);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(712);
+      expect(geometry.collapsedDetailContentOffset).assertEqual(395);
+      expect(geometry.collapsedDetailContentWidth).assertEqual(712);
     });
 
     it('uses width as the extra-wide fallback when crease data is missing', 0, () => {
@@ -2692,8 +2825,8 @@ export default function remoteControllersUnitTest() {
         [new ConversationLayoutCrease(600, 8)]
       );
       expect(geometry.masterPaneWidth).assertEqual(ConversationLayoutPolicy.FALLBACK_MASTER_PANE_WIDTH);
-      expect(geometry.detailContentOffset).assertEqual(264);
-      expect(geometry.detailContentWidth).assertEqual(292);
+      expect(geometry.detailContentOffset).assertEqual(0);
+      expect(geometry.detailContentWidth).assertEqual(556);
     });
   });
 
