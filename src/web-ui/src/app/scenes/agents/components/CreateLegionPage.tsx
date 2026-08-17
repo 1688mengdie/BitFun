@@ -10,6 +10,7 @@ import PATTERNS, {
 } from '../data/orchestration-patterns';
 import { LegionPresetAPI } from '@/infrastructure/api/service-api/LegionPresetAPI';
 import { createLogger } from '@/shared/utils/logger';
+import { DependencyGraph } from '@/tools/bitfun-canvas/runtime/sdk/diagrams';
 import '../AgentsView.scss';
 import './CreateLegionPage.scss';
 
@@ -112,6 +113,26 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
     </div>
   );
 
+  const renderPatternCanvas = (pattern: (typeof PATTERNS)[number]) => (
+    <div
+      className="legion-canvas"
+      data-bf-component="create-legion-page"
+      data-bf-part="canvas"
+      data-testid="legion-pattern-canvas"
+    >
+      <DependencyGraph
+        nodes={pattern.nodes.map((n) => ({ id: n.id, label: n.role, description: n.agent }))}
+        edges={pattern.edges.map((e) => ({ from: e.from, to: e.to, label: e.condition }))}
+        direction="vertical"
+        nodeWidth={172}
+        nodeHeight={46}
+        rankGap={64}
+        nodeGap={48}
+        padding={20}
+      />
+    </div>
+  );
+
   return (
     <div
       className="create-agent-page"
@@ -203,6 +224,15 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
               <span>{t('legionPattern.nodesCount', { count: selectedPattern.nodes.length })}</span>
               <span>{t('legionPattern.edgesCount', { count: selectedPattern.edges.length })}</span>
             </div>
+          </section>
+
+          {/* Canvas (R-WF-17 assertion 1: DAG canvas display via official
+              DependencyGraph, not a handcrafted list-only rendering) */}
+          <section className="create-agent-page__section" data-bf-component="create-legion-page" data-bf-part="canvasSection">
+            <h2 className="create-agent-page__section-title">
+              {t('legionPattern.canvas')}
+            </h2>
+            {renderPatternCanvas(selectedPattern)}
           </section>
 
           {/* Nodes */}

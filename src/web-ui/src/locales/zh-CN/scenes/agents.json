@@ -477,6 +477,7 @@
     "nodes": "节点（{{count}}）",
     "edges": "连线（{{count}}）",
     "noEdges": "无连线",
+    "canvas": "画布预览",
     "usePattern": "使用此模式",
     "planning": "规划中",
     "saved": "工作流编排模式「{{name}}」已保存",
@@ -594,7 +595,22 @@
   },
   "formation": {
     "empty": "从左侧选择 Agent 加入团队",
-    "emptySub": "点击 Agent 卡片上的 + 按钮"
+    "emptySub": "点击 Agent 卡片上的 + 按钮",
+    "hint": "拖拽连线端口可新建连线，点击连线起点圆点可删除连线",
+    "startWire": "开始连线",
+    "cancelWire": "取消连线",
+    "wireActive": "连线中（源：{{from}}）——点击另一节点完成，点击端口取消",
+    "removeEdge": "删除此连线",
+    "openSession": "打开会话",
+    "state": {
+      "standby": "待命",
+      "processing": "处理中",
+      "completed": "已完成",
+      "hung": "挂起",
+      "interrupted": "已中断",
+      "pending_attention": "待关注",
+      "viewed": "已查看"
+    }
   },
   "capability": {
     "warning": "{{cats}} 能力缺失",

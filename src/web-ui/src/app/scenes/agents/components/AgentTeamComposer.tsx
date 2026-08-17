@@ -1,5 +1,5 @@
 import React, { useState, useRef, useLayoutEffect, useCallback } from 'react';
-import { LayoutGrid, List, Trash2, ChevronDown, Bot } from 'lucide-react';
+import { LayoutGrid, List, Trash2, ChevronDown, Bot, Unplug, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   useAgentsStore,
@@ -7,11 +7,15 @@ import {
   type AgentTeam,
   type AgentTeamMember,
   type MemberRole,
+  type MemberDisplayState,
   type AgentWithCapabilities,
   type CapabilityCategory,
 } from '../agentsStore';
 import { AGENT_ICON_MAP } from '../agentsIcons';
 import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
+import { computeDAGLayout } from '@/tools/bitfun-canvas/runtime/sdk/diagramLayout';
+import { Badge } from '@/component-library';
+import { openMainSession } from '@/flow_chat/services/sessionActivation';
 import './AgentTeamComposer.scss';
 
 // Constants
@@ -21,8 +25,6 @@ const ROLE_COLORS: Record<MemberRole, string> = {
   member: APPEARANCE_DOMAIN_TOKENS.agentTeam.roleMember,
   reviewer: APPEARANCE_DOMAIN_TOKENS.agentTeam.roleReviewer,
 };
-
-interface NodePos { x: number; y: number; memberId: string }
 
 function getAgent(id: string): AgentWithCapabilities | undefined {
   return useAgentsStore.getState().teamComposerAgents.find((a) => a.id === id);
@@ -40,28 +42,11 @@ const AgentIconSmall: React.FC<{ agent?: AgentWithCapabilities }> = ({ agent }) 
 
 // Formation layout
 
-interface NodePos { x: number; y: number; memberId: string }
-
-function layoutNodes(members: AgentTeamMember[]): NodePos[] {
-  const leaders = members.filter((m) => m.role === 'leader');
-  const middles = members.filter((m) => m.role === 'member');
-  const reviewers = members.filter((m) => m.role === 'reviewer');
-  const positions: NodePos[] = [];
-
-  const placeRow = (group: AgentTeamMember[], y: number) => {
-    const n = group.length;
-    group.forEach((m, i) => {
-      const x = n === 1 ? 50 : 15 + (70 / Math.max(n - 1, 1)) * i;
-      positions.push({ x, y, memberId: m.agentId });
-    });
-  };
-
-  const rows = [leaders, middles, reviewers].filter((r) => r.length > 0);
-  const ys = rows.length === 1 ? [50] : rows.length === 2 ? [28, 72] : [18, 50, 82];
-  rows.forEach((row, i) => placeRow(row, ys[i]));
-  return positions;
+function edgeKey(from: string, to: string): string {
+  return `${from}\u0000${to}`;
 }
 
+/** Edge fallback used when a team has no explicit edges yet (R-WF-17 data flow). */
 function buildEdges(members: AgentTeamMember[]): Array<[string, string]> {
   const l = members.filter((m) => m.role === 'leader').map((m) => m.agentId);
   const m = members.filter((m) => m.role === 'member').map((m) => m.agentId);
@@ -79,26 +64,59 @@ function buildEdges(members: AgentTeamMember[]): Array<[string, string]> {
   return edges;
 }
 
+/** Editable member-edge map used by the formation canvas (R-WF-17). */
+function editableEdges(team: AgentTeam): Array<[string, string]> {
+  if (team.edges && team.edges.length > 0) {
+    return team.edges.filter(([a, b]) => team.members.some((m) => m.agentId === a) && team.members.some((m) => m.agentId === b));
+  }
+  return buildEdges(team.members);
+}
+
+// Seven-state display mapping (R-WF-17 assertion 2) — reuses the backend
+// SessionDisplayState value contract and the component-library Badge variants;
+// no new state system is introduced.
+const DISPLAY_STATE_BADGE: Record<MemberDisplayState, BadgeVariantLike> = {
+  standby: 'neutral',
+  processing: 'info',
+  completed: 'success',
+  hung: 'warning',
+  interrupted: 'error',
+  pending_attention: 'warning',
+  viewed: 'neutral',
+};
+
+type BadgeVariantLike = 'neutral' | 'accent' | 'purple' | 'success' | 'warning' | 'error' | 'info';
+
 // Formation node
 
 const NODE_W = 176;
-const NODE_H = 72;
 
 interface NodeProps {
   member: AgentTeamMember;
-  pos: NodePos;
-  cw: number;
-  ch: number;
+  pos: { x: number; y: number };
   onRoleChange: (r: MemberRole) => void;
   onRemove: () => void;
+  onOpenSession: () => void;
+  wireMode: boolean;
+  onStartWire: () => void;
+  onDropWire: () => void;
+  onCancelWire: () => void;
 }
 
-const FormationNode: React.FC<NodeProps> = ({ member, pos, cw, ch, onRoleChange, onRemove }) => {
+const FormationNode: React.FC<NodeProps> = ({
+  member,
+  pos,
+  onRoleChange,
+  onRemove,
+  onOpenSession,
+  wireMode,
+  onStartWire,
+  onDropWire,
+  onCancelWire,
+}) => {
   const { t } = useTranslation('scenes/agents');
   const [roleOpen, setRoleOpen] = useState(false);
   const agent = getAgent(member.agentId);
-  const x = (pos.x / 100) * cw - NODE_W / 2;
-  const y = (pos.y / 100) * ch - NODE_H / 2;
   const roleColor = ROLE_COLORS[member.role];
   const primaryCap = agent?.capabilities[0]?.category;
   const roleLabels: Record<MemberRole, string> = {
@@ -106,9 +124,16 @@ const FormationNode: React.FC<NodeProps> = ({ member, pos, cw, ch, onRoleChange,
     member: t('composer.role.member'),
     reviewer: t('composer.role.reviewer'),
   };
+  const state = member.displayState ?? 'standby';
+  const stateLabel = t(`formation.state.${state}`);
 
   return (
-    <div className="tcf__node" style={{ left: x, top: y, width: NODE_W }}>
+    <div
+      className="tcf__node"
+      style={{ left: pos.x, top: pos.y, width: NODE_W }}
+      data-member-id={member.agentId}
+      onClick={wireMode ? onDropWire : undefined}
+    >
       <div className="tcf__node-card" style={{ borderTopColor: roleColor }}>
         {/* Row 1: name + role + delete */}
         <div className="tcf__node-head">
@@ -160,6 +185,40 @@ const FormationNode: React.FC<NodeProps> = ({ member, pos, cw, ch, onRoleChange,
             <span className="tcf__node-model">{agent.model}</span>
           )}
         </div>
+
+        {/* Row 3: seven-state badge + wire port + session jump (R-WF-17) */}
+        <div className="tcf__node-foot tcf__node-status">
+          <Badge variant={DISPLAY_STATE_BADGE[state]} className="tcf__node-state">
+            {stateLabel}
+          </Badge>
+          <button
+            className={`tcf__node-port ${wireMode ? 'is-active' : ''}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (wireMode) {
+                onCancelWire();
+              } else {
+                onStartWire();
+              }
+            }}
+            title={wireMode ? t('formation.cancelWire') : t('formation.startWire')}
+            data-bf-component="agent-team-composer"
+            data-bf-part="wireStart"
+            data-testid="tcf-node-port"
+          >
+            <Unplug size={9} />
+          </button>
+          <button
+            className="tcf__node-jump"
+            onClick={(e) => { e.stopPropagation(); onOpenSession(); }}
+            title={t('formation.openSession')}
+            data-bf-component="agent-team-composer"
+            data-bf-part="openSession"
+            data-testid="tcf-node-jump"
+          >
+            <ExternalLink size={9} />
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -167,11 +226,15 @@ const FormationNode: React.FC<NodeProps> = ({ member, pos, cw, ch, onRoleChange,
 
 // Formation View
 
+const FORMATION_NODE_W = 176;
+const FORMATION_NODE_H = 72;
+
 const FormationView: React.FC<{ team: AgentTeam }> = ({ team }) => {
   const { t } = useTranslation('scenes/agents');
-  const { removeMember, updateMemberRole } = useAgentsStore();
+  const { removeMember, updateMemberRole, addTeamEdge, removeTeamEdge } = useAgentsStore();
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 600, h: 320 });
+  const [pendingEdge, setPendingEdge] = useState<string | null>(null);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -194,57 +257,90 @@ const FormationView: React.FC<{ team: AgentTeam }> = ({ team }) => {
     );
   }
 
-  const positions = layoutNodes(team.members);
-  const edges = buildEdges(team.members);
+  const layoutEdges = editableEdges(team);
+  // R-WF-17: delegate the real layered layout to the official computeDAGLayout
+  // (nodes/edges -> rank layered x/y + edge paths). No handcrafted layout.
+  const dagLayout = computeDAGLayout({
+    nodes: team.members.map((m) => ({ id: m.agentId, label: m.agentId })),
+    edges: layoutEdges.map(([from, to]) => ({ from, to })),
+    direction: 'vertical',
+    nodeWidth: FORMATION_NODE_W,
+    nodeHeight: FORMATION_NODE_H,
+    rankGap: 96,
+    nodeGap: 72,
+    padding: 16,
+  });
 
-  const getCenter = (agentId: string) => {
-    const p = positions.find((pos) => pos.memberId === agentId);
-    return p ? { x: (p.x / 100) * size.w, y: (p.y / 100) * size.h } : { x: 0, y: 0 };
+  const nodePosById = new Map(dagLayout.nodes.map((node) => [String(node.id), node]));
+  const canvasHeight = Math.max(size.h, dagLayout.height);
+
+  const handleStartWire = (memberId: string) => setPendingEdge(memberId);
+  const handleDropWire = (targetId: string) => {
+    if (pendingEdge && pendingEdge !== targetId) {
+      addTeamEdge(team.id, pendingEdge, targetId);
+    }
+    setPendingEdge(null);
   };
 
   return (
     <div className="tcf" data-bf-component="agent-team-composer" data-bf-part="formation" ref={ref}>
-      {/* SVG edges */}
-      <svg className="tcf__svg" width={size.w} height={size.h} aria-hidden>
+      <p className="tcf__hint">{t('formation.hint')}</p>
+      {/* SVG edges: official layout.edges carry sourceX/Y + path (R-WF-17) */}
+      <svg className="tcf__svg" width={size.w} height={canvasHeight} aria-hidden>
         <defs>
           <marker id="tcf-arrow" markerWidth="5" markerHeight="5" refX="2.5" refY="2.5" orient="auto">
             <circle cx="2.5" cy="2.5" r="2" fill="var(--bf-appearance-token-border-subtle)" />
           </marker>
         </defs>
-        {edges.map(([a, b], i) => {
-          const from = getCenter(a);
-          const to = getCenter(b);
-          const cy = (from.y + to.y) / 2;
-          return (
+        {dagLayout.edges.map((edge) => (
+          <g key={edgeKey(edge.from, edge.to)}>
             <path
-              key={i}
-              d={`M${from.x},${from.y} C${from.x},${cy} ${to.x},${cy} ${to.x},${to.y}`}
+              d={edge.path}
               fill="none"
               stroke="var(--bf-appearance-token-border-subtle)"
               strokeWidth="1"
               strokeDasharray="3 3"
               markerEnd="url(#tcf-arrow)"
+              className="tcf__edge"
             />
-          );
-        })}
+            <circle
+              className="tcf__edge-remove"
+              cx={edge.sourceX}
+              cy={edge.sourceY}
+              r={8}
+              onClick={() => removeTeamEdge(team.id, edge.from, edge.to)}
+            >
+              <title>{t('formation.removeEdge')}</title>
+            </circle>
+          </g>
+        ))}
       </svg>
 
       {/* Nodes */}
       {team.members.map((member) => {
-        const pos = positions.find((p) => p.memberId === member.agentId);
-        if (!pos) return null;
+        const node = nodePosById.get(member.agentId);
+        if (!node) return null;
         return (
           <FormationNode
             key={member.agentId}
             member={member}
-            pos={pos}
-            cw={size.w}
-            ch={size.h}
+            pos={{ x: node.x, y: node.y }}
             onRoleChange={(r) => updateMemberRole(team.id, member.agentId, r)}
             onRemove={() => removeMember(team.id, member.agentId)}
+            onOpenSession={() => void openMainSession(member.agentId)}
+            wireMode={pendingEdge !== null}
+            onStartWire={() => handleStartWire(member.agentId)}
+            onDropWire={() => handleDropWire(member.agentId)}
+            onCancelWire={() => setPendingEdge(null)}
           />
         );
       })}
+
+      {pendingEdge && (
+        <div className="tcf__wire" data-testid="tcf-wire-active">
+          <span>{t('formation.wireActive', { from: pendingEdge })}</span>
+        </div>
+      )}
     </div>
   );
 };

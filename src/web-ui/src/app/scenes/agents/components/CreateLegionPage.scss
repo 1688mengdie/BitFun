@@ -308,3 +308,13 @@
   font-size: var(--bf-appearance-token-flowchat-font-size-sm);
 }
 
+// ─── Pattern canvas (official DependencyGraph wrapper, R-WF-17) ─────
+.legion-canvas {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--bf-appearance-token-border-subtle);
+  border-radius: 12px;
+  background: var(--bf-appearance-token-element-bg-soft);
+  padding: $size-gap-3;
+}
+

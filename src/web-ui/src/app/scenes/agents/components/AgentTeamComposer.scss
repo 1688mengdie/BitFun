@@ -196,6 +196,41 @@
     pointer-events: none;
   }
 
+  &__edge {
+    cursor: pointer;
+  }
+
+  &__edge-remove {
+    fill: var(--bf-appearance-token-color-bg-elevated);
+    stroke: var(--bf-appearance-token-border-subtle);
+    stroke-width: 1;
+    pointer-events: all;
+    cursor: pointer;
+
+    &:hover { fill: var(--bf-appearance-token-color-error-bg); stroke: var(--bf-appearance-token-color-error); }
+  }
+
+  &__hint {
+    margin: 0 0 4px;
+    font-size: 0.7rem;
+    color: var(--bf-appearance-token-color-text-disabled);
+  }
+
+  &__wire {
+    position: absolute;
+    left: 50%;
+    bottom: 8px;
+    transform: translateX(-50%);
+    padding: 4px 10px;
+    border: 1px dashed var(--bf-appearance-token-border-strong);
+    border-radius: 999px;
+    background: var(--bf-appearance-token-color-bg-elevated);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: 0.7rem;
+    z-index: 3;
+    pointer-events: none;
+  }
+
   // ── Node ────────────────────────────────────────────────────────────────
   &__node {
     position: absolute;
@@ -334,6 +369,48 @@
     white-space: nowrap;
     margin-left: auto;
   }
+
+  // ── Seven-state badge + wire port + session jump (R-WF-17) ────────
+  &__node-status {
+    align-items: center;
+    gap: $size-gap-2;
+  }
+
+  &__node-state {
+    flex-shrink: 0;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__node-port,
+  &__node-jump {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 3px;
+    background: transparent;
+    color: var(--bf-appearance-token-color-text-disabled);
+    cursor: pointer;
+    transition: all $motion-fast $easing-standard;
+
+    &:hover {
+      background: var(--bf-appearance-token-element-bg-medium);
+      color: var(--bf-appearance-token-color-text-primary);
+    }
+
+    &.is-active {
+      background: var(--bf-appearance-token-color-accent-200);
+      color: var(--bf-appearance-token-color-accent-500);
+    }
+  }
+
+  &__node-jump { margin-left: auto; }
 }
 
 // ─── List view ────────────────────────────────────────────────────────────────

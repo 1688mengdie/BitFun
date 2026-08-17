@@ -477,6 +477,7 @@
     "nodes": "Nodes ({{count}})",
     "edges": "Edges ({{count}})",
     "noEdges": "No edges",
+    "canvas": "Canvas preview",
     "usePattern": "Use this pattern",
     "planning": "Planning",
     "saved": "Workflow preset \"{{name}}\" saved",
@@ -594,7 +595,22 @@
   },
   "formation": {
     "empty": "Select agents from the left panel",
-    "emptySub": "Click the + button on an agent card"
+    "emptySub": "Click the + button on an agent card",
+    "hint": "Click the wire port on a node to create an edge, click an edge start dot to remove it",
+    "startWire": "Start wiring",
+    "cancelWire": "Cancel wiring",
+    "wireActive": "Wiring (from: {{from}}) - click another node to finish, click the port to cancel",
+    "removeEdge": "Remove this edge",
+    "openSession": "Open session",
+    "state": {
+      "standby": "Standby",
+      "processing": "Processing",
+      "completed": "Completed",
+      "hung": "Hung",
+      "interrupted": "Interrupted",
+      "pending_attention": "Needs attention",
+      "viewed": "Viewed"
+    }
   },
   "capability": {
     "warning": "Missing capabilities: {{cats}}",
