@@ -299,7 +299,7 @@
       "createSuccess": "已创建 Agent「{{name}}」",
       "createFailed": "创建失败：",
       "review": "评审",
-      "reviewToolsHint": "补充检查仅使用只读工具。"
+      "reviewToolsHint": "只读模式将代理限制为仅使用只读工具。"
     }
   },
   "reviewTeams": {

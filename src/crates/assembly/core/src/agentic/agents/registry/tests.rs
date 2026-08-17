@@ -1020,6 +1020,80 @@ async fn project_scoped_custom_mode_is_skipped_while_project_subagent_loads() {
 }
 
 #[tokio::test]
+async fn load_strips_writable_tools_from_readonly_disk_definition() {
+    // M4 load fallback: a hand-edited md file with readonly:true + writable
+    // tools is stripped during load via the single validate entry point.
+    let env = CustomAgentTestEnv::new("bitfun-custom-agent-load-strip");
+    let registry = AgentRegistry::new();
+    let path = env.user_agents_dir.join("bad-readonly.md");
+    let definition = CustomAgentDefinition::from_front_matter_fields(
+        Some("BadReadonly"),
+        Some("BadReadonly"),
+        Some("Hand-edited readonly subagent"),
+        Some(CustomAgentKind::Subagent),
+        Some(vec!["Read".to_string(), "Write".to_string(), "Edit".to_string()]),
+        Some(true),
+        Some(false),
+        Some("fast"),
+        None,
+        "Readonly review subagent.".to_string(),
+        CustomAgentLevel::User,
+    )
+    .expect("definition should build")
+    .definition;
+    custom_agent_save_markdown_file(&path, &definition).expect("markdown should save");
+
+    registry
+        .load_custom_agents_from_test_roots(None, &env.discovery_roots(None))
+        .await;
+
+    let detail = registry
+        .get_custom_agent_detail("BadReadonly", None)
+        .await
+        .expect("loaded subagent detail should resolve");
+    assert!(detail.readonly);
+    assert_eq!(detail.tools, vec!["Read".to_string()]);
+    assert!(!detail.review);
+}
+
+#[tokio::test]
+async fn load_keeps_writable_tools_for_review_disk_definition() {
+    // M4 companion: review:true + readonly:false on disk must keep the full
+    // tool set through load (review never forces readonly).
+    let env = CustomAgentTestEnv::new("bitfun-custom-agent-load-keep");
+    let registry = AgentRegistry::new();
+    let path = env.user_agents_dir.join("writable-review.md");
+    let definition = CustomAgentDefinition::from_front_matter_fields(
+        Some("WritableReview"),
+        Some("WritableReview"),
+        Some("Review with writable tools"),
+        Some(CustomAgentKind::Subagent),
+        Some(vec!["Read".to_string(), "Write".to_string()]),
+        Some(false),
+        Some(true),
+        Some("fast"),
+        None,
+        "Review and fix.".to_string(),
+        CustomAgentLevel::User,
+    )
+    .expect("definition should build")
+    .definition;
+    custom_agent_save_markdown_file(&path, &definition).expect("markdown should save");
+
+    registry
+        .load_custom_agents_from_test_roots(None, &env.discovery_roots(None))
+        .await;
+
+    let detail = registry
+        .get_custom_agent_detail("WritableReview", None)
+        .await
+        .expect("loaded subagent detail should resolve");
+    assert!(!detail.readonly);
+    assert!(detail.review);
+    assert_eq!(detail.tools, vec!["Read".to_string(), "Write".to_string()]);
+}
+
+#[tokio::test]
 async fn custom_mode_detail_reports_kind_level_model_path_and_policy() {
     let env = CustomAgentTestEnv::new("bitfun-custom-mode-registry-detail");
     let registry = AgentRegistry::new();
