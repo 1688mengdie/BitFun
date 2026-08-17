@@ -6095,6 +6095,7 @@ impl SessionManager {
         self.sessions.remove(session_id);
         self.transient_session_ids.remove(session_id);
         self.release_active_session_reservation(session_id);
+        self.keep_processing_turns.remove(session_id);
         clear_session_runtime_stores(
             session_id,
             self.context_store.as_ref(),

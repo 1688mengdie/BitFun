@@ -203,14 +203,57 @@ const SESSION_REFERENCE_NAME_CHAR_LIMIT: usize = 96;
 const USER_SHELL_COMMAND_MAX_BYTES: usize = 64 * 1024;
 const USER_SHELL_TOOL_NAME: &str = "ExecCommand";
 
-/// How often the keep-processing watchdog re-checks the background command
-/// registry for a session pinned to `Processing` by a still-running child.
-const BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_secs(60);
-/// Hard ceiling for how long a session may stay `Processing` solely because of
-/// a running background command. After this the watchdog settles it to `Idle`
-/// and logs a warning (large compiles can legitimately exceed this, tune the
-/// constant instead of hard-coding magic numbers at call sites).
-const BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME: Duration = Duration::from_secs(10 * 60);
+/// Fallback poll interval (seconds) for the keep-processing watchdog when the
+/// `ai.thresholds.execution.background_command_watchdog_poll_interval_secs`
+/// config is unavailable or unset (mirrors the serde default in
+/// `ExecutionThresholds`).
+const BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK: u64 = 60;
+/// Fallback hard lifetime (seconds) for the keep-processing watchdog when
+/// `ai.thresholds.execution.background_command_watchdog_max_lifetime_secs` is
+/// unavailable or unset (mirrors the serde default in `ExecutionThresholds`).
+const BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK: u64 = 600;
+
+/// Resolve the configured keep-processing watchdog poll interval
+/// (`ai.thresholds.execution.background_command_watchdog_poll_interval_secs`),
+/// falling back to 60s when the config service is unavailable or the value is
+/// unset/zero (S-90: runtime-tunable, large compiles may need a coarser cadence).
+async fn configured_background_command_watchdog_poll_interval() -> Duration {
+    let Ok(config_service) = GlobalConfigManager::get_service().await else {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK);
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK);
+    };
+    let secs = thresholds.execution.background_command_watchdog_poll_interval_secs;
+    if secs == 0 {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK);
+    }
+    Duration::from_secs(secs)
+}
+
+/// Resolve the configured keep-processing watchdog hard lifetime
+/// (`ai.thresholds.execution.background_command_watchdog_max_lifetime_secs`),
+/// falling back to 600s when the config service is unavailable or the value is
+/// unset/zero.
+async fn configured_background_command_watchdog_max_lifetime() -> Duration {
+    let Ok(config_service) = GlobalConfigManager::get_service().await else {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK);
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK);
+    };
+    let secs = thresholds.execution.background_command_watchdog_max_lifetime_secs;
+    if secs == 0 {
+        return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK);
+    }
+    Duration::from_secs(secs)
+}
 
 fn comparable_workspace_path(path: &str) -> String {
     let path = path.trim();
@@ -16566,12 +16609,16 @@ async fn has_running_background_command(session_id: &str) -> bool {
 /// Spawns the keep-processing watchdog for a session pinned to `Processing`
 /// because a background command is still running.
 ///
-/// The watchdog polls the capture registry on a fixed interval. It settles the
-/// session back to `Idle` (and clears the marker) when:
+/// The watchdog polls the capture registry on a configured interval
+/// (`ai.thresholds.execution.background_command_watchdog_poll_interval_secs`,
+/// fallback 60s). It settles the session back to `Idle` (and clears the
+/// marker) when:
 /// - no Running command remains (the lifecycle-event track may have missed the
 ///   terminal update), or
-/// - the pin outlives [`BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME`] (guards
-///   against a permanently stuck `Processing` when a child never exits).
+/// - the pin outlives the configured hard lifetime
+///   (`ai.thresholds.execution.background_command_watchdog_max_lifetime_secs`,
+///   fallback 600s) — guards against a permanently stuck `Processing` when a
+///   child never exits.
 fn spawn_background_command_watchdog(session_id: String, turn_id: String) {
     tokio::spawn(async move {
         // Resolve the session manager through the global coordinator so callers
@@ -16580,49 +16627,70 @@ fn spawn_background_command_watchdog(session_id: String, turn_id: String) {
             return;
         };
         let session_manager = coordinator.session_manager.clone();
-        let started = Instant::now();
-        let mut interval = tokio::time::interval(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL);
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            // Only act while the pin still belongs to this turn.
-            let keep = session_manager.keep_processing_turn(&session_id) == Some(turn_id.clone());
-            if !keep {
-                return;
-            }
-            let still_running = has_running_background_command(&session_id).await;
-            if !still_running {
-                debug!(
-                    "Background command watchdog settling session to Idle: session_id={}, turn_id={}",
-                    session_id, turn_id
-                );
-                let _ = session_manager
-                    .update_session_state_for_turn_if_processing(
-                        &session_id,
-                        &turn_id,
-                        SessionState::Idle,
-                    )
-                    .await;
-                session_manager.clear_keep_processing_turn(&session_id);
-                return;
-            }
-            if started.elapsed() >= BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME {
-                warn!(
-                    "Background command still running after {:?}; force-settling session to Idle to avoid permanent Processing: session_id={}, turn_id={}",
-                    BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME, session_id, turn_id
-                );
-                let _ = session_manager
-                    .update_session_state_for_turn_if_processing(
-                        &session_id,
-                        &turn_id,
-                        SessionState::Idle,
-                    )
-                    .await;
-                session_manager.clear_keep_processing_turn(&session_id);
-                return;
-            }
-        }
+        let poll_interval = configured_background_command_watchdog_poll_interval().await;
+        let max_lifetime = configured_background_command_watchdog_max_lifetime().await;
+        run_background_command_watchdog(
+            session_manager,
+            session_id,
+            turn_id,
+            poll_interval,
+            max_lifetime,
+        )
+        .await;
     });
+}
+
+/// Watchdog core loop (parameterized so tests can drive it with tiny
+/// intervals/lifetimes instead of the 60s/600s production defaults).
+async fn run_background_command_watchdog(
+    session_manager: Arc<SessionManager>,
+    session_id: String,
+    turn_id: String,
+    poll_interval: Duration,
+    max_lifetime: Duration,
+) {
+    let started = Instant::now();
+    let mut interval = tokio::time::interval(poll_interval);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        interval.tick().await;
+        // Only act while the pin still belongs to this turn.
+        let keep = session_manager.keep_processing_turn(&session_id) == Some(turn_id.clone());
+        if !keep {
+            return;
+        }
+        let still_running = has_running_background_command(&session_id).await;
+        if !still_running {
+            debug!(
+                "Background command watchdog settling session to Idle: session_id={}, turn_id={}",
+                session_id, turn_id
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    &session_id,
+                    &turn_id,
+                    SessionState::Idle,
+                )
+                .await;
+            session_manager.clear_keep_processing_turn(&session_id);
+            return;
+        }
+        if started.elapsed() >= max_lifetime {
+            warn!(
+                "Background command still running after {:?}; force-settling session to Idle to avoid permanent Processing: session_id={}, turn_id={}",
+                max_lifetime, session_id, turn_id
+            );
+            let _ = session_manager
+                .update_session_state_for_turn_if_processing(
+                    &session_id,
+                    &turn_id,
+                    SessionState::Idle,
+                )
+                .await;
+            session_manager.clear_keep_processing_turn(&session_id);
+            return;
+        }
+    }
 }
 
 fn merge_prepended_messages_for_turn(
@@ -16663,8 +16731,10 @@ mod tests {
     use super::{
         apply_primary_agent_model_default, apply_scheduler_busy_projection,
         background_subagent_follow_up_message, btw_session_memory_mode,
-        build_subagent_session_relationship, commit_interrupted_turn_intent, is_main_session_by_creator,
-        has_running_background_command, lineage_active_turn_after_transcript,
+        build_subagent_session_relationship, commit_interrupted_turn_intent,
+        configured_background_command_watchdog_max_lifetime,
+        configured_background_command_watchdog_poll_interval, has_running_background_command,
+        is_main_session_by_creator, lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
         logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
         normalize_subagent_max_concurrency_with_cap,
@@ -16693,8 +16763,8 @@ mod tests {
     };
     use crate::agentic::events::{AgenticEvent, EventQueue, EventQueueConfig, EventRouter};
     use crate::agentic::execution::{
-        restrict_recovered_permission_mode, ExecutionEngine, ExecutionEngineConfig, RoundExecutor,
-        StreamProcessor,
+        restrict_recovered_permission_mode, ExecutionEngine, ExecutionEngineConfig, ExecutionResult,
+        RoundExecutor, StreamProcessor,
     };
     use crate::agentic::goal_mode::thread_goal_patch;
     use crate::agentic::persistence::PersistenceManager;
@@ -23602,5 +23672,179 @@ mod tests {
 
         // Sessions without any capture are never reported as running.
         assert!(!has_running_background_command("rwf25-session-unknown").await);
+    }
+
+    #[tokio::test]
+    async fn persist_completed_turn_keeps_processing_when_background_running() {
+        // R-WF-25 assertion 1 (full-chain, before/after contrast): with a
+        // Running background command registered for the session, the REAL
+        // turn-completion persistence path must keep the session Processing and
+        // install the keep-processing marker instead of settling to Idle.
+        // Contrast: without any Running command the same path settles to Idle
+        // (the pre-fix behavior).
+        let (_coordinator, session_manager) = test_persistent_coordinator();
+        let workspace = tempfile::tempdir().expect("workspace");
+        let session_id = format!("rwf25-chain-{}", uuid::Uuid::new_v4());
+        session_manager
+            .create_session_with_id(
+                Some(session_id.clone()),
+                "R-WF-25 chain".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        let turn_id = session_manager
+            .start_dialog_turn(
+                &session_id,
+                "agentic".to_string(),
+                "hello".to_string(),
+                Some("turn-1".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("start turn");
+
+        let execution_result = ExecutionResult {
+            final_message: Message::assistant("done".to_string())
+                .with_turn_id(turn_id.clone())
+                .with_round_id("round-1".to_string()),
+            total_rounds: 1,
+            total_tools: 0,
+            total_tokens: 0,
+            duration_ms: 1,
+            success: true,
+            new_messages: vec![],
+            finish_reason: crate::agentic::execution::types::FinishReason::Complete,
+            partial_recovery_reason: None,
+            effective_finish_reason: "complete".to_string(),
+            has_final_response: true,
+        };
+        let event_queue = EventQueue::new(EventQueueConfig::default());
+
+        // --- Contrast (pre-fix behavior): no background command → Idle. ---
+        let (status, _) = ConversationCoordinator::persist_completed_dialog_turn(
+            &event_queue,
+            session_manager.as_ref(),
+            None,
+            &session_id,
+            &turn_id,
+            &execution_result,
+            None,
+        )
+        .await;
+        assert_eq!(status, crate::service::session::TurnStatus::Completed);
+        let session = session_manager
+            .get_session(&session_id)
+            .expect("session should remain available");
+        assert!(
+            matches!(session.state, SessionState::Idle),
+            "pre-fix behavior: no background command must settle to Idle"
+        );
+        assert_eq!(session_manager.keep_processing_turn(&session_id), None);
+
+        // --- With a Running background command → keep Processing + marker. ---
+        use tool_runtime::background_command_output::{
+            background_command_output_capture, BackgroundCommandOutputStatus,
+            StartBackgroundCommandOutputCapture,
+        };
+        let capture_id = format!(
+            "rwf25-chain-capture-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        );
+        let capture = background_command_output_capture();
+        let _tx = capture
+            .start_capture(StartBackgroundCommandOutputCapture {
+                capture_id: capture_id.clone(),
+                agent_session_id: Some(session_id.clone()),
+                command: "cargo check".to_string(),
+                workdir: None,
+                remote: false,
+                tty: false,
+            })
+            .await;
+        capture
+            .update_lifecycle(
+                &capture_id,
+                7777,
+                BackgroundCommandOutputStatus::Running,
+                None,
+            )
+            .await
+            .expect("record exists");
+
+        // Start a second turn so the session is Processing again.
+        let turn_id2 = session_manager
+            .start_dialog_turn(
+                &session_id,
+                "agentic".to_string(),
+                "compile".to_string(),
+                Some("turn-2".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("start second turn");
+        let execution_result2 = ExecutionResult {
+            final_message: Message::assistant("compiling".to_string())
+                .with_turn_id(turn_id2.clone())
+                .with_round_id("round-2".to_string()),
+            total_rounds: 1,
+            total_tools: 1,
+            total_tokens: 0,
+            duration_ms: 1,
+            success: true,
+            new_messages: vec![],
+            finish_reason: crate::agentic::execution::types::FinishReason::Complete,
+            partial_recovery_reason: None,
+            effective_finish_reason: "complete".to_string(),
+            has_final_response: true,
+        };
+        let (status2, _) = ConversationCoordinator::persist_completed_dialog_turn(
+            &event_queue,
+            session_manager.as_ref(),
+            None,
+            &session_id,
+            &turn_id2,
+            &execution_result2,
+            None,
+        )
+        .await;
+        assert_eq!(status2, crate::service::session::TurnStatus::Completed);
+        let session = session_manager
+            .get_session(&session_id)
+            .expect("session should remain available");
+        assert!(
+            !matches!(session.state, SessionState::Idle),
+            "with a Running background command the session must NOT settle to Idle"
+        );
+        assert!(matches!(
+            session.state,
+            SessionState::Processing { ref current_turn_id, .. } if current_turn_id == &turn_id2
+        ));
+        assert_eq!(
+            session_manager.keep_processing_turn(&session_id),
+            Some(turn_id2.clone())
+        );
+        // The global coordinator is not initialized in this test, so the
+        // watchdog task returns early (its core loop is covered separately).
+    }
+
+    #[tokio::test]
+    async fn configured_watchdog_params_fall_back_to_defaults_without_config_service() {
+        // P2-2: the config-driven resolvers must fall back to the legacy
+        // defaults when the global config service is unavailable (as in unit
+        // tests), so arming the watchdog never panics.
+        let poll = configured_background_command_watchdog_poll_interval().await;
+        let lifetime = configured_background_command_watchdog_max_lifetime().await;
+        assert_eq!(poll, Duration::from_secs(60));
+        assert_eq!(lifetime, Duration::from_secs(600));
     }
 }

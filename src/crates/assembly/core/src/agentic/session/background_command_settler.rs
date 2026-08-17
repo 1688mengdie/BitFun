@@ -83,3 +83,221 @@ impl EventSubscriber for BackgroundCommandSettlerSubscriber {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agentic::core::{ProcessingPhase, SessionConfig};
+    use crate::agentic::events::AgenticEvent;
+    use crate::agentic::persistence::PersistenceManager;
+    use crate::agentic::session::session_manager::SessionManagerConfig;
+    use crate::agentic::session::{PromptCachePolicy, SessionContextStore};
+    use crate::infrastructure::PathManager;
+    use uuid::Uuid;
+
+    fn test_manager() -> Arc<SessionManager> {
+        let root = std::env::temp_dir().join(format!(
+            "bitfun-settler-test-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).expect("create test root");
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(root.join("user-root")));
+        let persistence_manager =
+            Arc::new(PersistenceManager::new(path_manager).expect("persistence manager"));
+        Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            persistence_manager,
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: std::time::Duration::from_secs(3600),
+                auto_save_interval: std::time::Duration::from_secs(300),
+                enable_persistence: false,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ))
+    }
+
+    async fn processing_session_with_marker(
+        manager: &SessionManager,
+        session_id: &str,
+        turn_id: &str,
+    ) {
+        let workspace =
+            std::env::temp_dir().join(format!("bitfun-settler-ws-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&workspace).expect("create workspace dir");
+        manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "settler test".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+        // Force the session into Processing for the expected turn using the
+        // public state API (the raw `sessions` map is private to the manager).
+        manager
+            .update_session_state(
+                session_id,
+                SessionState::Processing {
+                    current_turn_id: turn_id.to_string(),
+                    phase: ProcessingPhase::ToolCalling,
+                },
+            )
+            .await
+            .expect("set processing state");
+        manager.set_keep_processing_turn(session_id, turn_id);
+    }
+
+    #[tokio::test]
+    async fn running_status_is_ignored() {
+        let manager = test_manager();
+        let session_id = format!("session-run-{}", Uuid::new_v4());
+        processing_session_with_marker(&manager, &session_id, "turn-1").await;
+        let subscriber = BackgroundCommandSettlerSubscriber::new(manager.clone());
+        let event = AgenticEvent::BackgroundCommandLifecycleChanged {
+            session_id: session_id.clone(),
+            status: "running".to_string(),
+        };
+        subscriber.on_event(&event).await.expect("no error");
+
+        let session = manager.get_session(&session_id).expect("session");
+        assert!(matches!(
+            session.state,
+            SessionState::Processing { ref current_turn_id, .. }
+                if current_turn_id == "turn-1"
+        ));
+        assert_eq!(
+            manager.keep_processing_turn(&session_id),
+            Some("turn-1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_status_settles_to_idle_and_clears_marker() {
+        // R-WF-25 assertion 2 (event-track full chain): a terminal lifecycle
+        // event with no Running command left in the registry settles the
+        // session back to Idle and clears the keep-processing marker.
+        let manager = test_manager();
+        let session_id = format!("session-settle-{}", Uuid::new_v4());
+        processing_session_with_marker(&manager, &session_id, "turn-1").await;
+        let subscriber = BackgroundCommandSettlerSubscriber::new(manager.clone());
+
+        // Capture registry: start + finish (no Running remains).
+        use tool_runtime::background_command_output::{
+            background_command_output_capture, BackgroundCommandOutputStatus,
+            StartBackgroundCommandOutputCapture,
+        };
+        let capture_id = format!(
+            "settler-capture-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        );
+        let capture = background_command_output_capture();
+        let _tx = capture
+            .start_capture(StartBackgroundCommandOutputCapture {
+                capture_id: capture_id.clone(),
+                agent_session_id: Some(session_id.clone()),
+                command: "echo hi".to_string(),
+                workdir: None,
+                remote: false,
+                tty: false,
+            })
+            .await;
+        capture
+            .update_lifecycle(
+                &capture_id,
+                5555,
+                BackgroundCommandOutputStatus::Exited,
+                Some(0),
+            )
+            .await
+            .expect("record exists");
+
+        let event = AgenticEvent::BackgroundCommandLifecycleChanged {
+            session_id: session_id.clone(),
+            status: "exited".to_string(),
+        };
+        subscriber.on_event(&event).await.expect("no error");
+
+        let session = manager.get_session(&session_id).expect("session");
+        assert!(matches!(session.state, SessionState::Idle));
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+    }
+
+    #[tokio::test]
+    async fn terminal_status_keeps_processing_when_another_command_still_running() {
+        // R-WF-25 assertion 2 branch: if another Running command remains for
+        // the session, the settle must NOT happen yet.
+        let manager = test_manager();
+        let session_id = format!("session-hold-{}", Uuid::new_v4());
+        processing_session_with_marker(&manager, &session_id, "turn-1").await;
+        let subscriber = BackgroundCommandSettlerSubscriber::new(manager.clone());
+
+        use tool_runtime::background_command_output::{
+            background_command_output_capture, BackgroundCommandOutputStatus,
+            StartBackgroundCommandOutputCapture,
+        };
+        let capture_id = format!(
+            "settler-running-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock should be after unix epoch")
+                .as_nanos()
+        );
+        let capture = background_command_output_capture();
+        let _tx = capture
+            .start_capture(StartBackgroundCommandOutputCapture {
+                capture_id: capture_id.clone(),
+                agent_session_id: Some(session_id.clone()),
+                command: "sleep 30".to_string(),
+                workdir: None,
+                remote: false,
+                tty: false,
+            })
+            .await;
+        capture
+            .update_lifecycle(
+                &capture_id,
+                5556,
+                BackgroundCommandOutputStatus::Running,
+                None,
+            )
+            .await
+            .expect("record exists");
+
+        let event = AgenticEvent::BackgroundCommandLifecycleChanged {
+            session_id: session_id.clone(),
+            status: "exited".to_string(),
+        };
+        subscriber.on_event(&event).await.expect("no error");
+
+        let session = manager.get_session(&session_id).expect("session");
+        assert!(matches!(
+            session.state,
+            SessionState::Processing { ref current_turn_id, .. }
+                if current_turn_id == "turn-1"
+        ));
+        assert_eq!(
+            manager.keep_processing_turn(&session_id),
+            Some("turn-1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn no_marker_means_noop() {
+        let manager = test_manager();
+        let subscriber = BackgroundCommandSettlerSubscriber::new(manager.clone());
+        let event = AgenticEvent::BackgroundCommandLifecycleChanged {
+            session_id: "session-unknown".to_string(),
+            status: "exited".to_string(),
+        };
+        subscriber.on_event(&event).await.expect("no error");
+        // No panic, no state change needed (marker absent).
+    }
+}

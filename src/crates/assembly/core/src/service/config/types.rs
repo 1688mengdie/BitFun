@@ -1886,6 +1886,32 @@ pub struct ExecutionThresholds {
     /// 窗口内任一相同即拦；正常轮指纹变化 → 窗口滑动。
     #[serde(default = "default_execution_duplicate_message_window")]
     pub duplicate_message_window: usize,
+    /// Background command keep-processing watchdog poll interval (seconds).
+    ///
+    /// R-WF-25: how often the watchdog re-checks the background command
+    /// registry for a session pinned to `Processing` by a still-running child.
+    /// Mirrors `BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL` (60s); configurable
+    /// at runtime via `ai.thresholds.execution.background_command_watchdog_poll_interval_secs`
+    /// (S-90 — large compiles may need a coarser/coarser cadence).
+    #[serde(default = "default_execution_background_command_watchdog_poll_interval_secs")]
+    pub background_command_watchdog_poll_interval_secs: u64,
+    /// Background command keep-processing watchdog hard lifetime (seconds).
+    ///
+    /// R-WF-25: hard ceiling for how long a session may stay `Processing`
+    /// solely because of a running background command; after this the watchdog
+    /// settles it to `Idle` and logs a warning. Mirrors
+    /// `BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME` (600s); configurable via
+    /// `ai.thresholds.execution.background_command_watchdog_max_lifetime_secs`.
+    #[serde(default = "default_execution_background_command_watchdog_max_lifetime_secs")]
+    pub background_command_watchdog_max_lifetime_secs: u64,
+}
+
+fn default_execution_background_command_watchdog_poll_interval_secs() -> u64 {
+    60
+}
+
+fn default_execution_background_command_watchdog_max_lifetime_secs() -> u64 {
+    600
 }
 
 impl Default for ExecutionThresholds {
@@ -1903,6 +1929,10 @@ impl Default for ExecutionThresholds {
             empty_input_guard: default_execution_empty_input_guard(),
             duplicate_message_enabled: default_execution_duplicate_message_enabled(),
             duplicate_message_window: default_execution_duplicate_message_window(),
+            background_command_watchdog_poll_interval_secs:
+                default_execution_background_command_watchdog_poll_interval_secs(),
+            background_command_watchdog_max_lifetime_secs:
+                default_execution_background_command_watchdog_max_lifetime_secs(),
         }
     }
 }
