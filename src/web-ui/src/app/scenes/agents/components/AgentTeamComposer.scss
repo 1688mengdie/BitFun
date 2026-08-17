@@ -52,7 +52,7 @@
     color: var(--bf-appearance-token-color-text-primary);
     background: transparent;
     border: none;
-    border-bottom: 1px solid var(--bf-appearance-token-color-primary);
+    border-bottom: 1px solid var(--bf-appearance-token-color-accent-500);
     outline: none;
     font-family: var(--bf-appearance-token-font-family-sans);
     padding: 0;
@@ -111,7 +111,7 @@
     font-family: var(--bf-appearance-token-font-family-sans);
 
     &.is-on {
-      background: var(--bf-appearance-token-element-bg-elevated);
+      background: var(--bf-appearance-token-element-bg-medium);
       color: var(--bf-appearance-token-color-text-primary);
     }
 

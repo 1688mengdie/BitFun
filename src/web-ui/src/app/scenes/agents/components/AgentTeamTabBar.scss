@@ -47,7 +47,7 @@
 
     &.is-active {
       color: var(--bf-appearance-token-color-text-primary);
-      border-bottom-color: var(--bf-appearance-token-color-primary);
+      border-bottom-color: var(--bf-appearance-token-color-accent-500);
     }
   }
 
@@ -73,8 +73,8 @@
     color: var(--bf-appearance-token-color-text-muted);
 
     .bt-tabbar__tab.is-active & {
-      background: color-mix(in srgb, var(--bf-appearance-token-color-primary) 15%, transparent);
-      color: var(--bf-appearance-token-color-primary);
+      background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 15%, transparent);
+      color: var(--bf-appearance-token-color-accent-500);
     }
   }
 
@@ -294,7 +294,7 @@
     white-space: nowrap;
 
     &--primary {
-      background: var(--bf-appearance-token-color-primary);
+      background: var(--bf-appearance-token-color-accent-500);
       color: #fff;
       &:hover:not(:disabled) { opacity: 0.88; }
       &:disabled { opacity: 0.35; cursor: not-allowed; }

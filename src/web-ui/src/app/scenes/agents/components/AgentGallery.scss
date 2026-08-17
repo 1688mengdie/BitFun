@@ -132,8 +132,8 @@
   }
 
   &.is-member {
-    background: color-mix(in srgb, var(--bf-appearance-token-color-primary) 5%, transparent);
-    border-color: color-mix(in srgb, var(--bf-appearance-token-color-primary) 22%, transparent);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 5%, transparent);
+    border-color: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 22%, transparent);
   }
 
   &.is-disabled { opacity: 0.45; }
@@ -228,7 +228,7 @@
     cursor: pointer;
     transition: all $motion-fast $easing-standard;
 
-    &:hover { border-color: var(--bf-appearance-token-color-primary); color: var(--bf-appearance-token-color-primary); }
+    &:hover { border-color: var(--bf-appearance-token-color-accent-500); color: var(--bf-appearance-token-color-accent-500); }
 
     &.is-added {
       border-color: var(--bf-appearance-token-color-success);
@@ -276,7 +276,7 @@
     transition: all $motion-fast $easing-standard;
     font-family: var(--bf-appearance-token-font-family-sans);
 
-    &:hover { border-color: var(--bf-appearance-token-color-primary); color: var(--bf-appearance-token-color-primary); }
+    &:hover { border-color: var(--bf-appearance-token-color-accent-500); color: var(--bf-appearance-token-color-accent-500); }
 
     &.is-added {
       border-color: var(--bf-appearance-token-color-success);
