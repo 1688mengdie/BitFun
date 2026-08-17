@@ -602,6 +602,14 @@ impl DialogRoundInjectionInterrupt {
         self.pending_tool_preemption().should_cancel_running_tools()
     }
 
+    /// R-WF-22 write-tool-safe 消费点：仅当没有写文件类工具正在原子单元内
+    /// 执行时才允许 CancelRunning 立即生效。写类工具执行中 → 由调用方
+    /// （tool_pipeline round injection watch）延迟到原子单元完成后。
+    /// 零类型变更：不新增 RoundInjectionToolPreemption 变体，仅消费点判定。
+    pub fn should_cancel_running_tools_after_write_guard(&self, write_tool_running: bool) -> bool {
+        self.should_cancel_running_tools() && !write_tool_running
+    }
+
     pub fn should_interrupt(&self) -> bool {
         self.should_interrupt_after_current_atomic_unit()
     }

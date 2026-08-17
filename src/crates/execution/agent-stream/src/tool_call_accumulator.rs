@@ -149,7 +149,10 @@ pub struct PendingToolCalls {
 /// the truncation as an error: a partial shell command or a partial
 /// `old_string`/`new_string` for Edit can change semantics destructively.
 pub fn is_write_like_tool_name(tool_name: &str) -> bool {
-    matches!(tool_name, "Write" | "file_write" | "write_notebook")
+    matches!(
+        tool_name,
+        "Write" | "file_write" | "write_notebook" | "Edit" | "Delete" | "ExecCommand"
+    )
 }
 
 #[derive(Debug)]

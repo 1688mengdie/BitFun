@@ -33,8 +33,8 @@ use bitfun_agent_tools::{
     build_tool_execution_timeout_presentation,
     build_user_rejected_tool_presentation_with_instruction,
     build_user_steering_interrupted_presentation, build_write_tail_closure_notice,
-    render_tool_result_for_assistant, validate_tool_execution_admission, LoadedDeferredToolSpec,
-    PermissionIntent, ResolvedToolInvocation,
+    is_write_like_tool_name, render_tool_result_for_assistant, validate_tool_execution_admission,
+    LoadedDeferredToolSpec, PermissionIntent, ResolvedToolInvocation,
     ToolExecutionAdmissionRejection, ToolExecutionAdmissionRequest, ToolExecutionErrorPresentation,
     ToolRuntimeRestrictions, GET_TOOL_SPEC_TOOL_NAME, USER_STEERING_INTERRUPTED_MESSAGE,
 };
@@ -823,6 +823,11 @@ pub struct ToolPipeline {
     /// result 返回。中间插入其他工具调用 / 其他目标 / 文本产出 → 计数重置
     /// （交叉引用 A→B→A 不误伤）。配置：`ai.thresholds.execution.*`。
     repeated_read_states: Arc<TokioMutex<HashMap<String, RepeatedReadSessionState>>>,
+    /// R-WF-22 写文件类工具（Write/Edit/Delete/ExecCommand）执行中保护：
+    /// 记录正在原子单元内执行的写类工具 task id 集合。round injection 的
+    /// CancelRunning 路径见到写类工具在执行中时，延迟到原子单元完成后才
+    /// 触发取消——避免中途打断造成半写文件。零类型变更：仅消费点逻辑。
+    active_write_like_tools: Arc<TokioMutex<HashSet<String>>>,
 }
 
 /// R-MR-11 会话级重复读取拦截的连续计数状态。
@@ -863,6 +868,7 @@ impl ToolPipeline {
             admission_rejected_tasks: Arc::new(TokioMutex::new(HashSet::new())),
             session_loaded_deferred_specs: Arc::new(TokioMutex::new(HashMap::new())),
             repeated_read_states: Arc::new(TokioMutex::new(HashMap::new())),
+            active_write_like_tools: Arc::new(TokioMutex::new(HashSet::new())),
         }
     }
 
@@ -1464,9 +1470,52 @@ impl ToolPipeline {
             .unwrap_or(RoundInjectionToolPreemption::None)
     }
 
-    fn should_interrupt_for_round_injection(&self, context: &ToolExecutionContext) -> bool {
-        self.pending_round_injection_tool_preemption(context)
-            .should_interrupt_after_current_atomic_unit()
+    /// R-WF-22: 写文件类工具（is_write_like_tool_name 命中）是否仍在原子
+    /// 单元内执行。为 true 时，round injection 的中断/取消必须延迟到该
+    /// 工具完整结束之后，避免中途打断造成半写文件。
+    async fn has_active_write_like_tools(&self) -> bool {
+        !self.active_write_like_tools.lock().await.is_empty()
+    }
+
+    async fn mark_write_like_tool_started(&self, tool_id: &str, tool_name: &str) {
+        if is_write_like_tool_name(tool_name) {
+            self.active_write_like_tools
+                .lock()
+                .await
+                .insert(tool_id.to_string());
+        }
+    }
+
+    async fn mark_write_like_tool_finished(&self, tool_id: &str) {
+        self.active_write_like_tools.lock().await.remove(tool_id);
+    }
+
+    /// R-WF-22 注入判定消费点：写类工具执行中时，把「应中断/应取消」整体
+    /// 返回「等当前原子单元完成」——后续剩余工具计划照常被跳过，但当前
+    /// 写操作本身不被打断。读类工具不受影响（保持原立即生效语义）。
+    async fn should_interrupt_for_round_injection(
+        &self,
+        context: &ToolExecutionContext,
+        tool_name: &str,
+    ) -> bool {
+        let pending = self.pending_round_injection_tool_preemption(context);
+        if !pending.should_interrupt_after_current_atomic_unit() {
+            return false;
+        }
+        if is_write_like_tool_name(tool_name) && self.has_active_write_like_tools().await {
+            // 写类工具正在原子单元内执行：注入延迟到该原子单元完成后。
+            // 语义上等价于 InterruptAfterCurrentAtomicUnit——等当前写完。
+            return false;
+        }
+        true
+    }
+
+    /// R-WF-22 round injection 打断路径（CancelRunningCooperatively/
+    /// Forcefully → cancel_tool）的写工具保护消费点：有写类工具执行中时
+    /// 返回 true，取消动作应延迟到原子单元完成后（由执行侧在工具结束后
+    /// 再补取消）；无写类工具在执行时照常立即取消。
+    async fn should_defer_cancel_for_active_write_like_tools(&self) -> bool {
+        self.has_active_write_like_tools().await
     }
 
     async fn build_steering_interrupted_results(
@@ -1550,6 +1599,15 @@ impl ToolPipeline {
 
             loop {
                 if interrupt.should_cancel_running_tools() {
+                    // R-WF-22: 写文件类工具执行中 → 延迟到原子单元完成后
+                    // 才允许取消（避免半写）。无写类工具执行时照常立即取消。
+                    if pipeline
+                        .should_defer_cancel_for_active_write_like_tools()
+                        .await
+                    {
+                        tokio::time::sleep(Duration::from_millis(25)).await;
+                        continue;
+                    }
                     let _ = pipeline.cancel_tools_for_round_injection(task_ids).await;
                     break;
                 }
@@ -1716,10 +1774,20 @@ impl ToolPipeline {
                 .first()
                 .and_then(|task_id| self.state_manager.get_task(task_id))
                 .map(|task| task.context);
-            if batch_context
-                .as_ref()
-                .is_some_and(|context| self.should_interrupt_for_round_injection(context))
+            let batch_tool_name = batch
+                .task_ids
+                .first()
+                .and_then(|task_id| self.state_manager.get_task(task_id))
+                .map(|task| task.effective_tool_name().to_string());
+            let batch_should_interrupt = match (batch_context.as_ref(), batch_tool_name.as_deref())
             {
+                (Some(context), Some(tool_name)) => {
+                    self.should_interrupt_for_round_injection(context, tool_name)
+                        .await
+                }
+                _ => false,
+            };
+            if batch_should_interrupt {
                 let remaining_task_ids = batch
                     .task_ids
                     .into_iter()
@@ -1794,10 +1862,17 @@ impl ToolPipeline {
         let mut task_iter = task_ids.into_iter().peekable();
         while let Some(task_id) = task_iter.next() {
             let task = self.state_manager.get_task(&task_id);
-            if task
-                .as_ref()
-                .is_some_and(|task| self.should_interrupt_for_round_injection(&task.context))
-            {
+            let should_interrupt = match task.as_ref() {
+                Some(task) => {
+                    self.should_interrupt_for_round_injection(
+                        &task.context,
+                        task.effective_tool_name(),
+                    )
+                    .await
+                }
+                None => false,
+            };
+            if should_interrupt {
                 let remaining_task_ids = std::iter::once(task_id).chain(task_iter);
                 results.extend(
                     self.build_steering_interrupted_results(remaining_task_ids)
@@ -2028,6 +2103,24 @@ impl ToolPipeline {
 
     /// Execute single tool
     async fn execute_single_tool(&self, tool_id: String) -> BitFunResult<ToolExecutionResult> {
+        // R-WF-22: 写文件类工具原子单元执行期保护——进入执行即登记，全部
+        // 返回路径（成功/失败/取消/拒绝/超时）必须配对清除。
+        let tool_name = self
+            .state_manager
+            .get_task(&tool_id)
+            .map(|task| task.effective_tool_name().to_string())
+            .unwrap_or_default();
+        self.mark_write_like_tool_started(&tool_id, &tool_name)
+            .await;
+        let write_guard_result = self.execute_single_tool_inner(tool_id.clone()).await;
+        self.mark_write_like_tool_finished(&tool_id).await;
+        write_guard_result
+    }
+
+    async fn execute_single_tool_inner(
+        &self,
+        tool_id: String,
+    ) -> BitFunResult<ToolExecutionResult> {
         let start_time = Instant::now();
 
         debug!("Starting tool execution: tool_id={}", tool_id);
@@ -2340,7 +2433,7 @@ impl ToolPipeline {
 
         // Register cancellation only after deterministic validation and registry lookup succeed.
         self.cancellation_tokens
-            .insert(tool_id.clone(), cancellation_token.clone());
+            .insert(tool_id.to_string(), cancellation_token.clone());
 
         if cancellation_token.is_cancelled() {
             self.state_manager
@@ -5021,6 +5114,89 @@ mod tests {
             .await
             .expect("cooperative cancel should still return a tool result");
 
+        assert_eq!(results.len(), 1);
+        assert!(results[0].result.is_error);
+        assert_eq!(results[0].result.result["category"], json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn write_like_tool_in_flight_defers_round_injection_cancel_until_complete() {
+        let pipeline = test_tool_pipeline();
+        // 写类工具用长时间执行模拟「原子单元执行中」。
+        register_static_test_tool(&pipeline, "Write", json!({ "ok": true }), 500).await;
+
+        let buffer = Arc::new(SessionRoundInjectionBuffer::default());
+        let buffer_for_injection = buffer.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            buffer_for_injection.push(
+                "session_1",
+                test_round_injection(
+                    RoundInjectionKind::UserSteering,
+                    RoundInjectionToolPreemption::CancelRunningCooperatively,
+                ),
+            );
+        });
+
+        let mut context = test_tool_execution_context();
+        context.steering_interrupt = Some(DialogRoundInjectionInterrupt::new(
+            "session_1".to_string(),
+            "turn_1".to_string(),
+            buffer,
+        ));
+        let options = ToolExecutionOptions {
+            allow_parallel: false,
+            ..Default::default()
+        };
+
+        let results = pipeline
+            .execute_tools(vec![test_tool_call("tool_1", "Write")], context, options)
+            .await
+            .expect("write tool should complete despite cooperative cancel");
+
+        // 写类工具原子单元必须完整结束（无强制取消/无半写）。
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].result.is_error);
+        assert_eq!(results[0].result.result["ok"], json!(true));
+        assert_ne!(results[0].result.result["category"], json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn read_like_tool_in_flight_is_cancelled_immediately_by_round_injection() {
+        let pipeline = test_tool_pipeline();
+        // 读类工具长执行：注入后应被立即取消（不被 write guard 保护）。
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 30_000).await;
+
+        let buffer = Arc::new(SessionRoundInjectionBuffer::default());
+        let buffer_for_injection = buffer.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            buffer_for_injection.push(
+                "session_1",
+                test_round_injection(
+                    RoundInjectionKind::UserSteering,
+                    RoundInjectionToolPreemption::CancelRunningCooperatively,
+                ),
+            );
+        });
+
+        let mut context = test_tool_execution_context();
+        context.steering_interrupt = Some(DialogRoundInjectionInterrupt::new(
+            "session_1".to_string(),
+            "turn_1".to_string(),
+            buffer,
+        ));
+        let options = ToolExecutionOptions {
+            allow_parallel: false,
+            ..Default::default()
+        };
+
+        let results = pipeline
+            .execute_tools(vec![test_tool_call("tool_1", "Read")], context, options)
+            .await
+            .expect("read tool cancellation should surface as a tool result");
+
+        // 读类工具不受写保护：注入立即生效（cancelled）。
         assert_eq!(results.len(), 1);
         assert!(results[0].result.is_error);
         assert_eq!(results[0].result.result["category"], json!("cancelled"));
