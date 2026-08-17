@@ -432,6 +432,18 @@ pub enum AgenticEvent {
         previous_preset_id: String,
         reason: String,
     },
+
+    /// A background ExecCommand child process belonging to a session changed
+    /// lifecycle status (running / exited / interrupted / killed / pruned).
+    ///
+    /// Emitted by the exec_command lifecycle bridge alongside the existing
+    /// frontend `BackgroundCommandLifecycle` backend event. Internal
+    /// subscribers (e.g. the background command settler) use it to settle a
+    /// session back to `Idle` once no Running background command remains.
+    BackgroundCommandLifecycleChanged {
+        session_id: String,
+        status: String,
+    },
 }
 
 /// Diagnostic evidence collected for an attempt that was superseded by an
@@ -688,7 +700,8 @@ impl AgenticEvent {
             | Self::UserSteeringInjected { session_id, .. }
             | Self::DeepReviewQueueStateChanged { session_id, .. }
             | Self::SessionModelAutoMigrated { session_id, .. }
-            | Self::SessionReasoningPresetAutoCleared { session_id, .. } => Some(session_id),
+            | Self::SessionReasoningPresetAutoCleared { session_id, .. }
+            | Self::BackgroundCommandLifecycleChanged { session_id, .. } => Some(session_id),
             Self::SubagentTurnCompleted { session_id, .. } => Some(session_id),
             Self::ReviewPropagationNeeded {
                 parent_session_id, ..
@@ -756,6 +769,8 @@ impl AgenticEvent {
             | Self::UserSteeringInjected { .. }
             | Self::ContextCompressionCompleted { .. } => AgenticEventPriority::Normal,
             Self::SubagentTurnCompleted { .. } => AgenticEventPriority::Normal,
+
+            Self::BackgroundCommandLifecycleChanged { .. } => AgenticEventPriority::Normal,
 
             Self::ToolEvent { tool_event, .. } => tool_event.default_priority(),
 

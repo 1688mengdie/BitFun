@@ -3,6 +3,7 @@
 //! Provides session lifecycle management and context management.
 
 pub mod compression;
+mod background_command_settler;
 pub mod context_store;
 mod context_usage;
 pub mod evidence_ledger;
@@ -16,6 +17,7 @@ pub mod token_anchor;
 pub(crate) mod transcript_render;
 pub mod turn_skill_agent_snapshot_store;
 
+pub use background_command_settler::*;
 pub use compression::*;
 pub use context_store::*;
 pub use context_usage::*;

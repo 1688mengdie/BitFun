@@ -333,6 +333,18 @@ pub struct SessionManager {
     /// between model rounds, and it must disappear when the owning turn ends.
     active_turn_permission_modes: Arc<DashMap<String, ActiveTurnPermissionMode>>,
 
+    /// session_id -> turn_id that must stay `Processing` after the turn's
+    /// persistence path would normally settle it to `Idle`, because a
+    /// background ExecCommand child process is still running for this session.
+    ///
+    /// Synchronous, in-memory only, never persisted. It mirrors the
+    /// `active_turn_permission_modes` pattern so RAII `Drop` guards can read it
+    /// without awaiting. Entries are installed by the turn-completion path when
+    /// it detects a Running background command and cleared by the settle side
+    /// (background command lifecycle subscriber / watchdog) when the command
+    /// exits.
+    keep_processing_turns: Arc<DashMap<String, String>>,
+
     /// Process-local durability classification owned by the Session lifecycle.
     /// Entries are installed before a transient Session becomes visible and are
     /// removed with that Session; they are never serialized into public config.
@@ -2551,6 +2563,7 @@ impl SessionManager {
         let manager = Self {
             sessions: Arc::new(DashMap::new()),
             active_turn_permission_modes: Arc::new(DashMap::new()),
+            keep_processing_turns: Arc::new(DashMap::new()),
             transient_session_ids: Arc::new(DashMap::new()),
             active_session_capacity: Arc::new(Semaphore::new(config.max_active_sessions)),
             active_session_permits: Arc::new(DashMap::new()),
@@ -2926,6 +2939,7 @@ impl SessionManager {
             let manager = Self {
                 sessions,
                 active_turn_permission_modes,
+                keep_processing_turns: Arc::new(DashMap::new()),
                 transient_session_ids,
                 active_session_capacity,
                 active_session_permits,
@@ -4973,6 +4987,45 @@ impl SessionManager {
         }
     }
 
+    /// Returns the turn_id that must stay `Processing` after turn persistence
+    /// because a background command is still running for this session.
+    ///
+    /// Synchronous (DashMap, no lock held across await) so RAII guards can
+    /// consult it from `Drop::drop`.
+    pub fn keep_processing_turn(&self, session_id: &str) -> Option<String> {
+        self.keep_processing_turns
+            .get(session_id)
+            .map(|entry| entry.value().clone())
+    }
+
+    /// Records that the given turn must stay `Processing` after turn
+    /// persistence because a background command is still running.
+    pub fn set_keep_processing_turn(&self, session_id: &str, turn_id: &str) {
+        self.keep_processing_turns
+            .insert(session_id.to_string(), turn_id.to_string());
+    }
+
+    /// Clears the keep-processing marker for a session (unconditionally).
+    ///
+    /// Used by the settle side (background command lifecycle subscriber /
+    /// watchdog) once no Running background command remains.
+    pub fn clear_keep_processing_turn(&self, session_id: &str) {
+        self.keep_processing_turns.remove(session_id);
+    }
+
+    /// Clears the keep-processing marker only when it still belongs to the
+    /// expected turn. Used by RAII guards so a stale guard never clears a
+    /// marker installed by a newer turn.
+    pub fn clear_keep_processing_turn_if(&self, session_id: &str, turn_id: &str) -> bool {
+        match self.keep_processing_turns.entry(session_id.to_string()) {
+            dashmap::mapref::entry::Entry::Occupied(entry) if entry.get() == turn_id => {
+                entry.remove();
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Rebind where a session executes (in-memory + persistence).
     ///
     /// Only the workspace roots and the resolved execution target move; session
@@ -5689,6 +5742,7 @@ impl SessionManager {
         }
         self.release_active_session_reservation(session_id);
         self.active_turn_permission_modes.remove(session_id);
+        self.keep_processing_turns.remove(session_id);
         clear_session_runtime_stores(
             session_id,
             self.context_store.as_ref(),
@@ -5732,6 +5786,7 @@ impl SessionManager {
         }
 
         self.active_turn_permission_modes.remove(session_id);
+        self.keep_processing_turns.remove(session_id);
         clear_session_runtime_stores(
             session_id,
             self.context_store.as_ref(),
@@ -6040,6 +6095,7 @@ impl SessionManager {
         self.sessions.remove(session_id);
         self.transient_session_ids.remove(session_id);
         self.release_active_session_reservation(session_id);
+        self.keep_processing_turns.remove(session_id);
         clear_session_runtime_stores(
             session_id,
             self.context_store.as_ref(),
@@ -10647,6 +10703,7 @@ impl SessionManager {
             let manager = Self {
                 sessions: sessions.clone(),
                 active_turn_permission_modes: active_turn_permission_modes.clone(),
+                keep_processing_turns: Arc::new(DashMap::new()),
                 transient_session_ids: transient_session_ids.clone(),
                 active_session_capacity: active_session_capacity.clone(),
                 active_session_permits: active_session_permits.clone(),
@@ -10796,6 +10853,7 @@ impl SessionManager {
         Self {
             sessions: self.sessions.clone(),
             active_turn_permission_modes: self.active_turn_permission_modes.clone(),
+            keep_processing_turns: self.keep_processing_turns.clone(),
             transient_session_ids: self.transient_session_ids.clone(),
             active_session_capacity: self.active_session_capacity.clone(),
             active_session_permits: self.active_session_permits.clone(),
@@ -15228,6 +15286,146 @@ mod tests {
             .get_session(&session_id)
             .expect("session should remain available");
         assert!(updated);
+        assert!(matches!(session.state, SessionState::Idle));
+    }
+
+    #[tokio::test]
+    async fn keep_processing_turn_marker_lifecycle() {
+        let manager = in_memory_test_manager();
+        let session_id = "session-kp-1".to_string();
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+
+        manager.set_keep_processing_turn(&session_id, "turn-1");
+        assert_eq!(
+            manager.keep_processing_turn(&session_id),
+            Some("turn-1".to_string())
+        );
+
+        // Conditional clear only removes the marker when it still belongs to
+        // the expected turn (stale guard protection).
+        assert!(!manager.clear_keep_processing_turn_if(&session_id, "turn-2"));
+        assert_eq!(
+            manager.keep_processing_turn(&session_id),
+            Some("turn-1".to_string())
+        );
+        assert!(manager.clear_keep_processing_turn_if(&session_id, "turn-1"));
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+
+        manager.set_keep_processing_turn(&session_id, "turn-3");
+        manager.clear_keep_processing_turn(&session_id);
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+    }
+
+    #[tokio::test]
+    async fn keep_processing_turn_preserves_processing_across_guard_reset() {
+        // R-WF-25 assertion 3 (guard interaction): when the keep-processing
+        // marker is installed for the current turn, the RAII-style reset must
+        // NOT transition the session back to Idle -- otherwise the guard drop
+        // would undo the "still Processing while background command alive"
+        // state the turn-completion path just installed.
+        let manager = in_memory_test_manager();
+        let session_id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            session_id.clone(),
+            "Active session".to_string(),
+            "agent".to_string(),
+            SessionConfig::default(),
+        );
+        session.state = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+        manager.sessions.insert(session_id.clone(), session);
+        manager.set_keep_processing_turn(&session_id, "turn-1");
+
+        // This is exactly what SessionExecutionGuard::drop would call when the
+        // marker matches: it must skip the reset (guarded by the marker).
+        let keep = manager.keep_processing_turn(&session_id) == Some("turn-1".to_string());
+        if !keep {
+            manager.reset_session_state_if_processing(&session_id, "turn-1");
+        }
+
+        let session = manager
+            .get_session(&session_id)
+            .expect("session should remain available");
+        assert!(matches!(
+            session.state,
+            SessionState::Processing {
+                ref current_turn_id,
+                ..
+            } if current_turn_id == "turn-1"
+        ));
+        // The marker is left intact for the settle side (subscriber/watchdog).
+        assert_eq!(
+            manager.keep_processing_turn(&session_id),
+            Some("turn-1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_processing_turn_cleared_when_settling_to_idle() {
+        // R-WF-25 assertion 2 (finish path): the settle side transitions the
+        // session back to Idle AND clears the marker atomically.
+        let manager = in_memory_test_manager();
+        let session_id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            session_id.clone(),
+            "Active session".to_string(),
+            "agent".to_string(),
+            SessionConfig::default(),
+        );
+        session.state = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::ToolCalling,
+        };
+        manager.sessions.insert(session_id.clone(), session);
+        manager.set_keep_processing_turn(&session_id, "turn-1");
+
+        let turn_id = manager
+            .keep_processing_turn(&session_id)
+            .expect("marker should be installed");
+        let updated = manager
+            .update_session_state_for_turn_if_processing(&session_id, &turn_id, SessionState::Idle)
+            .await
+            .expect("conditional state update should not fail");
+        assert!(updated);
+        manager.clear_keep_processing_turn(&session_id);
+
+        let session = manager
+            .get_session(&session_id)
+            .expect("session should remain available");
+        assert!(matches!(session.state, SessionState::Idle));
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+    }
+
+    #[tokio::test]
+    async fn no_background_command_keeps_immediate_idle() {
+        // R-WF-25 assertion 5 (zero regression): with no keep marker installed
+        // the normal completion path still settles to Idle immediately.
+        let manager = in_memory_test_manager();
+        let session_id = Uuid::new_v4().to_string();
+        let mut session = Session::new_with_id(
+            session_id.clone(),
+            "Active session".to_string(),
+            "agent".to_string(),
+            SessionConfig::default(),
+        );
+        session.state = SessionState::Processing {
+            current_turn_id: "turn-1".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+        manager.sessions.insert(session_id.clone(), session);
+
+        assert_eq!(manager.keep_processing_turn(&session_id), None);
+        let updated = manager
+            .update_session_state_for_turn_if_processing(&session_id, "turn-1", SessionState::Idle)
+            .await
+            .expect("conditional state update should not fail");
+        assert!(updated);
+
+        let session = manager
+            .get_session(&session_id)
+            .expect("session should remain available");
         assert!(matches!(session.state, SessionState::Idle));
     }
 
