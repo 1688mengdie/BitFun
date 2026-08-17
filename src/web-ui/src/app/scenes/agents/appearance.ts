@@ -10,5 +10,6 @@ export const agentsAppearanceDescriptor: AppearanceSurfaceDescriptor = {
     { id: 'filters' },
     { id: 'detailSection' },
     { id: 'legionsGrid' },
+    { id: 'teamsGrid' },
   ],
 };

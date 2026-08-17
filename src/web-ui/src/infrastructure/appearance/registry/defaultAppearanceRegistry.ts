@@ -225,6 +225,12 @@ import { miniAppCardAppearanceDescriptor } from '@/app/scenes/miniapps/component
 import { agentCardAppearanceDescriptor } from '@/app/scenes/agents/components/AgentCard.appearance';
 import { coreAgentCardAppearanceDescriptor } from '@/app/scenes/agents/components/CoreAgentCard.appearance';
 import { agentCapabilityTooltipAppearanceDescriptor } from '@/app/scenes/agents/components/AgentCapabilityTooltip.appearance';
+import { agentTeamCardAppearanceDescriptor } from '@/app/scenes/agents/components/AgentTeamCard.appearance';
+import { agentTeamComposerAppearanceDescriptor } from '@/app/scenes/agents/components/AgentTeamComposer.appearance';
+import { agentTeamTabBarAppearanceDescriptor } from '@/app/scenes/agents/components/AgentTeamTabBar.appearance';
+import { agentGalleryAppearanceDescriptor } from '@/app/scenes/agents/components/AgentGallery.appearance';
+import { capabilityBarAppearanceDescriptor } from '@/app/scenes/agents/components/CapabilityBar.appearance';
+import { reviewTeamPageAppearanceDescriptor } from '@/app/scenes/agents/components/ReviewTeamPage.appearance';
 import { gitNavAppearanceDescriptor } from '@/app/scenes/git/GitNav.appearance';
 import { fileViewerNavAppearanceDescriptor } from '@/app/scenes/file-viewer/FileViewerNav.appearance';
 import { assistantQuickInputAppearanceDescriptor } from '@/app/scenes/profile/views/AssistantQuickInput.appearance';
@@ -408,6 +414,12 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(agentCardAppearanceDescriptor)
     .registerComponent(coreAgentCardAppearanceDescriptor)
     .registerComponent(agentCapabilityTooltipAppearanceDescriptor)
+    .registerComponent(agentTeamCardAppearanceDescriptor)
+    .registerComponent(agentTeamComposerAppearanceDescriptor)
+    .registerComponent(agentTeamTabBarAppearanceDescriptor)
+    .registerComponent(agentGalleryAppearanceDescriptor)
+    .registerComponent(capabilityBarAppearanceDescriptor)
+    .registerComponent(reviewTeamPageAppearanceDescriptor)
     .registerComponent(gitNavAppearanceDescriptor)
     .registerComponent(fileViewerNavAppearanceDescriptor)
     .registerComponent(assistantQuickInputAppearanceDescriptor)

@@ -16,7 +16,8 @@
   },
   "nav": {
     "coreAgents": "核心智能體",
-    "agents": "Agent"
+    "agents": "Agent",
+    "teams": "Agent Team"
   },
   "filters": {
     "source": "來源",
@@ -327,6 +328,112 @@
         "只檢查使用者指定的變更和檔案。",
         "提供有具體依據的問題、修正建議或後續步驟。"
       ]
+    },
+    "default": {
+      "name": "程式碼審核團隊",
+      "summary": "專業深度程式碼審核團隊，內置業務邏輯、性能、安全、架構與質檢固定角色。",
+      "members": "{{count}} 名成員",
+      "tags": [
+        "質量",
+        "性能",
+        "架構"
+      ]
+    },
+    "detail": {
+      "open": "開啟團隊",
+      "back": "返回專業智能體",
+      "openSettings": "審核設定",
+      "loading": "正在載入程式碼審核團隊...",
+      "title": "程式碼審核團隊",
+      "subtitle": "設定深度審核及 /DeepReview 使用的程式碼審核團隊。每個審核員預設使用快速模型，也可以單獨修改。",
+      "summaryTitle": "團隊概覽",
+      "summaryDescription": "多個審核員會並行覆蓋目標範圍，最後由質檢員彙總為最終結論。",
+      "membersTitle": "團隊成員",
+      "membersDescription": "選擇成員可查看職責、模型和策略覆蓋。固定角色會始終保留在團隊中。",
+      "membersCount": "{{count}} 名成員",
+      "lockedCount": "{{count}} 個固定角色",
+      "extraCount": "{{count}} 個額外 Sub-Agent",
+      "localOnly": "程式碼審核",
+      "localOnlyDescription": "在 BitFun 內以唯讀 Sub-Agent 運行，並把結果回傳到目前審核線程。",
+      "parallelLabel": "並行審核",
+      "parallelDescription": "邏輯、性能、安全、架構和額外審核員會並行工作，再由質檢員驗證結果。",
+      "warningLabel": "審核更重",
+      "warning": "建議用於風險更高的改動；它可能比普通審核耗時更久並消耗更多 token。",
+      "qualityGate": "質檢覆核",
+      "executionPolicyTitle": "審核執行策略",
+      "executionPolicyDescription": "控制審核深度、超時，以及大範圍目標如何拆分給並行唯讀審核員。",
+      "policySummaryTitle": "目前策略",
+      "policySummaryIntro": "這裡展示的即時策略來自審核設定，團隊策略變更後會同步更新。",
+      "policySummaryEyebrow": "已設定行為",
+      "policySummaryDescription": "{{strategy}}審核會為每位審核員使用 {{reviewerTimeout}} 超時，為質檢員使用 {{judgeTimeout}} 超時；每類角色在 {{splitThreshold}} 後拆分，並將同角色並發限制為 {{maxSameRoleInstances}}。",
+      "policySummaryAction": "開啟審核設定以編輯目前策略",
+      "policyMetricsLabel": "目前策略值",
+      "policyStrategyLabel": "策略",
+      "reviewerTimeout": "審核員超時",
+      "reviewerTimeoutDescription": "單個審核員的超時時間，單位為秒。設為 0 表示不設置硬性截止時間。",
+      "judgeTimeout": "質檢員超時",
+      "judgeTimeoutDescription": "質檢覆核的超時時間，單位為秒。設為 0 表示一直等待質檢員完成。",
+      "fileSplitThreshold": "檔案拆分閾值",
+      "fileSplitThresholdDescription": "目標檔案數超過該值時，每類審核員可拆分為多個實例。設為 0 表示關閉拆分。",
+      "maxSameRoleInstances": "同角色最大實例數",
+      "maxSameRoleInstancesDescription": "啟用檔案拆分時，每個審核角色最多可並行運行的實例數。",
+      "seconds": "秒",
+      "secondsValue": "{{seconds}} 秒",
+      "noTimeout": "不限制",
+      "fileCountValue": "{{count}} 個檔案",
+      "splitDisabled": "不拆分",
+      "instancesValue": "最多 {{count}} 個",
+      "memberDetailTitle": "成員詳情",
+      "memberDetailDescription": "團隊運行時，每個審核員都會保留自己的獨立上下文。",
+      "responsibilities": "職責範圍",
+      "model": "使用模型",
+      "modelDescription": "只修改目前審核員使用的模型。Primary/Fast 別名會跟隨目前策略，具體自定義模型在可用時會保持不變。",
+      "remove": "移除成員",
+      "removeDescription": "將這個額外 Sub-Agent 從程式碼審核團隊中移除。固定角色不可刪除。",
+      "addTitle": "新增額外 Sub-Agent",
+      "addDescription": "把其他唯讀 Sub-Agent 加入深度程式碼審核團隊，固定角色會始終保留。",
+      "addLabel": "候選成員",
+      "addHint": "只有唯讀 Sub-Agent 可以加入初始審核流程；每個額外審核員的結果仍會由質檢員統一覆核。",
+      "addPlaceholder": "選擇一個 Sub-Agent",
+      "addButton": "加入團隊",
+      "emptyCandidates": "目前沒有可新增的額外唯讀 Sub-Agent。",
+      "memberTypes": {
+        "locked": "固定",
+        "core": "核心角色",
+        "extra": "額外 Sub-Agent",
+        "builtin": "內置",
+        "user": "用戶級",
+        "project": "項目級"
+      },
+      "messages": {
+        "modelUpdated": "已更新 {{name}} 的模型設定。",
+        "memberAdded": "已將額外審核員加入團隊。",
+        "memberRemoved": "已將額外審核員移出團隊。",
+        "saveFailed": "儲存程式碼審核團隊設定失敗。"
+      }
+    },
+    "strategy": {
+      "teamTitle": "審核策略",
+      "teamDescription": "選擇整個程式碼審核團隊的預設審核深度。單個審核員可以在成員詳情中單獨覆蓋。",
+      "memberTitle": "審核員策略",
+      "memberDescription": "只有當某個角色需要不同於團隊預設值的審核深度時，才建議單獨覆蓋。",
+      "impact": "大約 {{token}} token 消耗，{{runtime}} 耗時。",
+      "inheritLabel": "繼承團隊（{{level}}）",
+      "inheritSummary": "該審核員使用團隊級審核策略。",
+      "modelFallbackShort": "已回退",
+      "modelFallbackDescription": "已設定的模型 {{configuredModel}} 目前不可用，因此該審核員會使用 {{model}}。",
+      "quick": {
+        "label": "快速",
+        "summary": "面向指定 diff 或範圍的快速篩查，只保留高置信問題。"
+      },
+      "normal": {
+        "label": "正常",
+        "summary": "適合日常代碼審核的均衡深度，兼顧覆蓋面和證據質量。"
+      },
+      "deep": {
+        "label": "深度",
+        "summary": "適合高風險、大範圍或發布前變更的多輪深度審核。"
+      }
     }
   },
   "agentDescriptions": {
@@ -382,5 +489,110 @@
       "l6": "L6",
       "l7": "L7"
     }
+  },
+  "teamsZone": {
+    "title": "Agent Teams",
+    "subtitle": "查看 Agent Team 配置、能力覆蓋和成員結構，並快速進入編輯器。",
+    "create": "創建 Agent Team",
+    "newTeamName": "新 Agent Team",
+    "empty": {
+      "noTeams": "當前還沒有團隊",
+      "noMatch": "沒有匹配的團隊"
+    }
+  },
+  "composer": {
+    "emptyTeam": "請選擇或新建一個 Agent Team",
+    "emptyMembers": "暫無成員，從左側 Agent 圖鑑添加",
+    "memberCount": "{{count}} 名成員",
+    "viewMode": {
+      "formation": "陣型",
+      "list": "列表"
+    },
+    "role": {
+      "leader": "主導",
+      "member": "執行",
+      "reviewer": "審查"
+    },
+    "strategy": {
+      "collaborative": "協作執行",
+      "sequential": "順序執行",
+      "free": "自由執行"
+    },
+    "columns": {
+      "agent": "Agent",
+      "role": "角色",
+      "tools": "工具",
+      "model": "模型"
+    },
+    "remove": "移出",
+    "rename": "點擊編輯"
+  },
+  "gallery": {
+    "title": "Agent 圖鑑",
+    "search": "搜索 Agent...",
+    "filter": {
+      "joined": "已加入",
+      "all": "全部"
+    },
+    "empty": "沒有匹配的 Agent",
+    "footer": "{{shown}} / {{total}} · {{enabled}} 已啟用",
+    "removeFromTeam": "移出團隊",
+    "addToTeam": "加入團隊",
+    "joinedTeam": "已加入團隊",
+    "addCurrentTeam": "加入當前團隊",
+    "toolCount": "{{count}} 個工具",
+    "modelLabel": "模型"
+  },
+  "tabbar": {
+    "newTeam": "新建 Agent Team",
+    "fromTemplate": "從模板創建",
+    "templateTitle": "選擇模板",
+    "blankCreate": "空白創建",
+    "cancel": "取消",
+    "create": "創建",
+    "form": {
+      "namePlaceholder": "Agent Team 名稱",
+      "descriptionPlaceholder": "描述（可選）"
+    }
+  },
+  "home": {
+    "filterAll": "全部",
+    "filterAgent": "獨立 Agent",
+    "filterTeam": "工作團隊",
+    "search": "搜索名稱、描述...",
+    "solo": "獨立",
+    "team": "團隊",
+    "enabled": "已啟用",
+    "disabled": "已禁用",
+    "members": "{{count}} 名成員",
+    "createTeam": "創建 Agent Team",
+    "quickCreate": "快速創建",
+    "globalCap": "全局能力",
+    "backToOverview": "返回總覽",
+    "strategyCollab": "協作",
+    "strategySeq": "順序",
+    "strategyFree": "自由"
+  },
+  "teamCard": {
+    "badges": {
+      "example": "示例",
+      "sharedContext": "共享上下文"
+    },
+    "actions": {
+      "expand": "展開詳情"
+    },
+    "sections": {
+      "members": "成員",
+      "capabilities": "能力"
+    }
+  },
+  "formation": {
+    "empty": "從左側選擇 Agent 加入團隊",
+    "emptySub": "點擊 Agent 卡片上的 + 按鈕"
+  },
+  "capability": {
+    "warning": "{{cats}} 能力缺失",
+    "coverage": "能力覆蓋",
+    "none": "無覆蓋"
   }
 }

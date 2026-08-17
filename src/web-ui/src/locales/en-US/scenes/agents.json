@@ -16,7 +16,8 @@
   },
   "nav": {
     "coreAgents": "Core Agents",
-    "agents": "Agent"
+    "agents": "Agent",
+    "teams": "Agent Team"
   },
   "filters": {
     "source": "Source",
@@ -327,6 +328,112 @@
         "Check only the requested changes and selected files.",
         "Return concrete findings with clear fixes or follow-up steps."
       ]
+    },
+    "default": {
+      "name": "Code Review Team",
+      "summary": "A deep-review code team with locked logic, performance, security, architecture, and quality-gate roles.",
+      "members": "{{count}} members",
+      "tags": [
+        "Quality",
+        "Performance",
+        "Architecture"
+      ]
+    },
+    "detail": {
+      "open": "Open team",
+      "back": "Back to Agents",
+      "openSettings": "Review settings",
+      "loading": "Loading code review team...",
+      "title": "Code Review Team",
+      "subtitle": "Configure the code review team used by Deep Review and /DeepReview. Every reviewer starts on the Fast model unless you change it.",
+      "summaryTitle": "Team Overview",
+      "summaryDescription": "Parallel reviewers cover the requested scope, then the quality gate consolidates the final result.",
+      "membersTitle": "Team Members",
+      "membersDescription": "Select a member to review its role, responsibilities, model, and strategy override. Locked roles always stay in the team.",
+      "membersCount": "{{count}} members",
+      "lockedCount": "{{count}} locked roles",
+      "extraCount": "{{count}} extra Sub-Agents",
+      "localOnly": "Code review",
+      "localOnlyDescription": "Runs inside BitFun as read-only Sub-Agents and reports back into this review thread.",
+      "parallelLabel": "Parallel reviewers",
+      "parallelDescription": "Logic, performance, security, architecture, and extra reviewers work side by side before the judge validates findings.",
+      "warningLabel": "Heavier review",
+      "warning": "Use for higher-risk changes; it can take longer and use more tokens than a standard review.",
+      "qualityGate": "Quality gate",
+      "executionPolicyTitle": "Execution Policy",
+      "executionPolicyDescription": "Control review depth, timeouts, and how broad scopes split across parallel read-only reviewers.",
+      "policySummaryTitle": "Current Policy",
+      "policySummaryIntro": "This live snapshot comes from Review settings and updates when the team policy changes.",
+      "policySummaryEyebrow": "Configured behavior",
+      "policySummaryDescription": "{{strategy}} review uses {{reviewerTimeout}} per reviewer, gives the judge {{judgeTimeout}}, splits each role after {{splitThreshold}}, and caps same-role parallelism at {{maxSameRoleInstances}}.",
+      "policySummaryAction": "Open Review settings to edit the current policy",
+      "policyMetricsLabel": "Current policy values",
+      "policyStrategyLabel": "Strategy",
+      "reviewerTimeout": "Reviewer timeout",
+      "reviewerTimeoutDescription": "Per-reviewer timeout in seconds. Set 0 to let reviewers run without a hard deadline.",
+      "judgeTimeout": "Judge timeout",
+      "judgeTimeoutDescription": "Quality-gate timeout in seconds. Set 0 to wait as long as needed for the judge.",
+      "fileSplitThreshold": "File split threshold",
+      "fileSplitThresholdDescription": "When target files exceed this value, each reviewer role can split into multiple instances. Set 0 to disable splitting.",
+      "maxSameRoleInstances": "Max same-role instances",
+      "maxSameRoleInstancesDescription": "Maximum parallel instances per reviewer role when file splitting is active.",
+      "seconds": "s",
+      "secondsValue": "{{seconds}}s",
+      "noTimeout": "No cap",
+      "fileCountValue": "{{count}} files",
+      "splitDisabled": "No split",
+      "instancesValue": "{{count}} max",
+      "memberDetailTitle": "Member Detail",
+      "memberDetailDescription": "Each reviewer keeps its own context while the team run is active.",
+      "responsibilities": "Responsibilities",
+      "model": "Assigned model",
+      "modelDescription": "Change the model for this reviewer only. Deep review uses Fast by default, and your update applies immediately.",
+      "remove": "Remove member",
+      "removeDescription": "Remove this extra Sub-Agent from the code review team. Core roles cannot be removed.",
+      "addTitle": "Add Extra Sub-Agent",
+      "addDescription": "Bring another read-only Sub-Agent into the deep code review team. The core roles always remain locked in place.",
+      "addLabel": "Candidate",
+      "addHint": "Only read-only Sub-Agents can join the initial review pass; the quality inspector checks every extra reviewer before final reporting.",
+      "addPlaceholder": "Select a Sub-Agent",
+      "addButton": "Add to team",
+      "emptyCandidates": "No additional read-only Sub-Agents are available to add right now.",
+      "memberTypes": {
+        "locked": "Locked",
+        "core": "Core role",
+        "extra": "Extra Sub-Agent",
+        "builtin": "Built-in",
+        "user": "User",
+        "project": "Project"
+      },
+      "messages": {
+        "modelUpdated": "Updated {{name}} model.",
+        "memberAdded": "Added the extra reviewer to the team.",
+        "memberRemoved": "Removed the extra reviewer from the team.",
+        "saveFailed": "Failed to save the code review team configuration."
+      }
+    },
+    "strategy": {
+      "teamTitle": "Review strategy",
+      "teamDescription": "Choose the default depth for the whole code review team. Individual reviewers can override it in their member details.",
+      "memberTitle": "Reviewer strategy",
+      "memberDescription": "Override this reviewer only when a role needs a different depth from the team default.",
+      "impact": "About {{token}} token usage and {{runtime}} runtime.",
+      "inheritLabel": "Inherit team ({{level}})",
+      "inheritSummary": "Use the team-wide review strategy for this reviewer.",
+      "modelFallbackShort": "fallback",
+      "modelFallbackDescription": "The configured model {{configuredModel}} is no longer available, so this reviewer will use {{model}}.",
+      "quick": {
+        "label": "Quick",
+        "summary": "Fast screening for high-confidence issues in the requested diff or scope."
+      },
+      "normal": {
+        "label": "Normal",
+        "summary": "Balanced review depth for day-to-day code review with practical evidence."
+      },
+      "deep": {
+        "label": "Deep",
+        "summary": "Thorough multi-pass review for risky, broad, or release-sensitive changes."
+      }
     }
   },
   "agentDescriptions": {
@@ -382,5 +489,110 @@
       "l6": "L6",
       "l7": "L7"
     }
+  },
+  "teamsZone": {
+    "title": "Agent Teams",
+    "subtitle": "Review agent team setups, capability coverage, and member structure, then jump into the editor.",
+    "create": "Create Agent Team",
+    "newTeamName": "New Agent Team",
+    "empty": {
+      "noTeams": "No teams have been created yet",
+      "noMatch": "No matching teams"
+    }
+  },
+  "composer": {
+    "emptyTeam": "Select or create an agent team",
+    "emptyMembers": "No members yet. Add them from the gallery on the left.",
+    "memberCount": "{{count}} members",
+    "viewMode": {
+      "formation": "Formation",
+      "list": "List"
+    },
+    "role": {
+      "leader": "Leader",
+      "member": "Member",
+      "reviewer": "Reviewer"
+    },
+    "strategy": {
+      "collaborative": "Collaborative",
+      "sequential": "Sequential",
+      "free": "Free"
+    },
+    "columns": {
+      "agent": "Agent",
+      "role": "Role",
+      "tools": "Tools",
+      "model": "Model"
+    },
+    "remove": "Remove",
+    "rename": "Click to rename"
+  },
+  "gallery": {
+    "title": "Agent Gallery",
+    "search": "Search agents...",
+    "filter": {
+      "joined": "Joined",
+      "all": "All"
+    },
+    "empty": "No matching agents",
+    "footer": "{{shown}} / {{total}} · {{enabled}} enabled",
+    "removeFromTeam": "Remove from team",
+    "addToTeam": "Add to team",
+    "joinedTeam": "Already in team",
+    "addCurrentTeam": "Add to current team",
+    "toolCount": "{{count}} tools",
+    "modelLabel": "Model"
+  },
+  "tabbar": {
+    "newTeam": "New Agent Team",
+    "fromTemplate": "From Template",
+    "templateTitle": "Choose Template",
+    "blankCreate": "Blank",
+    "cancel": "Cancel",
+    "create": "Create",
+    "form": {
+      "namePlaceholder": "Agent Team name",
+      "descriptionPlaceholder": "Description (optional)"
+    }
+  },
+  "home": {
+    "filterAll": "All",
+    "filterAgent": "Solo Agents",
+    "filterTeam": "Teams",
+    "search": "Search by name or description...",
+    "solo": "Solo",
+    "team": "Team",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "members": "{{count}} members",
+    "createTeam": "Create Agent Team",
+    "quickCreate": "Quick Create",
+    "globalCap": "Global Capabilities",
+    "backToOverview": "Back to Overview",
+    "strategyCollab": "Collaborative",
+    "strategySeq": "Sequential",
+    "strategyFree": "Free"
+  },
+  "teamCard": {
+    "badges": {
+      "example": "Example",
+      "sharedContext": "Shared context"
+    },
+    "actions": {
+      "expand": "Expand details"
+    },
+    "sections": {
+      "members": "Members",
+      "capabilities": "Capabilities"
+    }
+  },
+  "formation": {
+    "empty": "Select agents from the left panel",
+    "emptySub": "Click the + button on an agent card"
+  },
+  "capability": {
+    "warning": "Missing capabilities: {{cats}}",
+    "coverage": "Coverage",
+    "none": "None"
   }
 }
