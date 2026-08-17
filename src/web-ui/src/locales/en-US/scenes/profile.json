@@ -139,7 +139,8 @@
         "zoneTitle": "Workflow members",
         "zoneSubtitle": "Claws deployed as workflow members",
         "emptyTitle": "No workflow members yet",
-        "emptySubtitle": "Deploy a workflow and its member Claws will appear here"
+        "emptySubtitle": "Deploy a workflow and its member Claws will appear here",
+        "create": "New workflow"
       }
     },
 

@@ -648,20 +648,6 @@ const AIModelConfig: React.FC = () => {
       ));
   }, [preferredProviderRegion, providerTemplates, t]);
 
-  const normalizedProviderQuery = providerQuery.trim().toLowerCase();
-  const matchedProviders = useMemo(() => (
-    normalizedProviderQuery
-      ? providers.filter(provider => provider.searchText.includes(normalizedProviderQuery))
-      : providers
-  ), [normalizedProviderQuery, providers]);
-  // Searching always reveals every hit; only the resting list stays short.
-  const canToggleProviderList = !normalizedProviderQuery
-    && matchedProviders.length > COLLAPSED_PROVIDER_COUNT;
-  const isProviderListCollapsed = canToggleProviderList && !showAllProviders;
-  const visibleProviders = isProviderListCollapsed
-    ? matchedProviders.slice(0, COLLAPSED_PROVIDER_COUNT)
-    : matchedProviders;
-
   // Current template with translations (must be at top level, before any conditional returns)
   const currentTemplate = useMemo(() => {
     if (!selectedProviderId) return null;
@@ -1917,6 +1903,21 @@ const AIModelConfig: React.FC = () => {
 
   
   if (creationMode === 'selection') {
+    // Provider search/filter state is only consumed by this selection branch,
+    // so the derived values stay scoped to it instead of recomputing on every
+    // main-list render.
+    const normalizedProviderQuery = providerQuery.trim().toLowerCase();
+    const matchedProviders = normalizedProviderQuery
+      ? providers.filter(provider => provider.searchText.includes(normalizedProviderQuery))
+      : providers;
+    // Searching always reveals every hit; only the resting list stays short.
+    const canToggleProviderList = !normalizedProviderQuery
+      && matchedProviders.length > COLLAPSED_PROVIDER_COUNT;
+    const isProviderListCollapsed = canToggleProviderList && !showAllProviders;
+    const visibleProviders = isProviderListCollapsed
+      ? matchedProviders.slice(0, COLLAPSED_PROVIDER_COUNT)
+      : matchedProviders;
+
     return (
       <ConfigPageLayout className="bitfun-ai-model-config" data-bf-component="ai-model-config" data-bf-part="root" data-bf-view="selection">
         <ConfigPageHeader

@@ -139,7 +139,8 @@
         "zoneTitle": "工作流成员",
         "zoneSubtitle": "部署到工作流中的成员 Claw",
         "emptyTitle": "暂无工作流成员",
-        "emptySubtitle": "部署工作流后，成员 Claw 会显示在这里"
+        "emptySubtitle": "部署工作流后，成员 Claw 会显示在这里",
+        "create": "新建工作流"
       }
     },
 

@@ -92,18 +92,9 @@ const SettingsScene: React.FC = () => {
   const tabTransitionTarget = useSettingsStore(s => s.tabTransitionTarget);
   const tabTransitionMotion = useSettingsStore(s => s.tabTransitionMotion);
   const tabTransitionSequence = useSettingsStore(s => s.tabTransitionSequence);
-  const setActiveTab = useSettingsStore(s => s.setActiveTab);
   const appliedTransitionSequenceRef = useRef(tabTransitionSequence);
 
-  const resolvedTab: ConfigTab =
-    (activeTab as string) === 'session-config' ? 'session-personalization' : activeTab;
-
-  useEffect(() => {
-    /** Legacy merged session settings tab removed in favor of two panels. */
-    if ((activeTab as string) === 'session-config') {
-      setActiveTab('session-personalization');
-    }
-  }, [activeTab, setActiveTab]);
+  const resolvedTab: ConfigTab = activeTab;
 
   const shouldAnimateTabTransition = (
     appliedTransitionSequenceRef.current !== tabTransitionSequence
