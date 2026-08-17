@@ -58,7 +58,12 @@ export interface AgentTeam {
   shareContext: boolean;
 }
 
-/** Mock agents used by the recovered team gallery/editor (builtin-only). */
+/**
+ * Mock agents used by the recovered team gallery/editor (builtin-only).
+ * Frontend mock data for the gallery; R-WF-17 (DAG orchestration) replaces
+ * this with the persisted team backend, at which point this seed can be
+ * removed.
+ */
 export const MOCK_AGENT_TEAMS: AgentTeam[] = [
   {
     id: 'agent-team-coding',

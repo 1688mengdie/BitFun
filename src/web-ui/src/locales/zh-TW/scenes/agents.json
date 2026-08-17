@@ -505,18 +505,18 @@
     "emptyMembers": "暫無成員，從左側 Agent 圖鑑添加",
     "memberCount": "{{count}} 名成員",
     "viewMode": {
-      "formation": "阵型",
+      "formation": "陣型",
       "list": "列表"
     },
     "role": {
       "leader": "主導",
-      "member": "执行",
+      "member": "執行",
       "reviewer": "審查"
     },
     "strategy": {
-      "collaborative": "協作执行",
-      "sequential": "顺序执行",
-      "free": "自由执行"
+      "collaborative": "協作執行",
+      "sequential": "順序執行",
+      "free": "自由執行"
     },
     "columns": {
       "agent": "Agent",
@@ -557,10 +557,10 @@
   },
   "home": {
     "filterAll": "全部",
-    "filterAgent": "独立 Agent",
+    "filterAgent": "獨立 Agent",
     "filterTeam": "工作團隊",
     "search": "搜索名稱、描述...",
-    "solo": "独立",
+    "solo": "獨立",
     "team": "團隊",
     "enabled": "已啟用",
     "disabled": "已禁用",
@@ -570,7 +570,7 @@
     "globalCap": "全局能力",
     "backToOverview": "返回總覽",
     "strategyCollab": "協作",
-    "strategySeq": "顺序",
+    "strategySeq": "順序",
     "strategyFree": "自由"
   },
   "teamCard": {
@@ -579,7 +579,7 @@
       "sharedContext": "共享上下文"
     },
     "actions": {
-      "expand": "展開详情"
+      "expand": "展開詳情"
     },
     "sections": {
       "members": "成員",
@@ -588,7 +588,7 @@
   },
   "formation": {
     "empty": "從左側選擇 Agent 加入團隊",
-    "emptySub": "點擊 Agent 卡片上的 + 按钮"
+    "emptySub": "點擊 Agent 卡片上的 + 按鈕"
   },
   "capability": {
     "warning": "{{cats}} 能力缺失",
