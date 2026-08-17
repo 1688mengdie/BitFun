@@ -9,10 +9,11 @@
  */
 
 import React, { Suspense, useCallback, useMemo } from 'react';
-import { Bot } from 'lucide-react';
+import { Bot, GitBranch } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
+import { useSceneManager } from '@/app/hooks/useSceneManager';
 import { DotMatrixLoader } from '@/component-library';
 import {
   GalleryLayout,
@@ -31,6 +32,7 @@ const WorkflowClawScene: React.FC = () => {
   const { t } = useTranslation('scenes/profile');
   const { t: tCommon } = useI18n('common');
   const { assistantWorkspacesList } = useWorkspaceContext();
+  const { openScene } = useSceneManager();
   const openAssistant = useNurseryStore((s) => s.openAssistant);
   const setSelectedAssistantWorkspaceId = useMyAgentStore((s) => s.setSelectedAssistantWorkspaceId);
 
@@ -43,6 +45,11 @@ const WorkflowClawScene: React.FC = () => {
     setSelectedAssistantWorkspaceId(workspaceId);
     openAssistant(workspaceId);
   }, [openAssistant, setSelectedAssistantWorkspaceId]);
+
+  const handleCreateWorkflow = useCallback(() => {
+    // The agents scene owns workflow orchestration (CreateLegionPage entry).
+    openScene('agents');
+  }, [openScene]);
 
   return (
     <div className="bitfun-workflow-claw-scene" data-bf-scene="workflow-claw" data-bf-part="root">
@@ -68,6 +75,17 @@ const WorkflowClawScene: React.FC = () => {
           <GalleryPageHeader
             title={t('nursery.workflowClaw.gallery.title')}
             subtitle={t('nursery.workflowClaw.gallery.subtitle')}
+            actions={(
+              <button
+                type="button"
+                className="gallery-action-btn"
+                onClick={handleCreateWorkflow}
+                data-testid="workflow-claw-create-btn"
+              >
+                <GitBranch size={15} />
+                <span>{t('nursery.workflowClaw.gallery.create')}</span>
+              </button>
+            )}
           />
 
           <GalleryZone

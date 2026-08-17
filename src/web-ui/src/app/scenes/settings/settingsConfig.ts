@@ -362,7 +362,6 @@ const KNOWN_TABS: ConfigTab[] = SETTINGS_CATEGORIES.flatMap((c) => c.tabs.map((t
 export function normalizeSettingsTab(section: string): ConfigTab {
   if (section === 'font' || section === 'fonts') return 'appearance';
   if (section === 'logging' || section === 'terminal') return 'basics';
-  if (section === 'lsp') return DEFAULT_SETTINGS_TAB;
   if (section === 'session-config') return 'session-personalization';
   if (section === 'deep-review' || section === 'code-review' || section === 'review-team') return 'review';
   if (section === 'shortcuts' || section === 'keybindings' || section === 'hotkeys') return 'keyboard';

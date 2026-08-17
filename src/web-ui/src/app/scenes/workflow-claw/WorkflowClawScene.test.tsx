@@ -35,6 +35,7 @@ const PLAIN_WORKSPACE = {
 
 const mockOpenAssistant = vi.fn();
 const mockSetSelectedAssistantWorkspaceId = vi.fn();
+const mockOpenScene = vi.fn();
 
 vi.mock('@/infrastructure/i18n/hooks/useI18n', () => ({
   useI18n: () => ({ t: (key: string) => key }),
@@ -55,10 +56,16 @@ vi.mock('@/component-library', () => ({
 
 vi.mock('@/app/components', () => ({
   GalleryLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-  GalleryPageHeader: () => <div />,
+  GalleryPageHeader: ({ actions }: { actions?: React.ReactNode }) => (
+    <div data-testid="workflow-claw-header">{actions}</div>
+  ),
   GalleryZone: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   GalleryGrid: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   GalleryEmpty: ({ children, testId }: { children?: React.ReactNode; testId?: string }) => <div data-testid={testId}>{children}</div>,
+}));
+
+vi.mock('@/app/hooks/useSceneManager', () => ({
+  useSceneManager: () => ({ openScene: mockOpenScene }),
 }));
 
 vi.mock('../my-agent/myAgentStore', () => ({
@@ -103,6 +110,29 @@ describe('WorkflowClawScene (R-WF-18)', () => {
     expect(container.textContent).toContain('Research Bee');
     expect(container.textContent).toContain('Review Bee');
     expect(container.textContent).not.toContain('Mira');
+  });
+
+  it('renders a new-workflow entry action on the gallery header (P2-3)', () => {
+    act(() => {
+      root.render(<WorkflowClawScene />);
+    });
+
+    const header = container.querySelector('[data-testid="workflow-claw-header"]');
+    expect(header).not.toBeNull();
+    const createBtn = header?.querySelector<HTMLButtonElement>('[data-testid="workflow-claw-create-btn"]');
+    expect(createBtn).not.toBeNull();
+    expect(createBtn?.textContent).toContain('nursery.workflowClaw.gallery.create');
+  });
+
+  it('opens the agents scene (workflow orchestration entry) from the header action (P2-3)', () => {
+    act(() => {
+      root.render(<WorkflowClawScene />);
+    });
+
+    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="workflow-claw-create-btn"]');
+    act(() => createBtn?.click());
+
+    expect(mockOpenScene).toHaveBeenCalledWith('agents');
   });
 
   it('opens the shared AssistantConfigPage (not a duplicated detail page) on card click', () => {

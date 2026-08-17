@@ -148,7 +148,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
       >
         <IconButton
           onClick={onBack}
-          aria-label={t('legionPattern.back')}
+          aria-label={t('agentsOverview.backToOverview')}
           data-testid="create-legion-back"
         >
           <ArrowLeft size={18} />
@@ -260,7 +260,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
             data-bf-part="actions"
           >
             <Button variant="secondary" onClick={onBack}>
-              {t('legionPattern.back')}
+              {t('agentsOverview.backToOverview')}
             </Button>
             <Button
               variant="primary"

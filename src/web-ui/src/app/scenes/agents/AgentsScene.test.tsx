@@ -1,4 +1,4 @@
-﻿// @vitest-environment jsdom
+// @vitest-environment jsdom
 
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
@@ -94,8 +94,8 @@ vi.mock('@/component-library', () => ({
   }) => (
     <button type="button" onClick={onClick} disabled={disabled} data-testid={testId} data-bf-variant={variant}>{children}</button>
   ),
-  IconButton: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
-    <button type="button" onClick={onClick}>{children}</button>
+  IconButton: ({ children, onClick, 'data-testid': testId, 'aria-label': ariaLabel }: { children: React.ReactNode; onClick?: () => void; 'data-testid'?: string; 'aria-label'?: string }) => (
+    <button type="button" onClick={onClick} data-testid={testId} aria-label={ariaLabel}>{children}</button>
   ),
   Search: () => <input readOnly />,
   Select: () => <div />,
@@ -477,6 +477,38 @@ describeWithJsdom('AgentsScene', () => {
     const pageRoot = container.querySelector('[data-testid="create-legion-page"]')?.parentElement;
     expect(pageRoot?.getAttribute('data-bf-scene')).toBe('agents');
     expect(pageRoot?.getAttribute('data-bf-part')).toBe('root');
+  }, 10_000);
+
+  it('uses the unified back-to-overview label on both editor pages (P2-4)', async () => {
+    const legionSource = readFileSync(
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'components/CreateLegionPage.tsx'),
+      'utf8',
+    );
+    const agentSource = readFileSync(
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'components/CreateAgentPage.tsx'),
+      'utf8',
+    );
+
+    // Both editors return to the same overview, so both must resolve the back
+    // label through the same i18n key instead of divergent copy (P2-4).
+    expect(legionSource).not.toContain('legionPattern.back');
+    expect(legionSource).toContain('agentsOverview.backToOverview');
+    expect(agentSource).toContain('agentsOverview.backToOverview');
+
+    const { default: AgentsScene } = await import('./AgentsScene');
+
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+    const createLegionBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
+    await act(async () => {
+      createLegionBtn?.click();
+    });
+
+    const headerBack = container.querySelector('[data-testid="create-legion-back"]');
+    expect(headerBack?.getAttribute('aria-label')).toBe('agentsOverview.backToOverview');
+    const actionButtons = [...container.querySelectorAll('.create-agent-page__actions button')] as HTMLButtonElement[];
+    expect(actionButtons.some((b) => b.textContent === 'agentsOverview.backToOverview')).toBe(true);
   }, 10_000);
 
   it('renders saved legion presets through the LegionCard gallery (P1-1 wiring)', async () => {
