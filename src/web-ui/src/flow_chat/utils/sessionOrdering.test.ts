@@ -11,6 +11,8 @@ import {
   orphanSessionSortRank,
   resolveSessionOrphanKind,
   sessionBelongsToWorkspaceNavRow,
+  sessionIsGroupChat,
+  sessionIsWorkflowMember,
 } from './sessionOrdering';
 
 function createSession(overrides: Partial<Session> = {}): Session {
@@ -225,5 +227,26 @@ describe('sessionOrdering', () => {
     expect(isOrphanMetadata({ orphaned: true, orphanKind: 'DetachedChild' })).toBe(true);
     expect(isOrphanMetadata({ orphaned: false })).toBe(false);
     expect(isOrphanMetadata({})).toBe(false);
+  });
+});
+
+describe('sessionIsGroupChat / sessionIsWorkflowMember (R-WF-12)', () => {
+  it('flags a session whose isGroupChat marker is true', () => {
+    expect(sessionIsGroupChat(createSession({ isGroupChat: true }))).toBe(true);
+    expect(sessionIsGroupChat(createSession())).toBe(false);
+    expect(sessionIsGroupChat(createSession({ isGroupChat: false }))).toBe(false);
+  });
+
+  it('treats null/undefined sessions as not group chats', () => {
+    expect(sessionIsGroupChat(null)).toBe(false);
+    expect(sessionIsGroupChat(undefined)).toBe(false);
+  });
+
+  it('flags a workflow member Claw via the workflowMember marker', () => {
+    expect(sessionIsWorkflowMember(createSession({ workflowMember: true }))).toBe(true);
+    expect(sessionIsWorkflowMember(createSession())).toBe(false);
+    expect(sessionIsWorkflowMember(createSession({ workflowMember: false }))).toBe(false);
+    expect(sessionIsWorkflowMember(null)).toBe(false);
+    expect(sessionIsWorkflowMember(undefined)).toBe(false);
   });
 });

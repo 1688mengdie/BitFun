@@ -7088,6 +7088,14 @@ config: {
         const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
           ? true
           : undefined;
+        // R-WF-12: restore the workflow-member Claw marker from backend
+        // metadata (`customMetadata.legionNodeId`, written by
+        // legion_control_tool.rs when a Claw is deployed as a group/workflow
+        // member). Presence of the marker = workflow-owned Claw; the UI hides
+        // these from the Claw assistant list.
+        const restoredWorkflowMember = Boolean((metadata as any)?.customMetadata?.legionNodeId)
+          ? true
+          : undefined;
 
         this.setState(prev => {
           if (!scope.isCurrent() || prev.sessions.has(metadata.sessionId)) {
@@ -7154,6 +7162,7 @@ config: {
             reviewTargetEvidence: metadata.reviewTargetEvidence,
             isTransient: false,
             isGroupChat: restoredGroupChat,
+            workflowMember: restoredWorkflowMember,
           };
 
           const newSessions = new Map(prev.sessions);
@@ -7566,6 +7575,11 @@ config: {
           const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
             ? true
             : undefined;
+          // R-WF-12: restore the workflow-member Claw marker from backend
+          // metadata (`customMetadata.legionNodeId`, legion_control_tool.rs).
+          const restoredWorkflowMember = Boolean((metadata as any)?.customMetadata?.legionNodeId)
+            ? true
+            : undefined;
 
           this.setState(prev => {
             if (!scope.isCurrent() || prev.sessions.has(metadata.sessionId)) {
@@ -7632,6 +7646,7 @@ config: {
               reviewTargetEvidence: metadata.reviewTargetEvidence,
               isTransient: false,
               isGroupChat: restoredGroupChat,
+              workflowMember: restoredWorkflowMember,
             };
 
             const newSessions = new Map(prev.sessions);

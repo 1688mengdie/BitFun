@@ -181,3 +181,28 @@ export function isOrphanMetadata(
 ): boolean {
   return metadata?.orphaned === true;
 }
+
+/**
+ * R-WF-12: whether a session is a group chat (group chat = ordinary session
+ * with `isGroupChat` set, v3 decision). Used to partition nav rows: group
+ * chats render only in the dedicated group-chats section, never mixed into
+ * the plain assistant session list.
+ */
+export function sessionIsGroupChat(
+  session: Pick<Session, 'isGroupChat'> | null | undefined
+): boolean {
+  return session?.isGroupChat === true;
+}
+
+/**
+ * R-WF-12: whether a session is a workflow member Claw (a Claw spawned as a
+ * member of a group/workflow; backend marks it via `customMetadata.legionNodeId`,
+ * legion_control_tool.rs). The UI mirrors that marker into `Session.workflowMember`
+ * during metadata restore so the Claw list can hide these workflow-owned Claws
+ * (they belong to the group, not to the user's Claw assistant list).
+ */
+export function sessionIsWorkflowMember(
+  session: Pick<Session, 'workflowMember'> | null | undefined
+): boolean {
+  return session?.workflowMember === true;
+}

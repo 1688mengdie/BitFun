@@ -21,6 +21,23 @@
     margin: 0 $size-gap-1 0 calc(#{$size-gap-1} + 4px);
   }
 
+  &__group-chats-empty {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    height: 24px;
+    padding: 0 $size-gap-1;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-2xs);
+
+    span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
   &__inline-action {
     display: flex;
     align-items: center;
