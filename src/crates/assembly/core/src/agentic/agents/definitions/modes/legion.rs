@@ -1,15 +1,15 @@
-//! Legion Mode — Taiji legion orchestration
+//! Workflow Mode — multi-agent workflow orchestration
 //!
 //! Fractal deployment topology: the commander only orchestrates (task
 //! decomposition, agent session creation, message dispatch, quality gate
-//! enforcement) and never executes. Every legion member is a full agent
+//! enforcement) and never executes. Every workflow member is a full agent
 //! session that communicates via SessionMessage.
 
 use crate::agentic::agents::{subagent_default_tools, Agent, UserContextPolicy};
 use async_trait::async_trait;
 
-/// Legion 独有工具（不在 subagent_default_tools 共享集内）：LegionControl
-/// （军团模板一键部署）。
+/// Workflow 独有工具（不在 subagent_default_tools 共享集内）：LegionControl
+/// （工作流模板一键部署）。
 const LEGION_EXCLUSIVE_TOOLS: &[&str] = &["LegionControl"];
 
 pub struct LegionMode {
@@ -47,11 +47,11 @@ impl Agent for LegionMode {
     }
 
     fn name(&self) -> &str {
-        "Legion"
+        "Workflow"
     }
 
     fn description(&self) -> &str {
-        "Taiji legion commander: orchestrate agent sessions through a fractal deployment topology — decompose tasks, create sessions, dispatch via SessionMessage, enforce quality gates"
+        "Multi-agent workflow commander: orchestrate agent sessions through a fractal deployment topology — decompose tasks, create sessions, dispatch via SessionMessage, enforce quality gates"
     }
 
     fn prompt_template_name(&self, _model_name: Option<&str>) -> &str {

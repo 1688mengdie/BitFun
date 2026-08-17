@@ -826,7 +826,14 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
               data-testid="nav-workspace-name-btn"
               data-workspace-id={workspace.id}
             >
-              <span className="bitfun-nav-panel__assistant-item-label" data-bf-component="workspace-item" data-bf-part="label">{workspaceDisplayName}</span>
+              <span
+                className="bitfun-nav-panel__assistant-item-label"
+                data-bf-component="workspace-item"
+                data-bf-part="label"
+                title={workspaceDisplayName}
+              >
+                {workspaceDisplayName}
+              </span>
               {isDefaultAssistantWorkspace ? (
                 <span
                   data-bf-component="workspace-item"
@@ -1126,7 +1133,14 @@ const WorkspaceItem: React.FC<WorkspaceItemProps> = ({
                   data-workspace-id={workspace.id}
                 >
                   <span className="bitfun-nav-panel__workspace-item-name-line">
-                    <span className="bitfun-nav-panel__workspace-item-label" data-bf-component="workspace-item" data-bf-part="label">{workspaceDisplayName}</span>
+                    <span
+                      className="bitfun-nav-panel__workspace-item-label"
+                      data-bf-component="workspace-item"
+                      data-bf-part="label"
+                      title={workspaceDisplayName}
+                    >
+                      {workspaceDisplayName}
+                    </span>
                     {relatedPathCount > 0 ? (
                       <span className="bitfun-nav-panel__workspace-item-badge" data-bf-component="workspace-item" data-bf-part="badge">
                         {t('nav.workspaces.relatedPaths.badge', { count: relatedPathCount })}

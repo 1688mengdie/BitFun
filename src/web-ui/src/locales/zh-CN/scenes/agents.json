@@ -64,6 +64,7 @@
       "userSubagent": "用户 Sub-Agent",
       "projectSubagent": "项目 Sub-Agent",
       "externalSubagent": "外部 Sub-Agent",
+      "workflow": "工作流",
       "disabled": "已禁用"
     },
     "actions": {
@@ -445,6 +446,7 @@
     "Cowork": "协作模式：与您并肩工作，在关键步骤征求您的确认",
     "ComputerUse": "计算机使用模式：能够操作浏览器、桌面应用和文件系统",
     "DeepResearch": "深度研究智能体：对复杂主题进行系统性调研和分析",
+    "Workflow": "多智能体工作流指挥官：通过分形部署拓扑编排智能体会话——拆解任务、创建会话、经 SessionMessage 派发、执行质量闸门",
     "Explore": "探索智能体：快速浏览代码库，理解项目结构和关键文件",
     "FileFinder": "文件查找智能体：根据需求定位相关文件和代码片段",
     "CodeReview": "代码审查智能体：对代码进行质量检查和改进建议",
