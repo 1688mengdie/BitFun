@@ -139,6 +139,36 @@
   }
 
   // ── Icon options ─────────────────────────────────────────────────────────
+  &__panel-tabs {
+    display: flex;
+    gap: 1px;
+    background: var(--bf-appearance-token-element-bg-subtle);
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    border-radius: 4px;
+    padding: 2px;
+  }
+
+  &__panel-tab {
+    flex: 1;
+    padding: 4px 8px;
+    border: none;
+    background: transparent;
+    border-radius: 3px;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: all $motion-fast $easing-standard;
+    font-family: var(--bf-appearance-token-font-family-sans);
+    white-space: nowrap;
+
+    &:hover { color: var(--bf-appearance-token-color-text-secondary); }
+    &.is-active {
+      background: var(--bf-appearance-token-color-bg-elevated);
+      color: var(--bf-appearance-token-color-text-primary);
+      box-shadow: 0 0 0 1px var(--bf-appearance-token-border-subtle);
+    }
+  }
+
   &__icon-row {
     display: flex;
     gap: $size-gap-2;

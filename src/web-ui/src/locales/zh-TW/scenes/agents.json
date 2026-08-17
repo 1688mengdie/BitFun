@@ -532,7 +532,9 @@
       "model": "模型"
     },
     "remove": "移出",
-    "rename": "點擊編輯"
+    "rename": "點擊編輯",
+    "save": "儲存",
+    "cancel": "取消"
   },
   "gallery": {
     "title": "Agent 圖鑑",
@@ -557,6 +559,8 @@
     "blankCreate": "空白創建",
     "cancel": "取消",
     "create": "創建",
+    "deleteTeam": "刪除團隊",
+    "deleteConfirm": "確定刪除團隊「{{name}}」？此操作不可恢復。",
     "form": {
       "namePlaceholder": "Agent Team 名稱",
       "descriptionPlaceholder": "描述（可選）"
