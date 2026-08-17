@@ -463,7 +463,7 @@ mod tests {
         // R-THR-01 批2 2-8 边界断言：60 过 / 61 拒（SHORT_NAME_MAX_CHARS = 60）。
         let base = SessionControlInput {
             action: SessionControlAction::Create,
-            workspace: Some("C:\\work".to_string()),
+            workspace: Some(std::env::temp_dir().to_string_lossy().to_string()),
             session_id: None,
             session_name: None,
             agent_type: None,
@@ -499,7 +499,7 @@ mod tests {
         // R-THR-01 批2 2-8：context.short_name_max_chars 覆盖默认 60。
         let base = SessionControlInput {
             action: SessionControlAction::Create,
-            workspace: Some("C:\\work".to_string()),
+            workspace: Some(std::env::temp_dir().to_string_lossy().to_string()),
             session_id: None,
             session_name: None,
             agent_type: None,
