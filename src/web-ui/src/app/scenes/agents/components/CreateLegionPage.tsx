@@ -268,7 +268,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
               disabled={saving || !LEGION_CREATE_BACKEND_READY}
               data-testid="create-legion-save"
             >
-              {saving ? t('loading') : !LEGION_CREATE_BACKEND_READY ? t('legionPattern.planning') : t('legionPattern.usePattern')}
+              {saving ? t('loading') : !LEGION_CREATE_BACKEND_READY ? t('legionPattern.planning') : t('legionPattern.savePreset')}
             </Button>
           </div>
         </>

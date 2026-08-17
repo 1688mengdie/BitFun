@@ -772,6 +772,22 @@ const AgentsHomeView: React.FC = () => {
             >
               {t('nav.agents')}
             </button>
+            <button
+              type="button"
+              className="gallery-anchor-btn"
+              onClick={() => scrollToZone('legions-zone')}
+              data-testid="agents-anchor-legions"
+            >
+              {t('nav.legions')}
+            </button>
+            <button
+              type="button"
+              className="gallery-anchor-btn"
+              onClick={() => scrollToZone('agent-teams-zone')}
+              data-testid="agents-anchor-teams"
+            >
+              {t('nav.teams')}
+            </button>
           </div>
         )}
         actions={(
@@ -905,6 +921,16 @@ const AgentsHomeView: React.FC = () => {
               </div>
               <button
                 type="button"
+                className="gallery-action-btn gallery-action-btn--primary"
+                onClick={openCreateAgent}
+                data-testid="agents-create-agent-btn"
+              >
+                <Plus size={15} />
+                <span>{t('page.newAgent')}</span>
+              </button>
+              <span className="gallery-action-sep" aria-hidden="true" />
+              <button
+                type="button"
                 className="gallery-action-btn"
                 onClick={openCreateLegion}
                 data-testid="agents-create-legion-btn"
@@ -920,15 +946,6 @@ const AgentsHomeView: React.FC = () => {
               >
                 <ShieldCheck size={15} />
                 <span>{t('reviewTeams.detail.open')}</span>
-              </button>
-              <button
-                type="button"
-                className="gallery-action-btn gallery-action-btn--primary"
-                onClick={openCreateAgent}
-                data-testid="agents-create-agent-btn"
-              >
-                <Plus size={15} />
-                <span>{t('page.newAgent')}</span>
               </button>
               <span className="gallery-zone-count">{visibleAgents.length}</span>
             </>
@@ -968,79 +985,80 @@ const AgentsHomeView: React.FC = () => {
             </GalleryGrid>
           ) : null}
 
-          {!loading && savedLegionPresets.length > 0 ? (
-            <GalleryZone
-              id="legions-zone"
-              data-testid="agents-legions-zone"
-              title={t('legionsZone.title')}
-              subtitle={t('legionsZone.subtitle')}
-              tools={(
-                <span className="gallery-zone-count">{savedLegionPresets.length}</span>
-              )}
-            >
-              <GalleryGrid minCardWidth={360} data-bf-scene="agents" data-bf-part="legionsGrid">
-                {savedLegionPresets.map((preset, index) => (
-                  <LegionCard
-                    key={preset.id}
-                    pattern={presetToPattern(preset)}
-                    index={index}
-                    onOpenDetails={openCreateLegion}
-                  />
-                ))}
-              </GalleryGrid>
-            </GalleryZone>
-          ) : null}
+        </GalleryZone>
 
+        {!loading && savedLegionPresets.length > 0 ? (
           <GalleryZone
-            id="agent-teams-zone"
-            data-testid="agents-teams-zone"
-            title={t('teamsZone.title')}
-            subtitle={t('teamsZone.subtitle')}
+            id="legions-zone"
+            data-testid="agents-legions-zone"
+            title={t('legionsZone.title')}
+            subtitle={t('legionsZone.subtitle')}
             tools={(
-              <>
-                <button
-                  type="button"
-                  className="gallery-action-btn gallery-action-btn--primary"
-                  onClick={openCreateAgentTeam}
-                  data-testid="agents-create-team-btn"
-                >
-                  <Users size={15} />
-                  <span>{t('teamsZone.create')}</span>
-                </button>
-                <span className="gallery-zone-count">{agentTeams.length}</span>
-              </>
+              <span className="gallery-zone-count">{savedLegionPresets.length}</span>
             )}
           >
-            {agentTeams.length === 0 ? (
-              <GalleryEmpty
-                icon={<Users size={32} strokeWidth={1.5} />}
-                message={t('teamsZone.empty.noTeams')}
-                testId="agent-teams-empty"
-              />
-            ) : (
-              <GalleryGrid minCardWidth={360} data-bf-scene="agents" data-bf-part="teamsGrid">
-                {agentTeams.map((team, index) => {
-                  const caps = computeAgentTeamCapabilities(team, allAgents);
-                  const topCaps = CAPABILITY_CATEGORIES
-                    .filter((category) => caps[category] > 0)
-                    .sort((a, b) => caps[b] - caps[a])
-                    .slice(0, 3);
-                  return (
-                    <AgentTeamCard
-                      key={team.id}
-                      team={team}
-                      allAgents={allAgents}
-                      index={index}
-                      isExample={EXAMPLE_TEAM_IDS.has(team.id)}
-                      onEdit={openAgentTeamEditor}
-                      onOpenDetails={(currentTeam) => setSelectedTeamId(currentTeam.id)}
-                      topCapabilities={topCaps}
-                    />
-                  );
-                })}
-              </GalleryGrid>
-            )}
+            <GalleryGrid minCardWidth={360} data-bf-scene="agents" data-bf-part="legionsGrid">
+              {savedLegionPresets.map((preset, index) => (
+                <LegionCard
+                  key={preset.id}
+                  pattern={presetToPattern(preset)}
+                  index={index}
+                  onOpenDetails={openCreateLegion}
+                />
+              ))}
+            </GalleryGrid>
           </GalleryZone>
+        ) : null}
+
+        <GalleryZone
+          id="agent-teams-zone"
+          data-testid="agents-teams-zone"
+          title={t('teamsZone.title')}
+          subtitle={t('teamsZone.subtitle')}
+          tools={(
+            <>
+              <button
+                type="button"
+                className="gallery-action-btn gallery-action-btn--primary"
+                onClick={openCreateAgentTeam}
+                data-testid="agents-create-team-btn"
+              >
+                <Users size={15} />
+                <span>{t('teamsZone.create')}</span>
+              </button>
+              <span className="gallery-zone-count">{agentTeams.length}</span>
+            </>
+          )}
+        >
+          {agentTeams.length === 0 ? (
+            <GalleryEmpty
+              icon={<Users size={32} strokeWidth={1.5} />}
+              message={t('teamsZone.empty.noTeams')}
+              testId="agent-teams-empty"
+            />
+          ) : (
+            <GalleryGrid minCardWidth={360} data-bf-scene="agents" data-bf-part="teamsGrid">
+              {agentTeams.map((team, index) => {
+                const caps = computeAgentTeamCapabilities(team, allAgents);
+                const topCaps = CAPABILITY_CATEGORIES
+                  .filter((category) => caps[category] > 0)
+                  .sort((a, b) => caps[b] - caps[a])
+                  .slice(0, 3);
+                return (
+                  <AgentTeamCard
+                    key={team.id}
+                    team={team}
+                    allAgents={allAgents}
+                    index={index}
+                    isExample={EXAMPLE_TEAM_IDS.has(team.id)}
+                    onEdit={openAgentTeamEditor}
+                    onOpenDetails={(currentTeam) => setSelectedTeamId(currentTeam.id)}
+                    topCapabilities={topCaps}
+                  />
+                );
+              })}
+            </GalleryGrid>
+          )}
         </GalleryZone>
       </div>
 
@@ -1495,7 +1513,7 @@ const AgentsHomeView: React.FC = () => {
                     <span>{t('agentsOverview.customActions')}</span>
                   </div>
                 </div>
-                <div className="agent-card__section-actions" style={{ gap: 8 }}>
+                <div className="agent-card__section-actions" style={{ gap: 16 }}>
                   <Button
                     variant="secondary"
                     size="small"
@@ -1509,7 +1527,7 @@ const AgentsHomeView: React.FC = () => {
                     {t('agentsOverview.editAgent')}
                   </Button>
                   <Button
-                    variant="secondary"
+                    variant="danger"
                     size="small"
                     isLoading={deletingAgent}
                     onClick={() => void handleDeleteCustomAgent()}
@@ -1586,7 +1604,7 @@ const AgentsHomeView: React.FC = () => {
               openAgentTeamEditor(selectedTeam.id);
             }}
           >
-            {t('agentsOverview.editAgent')}
+            {t('composer.saveTeam')}
           </Button>
         ) : null}
       >

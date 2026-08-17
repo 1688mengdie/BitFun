@@ -17,6 +17,7 @@
   "nav": {
     "coreAgents": "Core Agents",
     "agents": "Agent",
+    "legions": "Workflows",
     "teams": "Agent Team"
   },
   "filters": {
@@ -299,7 +300,7 @@
       "createSuccess": "Created agent \"{{name}}\"",
       "createFailed": "Create failed: ",
       "review": "Review",
-      "reviewToolsHint": "Readonly mode restricts the agent to read-only tools."
+      "reviewToolsHint": "Additional checks use only read-only tools."
     }
   },
   "reviewTeams": {
@@ -479,6 +480,7 @@
     "noEdges": "No edges",
     "canvas": "Canvas preview",
     "usePattern": "Use this pattern",
+    "savePreset": "Save preset",
     "planning": "Planning",
     "saved": "Workflow preset \"{{name}}\" saved",
     "saveFailed": "Failed to save workflow preset",
@@ -533,8 +535,8 @@
     },
     "remove": "Remove",
     "rename": "Click to rename",
-    "save": "Save",
-    "cancel": "Cancel"
+    "saveTeam": "Save",
+    "cancelEdit": "Cancel"
   },
   "gallery": {
     "title": "Agent Gallery",

@@ -1,4 +1,5 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
+
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
@@ -143,25 +144,42 @@ vi.mock('@/flow_chat/state-machine/types', () => ({
   SESSION_DISPLAY_STATES: ['standby', 'processing', 'completed', 'hung', 'interrupted', 'pending_attention', 'viewed'],
 }));
 
-const describeWithJsdom = describe;
+let JSDOMCtor: (new (
+  html?: string,
+  options?: { pretendToBeVisual?: boolean }
+) => { window: Window & typeof globalThis }) | null = null;
+
+try {
+  const jsdom = await import('jsdom');
+  JSDOMCtor = jsdom.JSDOM as typeof JSDOMCtor;
+} catch {
+  JSDOMCtor = null;
+}
+
+const describeWithJsdom = JSDOMCtor ? describe : describe.skip;
 
 describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
-    if (typeof window.matchMedia !== 'function') {
-      Object.defineProperty(window, 'matchMedia', {
-        writable: true,
-        value: vi.fn().mockImplementation(() => ({
-          matches: false,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-          addListener: vi.fn(),
-          removeListener: vi.fn(),
-        })),
-      });
-    }
+    // The jsdom environment (via the `// @vitest-environment jsdom` pragma)
+    // provides a real document before react-dom initializes its event system,
+    // so controlled input events dispatch like a real browser.
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    vi.stubGlobal('MutationObserver', window.MutationObserver);
+    Object.defineProperty(window, 'matchMedia', {
+      writable: true,
+      value: vi.fn().mockImplementation(() => ({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+      })),
+    });
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -170,9 +188,6 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
         disconnect() {}
       },
     );
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container);
   });
 
   afterEach(() => {
@@ -273,6 +288,65 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
     expect(mocks.openMainSession).toHaveBeenCalled();
   });
 
+  it('shows explicit save/cancel actions while editing the team name', async () => {
+    const { agentTeams, activeAgentTeamId, updateAgentTeam } = useAgentsStore.getState();
+    const team = agentTeams.find((t) => t.id === activeAgentTeamId)!;
+    const originalName = team.name;
+
+    await act(async () => {
+      root.render(<AgentTeamComposer />);
+    });
+    const nameEl = container.querySelector<HTMLElement>('.tc__name');
+    expect(nameEl).toBeTruthy();
+    await act(async () => {
+      nameEl!.click();
+    });
+
+    expect(container.querySelector('[data-testid="tc-name-save"]')).toBeTruthy();
+    expect(container.querySelector('[data-testid="tc-name-cancel"]')).toBeTruthy();
+
+    // Save commits the trimmed value.
+    const input = container.querySelector<HTMLInputElement>('.tc__name-input');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input, 'Renamed Team');
+      input!.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="tc-name-save"]')!.click();
+    });
+    expect(useAgentsStore.getState().agentTeams.find((t) => t.id === team.id)?.name).toBe('Renamed Team');
+
+    // Cancel reverts to the persisted name without saving.
+    await act(async () => {
+      root.render(<AgentTeamComposer />);
+    });
+    const nameEl2 = container.querySelector<HTMLElement>('.tc__name');
+    await act(async () => {
+      nameEl2!.click();
+    });
+    const input2 = container.querySelector<HTMLInputElement>('.tc__name-input');
+    await act(async () => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        'value',
+      )?.set;
+      setter?.call(input2, 'Should not persist');
+      input2!.dispatchEvent(new window.Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="tc-name-cancel"]')!.click();
+    });
+    expect(useAgentsStore.getState().agentTeams.find((t) => t.id === team.id)?.name).toBe('Renamed Team');
+    expect(container.querySelector('.tc__name-input')).toBeFalsy();
+
+    // Restore state for later tests.
+    updateAgentTeam(team.id, { name: originalName });
+  });
+
   it('P1-6: clicking the port while wiring cancels without creating an edge', async () => {
     await act(async () => {
       root.render(<AgentTeamComposer />);
@@ -296,40 +370,6 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
     const after = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
     expect(after.edges.length).toBe(beforeCount);
     expect(container.querySelector('[data-testid="tcf-wire-active"]')).toBeFalsy();
-  });
-
-  it('P0-2: rename shows explicit save and cancel buttons and commits on save', async () => {
-    await act(async () => {
-      root.render(<AgentTeamComposer />);
-    });
-    const teamId = useAgentsStore.getState().activeAgentTeamId!;
-    const name = container.querySelector('.tc__name') as HTMLElement;
-    await act(async () => {
-      name.click();
-    });
-    const input = container.querySelector('.tc__name-input') as HTMLInputElement;
-    expect(input).toBeTruthy();
-    const saveBtn = container.querySelector('[data-testid="tc-name-save"]');
-    const cancelBtn = container.querySelector('[data-testid="tc-name-cancel"]');
-    expect(saveBtn).toBeTruthy();
-    expect(cancelBtn).toBeTruthy();
-
-    // React controlled input: use the native value setter so the change is
-    // picked up by the onChange handler.
-    const valueSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'value',
-    )!.set!;
-    await act(async () => {
-      valueSetter.call(input, 'Renamed Team');
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-    await act(async () => {
-      (saveBtn as HTMLElement).click();
-    });
-    const team = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
-    expect(team.name).toBe('Renamed Team');
-    expect(container.querySelector('.tc__name-input')).toBeFalsy();
   });
 
   it('P0-2: Escape cancels the rename without committing', async () => {
