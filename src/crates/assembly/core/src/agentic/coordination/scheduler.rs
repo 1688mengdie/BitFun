@@ -11,9 +11,9 @@
 //! - Queue cleared on unrecoverable failure
 
 use super::coordinator::{
-    background_subagent_follow_up_message, session_storage_workspace_locator,
-    ConversationCoordinator, DialogTriggerSource, HiddenSubagentExecutionRequest, SubagentResult,
-    SubagentResultStatus,
+    background_subagent_follow_up_message_with_limit, configured_background_follow_up_text_limit,
+    session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
+    HiddenSubagentExecutionRequest, SubagentResult, SubagentResultStatus,
 };
 use super::plan_todo_binding::{
     auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
@@ -26,8 +26,8 @@ use crate::agentic::core::{
 use crate::agentic::events::AgenticEvent;
 use crate::agentic::goal_mode::{
     goal_continuation_submit_retry_delay_ms, goal_internal_context_message,
-    goal_objective_updated_message, thread_goal_from_custom_metadata,
-    MAX_THREAD_GOAL_AUTO_CONTINUATIONS, GOAL_IDLE_WAKEUP_DELAY_MS,
+    goal_objective_updated_message, thread_goal_from_custom_metadata, GOAL_IDLE_WAKEUP_DELAY_MS,
+    MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
 };
 use crate::agentic::image_analysis::ImageContextData;
 use crate::agentic::init_agents_md::build_init_agents_md_user_input;
@@ -57,14 +57,13 @@ use bitfun_agent_runtime::scheduler::{
     resolve_agent_session_reply_action, resolve_background_delivery_action,
     resolve_background_delivery_injection, resolve_background_delivery_injection_for_turn,
     resolve_dialog_start_route, resolve_dialog_steering_action,
-    resolve_turn_outcome_lifecycle_plan, utc_iso8601_now, target_background_delivery_injection_to_turn,
-    ActiveDialogTurn, ActiveDialogTurnStore,
-    ActiveDialogTurnTakeResult, AgentSessionReplyAction, AgentSessionReplyPlan,
-    BackgroundDeliveryAction, BackgroundDeliveryFacts, BackgroundInjectionKind,
-    DialogReplySuppressionSet, DialogStartRoute, DialogStartRouteFacts, DialogSteeringAction,
-    DialogTurnQueue, GoalContinuationAfterTurnAction, SessionAbortFlags,
-    ThreadGoalDeliveryReminder, ThreadGoalDeliveryReminderKind, TurnOutcomeQueueAction,
-    TurnOutcomeStatus,
+    resolve_turn_outcome_lifecycle_plan, target_background_delivery_injection_to_turn,
+    utc_iso8601_now, ActiveDialogTurn, ActiveDialogTurnStore, ActiveDialogTurnTakeResult,
+    AgentSessionReplyAction, AgentSessionReplyPlan, BackgroundDeliveryAction,
+    BackgroundDeliveryFacts, BackgroundInjectionKind, DialogReplySuppressionSet, DialogStartRoute,
+    DialogStartRouteFacts, DialogSteeringAction, DialogTurnQueue, GoalContinuationAfterTurnAction,
+    SessionAbortFlags, ThreadGoalDeliveryReminder, ThreadGoalDeliveryReminderKind,
+    TurnOutcomeQueueAction, TurnOutcomeStatus,
 };
 use bitfun_runtime_ports::{
     resolve_dialog_submit_queue_action, AgentBackgroundResultRequest, AgentDialogPrependedReminder,
@@ -102,6 +101,8 @@ async fn configured_goal_idle_wakeup_delay_ms() -> u64 {
 
 /// R-AR-05 16k 护栏：运行中 turn 注入全文超限截断阈值，与 deliver 通道
 /// coordinator.rs `BACKGROUND_FOLLOW_UP_TEXT_LIMIT`（16_000）同值（契约 §四）。
+/// R-THR-01 批2 2-5 后生产路径走配置化 limit，本常量仅存量测试引用。
+#[cfg(test)]
 const BACKGROUND_INJECTION_TEXT_LIMIT: usize = 16_000;
 
 /// Coalescing key for background-result follow-up notifications (R-AR-03).
@@ -1031,6 +1032,7 @@ impl DialogScheduler {
                 let injection_content = Self::truncate_background_injection_text(
                     &delivery.content,
                     delivery.session_id.as_str(),
+                    configured_background_follow_up_text_limit().await,
                 );
                 let injection = resolve_background_delivery_injection_for_turn(
                     BackgroundInjectionKind::BackgroundResult,
@@ -1074,14 +1076,14 @@ impl DialogScheduler {
     /// R-AR-05 16k 护栏：运行中 turn 注入全文超限时截断（与 deliver 通道的
     /// `BACKGROUND_FOLLOW_UP_TEXT_LIMIT` 同值），保留指引（完整回复见
     /// SessionHistory）。护栏只兜底体积，不退回摘要。
-    fn truncate_background_injection_text(text: &str, session_id: &str) -> String {
-        if text.chars().count() > BACKGROUND_INJECTION_TEXT_LIMIT {
-            let truncated: String = text
-                .chars()
-                .take(BACKGROUND_INJECTION_TEXT_LIMIT)
-                .collect();
+    /// R-THR-01 批2 2-5：limit 由调用方从
+    /// `ai.thresholds.compression.background_follow_up_text_limit` 解析。
+    fn truncate_background_injection_text(text: &str, session_id: &str, limit: usize) -> String {
+        let limit = limit.max(1);
+        if text.chars().count() > limit {
+            let truncated: String = text.chars().take(limit).collect();
             format!(
-                "{truncated}\n\n[完整回复超过 {BACKGROUND_INJECTION_TEXT_LIMIT} 字符，已截断；全文见 SessionHistory({session_id})]"
+                "{truncated}\n\n[完整回复超过 {limit} 字符，已截断；全文见 SessionHistory({session_id})]"
             )
         } else {
             text.to_string()
@@ -1098,10 +1100,11 @@ impl DialogScheduler {
         // background_subagent_follow_up_message（coordinator.rs:12805 唯一全文
         // 组装源）——通知句 + 最终回复全文 + 16k 截断护栏
         // （BACKGROUND_FOLLOW_UP_TEXT_LIMIT），全文为空/失败时退化为纯通知句。
-        let user_input = background_subagent_follow_up_message(
+        let user_input = background_subagent_follow_up_message_with_limit(
             &delivery.session_id,
             &delivery.agent_type,
             Some(&delivery.content),
+            configured_background_follow_up_text_limit().await,
         );
         let queued_turn = QueuedTurn {
             user_input,
@@ -1479,7 +1482,8 @@ impl DialogScheduler {
         // The check happens before any prompt is built, so the kept
         // notification's prompt text, position, and prefix are byte-identical
         // to the pre-fix behavior.
-        if let Some(key) = Self::background_notice_dedupe_key_for_queued_turn(&session_id, &queued_turn)
+        if let Some(key) =
+            Self::background_notice_dedupe_key_for_queued_turn(&session_id, &queued_turn)
         {
             let already_active = self
                 .active_turns
@@ -2943,14 +2947,13 @@ impl DialogScheduler {
                             .reason
                             .as_deref()
                             .unwrap_or("timed out before completing the subagent task");
-                        let _ = outcome_tx
-                            .send((
-                                session_id_owned.clone(),
-                                TurnOutcome::Failed {
-                                    turn_id: turn_id_for_task.clone(),
-                                    error: format!("hidden subagent partial timeout: {reason}"),
-                                },
-                            ));
+                        let _ = outcome_tx.send((
+                            session_id_owned.clone(),
+                            TurnOutcome::Failed {
+                                turn_id: turn_id_for_task.clone(),
+                                error: format!("hidden subagent partial timeout: {reason}"),
+                            },
+                        ));
                     } else {
                         let _ = outcome_tx.send((
                             session_id_owned.clone(),
@@ -3380,7 +3383,6 @@ impl DialogScheduler {
                     }
                 }
 
-
                 // Plan-todo binding auto-complete (best-effort): when the
                 // finished turn is an agent-session execution turn bound
                 // to a plan todo (reply_route.is_some()) and it completed
@@ -3492,7 +3494,9 @@ impl DialogScheduler {
                                             }
                                             if attempt < MAX_THREAD_GOAL_AUTO_CONTINUATIONS {
                                                 let delay_ms =
-                                                    goal_continuation_submit_retry_delay_ms(attempt);
+                                                    goal_continuation_submit_retry_delay_ms(
+                                                        attempt,
+                                                    );
                                                 warn!(
                                                     "Goal continuation submit failed; retrying: session_id={}, attempt={}/{}, delay_ms={}, error={}",
                                                     session_id,
@@ -4213,8 +4217,8 @@ mod tests {
     };
     use crate::agentic::tools::registry::ToolRegistry;
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
-    use crate::infrastructure::{get_path_manager_arc, PathManager};
     use crate::infrastructure::ai::reasoning_catalog::reasoning_preset_runtime_fingerprint;
+    use crate::infrastructure::{get_path_manager_arc, PathManager};
     use crate::service::config::types::{
         model_runtime_binding_fingerprint, AIConfig, AIModelConfig,
     };
@@ -4917,7 +4921,9 @@ mod tests {
             "overlong reply must be truncated by the 16k guard"
         );
         assert!(
-            pending[0].content.starts_with(&"y".repeat(BACKGROUND_INJECTION_TEXT_LIMIT)),
+            pending[0]
+                .content
+                .starts_with(&"y".repeat(BACKGROUND_INJECTION_TEXT_LIMIT)),
             "truncation keeps the first 16k chars of the full reply"
         );
         assert!(
@@ -4990,7 +4996,7 @@ mod tests {
     fn truncate_background_injection_text_keeps_short_text_untouched() {
         let short = "short reply";
         assert_eq!(
-            DialogScheduler::truncate_background_injection_text(short, "s-1"),
+            DialogScheduler::truncate_background_injection_text(short, "s-1", 16_000),
             short
         );
     }
@@ -6876,7 +6882,7 @@ mod tests {
         // 组装源）——通知句 + 最终回复全文，父会话可见完整回复；不再只回传
         // 极简元信息（session_id + 身份标识 + 已回复状态）。
         let full_output = format!("FULL_REPLY_MARKER_{}", "x".repeat(2048));
-        let notice = background_subagent_follow_up_message(
+        let notice = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-1",
             "external::opencode",
             Some(&full_output),
@@ -6899,7 +6905,7 @@ mod tests {
         // background_result_follow_up_text_is_deterministic 单独覆盖。
         let bash_full =
             "Background Bash command completed; use SessionHistory to view the full reply. Full output was saved to /tmp/out.txt";
-        let marker_notice = background_subagent_follow_up_message(
+        let marker_notice = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-2",
             "agentic",
             Some(&bash_full.to_string()),
@@ -6917,12 +6923,12 @@ mod tests {
         // 缓存前缀稳定性：同一 (session_id, agent_type) 的 follow-up 全文文本
         // 必须逐字节一致（通知句 + 全文组装结果）——通知合并后同类场景使用
         // 相同文本，杜绝时序抖动变体。
-        let first = background_subagent_follow_up_message(
+        let first = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-3",
             "agentic",
             Some(&"deterministic full reply".to_string()),
         );
-        let second = background_subagent_follow_up_message(
+        let second = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-3",
             "agentic",
             Some(&"deterministic full reply".to_string()),
@@ -7038,7 +7044,9 @@ mod tests {
                         workspace_path: None,
                         remote_connection_id: None,
                         remote_ssh_host: None,
-                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
                         reply_route: None,
                         user_message_metadata: None,
                         image_contexts: None,
@@ -7071,7 +7079,9 @@ mod tests {
                         workspace_path: None,
                         remote_connection_id: None,
                         remote_ssh_host: None,
-                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
                         reply_route: None,
                         user_message_metadata: None,
                         image_contexts: None,
@@ -7112,7 +7122,9 @@ mod tests {
                         workspace_path: None,
                         remote_connection_id: None,
                         remote_ssh_host: None,
-                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
                         reply_route: None,
                         user_message_metadata: None,
                         image_contexts: None,
@@ -7175,7 +7187,9 @@ mod tests {
                         workspace_path: None,
                         remote_connection_id: None,
                         remote_ssh_host: None,
-                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
                         reply_route: None,
                         user_message_metadata: None,
                         image_contexts: None,
@@ -7207,7 +7221,9 @@ mod tests {
                         workspace_path: None,
                         remote_connection_id: None,
                         remote_ssh_host: None,
-                        policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                        policy: DialogSubmissionPolicy::for_source(
+                            DialogTriggerSource::AgentSession,
+                        ),
                         reply_route: None,
                         user_message_metadata: None,
                         image_contexts: None,
@@ -7260,7 +7276,7 @@ mod tests {
         // R-AR-02 起生产 deliver 通道输出 = background_subagent_follow_up_message
         // 全文组装（通知句 + 全文），detector 必须命中生产输出而非仅测试模板；
         // 真实用户消息绝不能被误判为后台通知。
-        let notice = background_subagent_follow_up_message(
+        let notice = crate::agentic::coordination::background_subagent_follow_up_message(
             "child-session-1",
             "GeneralPurpose",
             Some(&"full reply body".to_string()),

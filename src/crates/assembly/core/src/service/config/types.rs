@@ -1007,6 +1007,24 @@ pub struct AiThresholdsConfig {
     /// Execution-domain thresholds (R-MR-07 配置域扩展：读取/搜索重复拦截).
     #[serde(default)]
     pub execution: ExecutionThresholds,
+    /// Insight-analysis thresholds (R-THR-01 批2 2-2~2-4：洞察域 8 常量).
+    #[serde(default)]
+    pub insights: InsightsThresholds,
+    /// File-read tool caps (R-THR-01 批2 2-10：文件读取限制).
+    #[serde(default)]
+    pub file_read: FileReadThresholds,
+    /// Session-title generation caps (R-THR-01 批2 2-11：用户消息截断).
+    #[serde(default)]
+    pub session_title: SessionTitleThresholds,
+    /// Persistence caps (R-THR-01 批2 2-12：会话引用转录上限).
+    #[serde(default)]
+    pub persistence: PersistenceThresholds,
+    /// AskUserQuestion caps (R-THR-01 批2 2-1：header 长度).
+    #[serde(default)]
+    pub user_questions: UserQuestionsThresholds,
+    /// Session-control caps (R-THR-01 批2 2-8：会话短名上限).
+    #[serde(default)]
+    pub session_control: SessionControlThresholds,
 }
 
 impl Default for AiThresholdsConfig {
@@ -1024,6 +1042,12 @@ impl Default for AiThresholdsConfig {
             output_tokens: OutputTokensThresholds::default(),
             goal: GoalThresholds::default(),
             execution: ExecutionThresholds::default(),
+            insights: InsightsThresholds::default(),
+            file_read: FileReadThresholds::default(),
+            session_title: SessionTitleThresholds::default(),
+            persistence: PersistenceThresholds::default(),
+            user_questions: UserQuestionsThresholds::default(),
+            session_control: SessionControlThresholds::default(),
         }
     }
 }
@@ -1210,6 +1234,22 @@ pub struct CompressionThresholds {
     /// Maximum retained user tokens. Legacy `MAX_RETAINED_USER_TOKENS = 20_000`.
     #[serde(default = "default_compression_max_retained_user_tokens")]
     pub max_retained_user_tokens: usize,
+    /// Compression trigger as a percentage of the context window
+    /// (`ai.thresholds.compression.trigger_percent`).
+    ///
+    /// R-THR-01 批1：`input_limit = min(legacy fixed-token algorithm, window × percent%)`.
+    /// The percent line is an **upper bound** (compress earlier), so on small windows
+    /// where the legacy algorithm already triggers below the percent line the config
+    /// has no effect (legal, not a bug). Unique default = `None` (legacy algorithm);
+    /// `0` is a legal special value meaning the same as `None`; out-of-range values
+    /// (101+) or non-numbers degrade to `None` (zero behavior change).
+    #[serde(default)]
+    pub trigger_percent: Option<u8>,
+    /// Background follow-up / injection text truncation cap (chars).
+    /// Legacy `BACKGROUND_FOLLOW_UP_TEXT_LIMIT` (coordinator.rs) and
+    /// `BACKGROUND_INJECTION_TEXT_LIMIT` (scheduler.rs) = 16_000.
+    #[serde(default = "default_compression_background_follow_up_text_limit")]
+    pub background_follow_up_text_limit: usize,
 }
 
 impl Default for CompressionThresholds {
@@ -1226,8 +1266,14 @@ impl Default for CompressionThresholds {
             recent_context_tokens: default_compression_recent_context_tokens(),
             retry_step_tokens: default_compression_retry_step_tokens(),
             max_retained_user_tokens: default_compression_max_retained_user_tokens(),
+            trigger_percent: None,
+            background_follow_up_text_limit: default_compression_background_follow_up_text_limit(),
         }
     }
+}
+
+fn default_compression_background_follow_up_text_limit() -> usize {
+    16_000
 }
 
 fn default_compression_safety_reserve_tokens() -> usize {
@@ -1433,6 +1479,14 @@ pub struct ToolTimeoutThresholds {
     /// GetFileDiff new-file content limit (bytes). Legacy `REVIEW_NEW_FILE_CONTENT_LIMIT = 16 KiB`.
     #[serde(default = "default_tool_timeout_diff_new_file_bytes")]
     pub diff_new_file_bytes: u64,
+    /// Browser explicit `wait` upper bound (ms). Legacy `MAX_WAIT_MS = 3_600_000`
+    /// (browser_control/actions.rs).
+    #[serde(default = "default_tool_timeout_browser_max_wait_ms")]
+    pub browser_max_wait_ms: u64,
+    /// Browser condition-wait default timeout (ms). Legacy
+    /// `DEFAULT_CONDITION_TIMEOUT_MS = 15_000` (browser_control/actions.rs).
+    #[serde(default = "default_tool_timeout_browser_condition_timeout_ms")]
+    pub browser_condition_timeout_ms: u64,
 }
 
 impl Default for ToolTimeoutThresholds {
@@ -1451,8 +1505,18 @@ impl Default for ToolTimeoutThresholds {
             diff_page_chars: default_tool_timeout_diff_page_chars(),
             diff_total_chars: default_tool_timeout_diff_total_chars(),
             diff_new_file_bytes: default_tool_timeout_diff_new_file_bytes(),
+            browser_max_wait_ms: default_tool_timeout_browser_max_wait_ms(),
+            browser_condition_timeout_ms: default_tool_timeout_browser_condition_timeout_ms(),
         }
     }
+}
+
+fn default_tool_timeout_browser_max_wait_ms() -> u64 {
+    3_600_000
+}
+
+fn default_tool_timeout_browser_condition_timeout_ms() -> u64 {
+    15_000
 }
 
 fn default_tool_timeout_bash_default_ms() -> u64 {
@@ -1728,6 +1792,18 @@ pub struct MemoryThresholds {
     /// Phase-1 rollout token limit. Legacy `DEFAULT_ROLLOUT_TOKEN_LIMIT = 120_000`.
     #[serde(default = "default_memory_rollout_token_limit")]
     pub rollout_token_limit: usize,
+    /// Phase-1 stage-one max tokens. Legacy `STAGE_ONE_DEFAULT_MAX_TOKENS = 8_192`
+    /// (memories/service.rs).
+    #[serde(default = "default_memory_stage_one_max_tokens")]
+    pub stage_one_max_tokens: usize,
+    /// Phase-1 extraction max attempts. Legacy `PHASE1_EXTRACTION_MAX_ATTEMPTS = 3`
+    /// (memories/service.rs).
+    #[serde(default = "default_memory_phase1_extraction_max_attempts")]
+    pub phase1_extraction_max_attempts: usize,
+    /// Rollout slug max length. Legacy `ROLLOUT_SLUG_MAX_LEN = 60`
+    /// (memories/workspace.rs).
+    #[serde(default = "default_memory_rollout_slug_max_len")]
+    pub rollout_slug_max_len: usize,
 }
 
 impl Default for MemoryThresholds {
@@ -1739,8 +1815,23 @@ impl Default for MemoryThresholds {
             tool_result_token_limit: default_memory_tool_result_token_limit(),
             tool_error_token_limit: default_memory_tool_error_token_limit(),
             rollout_token_limit: default_memory_rollout_token_limit(),
+            stage_one_max_tokens: default_memory_stage_one_max_tokens(),
+            phase1_extraction_max_attempts: default_memory_phase1_extraction_max_attempts(),
+            rollout_slug_max_len: default_memory_rollout_slug_max_len(),
         }
     }
+}
+
+fn default_memory_stage_one_max_tokens() -> usize {
+    8_192
+}
+
+fn default_memory_phase1_extraction_max_attempts() -> usize {
+    3
+}
+
+fn default_memory_rollout_slug_max_len() -> usize {
+    60
 }
 
 fn default_memory_summary_token_limit() -> usize {
@@ -1983,6 +2074,204 @@ fn default_execution_duplicate_message_enabled() -> bool {
 
 fn default_execution_duplicate_message_window() -> usize {
     3
+}
+
+/// Insight-analysis thresholds (`ai.thresholds.insights.*`).
+///
+/// R-THR-01 批2 2-2~2-4：洞察域 8 常量全部配置化，默认值镜像旧硬编码。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InsightsThresholds {
+    /// Transcript cap (chars). Legacy `MAX_TRANSCRIPT_CHARS = 16000` (collector.rs).
+    #[serde(default = "default_insights_max_transcript_chars")]
+    pub max_transcript_chars: usize,
+    /// Per-message text cap (chars). Legacy `MAX_TEXT_PER_MESSAGE = 800` (collector.rs).
+    #[serde(default = "default_insights_max_text_per_message")]
+    pub max_text_per_message: usize,
+    /// Tail reserve (chars). Legacy `TAIL_RESERVE_CHARS = 4000` (collector.rs).
+    #[serde(default = "default_insights_tail_reserve_chars")]
+    pub tail_reserve_chars: usize,
+    /// Activity-gap threshold (secs). Legacy `ACTIVITY_GAP_THRESHOLD_SECS = 30*60` (collector.rs).
+    #[serde(default = "default_insights_activity_gap_threshold_secs")]
+    pub activity_gap_threshold_secs: u64,
+    /// Prompt session-summaries cap. Legacy `MAX_PROMPT_SESSION_SUMMARIES = 50` (prompt_context.rs).
+    #[serde(default = "default_insights_max_prompt_session_summaries")]
+    pub max_prompt_session_summaries: usize,
+    /// Prompt friction-details cap. Legacy `MAX_PROMPT_FRICTION_DETAILS = 20` (prompt_context.rs).
+    #[serde(default = "default_insights_max_prompt_friction_details")]
+    pub max_prompt_friction_details: usize,
+    /// Prompt user-instructions cap. Legacy `MAX_PROMPT_USER_INSTRUCTIONS = 15` (prompt_context.rs).
+    #[serde(default = "default_insights_max_prompt_user_instructions")]
+    pub max_prompt_user_instructions: usize,
+    /// Concurrent facet-extraction cap. Legacy `MAX_CONCURRENT_FACET_EXTRACTIONS = 5` (service.rs).
+    #[serde(default = "default_insights_max_concurrent_facet_extractions")]
+    pub max_concurrent_facet_extractions: usize,
+}
+
+impl Default for InsightsThresholds {
+    fn default() -> Self {
+        Self {
+            max_transcript_chars: default_insights_max_transcript_chars(),
+            max_text_per_message: default_insights_max_text_per_message(),
+            tail_reserve_chars: default_insights_tail_reserve_chars(),
+            activity_gap_threshold_secs: default_insights_activity_gap_threshold_secs(),
+            max_prompt_session_summaries: default_insights_max_prompt_session_summaries(),
+            max_prompt_friction_details: default_insights_max_prompt_friction_details(),
+            max_prompt_user_instructions: default_insights_max_prompt_user_instructions(),
+            max_concurrent_facet_extractions: default_insights_max_concurrent_facet_extractions(),
+        }
+    }
+}
+
+fn default_insights_max_transcript_chars() -> usize {
+    16000
+}
+
+fn default_insights_max_text_per_message() -> usize {
+    800
+}
+
+fn default_insights_tail_reserve_chars() -> usize {
+    4000
+}
+
+fn default_insights_activity_gap_threshold_secs() -> u64 {
+    30 * 60
+}
+
+fn default_insights_max_prompt_session_summaries() -> usize {
+    50
+}
+
+fn default_insights_max_prompt_friction_details() -> usize {
+    20
+}
+
+fn default_insights_max_prompt_user_instructions() -> usize {
+    15
+}
+
+fn default_insights_max_concurrent_facet_extractions() -> usize {
+    5
+}
+
+/// File-read tool caps (`ai.thresholds.file_read.*`).
+///
+/// R-THR-01 批2 2-10：文件读取限制。默认值镜像 `DEFAULT_READ_MAX_TOTAL_CHARS = 64_000`
+/// （file_read_tool.rs；勿混 tool_output_cap.read_chars = 72_000）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileReadThresholds {
+    /// Max total chars per Read call. Legacy `DEFAULT_READ_MAX_TOTAL_CHARS = 64_000`.
+    #[serde(default = "default_file_read_max_total_chars")]
+    pub max_total_chars: usize,
+}
+
+impl Default for FileReadThresholds {
+    fn default() -> Self {
+        Self {
+            max_total_chars: default_file_read_max_total_chars(),
+        }
+    }
+}
+
+fn default_file_read_max_total_chars() -> usize {
+    64_000
+}
+
+/// Session-title generation caps (`ai.thresholds.session_title.*`).
+///
+/// R-THR-01 批2 2-11：用户消息 200 字符截断（session_manager.rs）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionTitleThresholds {
+    /// Truncation cap for user messages fed to title generation. Legacy hard-coded 200.
+    #[serde(default = "default_session_title_truncate_user_message_chars")]
+    pub truncate_user_message_chars: usize,
+}
+
+impl Default for SessionTitleThresholds {
+    fn default() -> Self {
+        Self {
+            truncate_user_message_chars: default_session_title_truncate_user_message_chars(),
+        }
+    }
+}
+
+fn default_session_title_truncate_user_message_chars() -> usize {
+    200
+}
+
+/// Persistence caps (`ai.thresholds.persistence.*`).
+///
+/// R-THR-01 批2 2-12：会话引用转录上限。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PersistenceThresholds {
+    /// Session-reference transcript cap (chars). Legacy
+    /// `SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT = 60_000` (persistence/manager.rs).
+    #[serde(default = "default_persistence_session_reference_transcript_char_limit")]
+    pub session_reference_transcript_char_limit: usize,
+}
+
+impl Default for PersistenceThresholds {
+    fn default() -> Self {
+        Self {
+            session_reference_transcript_char_limit:
+                default_persistence_session_reference_transcript_char_limit(),
+        }
+    }
+}
+
+fn default_persistence_session_reference_transcript_char_limit() -> usize {
+    60_000
+}
+
+/// AskUserQuestion caps (`ai.thresholds.user_questions.*`).
+///
+/// R-THR-01 批2 2-1：提问 header 长度上限。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UserQuestionsThresholds {
+    /// Max header chars per question. Legacy hard-coded 20 (user_questions.rs).
+    #[serde(default = "default_user_questions_header_max_chars")]
+    pub header_max_chars: usize,
+}
+
+impl Default for UserQuestionsThresholds {
+    fn default() -> Self {
+        Self {
+            header_max_chars: default_user_questions_header_max_chars(),
+        }
+    }
+}
+
+fn default_user_questions_header_max_chars() -> usize {
+    20
+}
+
+/// Session-control caps (`ai.thresholds.session_control.*`).
+///
+/// R-THR-01 批2 2-8：会话短名上限。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SessionControlThresholds {
+    /// Max short-name chars. Legacy `SHORT_NAME_MAX_CHARS = 60` (session_control.rs).
+    /// 60 过 / 61 拒边界。
+    #[serde(default = "default_session_control_short_name_max_chars")]
+    pub short_name_max_chars: usize,
+}
+
+impl Default for SessionControlThresholds {
+    fn default() -> Self {
+        Self {
+            short_name_max_chars: default_session_control_short_name_max_chars(),
+        }
+    }
+}
+
+fn default_session_control_short_name_max_chars() -> usize {
+    60
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -2603,6 +2892,162 @@ pub(crate) async fn configured_output_tokens_ratio_percent() -> u32 {
         return MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT;
     }
     ratio
+}
+
+/// Resolve the configured insight-analysis thresholds
+/// (`ai.thresholds.insights.*`), falling back to the legacy hard-coded
+/// constants when the config service is unavailable (R-THR-01 批2 2-2).
+pub(crate) async fn configured_insights_thresholds() -> InsightsThresholds {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return InsightsThresholds::default();
+    };
+    config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+        .map(|thresholds| thresholds.insights)
+        .unwrap_or_default()
+}
+
+/// Resolve the configured AskUserQuestion header max chars
+/// (`ai.thresholds.user_questions.header_max_chars`), falling back to the
+/// legacy hard-coded 20 when unset or invalid (R-THR-01 批2 2-1).
+pub(crate) async fn configured_user_questions_header_max_chars() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return default_user_questions_header_max_chars();
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return default_user_questions_header_max_chars();
+    };
+    let limit = thresholds.user_questions.header_max_chars;
+    if limit == 0 {
+        return default_user_questions_header_max_chars();
+    }
+    limit
+}
+
+/// Resolve the configured session-control short-name max chars
+/// (`ai.thresholds.session_control.short_name_max_chars`), falling back to the
+/// legacy `SHORT_NAME_MAX_CHARS = 60` when unset or invalid
+/// (R-THR-01 批2 2-8；60 过 / 61 拒边界由校验函数保持）。
+pub(crate) async fn configured_session_control_short_name_max_chars() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return default_session_control_short_name_max_chars();
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return default_session_control_short_name_max_chars();
+    };
+    let limit = thresholds.session_control.short_name_max_chars;
+    if limit == 0 {
+        return default_session_control_short_name_max_chars();
+    }
+    limit
+}
+
+/// Resolve the configured file-read max total chars
+/// (`ai.thresholds.file_read.max_total_chars`), falling back to the legacy
+/// `DEFAULT_READ_MAX_TOTAL_CHARS = 64_000` when unset or invalid
+/// (R-THR-01 批2 2-10；勿混 tool_output_cap.read_chars = 72_000）。
+pub(crate) async fn configured_file_read_max_total_chars() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return default_file_read_max_total_chars();
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return default_file_read_max_total_chars();
+    };
+    let limit = thresholds.file_read.max_total_chars;
+    if limit == 0 {
+        return default_file_read_max_total_chars();
+    }
+    limit
+}
+
+/// Resolve the configured session-title user-message truncation cap
+/// (`ai.thresholds.session_title.truncate_user_message_chars`), falling back
+/// to the legacy hard-coded 200 when unset or invalid (R-THR-01 批2 2-11).
+pub(crate) async fn configured_session_title_truncate_user_message_chars() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return default_session_title_truncate_user_message_chars();
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return default_session_title_truncate_user_message_chars();
+    };
+    let limit = thresholds.session_title.truncate_user_message_chars;
+    if limit == 0 {
+        return default_session_title_truncate_user_message_chars();
+    }
+    limit
+}
+
+/// Resolve the configured session-reference transcript char limit
+/// (`ai.thresholds.persistence.session_reference_transcript_char_limit`),
+/// falling back to the legacy
+/// `SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT = 60_000` when unset or invalid
+/// (R-THR-01 批2 2-12).
+pub(crate) async fn configured_persistence_session_reference_transcript_char_limit() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return default_persistence_session_reference_transcript_char_limit();
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return default_persistence_session_reference_transcript_char_limit();
+    };
+    let limit = thresholds
+        .persistence
+        .session_reference_transcript_char_limit;
+    if limit == 0 {
+        return default_persistence_session_reference_transcript_char_limit();
+    }
+    limit
+}
+
+/// Resolve the configured browser timeouts
+/// (`ai.thresholds.tool_timeout.browser_max_wait_ms` /
+/// `browser_condition_timeout_ms`), falling back to the legacy
+/// `MAX_WAIT_MS = 3_600_000` / `DEFAULT_CONDITION_TIMEOUT_MS = 15_000` when
+/// unset or invalid (R-THR-01 批2 2-9).
+pub(crate) async fn configured_browser_timeouts() -> (u64, u64) {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return (
+            default_tool_timeout_browser_max_wait_ms(),
+            default_tool_timeout_browser_condition_timeout_ms(),
+        );
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return (
+            default_tool_timeout_browser_max_wait_ms(),
+            default_tool_timeout_browser_condition_timeout_ms(),
+        );
+    };
+    let t = &thresholds.tool_timeout;
+    (
+        if t.browser_max_wait_ms == 0 {
+            default_tool_timeout_browser_max_wait_ms()
+        } else {
+            t.browser_max_wait_ms
+        },
+        if t.browser_condition_timeout_ms == 0 {
+            default_tool_timeout_browser_condition_timeout_ms()
+        } else {
+            t.browser_condition_timeout_ms
+        },
+    )
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3376,9 +3821,9 @@ impl AIModelConfig {
 mod tests {
     use super::{
         AIConfig, AIExperienceConfig, AIModelConfig, AgentModelDefaultsConfig, AgentProfileConfig,
-        AgentProfileView, AppConfig, AppLoggingConfig, AuthConfig, GlobalConfig,
-        MemoryExternalContextPolicy, ModelExchangeTracingMode, NotificationConfig, OpenCodePlan,
-        SubagentBatchExecutionPolicy, SubagentModelSelection, SubscriptionProvider,
+        AgentProfileView, AiThresholdsConfig, AppConfig, AppLoggingConfig, AuthConfig,
+        GlobalConfig, MemoryExternalContextPolicy, ModelExchangeTracingMode, NotificationConfig,
+        OpenCodePlan, SubagentBatchExecutionPolicy, SubagentModelSelection, SubscriptionProvider,
         UserSkillGroupsConfig, UserToolGroupsConfig,
     };
     use bitfun_runtime_ports::ToolPermissionConfig;
@@ -4389,12 +4834,18 @@ mod tests {
         assert_eq!(execution.duplicate_tool_calls, 5);
         assert_eq!(execution.no_progress_results, 5);
         assert_eq!(execution.tool_calls_per_turn, 30);
-        assert!(execution.empty_input_guard, "empty_input_guard 默认开启（CEO 定标）");
+        assert!(
+            execution.empty_input_guard,
+            "empty_input_guard 默认开启（CEO 定标）"
+        );
         assert!(
             execution.duplicate_message_enabled,
             "duplicate_message_enabled 默认开启（R-MR-10 主人定标）"
         );
-        assert_eq!(execution.duplicate_message_window, 3, "窗口默认 3（R-MR-10）");
+        assert_eq!(
+            execution.duplicate_message_window, 3,
+            "窗口默认 3（R-MR-10）"
+        );
 
         // Unset config（空 AIConfig）反序列化得到相同默认值（零回归）。
         let empty: AIConfig =
@@ -4480,5 +4931,167 @@ mod tests {
         assert!(execution.empty_input_guard);
         assert!(execution.duplicate_message_enabled);
         assert_eq!(execution.duplicate_message_window, 3);
+    }
+
+    #[test]
+    fn compression_trigger_percent_defaults_to_none_and_round_trips() {
+        // R-THR-01 批1：唯一默认 = None（现算法，向前兼容）；显式值 round-trip。
+        let defaulted = AiThresholdsConfig::default();
+        assert_eq!(defaulted.compression.trigger_percent, None);
+
+        let empty: AiThresholdsConfig =
+            serde_json::from_value(serde_json::json!({})).expect("empty should default");
+        assert_eq!(empty.compression.trigger_percent, None);
+
+        let configured: AiThresholdsConfig = serde_json::from_value(serde_json::json!({
+            "compression": { "trigger_percent": 85 }
+        }))
+        .expect("trigger_percent should deserialize");
+        assert_eq!(configured.compression.trigger_percent, Some(85));
+
+        let serialized = serde_json::to_value(&configured).expect("should serialize");
+        assert_eq!(serialized["compression"]["trigger_percent"], 85);
+
+        // 0 = 合法特殊值（同 None 行为，但保留字面值以便前端展示）。
+        let zero: AiThresholdsConfig = serde_json::from_value(serde_json::json!({
+            "compression": { "trigger_percent": 0 }
+        }))
+        .expect("0 should deserialize");
+        assert_eq!(zero.compression.trigger_percent, Some(0));
+
+        // 非法值（101）反序列化仍为 Some(101)（值校验在消费点回退 None）。
+        let invalid: AiThresholdsConfig = serde_json::from_value(serde_json::json!({
+            "compression": { "trigger_percent": 101 }
+        }))
+        .expect("101 should deserialize as raw value");
+        assert_eq!(invalid.compression.trigger_percent, Some(101));
+    }
+
+    #[test]
+    fn r_thr_01_batch2_new_domains_default_and_round_trip() {
+        // R-THR-01 批2：新增域默认值 = 旧常量（零行为变化），显式值 round-trip。
+        let defaulted = AiThresholdsConfig::default();
+
+        // insights 域（2-2/3/4，8 常量）
+        assert_eq!(defaulted.insights.max_transcript_chars, 16000);
+        assert_eq!(defaulted.insights.max_text_per_message, 800);
+        assert_eq!(defaulted.insights.tail_reserve_chars, 4000);
+        assert_eq!(defaulted.insights.activity_gap_threshold_secs, 30 * 60);
+        assert_eq!(defaulted.insights.max_prompt_session_summaries, 50);
+        assert_eq!(defaulted.insights.max_prompt_friction_details, 20);
+        assert_eq!(defaulted.insights.max_prompt_user_instructions, 15);
+        assert_eq!(defaulted.insights.max_concurrent_facet_extractions, 5);
+
+        // compression 域补 background_follow_up_text_limit（2-5，16_000）
+        assert_eq!(
+            defaulted.compression.background_follow_up_text_limit,
+            16_000
+        );
+
+        // memories 域补齐（2-6/7）
+        assert_eq!(defaulted.memories.stage_one_max_tokens, 8_192);
+        assert_eq!(defaulted.memories.phase1_extraction_max_attempts, 3);
+        assert_eq!(defaulted.memories.rollout_slug_max_len, 60);
+
+        // tool_timeout 域补浏览器超时（2-9）
+        assert_eq!(defaulted.tool_timeout.browser_max_wait_ms, 3_600_000);
+        assert_eq!(defaulted.tool_timeout.browser_condition_timeout_ms, 15_000);
+
+        // file_read 域（2-10，64_000）
+        assert_eq!(defaulted.file_read.max_total_chars, 64_000);
+
+        // session_title 域（2-11，200）
+        assert_eq!(defaulted.session_title.truncate_user_message_chars, 200);
+
+        // persistence 域（2-12，60_000）
+        assert_eq!(
+            defaulted
+                .persistence
+                .session_reference_transcript_char_limit,
+            60_000
+        );
+
+        // user_questions 域（2-1，20）
+        assert_eq!(defaulted.user_questions.header_max_chars, 20);
+
+        // session_control 域（2-8，60）
+        assert_eq!(defaulted.session_control.short_name_max_chars, 60);
+
+        // 显式值 round-trip
+        let configured: AiThresholdsConfig = serde_json::from_value(serde_json::json!({
+            "insights": {
+                "max_transcript_chars": 32000,
+                "max_text_per_message": 1200,
+                "tail_reserve_chars": 8000,
+                "activity_gap_threshold_secs": 3600,
+                "max_prompt_session_summaries": 60,
+                "max_prompt_friction_details": 30,
+                "max_prompt_user_instructions": 25,
+                "max_concurrent_facet_extractions": 8
+            },
+            "compression": { "background_follow_up_text_limit": 32000 },
+            "memories": {
+                "stage_one_max_tokens": 4096,
+                "phase1_extraction_max_attempts": 5,
+                "rollout_slug_max_len": 40
+            },
+            "tool_timeout": {
+                "browser_max_wait_ms": 7200000,
+                "browser_condition_timeout_ms": 30000
+            },
+            "file_read": { "max_total_chars": 128000 },
+            "session_title": { "truncate_user_message_chars": 400 },
+            "persistence": { "session_reference_transcript_char_limit": 120000 },
+            "user_questions": { "header_max_chars": 40 },
+            "session_control": { "short_name_max_chars": 80 }
+        }))
+        .expect("batch2 overrides should deserialize");
+
+        assert_eq!(configured.insights.max_transcript_chars, 32000);
+        assert_eq!(configured.insights.max_text_per_message, 1200);
+        assert_eq!(configured.insights.tail_reserve_chars, 8000);
+        assert_eq!(configured.insights.activity_gap_threshold_secs, 3600);
+        assert_eq!(configured.insights.max_prompt_session_summaries, 60);
+        assert_eq!(configured.insights.max_prompt_friction_details, 30);
+        assert_eq!(configured.insights.max_prompt_user_instructions, 25);
+        assert_eq!(configured.insights.max_concurrent_facet_extractions, 8);
+        assert_eq!(
+            configured.compression.background_follow_up_text_limit,
+            32000
+        );
+        assert_eq!(configured.memories.stage_one_max_tokens, 4096);
+        assert_eq!(configured.memories.phase1_extraction_max_attempts, 5);
+        assert_eq!(configured.memories.rollout_slug_max_len, 40);
+        assert_eq!(configured.tool_timeout.browser_max_wait_ms, 7_200_000);
+        assert_eq!(configured.tool_timeout.browser_condition_timeout_ms, 30_000);
+        assert_eq!(configured.file_read.max_total_chars, 128_000);
+        assert_eq!(configured.session_title.truncate_user_message_chars, 400);
+        assert_eq!(
+            configured
+                .persistence
+                .session_reference_transcript_char_limit,
+            120_000
+        );
+        assert_eq!(configured.user_questions.header_max_chars, 40);
+        assert_eq!(configured.session_control.short_name_max_chars, 80);
+    }
+
+    #[test]
+    fn r_thr_01_batch2_empty_config_keeps_legacy_defaults() {
+        // R-THR-01 批2：空配置（{}）反序列化 → 全部新域保持默认（零行为变化铁证）。
+        let empty: AiThresholdsConfig =
+            serde_json::from_value(serde_json::json!({})).expect("empty should default");
+        assert_eq!(empty.insights.max_transcript_chars, 16000);
+        assert_eq!(empty.compression.background_follow_up_text_limit, 16_000);
+        assert_eq!(empty.memories.stage_one_max_tokens, 8_192);
+        assert_eq!(empty.tool_timeout.browser_max_wait_ms, 3_600_000);
+        assert_eq!(empty.file_read.max_total_chars, 64_000);
+        assert_eq!(empty.session_title.truncate_user_message_chars, 200);
+        assert_eq!(
+            empty.persistence.session_reference_transcript_char_limit,
+            60_000
+        );
+        assert_eq!(empty.user_questions.header_max_chars, 20);
+        assert_eq!(empty.session_control.short_name_max_chars, 60);
     }
 }

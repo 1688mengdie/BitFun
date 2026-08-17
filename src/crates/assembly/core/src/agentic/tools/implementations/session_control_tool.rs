@@ -233,6 +233,7 @@ impl SessionControlTool {
         SessionControlValidationContext {
             current_session_id: context.and_then(|value| value.session_id.as_deref()),
             has_workspace_root: context.and_then(|value| value.workspace_root()).is_some(),
+            short_name_max_chars: None,
         }
     }
 
@@ -748,7 +749,8 @@ pub(crate) async fn resolve_session_mutation_authorization(
     // R-26 / user-owner semantics: the top-level main session (no created_by)
     // is the owner and may act on any session. Cancel keeps the historical
     // stricter gate (no owner bypass).
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
+    let caller_is_owner =
+        options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     let acp_flow_session = is_acp_flow_session_id(target_session_id);
     let (created_by_match, orphan_delete_authorized) = {
@@ -905,7 +907,8 @@ pub(crate) async fn resolve_session_read_authorization(
     }
 
     // owner 豁免：Commander 角色或 RBAC 关闭（与 delete 的 owner 语义一致）。
-    let caller_is_owner = options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
+    let caller_is_owner =
+        options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
 
     // created_by 匹配：`session-<caller>` 标记（R-2）。
     let created_by_match = session_manager
@@ -1004,8 +1007,13 @@ pub(crate) async fn enforce_session_create_workspace_hierarchy(
     }
 
     // 非 L0：caller 必须是 L1（depth==1 的子会话），才能创建 L2。
-    let caller_depth =
-        session_tree_depth(session_manager, tree, caller_workspace_path, caller_session_id).await;
+    let caller_depth = session_tree_depth(
+        session_manager,
+        tree,
+        caller_workspace_path,
+        caller_session_id,
+    )
+    .await;
     match caller_depth {
         Some(1) => {
             // L1：只可创建 L2（depth==2，继承 L1 工作区）。同区已在上方
@@ -1243,7 +1251,10 @@ pub(crate) fn build_session_tree_json_impl(
         // output so tree consumers can render dots/markers without re-deriving.
         map.insert(
             "display_state".to_string(),
-            json!(session.display_state.clone().unwrap_or_else(|| status.clone())),
+            json!(session
+                .display_state
+                .clone()
+                .unwrap_or_else(|| status.clone())),
         );
         if orphaned.contains(session.session_id.as_str()) {
             map.insert("orphaned".to_string(), json!(true));
@@ -1344,7 +1355,12 @@ fn build_compact_tree_lines(
         };
         format!(
             "- [{}] {} | {} | {} | {}{}",
-            session.session_id, session.agent_type, status, display_state, display_name, orphan_marker
+            session.session_id,
+            session.agent_type,
+            status,
+            display_state,
+            display_name,
+            orphan_marker
         )
     }
 
@@ -1583,10 +1599,16 @@ Arguments:
             }
         };
 
-        Self::into_validation_result(validate_session_control_input(
-            &parsed,
-            Self::validation_context(context),
-        ))
+        // R-THR-01 批2 2-8：短名上限配置化（`ai.thresholds.session_control.short_name_max_chars`），
+        // 覆盖 context 默认（None = 60）。
+        let short_name_max_chars =
+            crate::service::config::types::configured_session_control_short_name_max_chars()
+                .await
+                .max(1);
+        let mut validation_ctx = Self::validation_context(context);
+        validation_ctx.short_name_max_chars = Some(short_name_max_chars);
+
+        Self::into_validation_result(validate_session_control_input(&parsed, validation_ctx))
     }
 
     fn render_tool_use_message(&self, input: &Value, _options: &ToolRenderOptions) -> String {
@@ -2234,10 +2256,7 @@ Arguments:
                     })?;
 
                 // Filter out daemon sessions
-                let sessions: Vec<_> = sessions
-                    .into_iter()
-                    .filter(|s| !s.is_daemon)
-                    .collect();
+                let sessions: Vec<_> = sessions.into_iter().filter(|s| !s.is_daemon).collect();
 
                 // Resolve compact short names from persisted session metadata
                 // (custom_metadata.shortName, written by create when a
@@ -2943,7 +2962,6 @@ mod tests {
         .expect("creator should be authorized to delete");
     }
 
-
     #[test]
     fn worktree_context_keeps_project_scope_for_session_operations() {
         let worktree_path = PathBuf::from("/worktrees/wt-1");
@@ -3189,10 +3207,7 @@ mod tests {
             .expect("cascade_failures array");
         assert_eq!(surfaced.len(), 2);
         assert_eq!(surfaced[0]["session_id"], "child_1");
-        assert_eq!(
-            surfaced[0]["reason"],
-            "skipped: daemon child session"
-        );
+        assert_eq!(surfaced[0]["reason"], "skipped: daemon child session");
         assert_eq!(surfaced[1]["session_id"], "child_2");
         assert_eq!(surfaced[1]["reason"], "storage write failed");
     }
@@ -3205,10 +3220,6 @@ mod tests {
             .expect("cascade_failures array present");
         assert!(surfaced.is_empty());
     }
-
-
-
-
 
     #[test]
     fn acp_flow_session_id_is_recognized() {
@@ -4134,7 +4145,9 @@ mod tests {
         .await
         .expect_err("cross-workspace create must be rejected");
         assert!(
-            error.to_string().contains("cross-workspace create is not allowed"),
+            error
+                .to_string()
+                .contains("cross-workspace create is not allowed"),
             "{error}"
         );
     }
@@ -4234,7 +4247,9 @@ mod tests {
         .await
         .expect_err("L1 cross-workspace create must be rejected");
         assert!(
-            error.to_string().contains("cross-workspace create is not allowed"),
+            error
+                .to_string()
+                .contains("cross-workspace create is not allowed"),
             "{error}"
         );
     }
@@ -4300,7 +4315,9 @@ mod tests {
         .await
         .expect_err("L2 session must not create further children");
         assert!(
-            error.to_string().contains("only L0 main sessions can create L1"),
+            error
+                .to_string()
+                .contains("only L0 main sessions can create L1"),
             "{error}"
         );
     }
@@ -4336,10 +4353,6 @@ mod tests {
         )
         .await
         .expect_err("child without resolvable depth must be rejected");
-        assert!(
-            error.to_string().contains("no resolvable depth"),
-            "{error}"
-        );
+        assert!(error.to_string().contains("no resolvable depth"), "{error}");
     }
 }
-

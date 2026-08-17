@@ -33,7 +33,9 @@
       "recent_context_tokens": "保留近期上下文（token）",
       "retry_step_tokens": "压缩重试步长（token）",
       "max_retained_user_tokens": "保留用户消息上限（token）",
-      "image_bearing_messages": "图片消息轮次上限"
+      "image_bearing_messages": "图片消息轮次上限",
+      "trigger_percent": "压缩触发百分比（占上下文窗口）",
+      "background_follow_up_text_limit": "后台回复截断上限（字符）"
     },
     "model_retry": {
       "__title": "模型流重试",
@@ -66,7 +68,9 @@
       "mcp_render_chars": "MCP 渲染字符上限",
       "diff_page_chars": "Diff 分页预算（字符）",
       "diff_total_chars": "Diff 总预算（字符）",
-      "diff_new_file_bytes": "Diff 新文件上限（字节）"
+      "diff_new_file_bytes": "Diff 新文件上限（字节）",
+      "browser_max_wait_ms": "浏览器等待上限（毫秒）",
+      "browser_condition_timeout_ms": "浏览器条件等待超时（毫秒）"
     },
     "knowledge_search": {
       "__title": "知识库搜索",
@@ -104,7 +108,10 @@
       "tool_input_token_limit": "转录工具入参 token 上限",
       "tool_result_token_limit": "转录工具结果 token 上限",
       "tool_error_token_limit": "转录工具错误 token 上限",
-      "rollout_token_limit": "滚动提取 token 上限"
+      "rollout_token_limit": "滚动提取 token 上限",
+      "stage_one_max_tokens": "阶段一最大 token",
+      "phase1_extraction_max_attempts": "阶段一提取最大重试次数",
+      "rollout_slug_max_len": "滚动提取 slug 最大长度"
     },
     "output_tokens": {
       "__title": "输出 token 档位",
@@ -126,6 +133,37 @@
       "no_progress_results": "工具结果无变化轮阈值",
       "tool_calls_per_turn": "单轮对话工具调用总数上限",
       "empty_input_guard": "拦截空输入轮"
+    },
+    "insights": {
+      "__title": "洞察分析",
+      "max_transcript_chars": "转录上限（字符）",
+      "max_text_per_message": "单条消息文本上限（字符）",
+      "tail_reserve_chars": "尾部保留（字符）",
+      "activity_gap_threshold_secs": "活跃间隔阈值（秒）",
+      "max_prompt_session_summaries": "提示词会话摘要上限",
+      "max_prompt_friction_details": "提示词摩擦详情上限",
+      "max_prompt_user_instructions": "提示词用户指令上限",
+      "max_concurrent_facet_extractions": "facet 提取并发上限"
+    },
+    "file_read": {
+      "__title": "文件读取",
+      "max_total_chars": "单次 Read 最大字符数"
+    },
+    "session_title": {
+      "__title": "会话标题",
+      "truncate_user_message_chars": "用户消息截断（字符）"
+    },
+    "persistence": {
+      "__title": "持久化",
+      "session_reference_transcript_char_limit": "会话引用转录上限（字符）"
+    },
+    "user_questions": {
+      "__title": "AskUserQuestion",
+      "header_max_chars": "提问 header 最大字符数"
+    },
+    "session_control": {
+      "__title": "会话控制",
+      "short_name_max_chars": "会话短名最大字符数"
     }
   }
 }

@@ -4052,10 +4052,15 @@ impl PersistenceManager {
         // Pick complete turns backwards from the newest one. The first turn
         // is admitted whenever the current total is below the limit, even if
         // that individual turn crosses it; this keeps references coherent.
+        // R-THR-01 批2 2-12：上限配置化（`ai.thresholds.persistence.session_reference_transcript_char_limit`）。
+        let char_limit =
+            crate::service::config::types::configured_persistence_session_reference_transcript_char_limit()
+                .await
+                .max(1);
         let mut selected_indices_reversed = Vec::new();
         let mut selected_turn_chars = 0usize;
         for index in (0..all_turns.len()).rev() {
-            if selected_turn_chars >= SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT {
+            if selected_turn_chars >= char_limit {
                 break;
             }
             selected_turn_chars += rendered_turn_char_count(&all_turns[index], &options);

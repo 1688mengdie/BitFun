@@ -49,6 +49,8 @@ interface ThresholdsShape {
     retry_step_tokens: number;
     max_retained_user_tokens: number;
     image_bearing_messages: number;
+    trigger_percent: number;
+    background_follow_up_text_limit: number;
   };
   model_retry: {
     max_attempts: number;
@@ -79,6 +81,8 @@ interface ThresholdsShape {
     diff_page_chars: number;
     diff_total_chars: number;
     diff_new_file_bytes: number;
+    browser_max_wait_ms: number;
+    browser_condition_timeout_ms: number;
   };
   knowledge_search: {
     max_scan_file_bytes: number;
@@ -113,6 +117,9 @@ interface ThresholdsShape {
     tool_result_token_limit: number;
     tool_error_token_limit: number;
     rollout_token_limit: number;
+    stage_one_max_tokens: number;
+    phase1_extraction_max_attempts: number;
+    rollout_slug_max_len: number;
   };
   output_tokens: { automatic_tiers: number[]; ratio_percent: number };
   goal: { idle_wakeup_delay_ms: number; max_auto_continuations: number };
@@ -125,6 +132,21 @@ interface ThresholdsShape {
     tool_calls_per_turn: number;
     empty_input_guard: boolean;
   };
+  insights: {
+    max_transcript_chars: number;
+    max_text_per_message: number;
+    tail_reserve_chars: number;
+    activity_gap_threshold_secs: number;
+    max_prompt_session_summaries: number;
+    max_prompt_friction_details: number;
+    max_prompt_user_instructions: number;
+    max_concurrent_facet_extractions: number;
+  };
+  file_read: { max_total_chars: number };
+  session_title: { truncate_user_message_chars: number };
+  persistence: { session_reference_transcript_char_limit: number };
+  user_questions: { header_max_chars: number };
+  session_control: { short_name_max_chars: number };
 }
 
 const DEFAULT_THRESHOLDS: ThresholdsShape = {
@@ -148,6 +170,8 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     retry_step_tokens: 10_000,
     max_retained_user_tokens: 20_000,
     image_bearing_messages: 2,
+    trigger_percent: 85,
+    background_follow_up_text_limit: 16_000,
   },
   model_retry: {
     max_attempts: 10,
@@ -178,6 +202,8 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     diff_page_chars: 40_000,
     diff_total_chars: 80_000,
     diff_new_file_bytes: 16_384,
+    browser_max_wait_ms: 3_600_000,
+    browser_condition_timeout_ms: 15_000,
   },
   knowledge_search: {
     max_scan_file_bytes: 2_097_152,
@@ -211,6 +237,9 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     tool_result_token_limit: 12_000,
     tool_error_token_limit: 1_000,
     rollout_token_limit: 120_000,
+    stage_one_max_tokens: 8_192,
+    phase1_extraction_max_attempts: 3,
+    rollout_slug_max_len: 60,
   },
   output_tokens: { automatic_tiers: [8_000, 16_000, 24_000, 32_000, 64_000], ratio_percent: 40 },
   goal: { idle_wakeup_delay_ms: 600_000, max_auto_continuations: 10 },
@@ -223,6 +252,21 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     tool_calls_per_turn: 30,
     empty_input_guard: true,
   },
+  insights: {
+    max_transcript_chars: 16_000,
+    max_text_per_message: 800,
+    tail_reserve_chars: 4_000,
+    activity_gap_threshold_secs: 1_800,
+    max_prompt_session_summaries: 50,
+    max_prompt_friction_details: 20,
+    max_prompt_user_instructions: 15,
+    max_concurrent_facet_extractions: 5,
+  },
+  file_read: { max_total_chars: 64_000 },
+  session_title: { truncate_user_message_chars: 200 },
+  persistence: { session_reference_transcript_char_limit: 60_000 },
+  user_questions: { header_max_chars: 20 },
+  session_control: { short_name_max_chars: 60 },
 };
 
 function deepMerge(base: ThresholdsShape, patch: Partial<ThresholdsShape> | null | undefined): ThresholdsShape {
@@ -371,6 +415,8 @@ export default function ThresholdsConfig() {
       renderField('compression', 'retry_step_tokens', 1, 100),
       renderField('compression', 'max_retained_user_tokens', 1, 100),
       renderField('compression', 'image_bearing_messages', 1),
+      renderField('compression', 'trigger_percent', 0),
+      renderField('compression', 'background_follow_up_text_limit', 1, 100),
     ]);
     add('model_retry', [
       renderField('model_retry', 'max_attempts', 1),
@@ -401,6 +447,8 @@ export default function ThresholdsConfig() {
       renderField('tool_timeout', 'diff_page_chars', 1, 100),
       renderField('tool_timeout', 'diff_total_chars', 1, 100),
       renderField('tool_timeout', 'diff_new_file_bytes', 1, 100),
+      renderField('tool_timeout', 'browser_max_wait_ms', 1, 1000),
+      renderField('tool_timeout', 'browser_condition_timeout_ms', 1, 100),
     ]);
     add('knowledge_search', [
       renderField('knowledge_search', 'max_scan_file_bytes', 1, 1024),
@@ -435,6 +483,9 @@ export default function ThresholdsConfig() {
       renderField('memories', 'tool_result_token_limit', 1, 10),
       renderField('memories', 'tool_error_token_limit', 1, 10),
       renderField('memories', 'rollout_token_limit', 1, 100),
+      renderField('memories', 'stage_one_max_tokens', 1, 100),
+      renderField('memories', 'phase1_extraction_max_attempts', 1),
+      renderField('memories', 'rollout_slug_max_len', 1),
     ]);
     add('output_tokens', [
       renderField('output_tokens', 'ratio_percent', 1),
@@ -462,6 +513,31 @@ export default function ThresholdsConfig() {
       renderField('execution', 'no_progress_results', 1),
       renderField('execution', 'tool_calls_per_turn', 1),
       renderToggle('execution', 'empty_input_guard'),
+    ]);
+    add('insights', [
+      renderField('insights', 'max_transcript_chars', 1, 100),
+      renderField('insights', 'max_text_per_message', 1, 100),
+      renderField('insights', 'tail_reserve_chars', 1, 100),
+      renderField('insights', 'activity_gap_threshold_secs', 1, 100),
+      renderField('insights', 'max_prompt_session_summaries', 1),
+      renderField('insights', 'max_prompt_friction_details', 1),
+      renderField('insights', 'max_prompt_user_instructions', 1),
+      renderField('insights', 'max_concurrent_facet_extractions', 1),
+    ]);
+    add('file_read', [
+      renderField('file_read', 'max_total_chars', 1, 100),
+    ]);
+    add('session_title', [
+      renderField('session_title', 'truncate_user_message_chars', 1, 100),
+    ]);
+    add('persistence', [
+      renderField('persistence', 'session_reference_transcript_char_limit', 1, 100),
+    ]);
+    add('user_questions', [
+      renderField('user_questions', 'header_max_chars', 1),
+    ]);
+    add('session_control', [
+      renderField('session_control', 'short_name_max_chars', 1),
     ]);
 
     return sections;

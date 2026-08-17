@@ -6954,9 +6954,7 @@ impl SessionManager {
                 // evidence is left intact (no should_persist flag from the state
                 // downgrade itself).
                 if session.interrupt_reason.is_none() {
-                    session.interrupt_reason = Some(
-                        "recovered_after_hung_restore".to_string(),
-                    );
+                    session.interrupt_reason = Some("recovered_after_hung_restore".to_string());
                 }
                 warn!(
                     "Recovering crash-leftover hung session to Idle with explicit interrupt marker: session_id={}, state={:?} -> Idle, disk Processing evidence preserved",
@@ -7663,18 +7661,16 @@ impl SessionManager {
                 // R-WF-11: project the seven-state display value from persisted
                 // lifecycle markers so restarts keep hung/interrupted/
                 // pending-attention/viewed.
-                let (last_progress_at, interrupt_reason, needs_attention, viewed) =
-                    stored_state.as_ref().map_or(
-                        (None, None, false, false),
-                        |value| {
-                            (
-                                value.last_progress_at,
-                                value.interrupt_reason.clone(),
-                                value.needs_attention,
-                                value.viewed,
-                            )
-                        },
-                    );
+                let (last_progress_at, interrupt_reason, needs_attention, viewed) = stored_state
+                    .as_ref()
+                    .map_or((None, None, false, false), |value| {
+                        (
+                            value.last_progress_at,
+                            value.interrupt_reason.clone(),
+                            value.needs_attention,
+                            value.viewed,
+                        )
+                    });
                 // R-WF-24 fix A: overlay the live in-memory state for sessions
                 // owned by this process. The persisted snapshot can lag the
                 // in-memory state in the narrow window between setting the
@@ -10425,9 +10421,20 @@ impl SessionManager {
             max_length, language_instruction
         );
 
-        // Truncate message to save tokens (max 200 characters)
-        let truncated_message = if user_message.chars().count() > 200 {
-            format!("{}...", user_message.chars().take(200).collect::<String>())
+        // Truncate message to save tokens. R-THR-01 批2 2-11：上限配置化
+        // （`ai.thresholds.session_title.truncate_user_message_chars`，默认 200）。
+        let truncate_chars =
+            crate::service::config::types::configured_session_title_truncate_user_message_chars()
+                .await
+                .max(1);
+        let truncated_message = if user_message.chars().count() > truncate_chars {
+            format!(
+                "{}...",
+                user_message
+                    .chars()
+                    .take(truncate_chars)
+                    .collect::<String>()
+            )
         } else {
             user_message.to_string()
         };
@@ -10941,8 +10948,8 @@ mod tests {
     use super::{
         should_auto_migrate_session_model, CoreSessionStorePort, PermissionMode,
         SessionExecutionBindingError, SessionExecutionBindingUpdate, SessionManager,
-        SessionManagerConfig, CONTEXT_SNAPSHOT_FLUSH_DEBOUNCE, DELETED_SESSION_IDS_FILE_NAME,
-        TEST_MODEL_RESOLUTION_AI_CONFIG, TurnAdmissionSessionFacts,
+        SessionManagerConfig, TurnAdmissionSessionFacts, CONTEXT_SNAPSHOT_FLUSH_DEBOUNCE,
+        DELETED_SESSION_IDS_FILE_NAME, TEST_MODEL_RESOLUTION_AI_CONFIG,
     };
     use crate::agentic::core::{
         CompressionState, InternalReminderKind, Message, MessageContent, MessageRole,
@@ -15602,9 +15609,8 @@ mod tests {
             phase: ProcessingPhase::Thinking,
         };
         // Crash leftover: last observable progress predates the hung timeout.
-        session.last_progress_at = Some(
-            SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60),
-        );
+        session.last_progress_at =
+            Some(SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60));
 
         persistence_manager
             .save_session(workspace.path(), &session)
@@ -15636,8 +15642,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_restore_of_crash_leftover_hung_session_records_explicit_handling_and_keeps_disk_evidence()
-    {
+    async fn full_restore_of_crash_leftover_hung_session_records_explicit_handling_and_keeps_disk_evidence(
+    ) {
         let workspace = TestWorkspace::new();
         let persistence_manager = Arc::new(
             PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
@@ -15658,9 +15664,8 @@ mod tests {
             phase: ProcessingPhase::Thinking,
         };
         // Crash leftover: stale progress beyond the hung timeout.
-        session.last_progress_at = Some(
-            SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60),
-        );
+        session.last_progress_at =
+            Some(SystemTime::now() - DEFAULT_HUNG_TIMEOUT - Duration::from_secs(60));
 
         persistence_manager
             .save_session(workspace.path(), &session)
@@ -15711,8 +15716,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn view_restore_of_crash_leftover_hung_session_within_hung_timeout_keeps_stuck_projection()
-    {
+    async fn view_restore_of_crash_leftover_hung_session_within_hung_timeout_keeps_stuck_projection(
+    ) {
         // R-WF-11 P1-1: a crash followed by an immediate restart (< 600s) must
         // not be silently rewritten into Completed. A persisted Processing is
         // a crash leftover no matter how fresh `last_progress_at` looks, so the
@@ -15937,10 +15942,7 @@ mod tests {
 
         let session = manager
             .create_session_with_id_and_details(
-                Some(format!(
-                    "lineage-persist-test-{}",
-                    Uuid::new_v4()
-                )),
+                Some(format!("lineage-persist-test-{}", Uuid::new_v4())),
                 "Review child".to_string(),
                 "CodeReview".to_string(),
                 SessionConfig {
@@ -18525,7 +18527,10 @@ mod tests {
         }
         manager
             .persistence_manager
-            .save_session(workspace.path(), &*manager.sessions.get(&session_id).expect("live"))
+            .save_session(
+                workspace.path(),
+                &*manager.sessions.get(&session_id).expect("live"),
+            )
             .await
             .expect("disk snapshot should persist");
         manager
