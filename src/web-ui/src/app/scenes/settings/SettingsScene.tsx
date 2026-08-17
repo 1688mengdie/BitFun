@@ -33,6 +33,7 @@ import {
   SessionPermissionsConfig,
   SessionPersonalizationConfig,
   ThresholdsConfig,
+  UsageStatisticsConfig,
   VoiceInputConfig,
   WorktreesConfig,
   isSettingsTabContentReady,
@@ -62,6 +63,7 @@ function resolveSettingsContent(tab: ConfigTab): React.ComponentType | null {
     case 'basics':                  return BasicsConfig;
     case 'appearance':              return AppearanceConfig;
     case 'models':                  return AIModelConfig;
+    case 'usage-statistics':        return UsageStatisticsConfig;
     case 'archived-sessions':       return ArchivedSessionsConfig;
     case 'worktrees':               return WorktreesConfig;
     case 'session-personalization': return SessionPersonalizationConfig;

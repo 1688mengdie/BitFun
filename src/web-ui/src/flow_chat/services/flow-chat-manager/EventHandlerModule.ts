@@ -89,7 +89,7 @@ import {
   scheduleModelResponseStatus,
 } from './RuntimeStatusModule';
 import { clearRuntimeStatusState } from '../../store/runtimeStatusStore';
-import { requestPeerSessionRefresh } from './PeerSessionRefreshModule';
+import { requestRuntimeProjectionRepair } from './PeerSessionRefreshModule';
 import { isPeerDeviceModeActive } from '@/infrastructure/peer-device/peerModeFlag';
 import {
   optimisticTurnAdoptionKey,
@@ -237,7 +237,7 @@ function logDroppedDataEvent(
   turnId: string | null,
   details: Record<string, unknown>
 ): void {
-  requestPeerSessionRefresh(sessionId);
+  requestRuntimeProjectionRepair(sessionId);
   log.debug('Dropped agentic data event', {
     eventName,
     sessionId,
@@ -299,15 +299,6 @@ function recoverIdleLatestTurnDataEvent(
   return true;
 }
 
-/**
- * UI-04: When an ACP directly-delivered session receives a later-turn data event
- * in a non-streaming state (IDLE/ERROR), align with recoverIdleLatestTurnDataEvent
- * semantics: update currentDialogTurnId and (when IDLE) START, so subsequent
- * streaming events are not dropped due to state_not_accepting_data / turn_id_mismatch.
- * Relaxation: recoverIdleLatestTurnDataEvent requires currentDialogTurnId to be
- * empty and the turn to be the session's last turn; ACP sessions allow
- * currentDialogTurnId to already have a value while the target turn advances.
- */
 function recoverAcpIdleTurnForDataEvent(
   sessionId: string,
   turnId: string,
@@ -370,6 +361,29 @@ function recoverAcpIdleTurnForDataEvent(
     currentState,
   });
   return true;
+}
+
+function isRecoveringIdleTurn(
+  sessionId: string,
+  turnId: string | null,
+  currentState: SessionExecutionState,
+  currentDialogTurnId: string | null,
+): boolean {
+  if (
+    currentState !== SessionExecutionState.IDLE ||
+    !turnId ||
+    currentDialogTurnId !== turnId
+  ) {
+    return false;
+  }
+
+  const session = FlowChatStore.getInstance().getState().sessions.get(sessionId);
+  const latestTurn = session?.dialogTurns[session.dialogTurns.length - 1];
+  return Boolean(
+    latestTurn &&
+    latestTurn.id === turnId &&
+    RECOVERABLE_IDLE_TURN_STATUSES.has(latestTurn.status)
+  );
 }
 
 function handleDeepReviewQueueStateChanged(event: DeepReviewQueueStateChangedEvent): void {
@@ -1037,13 +1051,10 @@ export function shouldProcessEvent(
       return true;
     }
 
-    // UI-04: When a non-streaming ACP session (IDLE/ERROR) receives a later-turn
-    // data event, recover with recoverIdleLatestTurnDataEvent semantics
-    // (update currentDialogTurnId + START), so ACP-delegated replies are not
-    // dropped when the state machine is ready but the turn has advanced.
     if (
-      turnId &&
-      recoverAcpIdleTurnForDataEvent(sessionId, turnId, currentState, context.currentDialogTurnId)
+      isRecoveringIdleTurn(sessionId, turnId, currentState, context.currentDialogTurnId) ||
+      (turnId &&
+        recoverAcpIdleTurnForDataEvent(sessionId, turnId, currentState, context.currentDialogTurnId))
     ) {
       return true;
     }
@@ -2285,7 +2296,7 @@ function handleTextChunk(context: FlowChatContext, event: any): void {
         ?.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
     }
     if (!dialogTurn) {
-      requestPeerSessionRefresh(sessionId);
+      requestRuntimeProjectionRepair(sessionId);
       log.debug('Dialog turn not found', { turnId });
       return;
     }
@@ -2464,7 +2475,7 @@ function handleModelRoundStart(context: FlowChatContext, event: ModelRoundStarte
 
   const dialogTurn = session.dialogTurns.find((turn: DialogTurn) => turn.id === turnId);
   if (!dialogTurn) {
-    requestPeerSessionRefresh(sessionId);
+    requestRuntimeProjectionRepair(sessionId);
     log.debug('Dialog turn not found (model round start)', { turnId });
     return;
   }

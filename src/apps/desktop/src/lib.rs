@@ -1308,6 +1308,7 @@ pub async fn run() {
             api::agentic_api::delete_session_tree,
             api::agentic_api::restore_session,
             api::agentic_api::restore_session_view,
+            api::agentic_api::load_session_event_backfill,
             api::agentic_api::load_session_turn_window,
             api::agentic_api::restore_session_with_turns,
             api::agentic_api::reset_memory,
@@ -1495,6 +1496,8 @@ pub async fn run() {
             add_skill,
             delete_skill,
             git_is_repository,
+            git_get_repository_trust,
+            git_trust_repository,
             git_get_repository_basic,
             git_resolve_revision,
             git_get_repository,
@@ -1904,6 +1907,8 @@ pub async fn run() {
             api::insights_api::load_insights_report,
             api::insights_api::has_insights_data,
             api::insights_api::cancel_insights_generation,
+            // Token usage statistics API
+            api::token_usage_api::get_token_usage_statistics,
             // SSH Remote API
             api::ssh_api::ssh_list_saved_connections,
             api::ssh_api::ssh_save_connection,
