@@ -111,6 +111,7 @@ import { profileAppearanceDescriptor } from '@/app/scenes/profile/appearance';
 import { sessionAppearanceDescriptor } from '@/app/scenes/session/appearance';
 import { settingsAppearanceDescriptor } from '@/app/scenes/settings/appearance';
 import { skillsAppearanceDescriptor } from '@/app/scenes/skills/appearance';
+import { toolsAppearanceDescriptor } from '@/app/scenes/tools/appearance';
 import { terminalAppearanceDescriptor } from '@/app/scenes/terminal/appearance';
 import { aboutDialogAppearanceDescriptor } from '@/app/components/AboutDialog/appearance';
 import { navPanelAppearanceDescriptor } from '@/app/components/NavPanel/appearance';
@@ -583,6 +584,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerScene(sessionAppearanceDescriptor)
     .registerScene(settingsAppearanceDescriptor)
     .registerScene(skillsAppearanceDescriptor)
+    .registerScene(toolsAppearanceDescriptor)
     .registerScene(terminalAppearanceDescriptor)
     .registerScene(todosSceneAppearanceDescriptor)
     .registerRenderer(cssTokenAppearanceAdapter)

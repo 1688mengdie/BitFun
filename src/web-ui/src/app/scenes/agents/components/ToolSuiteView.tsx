@@ -15,7 +15,7 @@ import {
   resolveToolGroups,
 } from './toolGroups';
 import { GroupManagerModal as ToolGroupManagerModal } from './ToolGroupPicker';
-import '../skills/SkillsScene.scss';
+import '../../skills/SkillsScene.scss';
 
 const log = createLogger('ToolSuiteView');
 
@@ -170,7 +170,7 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
 
   const isSaving = savingAction !== null || resettingModeId !== null;
 
-  const loadModeTools = useCallback(async (forceRefresh?: boolean) => {
+  const loadModeTools = useCallback(async (_forceRefresh?: boolean) => {
     const requestId = ++loadRequestIdRef.current;
     try {
       setLoading(true);
