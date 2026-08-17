@@ -42,8 +42,9 @@ use crate::agentic::agents::{get_agent_registry, ExternalSubagentModelBinding};
 use crate::agentic::context_profile::ContextProfilePolicy;
 use crate::agentic::core::{
     InternalReminderKind, Message, MessageContent, MessageSemanticKind, ProcessingPhase, Session,
-    SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy, SessionKind,
-    SessionModelBindingPolicy, SessionState, SessionSummary, ToolCall, ToolResult, TurnStats,
+    SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy, SessionDisplayState,
+    SessionKind, SessionModelBindingPolicy, SessionState, SessionSummary, ToolCall, ToolResult,
+    TurnStats,
 };
 use crate::agentic::events::{
     AgenticEvent, DeepReviewQueueState, EventPriority, EventQueue, EventRouter, EventSubscriber,
@@ -14636,6 +14637,34 @@ pub(crate) fn runtime_transcript_messages_from_turns(
     messages
 }
 
+/// R-WF-24 fix B: project a busy display for an otherwise-idle summary when
+/// the scheduler still tracks background activity for that session.
+///
+/// The window is real: `process_turn_outcome` (scheduler.rs:3222) clears
+/// `active_turns` asynchronously after the coordinator has already reset the
+/// in-memory state to `Idle` and persisted it, so list consumers can observe
+/// "memory Idle + active turn still tracked" for milliseconds to seconds.
+///
+/// Only `Idle` summaries are eligible — a genuinely `Processing`/`Error`
+/// session is never downgraded or rewritten. The busy predicate is injected so
+/// the projection stays a pure, unit-testable function (the real caller wires
+/// `DialogScheduler::is_session_busy_or_queued`, which reads `active_turns`).
+fn apply_scheduler_busy_projection(
+    summary: &mut SessionSummary,
+    scheduler_busy: impl Fn(&str) -> bool,
+) -> bool {
+    if matches!(summary.state, SessionState::Idle) && scheduler_busy(&summary.session_id) {
+        summary.state = SessionState::Processing {
+            current_turn_id: summary.session_id.clone(),
+            phase: ProcessingPhase::Starting,
+        };
+        summary.display_state = SessionDisplayState::Processing;
+        true
+    } else {
+        false
+    }
+}
+
 fn runtime_session_summary(session: SessionSummary) -> bitfun_runtime_ports::AgentSessionSummary {
     let status = Some(
         match &session.state {
@@ -14775,6 +14804,17 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
                         if summary.parent_session_id.is_none() {
                             summary.parent_session_id =
                                 self.session_tree.get_parent(&summary.session_id);
+                        }
+                        // R-WF-24 fix B: project busy when the scheduler still
+                        // tracks background activity for an otherwise-idle
+                        // summary (async outcome window). `display_state` is
+                        // already correct for live in-memory sessions after
+                        // fix A; this closes the remaining "Idle + active turn"
+                        // gap at the output boundary.
+                        if let Some(scheduler) = get_global_scheduler() {
+                            apply_scheduler_busy_projection(&mut summary, |session_id| {
+                                scheduler.is_session_busy_or_queued(session_id)
+                            });
                         }
                         runtime_session_summary(summary)
                     })
@@ -16420,9 +16460,9 @@ fn merge_prepended_messages_for_turn(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_primary_agent_model_default, background_subagent_follow_up_message,
-        btw_session_memory_mode, build_subagent_session_relationship,
-        commit_interrupted_turn_intent, is_main_session_by_creator,
+        apply_primary_agent_model_default, apply_scheduler_busy_projection,
+        background_subagent_follow_up_message, btw_session_memory_mode,
+        build_subagent_session_relationship, commit_interrupted_turn_intent, is_main_session_by_creator,
         lineage_active_turn_after_transcript,
         lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
         logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
@@ -16447,7 +16487,8 @@ mod tests {
     use crate::agentic::core::{
         InternalReminderKind, Message, MessageContent, MessageRole, MessageSemanticKind,
         ProcessingPhase, Session, SessionAgentRouteOwner, SessionConfig, SessionContinuationPolicy,
-        SessionKind, SessionModelBindingPolicy, SessionState, ToolCall, TurnStats,
+        SessionDisplayState, SessionKind, SessionModelBindingPolicy, SessionState, SessionSummary,
+        ToolCall, TurnStats,
     };
     use crate::agentic::events::{AgenticEvent, EventQueue, EventQueueConfig, EventRouter};
     use crate::agentic::execution::{
@@ -16849,6 +16890,107 @@ mod tests {
         });
 
         assert_eq!(summary.model_id.as_deref(), Some("fast"));
+    }
+
+    // R-WF-24 fix B: an otherwise-idle summary must project busy/processing
+    // while the scheduler still tracks background activity for it (the async
+    // outcome window: memory already Idle but active_turns not yet cleared).
+    // The projection is a pure function taking an injected busy predicate so
+    // the test does not depend on the global scheduler singleton.
+    #[test]
+    fn scheduler_busy_projection_marks_idle_session_as_processing() {
+        let mut summary = SessionSummary {
+            session_id: "busy-session".to_string(),
+            session_name: "Busy".to_string(),
+            agent_type: "agentic".to_string(),
+            model_id: None,
+            reasoning_preset: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            created_by: None,
+            kind: SessionKind::Standard,
+            turn_count: 2,
+            created_at: std::time::UNIX_EPOCH,
+            last_activity_at: std::time::UNIX_EPOCH,
+            state: SessionState::Idle,
+            display_state: SessionDisplayState::Completed,
+            parent_session_id: None,
+            is_daemon: false,
+        };
+
+        // Narrow window: scheduler still tracks an active turn for this
+        // otherwise-idle session -> busy projection must apply.
+        let projected = apply_scheduler_busy_projection(&mut summary, |id| {
+            id == "busy-session"
+        });
+        assert!(projected, "idle + active turn must project busy");
+        assert_eq!(summary.display_state, SessionDisplayState::Processing);
+        assert!(
+            matches!(summary.state, SessionState::Processing { .. }),
+            "state must be projected to Processing so status maps to active"
+        );
+    }
+
+    #[test]
+    fn scheduler_busy_projection_leaves_idle_session_untouched_when_no_active_turn() {
+        let mut summary = SessionSummary {
+            session_id: "calm-session".to_string(),
+            session_name: "Calm".to_string(),
+            agent_type: "agentic".to_string(),
+            model_id: None,
+            reasoning_preset: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            created_by: None,
+            kind: SessionKind::Standard,
+            turn_count: 3,
+            created_at: std::time::UNIX_EPOCH,
+            last_activity_at: std::time::UNIX_EPOCH,
+            state: SessionState::Idle,
+            display_state: SessionDisplayState::Completed,
+            parent_session_id: None,
+            is_daemon: false,
+        };
+
+        let projected = apply_scheduler_busy_projection(&mut summary, |_| false);
+        assert!(!projected, "no active turn -> no busy projection");
+        assert_eq!(summary.display_state, SessionDisplayState::Completed);
+        assert_eq!(summary.state, SessionState::Idle);
+    }
+
+    #[test]
+    fn scheduler_busy_projection_does_not_downgrade_processing_state() {
+        let mut summary = SessionSummary {
+            session_id: "active-session".to_string(),
+            session_name: "Active".to_string(),
+            agent_type: "agentic".to_string(),
+            model_id: None,
+            reasoning_preset: None,
+            last_user_dialog_agent_type: None,
+            last_submitted_agent_type: None,
+            created_by: None,
+            kind: SessionKind::Standard,
+            turn_count: 1,
+            created_at: std::time::UNIX_EPOCH,
+            last_activity_at: std::time::UNIX_EPOCH,
+            state: SessionState::Processing {
+                current_turn_id: "turn-9".to_string(),
+                phase: ProcessingPhase::Streaming,
+            },
+            display_state: SessionDisplayState::Processing,
+            parent_session_id: None,
+            is_daemon: false,
+        };
+
+        // Already Processing -> the projection is a no-op (only Idle is
+        // eligible for the busy upgrade).
+        let projected = apply_scheduler_busy_projection(&mut summary, |_| true);
+        assert!(!projected);
+        assert_eq!(summary.display_state, SessionDisplayState::Processing);
+        assert!(
+            matches!(summary.state, SessionState::Processing { .. }),
+            "processing state must never be downgraded or rewritten"
+        );
     }
     use crate::runtime_ownership::CoreRuntimeOwnership;
     use crate::service::config::types::{
