@@ -13,8 +13,8 @@ use bitfun_agent_runtime::scheduler::{
 use bitfun_runtime_ports::{
     AgentInputAttachment, AgentSessionReplyRoute, DialogQueuePriority, DialogSessionStateFact,
     DialogSteerOutcome, DialogSubmissionPolicy, DialogTriggerSource, RoundInjection,
-    RoundInjectionExecutionPolicy, RoundInjectionKind, RoundInjectionTarget,
-    RoundInjectionToolPreemption, ThreadGoal, ThreadGoalStatus,
+    RoundInjectionKind, RoundInjectionTarget, RoundInjectionToolPreemption, ThreadGoal,
+    ThreadGoalStatus,
 };
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -901,34 +901,4 @@ fn assert_reminder_server_time_matches_metadata(reminder_text: &str, metadata_se
         &server_time_line["Server time: ".len()..],
         metadata_server_time
     );
-}
-
-#[test]
-fn round_injection_cancel_running_tools_is_write_tool_safe() {
-    let buffer = Arc::new(SessionRoundInjectionBuffer::default());
-    buffer.push(
-        "s1",
-        RoundInjection {
-            id: "steer-cancel".to_string(),
-            kind: RoundInjectionKind::UserSteering,
-            execution_policy: RoundInjectionExecutionPolicy::new(
-                RoundInjectionToolPreemption::CancelRunningCooperatively,
-            ),
-            target: RoundInjectionTarget::CurrentRunningTurn,
-            content: "stop".to_string(),
-            display_content: "stop".to_string(),
-            attachments: Vec::new(),
-            metadata: serde_json::Map::new(),
-            created_at: SystemTime::now(),
-            prepended_reminders: Vec::new(),
-        },
-    );
-    let interrupt =
-        DialogRoundInjectionInterrupt::new("s1".to_string(), "turn-1".to_string(), buffer);
-
-    // R-WF-22: 写文件类工具执行中 → CancelRunning 延迟（write guard 拦截）。
-    assert!(interrupt.should_cancel_running_tools());
-    assert!(!interrupt.should_cancel_running_tools_after_write_guard(true));
-    // 无写类工具执行 → 照常立即取消。
-    assert!(interrupt.should_cancel_running_tools_after_write_guard(false));
 }

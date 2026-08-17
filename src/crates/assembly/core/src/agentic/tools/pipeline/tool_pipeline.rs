@@ -823,10 +823,11 @@ pub struct ToolPipeline {
     /// result 返回。中间插入其他工具调用 / 其他目标 / 文本产出 → 计数重置
     /// （交叉引用 A→B→A 不误伤）。配置：`ai.thresholds.execution.*`。
     repeated_read_states: Arc<TokioMutex<HashMap<String, RepeatedReadSessionState>>>,
-    /// R-WF-22 写文件类工具（Write/Edit/Delete/ExecCommand）执行中保护：
-    /// 记录正在原子单元内执行的写类工具 task id 集合。round injection 的
-    /// CancelRunning 路径见到写类工具在执行中时，延迟到原子单元完成后才
-    /// 触发取消——避免中途打断造成半写文件。零类型变更：仅消费点逻辑。
+    /// R-WF-22: write-like tool (Write/Edit/Delete/ExecCommand) in-flight
+    /// protection. Tracks the task ids currently executing inside an atomic
+    /// unit. When a round injection CancelRunning path sees a write-like tool
+    /// still running, cancellation is deferred until the atomic unit completes
+    /// to avoid half-written files. Zero type changes: consumer-side logic only.
     active_write_like_tools: Arc<TokioMutex<HashSet<String>>>,
 }
 
@@ -1470,9 +1471,10 @@ impl ToolPipeline {
             .unwrap_or(RoundInjectionToolPreemption::None)
     }
 
-    /// R-WF-22: 写文件类工具（is_write_like_tool_name 命中）是否仍在原子
-    /// 单元内执行。为 true 时，round injection 的中断/取消必须延迟到该
-    /// 工具完整结束之后，避免中途打断造成半写文件。
+    /// R-WF-22: whether a write-like tool (matched by is_write_like_tool_name)
+    /// is still executing inside an atomic unit. When true, round injection
+    /// interruption/cancellation must be deferred until the tool fully
+    /// completes to avoid half-written files.
     async fn has_active_write_like_tools(&self) -> bool {
         !self.active_write_like_tools.lock().await.is_empty()
     }
@@ -1490,9 +1492,11 @@ impl ToolPipeline {
         self.active_write_like_tools.lock().await.remove(tool_id);
     }
 
-    /// R-WF-22 注入判定消费点：写类工具执行中时，把「应中断/应取消」整体
-    /// 返回「等当前原子单元完成」——后续剩余工具计划照常被跳过，但当前
-    /// 写操作本身不被打断。读类工具不受影响（保持原立即生效语义）。
+    /// R-WF-22 injection decision consumer: while a write-like tool is
+    /// running, both interrupt/cancel signals resolve to "wait for the
+    /// current atomic unit" — the remaining tool plan is still skipped as
+    /// before, but the in-flight write operation itself is not interrupted.
+    /// Read-like tools keep the original immediate-interrupt semantics.
     async fn should_interrupt_for_round_injection(
         &self,
         context: &ToolExecutionContext,
@@ -1503,17 +1507,20 @@ impl ToolPipeline {
             return false;
         }
         if is_write_like_tool_name(tool_name) && self.has_active_write_like_tools().await {
-            // 写类工具正在原子单元内执行：注入延迟到该原子单元完成后。
-            // 语义上等价于 InterruptAfterCurrentAtomicUnit——等当前写完。
+            // A write-like tool is inside its atomic unit: defer the
+            // injection until it completes. Semantically equivalent to
+            // InterruptAfterCurrentAtomicUnit — wait for the write.
             return false;
         }
         true
     }
 
-    /// R-WF-22 round injection 打断路径（CancelRunningCooperatively/
-    /// Forcefully → cancel_tool）的写工具保护消费点：有写类工具执行中时
-    /// 返回 true，取消动作应延迟到原子单元完成后（由执行侧在工具结束后
-    /// 再补取消）；无写类工具在执行时照常立即取消。
+    /// R-WF-22 write-tool protection consumer for the round injection
+    /// interruption path (CancelRunningCooperatively/Forcefully → cancel_tool):
+    /// returns true while a write-like tool is running, deferring the cancel
+    /// until the atomic unit completes (the execution side cancels after the
+    /// tool finishes); with no write-like tool running, cancel proceeds
+    /// immediately as before.
     async fn should_defer_cancel_for_active_write_like_tools(&self) -> bool {
         self.has_active_write_like_tools().await
     }
@@ -1599,8 +1606,10 @@ impl ToolPipeline {
 
             loop {
                 if interrupt.should_cancel_running_tools() {
-                    // R-WF-22: 写文件类工具执行中 → 延迟到原子单元完成后
-                    // 才允许取消（避免半写）。无写类工具执行时照常立即取消。
+                    // R-WF-22: while a write-like tool is running, defer the
+                    // cancel until the atomic unit completes (avoid
+                    // half-written files). With no write-like tool running,
+                    // cancel proceeds immediately as before.
                     if pipeline
                         .should_defer_cancel_for_active_write_like_tools()
                         .await
@@ -2103,8 +2112,9 @@ impl ToolPipeline {
 
     /// Execute single tool
     async fn execute_single_tool(&self, tool_id: String) -> BitFunResult<ToolExecutionResult> {
-        // R-WF-22: 写文件类工具原子单元执行期保护——进入执行即登记，全部
-        // 返回路径（成功/失败/取消/拒绝/超时）必须配对清除。
+        // R-WF-22: write-like atomic-unit protection — register on entry;
+        // every return path (success/failure/cancel/reject/timeout) must
+        // pair with mark_write_like_tool_finished.
         let tool_name = self
             .state_manager
             .get_task(&tool_id)
@@ -5122,7 +5132,7 @@ mod tests {
     #[tokio::test]
     async fn write_like_tool_in_flight_defers_round_injection_cancel_until_complete() {
         let pipeline = test_tool_pipeline();
-        // 写类工具用长时间执行模拟「原子单元执行中」。
+        // Use a long-running write tool to simulate an in-flight atomic unit.
         register_static_test_tool(&pipeline, "Write", json!({ "ok": true }), 500).await;
 
         let buffer = Arc::new(SessionRoundInjectionBuffer::default());
@@ -5154,7 +5164,8 @@ mod tests {
             .await
             .expect("write tool should complete despite cooperative cancel");
 
-        // 写类工具原子单元必须完整结束（无强制取消/无半写）。
+        // The write-like atomic unit must complete fully (no forced cancel /
+        // no half-written file).
         assert_eq!(results.len(), 1);
         assert!(!results[0].result.is_error);
         assert_eq!(results[0].result.result["ok"], json!(true));
@@ -5164,7 +5175,8 @@ mod tests {
     #[tokio::test]
     async fn read_like_tool_in_flight_is_cancelled_immediately_by_round_injection() {
         let pipeline = test_tool_pipeline();
-        // 读类工具长执行：注入后应被立即取消（不被 write guard 保护）。
+        // Long-running read tool: injection should cancel it immediately
+        // (it is not protected by the write guard).
         register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 30_000).await;
 
         let buffer = Arc::new(SessionRoundInjectionBuffer::default());
@@ -5196,10 +5208,55 @@ mod tests {
             .await
             .expect("read tool cancellation should surface as a tool result");
 
-        // 读类工具不受写保护：注入立即生效（cancelled）。
+        // Read-like tools are not protected by the write guard: the
+        // injection takes effect immediately (cancelled).
         assert_eq!(results.len(), 1);
         assert!(results[0].result.is_error);
         assert_eq!(results[0].result.result["category"], json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn write_like_tool_in_flight_defers_forceful_cancel_until_complete() {
+        // P2: CancelRunningForcefully variant — the write guard defers the
+        // forceful cancel until the atomic unit completes too.
+        let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Write", json!({ "ok": true }), 500).await;
+
+        let buffer = Arc::new(SessionRoundInjectionBuffer::default());
+        let buffer_for_injection = buffer.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(50)).await;
+            buffer_for_injection.push(
+                "session_1",
+                test_round_injection(
+                    RoundInjectionKind::UserSteering,
+                    RoundInjectionToolPreemption::CancelRunningForcefully,
+                ),
+            );
+        });
+
+        let mut context = test_tool_execution_context();
+        context.steering_interrupt = Some(DialogRoundInjectionInterrupt::new(
+            "session_1".to_string(),
+            "turn_1".to_string(),
+            buffer,
+        ));
+        let options = ToolExecutionOptions {
+            allow_parallel: false,
+            ..Default::default()
+        };
+
+        let results = pipeline
+            .execute_tools(vec![test_tool_call("tool_1", "Write")], context, options)
+            .await
+            .expect("write tool should complete despite forceful cancel");
+
+        // The write-like atomic unit must still complete fully (no forced
+        // cancel / no half-written file) under the forceful preemption.
+        assert_eq!(results.len(), 1);
+        assert!(!results[0].result.is_error);
+        assert_eq!(results[0].result.result["ok"], json!(true));
+        assert_ne!(results[0].result.result["category"], json!("cancelled"));
     }
 
     #[test]
