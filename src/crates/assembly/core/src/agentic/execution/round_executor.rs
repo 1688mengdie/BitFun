@@ -285,6 +285,50 @@ impl RoundExecutor {
         }
     }
 
+    /// True when a provider error is an HTTP 401/403 classified as an
+    /// authentication or permission failure, which triggers the subscription
+    /// credential auto-refresh and one retry.
+    fn is_subscription_auth_failure(error: Option<&AiProviderError>) -> bool {
+        error.is_some_and(|error| {
+            matches!(
+                error.category,
+                ErrorCategory::Auth | ErrorCategory::Permission
+            ) && matches!(error.http_status, Some(401) | Some(403))
+        })
+    }
+
+    /// Force-refreshes the subscription credential for the round's model and
+    /// drops the cached client. Returns `Ok(true)` when a refresh happened and
+    /// the caller should retry once; `Ok(false)` when the model does not use
+    /// subscription auth or subscription support is not compiled.
+    async fn force_refresh_subscription(context: &RoundContext) -> anyhow::Result<bool> {
+        #[cfg(not(feature = "subscription-auth"))]
+        {
+            let _ = context;
+            return Ok(false);
+        }
+        #[cfg(feature = "subscription-auth")]
+        {
+            let factory = crate::infrastructure::ai::get_global_ai_client_factory().await?;
+            let global_config: crate::service::config::types::GlobalConfig =
+                match GlobalConfigManager::get_service().await {
+                    Ok(service) => service.get_config(None).await.unwrap_or_default(),
+                    Err(_) => Default::default(),
+                };
+            let proxy_config = global_config
+                .ai
+                .proxy
+                .enabled
+                .then_some(global_config.ai.proxy);
+            crate::infrastructure::ai::force_refresh_subscription_for_model(
+                &factory,
+                &context.model_config_id,
+                proxy_config,
+            )
+            .await
+        }
+    }
+
     pub fn new(
         stream_processor: Arc<StreamProcessor>,
         event_queue: Arc<EventQueue>,
@@ -434,6 +478,28 @@ impl RoundExecutor {
                     error!("AI request failed: {}", e);
                     let provider_error = e.downcast_ref::<AiProviderError>().cloned();
                     let err_msg = e.to_string();
+                    // 401/403 subscription auto-refresh: force-refresh the
+                    // provider credential, drop the cached client, and retry
+                    // once with a fresh token. Mirrors the CLI contract
+                    // (`openResponse`: 401/403 -> forceRefreshToken -> retry
+                    // once); `non_retryable_keywords` below must not mark
+                    // these as permanently dead for subscription models.
+                    if Self::is_subscription_auth_failure(provider_error.as_ref())
+                        && local_attempt_index < max_attempts - 1
+                    {
+                        if let Ok(refreshed) = Self::force_refresh_subscription(&context).await {
+                            if refreshed {
+                                warn!(
+                                    "Subscription credential refreshed after 401/403; retrying once: session_id={}, round_id={}, model_config_id={}",
+                                    context.session_id,
+                                    round_id,
+                                    context.model_config_id
+                                );
+                                local_attempt_index += 1;
+                                continue;
+                            }
+                        }
+                    }
                     if local_attempt_index < max_attempts - 1 {
                         self.record_retry_diagnostic(
                             &context,
@@ -2353,6 +2419,42 @@ mod tests {
         assert_eq!(RoundExecutor::retry_delay_ms(5), 16_000);
         assert_eq!(RoundExecutor::retry_delay_ms(6), 30_000);
         assert_eq!(RoundExecutor::retry_delay_ms(9), 30_000);
+    }
+
+    #[test]
+    fn subscription_auth_401_403_triggers_auto_refresh_decision() {
+        // Contract: 401/403 on a subscription model must take the
+        // force-refresh-then-retry-once path instead of being classified as
+        // permanently non-retryable.
+        let auth_401 = bitfun_core_types::errors::AiProviderError::from_parts(
+            "client error 401 Unauthorized".to_string(),
+            Some("qoder".to_string()),
+            None,
+            Some(401),
+        );
+        assert!(RoundExecutor::is_subscription_auth_failure(Some(&auth_401)));
+
+        let permission_403 = bitfun_core_types::errors::AiProviderError::from_parts(
+            "client error 403 Forbidden".to_string(),
+            Some("qoder".to_string()),
+            None,
+            Some(403),
+        );
+        assert!(RoundExecutor::is_subscription_auth_failure(Some(
+            &permission_403
+        )));
+
+        // Non-auth failures (rate limit, quota) must NOT take the refresh path.
+        let rate_limit = bitfun_core_types::errors::AiProviderError::from_parts(
+            "too many requests".to_string(),
+            Some("qoder".to_string()),
+            None,
+            Some(429),
+        );
+        assert!(!RoundExecutor::is_subscription_auth_failure(Some(
+            &rate_limit
+        )));
+        assert!(!RoundExecutor::is_subscription_auth_failure(None));
     }
 
     #[test]

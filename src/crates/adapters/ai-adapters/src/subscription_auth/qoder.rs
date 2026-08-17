@@ -541,6 +541,50 @@ mod tests {
     }
 
     #[test]
+    fn ensure_fresh_with_force_attempts_a_network_refresh() {
+        // Contract guard: `force` must bypass the freshness check and call the
+        // refresh endpoint even for an unexpired credential. The refresh call
+        // targets the real openapi host, which is unreachable in unit tests, so
+        // the expected outcome is a transport error (proving the force path
+        // attempted the refresh) rather than a silent reuse of the stored token.
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-subauth-qoder-forced-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Oauth {
+                    refresh: "r".to_string(),
+                    access: "stale-access".to_string(),
+                    expires: now_ms() + 3_600_000,
+                    account_id: None,
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            let outcome = ensure_fresh(&SubscriptionHttpOptions::default(), true).await;
+            match outcome {
+                Err(error) => {
+                    let text = error.to_string();
+                    assert!(
+                        text.contains("refresh") || text.contains("send request"),
+                        "force refresh must reach the network refresh path, got: {text}"
+                    );
+                }
+                Ok(_) => panic!("force refresh must not reuse the stored token"),
+            }
+        });
+    }
+
+    #[test]
     fn machine_id_falls_back_to_uuid() {
         let first = recover_machine_id();
         let second = recover_machine_id();
