@@ -7619,15 +7619,32 @@ impl SessionManager {
                             )
                         },
                     );
-                let display_state = crate::agentic::core::state::derive_display_state(
-                    &state,
-                    metadata.turn_count,
-                    interrupt_reason.as_deref(),
-                    needs_attention,
-                    viewed,
-                    last_progress_at,
-                    SystemTime::now(),
-                );
+                // R-WF-24 fix A: overlay the live in-memory state for sessions
+                // owned by this process. The persisted snapshot can lag the
+                // in-memory state in the narrow window between setting the
+                // runtime state and the async persistence write completing
+                // (e.g. turn start sets Processing in memory before the disk
+                // write finishes; turn completion resets Idle in memory before
+                // the disk flush). This realizes the R-WF-11 comment at
+                // 554-556 ("the view path overlays the live in-memory state
+                // when the current process owns the session").
+                let (state, display_state) =
+                    if let Some(live) = self.sessions.get(&metadata.session_id) {
+                        (live.state.clone(), live.display_state())
+                    } else {
+                        // Out-of-process session (no live in-memory entry):
+                        // keep the disk-snapshot projection unchanged.
+                        let display_state = crate::agentic::core::state::derive_display_state(
+                            &state,
+                            metadata.turn_count,
+                            interrupt_reason.as_deref(),
+                            needs_attention,
+                            viewed,
+                            last_progress_at,
+                            SystemTime::now(),
+                        );
+                        (state, display_state)
+                    };
                 summaries.push(SessionSummary {
                     session_id: metadata.session_id,
                     session_name: metadata.session_name,
@@ -18207,6 +18224,181 @@ mod tests {
         assert!(
             !deleted_ids_after_recreate.contains(&session_id),
             "re-creation must durably clear the on-disk tombstone"
+        );
+    }
+
+    // R-WF-24 fix A: the persisted list branch must overlay the live
+    // in-memory state for sessions owned by this process (the R-WF-11 comment
+    // at session_manager.rs:554-556 promised this but never implemented it).
+    // The narrow window simulated here is "memory already Processing, disk
+    // snapshot still Idle" (the gap between setting the in-memory state and
+    // the async persistence write completing).
+    #[tokio::test]
+    async fn persisted_list_overlays_in_memory_processing_state_over_disk_snapshot() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager);
+        let session = manager
+            .create_session(
+                "overlay-processing".to_string(),
+                "agent".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should create");
+        let session_id = session.session_id.clone();
+
+        // Simulate the narrow window: the turn start set the in-memory state
+        // to Processing but the persistence write has not completed yet, so
+        // the on-disk snapshot is still the creation-time Idle.
+        {
+            let mut live = manager
+                .sessions
+                .get_mut(&session_id)
+                .expect("session should be live in memory");
+            live.state = SessionState::Processing {
+                current_turn_id: "turn-1".to_string(),
+                phase: ProcessingPhase::ToolCalling,
+            };
+        }
+
+        let summaries = manager
+            .list_sessions_with_options(workspace.path(), false)
+            .await
+            .expect("list sessions");
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .expect("session should be listed");
+        // The persisted branch must project the live in-memory state, not the
+        // stale disk Idle snapshot.
+        assert_eq!(
+            summary.state,
+            SessionState::Processing {
+                current_turn_id: "turn-1".to_string(),
+                phase: ProcessingPhase::ToolCalling,
+            },
+            "persisted list must overlay the in-memory Processing state"
+        );
+        assert_eq!(
+            summary.display_state,
+            SessionDisplayState::Processing,
+            "persisted list display_state must match the in-memory state"
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_list_keeps_disk_snapshot_for_sessions_not_in_memory() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager);
+        let session = manager
+            .create_session(
+                "external-session".to_string(),
+                "agent".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should create");
+        let session_id = session.session_id.clone();
+
+        // Force the on-disk snapshot to carry a distinct state, then evict the
+        // session from memory so only the disk snapshot remains (the
+        // out-of-process view: another process owns the session).
+        {
+            let mut live = manager
+                .sessions
+                .get_mut(&session_id)
+                .expect("session should be live in memory");
+            live.state = SessionState::Processing {
+                current_turn_id: "turn-ext".to_string(),
+                phase: ProcessingPhase::Compacting,
+            };
+        }
+        manager
+            .persistence_manager
+            .save_session(workspace.path(), &*manager.sessions.get(&session_id).expect("live"))
+            .await
+            .expect("disk snapshot should persist");
+        manager
+            .sessions
+            .remove(&session_id)
+            .expect("session should evict from memory");
+
+        let summaries = manager
+            .list_sessions_with_options(workspace.path(), false)
+            .await
+            .expect("list sessions");
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .expect("session should still be listed from disk");
+        // No live in-memory session -> the disk snapshot path stays untouched.
+        assert_eq!(
+            summary.state,
+            SessionState::Processing {
+                current_turn_id: "turn-ext".to_string(),
+                phase: ProcessingPhase::Compacting,
+            },
+            "out-of-process sessions must keep the disk snapshot projection"
+        );
+    }
+
+    #[tokio::test]
+    async fn persisted_list_normal_completion_is_not_misreported_as_busy() {
+        let workspace = TestWorkspace::new();
+        let persistence_manager = Arc::new(
+            PersistenceManager::new(workspace.path_manager()).expect("persistence manager"),
+        );
+        let manager = test_manager(persistence_manager);
+        let session = manager
+            .create_session(
+                "normal-completion".to_string(),
+                "agent".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.path().to_string_lossy().to_string()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("session should create");
+        let session_id = session.session_id.clone();
+
+        // Normal end of turn: in-memory state is Idle (same as disk). The
+        // overlay must not fabricate a busy display for a genuinely idle
+        // session.
+        {
+            let mut live = manager
+                .sessions
+                .get_mut(&session_id)
+                .expect("session should be live in memory");
+            live.state = SessionState::Idle;
+        }
+
+        let summaries = manager
+            .list_sessions_with_options(workspace.path(), false)
+            .await
+            .expect("list sessions");
+        let summary = summaries
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .expect("session should be listed");
+        assert_eq!(summary.state, SessionState::Idle);
+        // turn_count == 0 -> Standby, never a fabricated Processing.
+        assert_eq!(
+            summary.display_state,
+            SessionDisplayState::Standby,
+            "a normally idle session must not be misreported as busy"
         );
     }
 
