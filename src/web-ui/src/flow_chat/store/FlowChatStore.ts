@@ -7093,7 +7093,7 @@ config: {
         // legion_control_tool.rs when a Claw is deployed as a group/workflow
         // member). Presence of the marker = workflow-owned Claw; the UI hides
         // these from the Claw assistant list.
-        const restoredWorkflowMember = Boolean((metadata as any)?.customMetadata?.legionNodeId)
+        const restoredWorkflowMember = (metadata as any)?.customMetadata?.legionNodeId
           ? true
           : undefined;
 
@@ -7577,7 +7577,7 @@ config: {
             : undefined;
           // R-WF-12: restore the workflow-member Claw marker from backend
           // metadata (`customMetadata.legionNodeId`, legion_control_tool.rs).
-          const restoredWorkflowMember = Boolean((metadata as any)?.customMetadata?.legionNodeId)
+          const restoredWorkflowMember = (metadata as any)?.customMetadata?.legionNodeId
             ? true
             : undefined;
 
