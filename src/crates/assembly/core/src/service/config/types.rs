@@ -3180,6 +3180,9 @@ pub enum SubscriptionProvider {
     Codex,
     Antigravity,
     Opencode,
+    #[serde(rename = "codebuddy")]
+    CodeBuddy,
+    Qoder,
 }
 
 /// OpenCode API product selected for a subscription-authenticated model.
