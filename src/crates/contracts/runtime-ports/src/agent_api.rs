@@ -815,8 +815,16 @@ pub enum DialogTurnOutcomeKind {
 pub const fn should_skip_agent_session_reply(
     outcome_kind: DialogTurnOutcomeKind,
     suppressed_cancelled_reply: bool,
+    suppress_injected_turn_reply: bool,
 ) -> bool {
-    matches!(outcome_kind, DialogTurnOutcomeKind::Interrupted)
+    // R-ASYNC-01（P1-1 扩展点）：引导注入 turn 完成时抑制自动回传——无论
+    // outcome kind（含 Completed）均 NoReply/Skip。urgent 注入（UserSteering）
+    // 的消息回复由注入通道交付，注入 turn 若再自动回传即产生双回复。
+    // 现役判定只覆盖 Interrupted / (Cancelled && suppressed_cancelled_reply)，
+    // Completed+suppress=true 仍 Forward（assembly scheduler.rs:6274-6284
+    // 现役测试实证）——本分支根除该盲区。
+    suppress_injected_turn_reply
+        || matches!(outcome_kind, DialogTurnOutcomeKind::Interrupted)
         || matches!(outcome_kind, DialogTurnOutcomeKind::Cancelled) && suppressed_cancelled_reply
 }
 
@@ -2619,18 +2627,36 @@ mod tests {
         assert!(should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Cancelled,
             true,
+            false,
         ));
         assert!(!should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Cancelled,
+            false,
             false,
         ));
         assert!(!should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Completed,
             true,
+            false,
         ));
         assert!(!should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Failed,
             true,
+            false,
+        ));
+
+        // R-ASYNC-01（P1-1 扩展点）：注入 turn suppress 标记命中 → 无论
+        // outcome kind（含 Completed）均 skip——修复前 Completed+suppress=true
+        // 仍 Forward（S-9 前后对比：此断言在旧签名下为 !skip，现为 skip）。
+        assert!(should_skip_agent_session_reply(
+            DialogTurnOutcomeKind::Completed,
+            true,
+            true,
+        ));
+        assert!(should_skip_agent_session_reply(
+            DialogTurnOutcomeKind::Interrupted,
+            true,
+            false,
         ));
     }
 

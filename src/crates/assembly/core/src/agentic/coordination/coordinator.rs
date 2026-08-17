@@ -14339,7 +14339,9 @@ pub(crate) fn test_coordinator_access_lock_sync() -> std::sync::MutexGuard<'stat
 ///
 /// 截断护栏：全文超过 [`BACKGROUND_FOLLOW_UP_TEXT_LIMIT`] 字符时截断为
 /// 前缀摘要 + "完整回复见 SessionHistory(session_id)" 指引，防止上下文膨胀。
-const BACKGROUND_FOLLOW_UP_TEXT_LIMIT: usize = 16_000;
+/// R-ASYNC-01（项3）：`pub(crate)` 提升——Session 自动回传（forward_agent_session_reply）
+/// 复用同一常量做 16k 截断对齐（Task 通道已有，Session 通道补齐，不新造常量）。
+pub(crate) const BACKGROUND_FOLLOW_UP_TEXT_LIMIT: usize = 16_000;
 
 /// Resolve the configured background follow-up text limit
 /// (`ai.thresholds.compression.background_follow_up_text_limit`), falling back

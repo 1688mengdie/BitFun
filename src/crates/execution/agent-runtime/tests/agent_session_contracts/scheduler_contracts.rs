@@ -447,8 +447,15 @@ fn agent_session_reply_action_forwards_completed_outcome_with_legacy_reminder_te
         final_response: "done".to_string(),
     };
 
-    let action =
-        resolve_agent_session_reply_action("target-session", None, None, &turn, &outcome, false);
+    let action = resolve_agent_session_reply_action(
+        "target-session",
+        None,
+        None,
+        &turn,
+        &outcome,
+        false,
+        false,
+    );
 
     let AgentSessionReplyAction::Forward(plan) = action else {
         panic!("agent-session completion should forward a reply");
@@ -487,8 +494,15 @@ fn agent_session_reply_action_suppresses_cancelled_auto_reply_when_requested() {
         turn_id: "turn-1".to_string(),
     };
 
-    let action =
-        resolve_agent_session_reply_action("target-session", None, None, &turn, &outcome, true);
+    let action = resolve_agent_session_reply_action(
+        "target-session",
+        None,
+        None,
+        &turn,
+        &outcome,
+        true,
+        false,
+    );
 
     assert_eq!(
         action,
@@ -514,8 +528,15 @@ fn agent_session_reply_action_ignores_non_agent_session_turns() {
         final_response: "done".to_string(),
     };
 
-    let action =
-        resolve_agent_session_reply_action("target-session", None, None, &turn, &outcome, false);
+    let action = resolve_agent_session_reply_action(
+        "target-session",
+        None,
+        None,
+        &turn,
+        &outcome,
+        false,
+        false,
+    );
 
     assert_eq!(action, AgentSessionReplyAction::NoReply);
 }
@@ -534,6 +555,7 @@ fn agent_session_reply_action_includes_responder_identity() {
         Some(0),
         &turn,
         &outcome,
+        false,
         false,
     );
 
@@ -600,6 +622,7 @@ fn agent_session_reply_action_rewrites_stale_sender_metadata() {
         Some(1),
         &active_turn,
         &outcome,
+        false,
         false,
     );
 
