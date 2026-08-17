@@ -187,6 +187,7 @@ impl FileReadTool {
         start_line: usize,
         limit: usize,
         context: &ToolUseContext,
+        max_total_chars: usize,
     ) -> BitFunResult<tool_runtime::fs::read_file::ReadFileResult> {
         let ws_shell = context.ws_shell().ok_or_else(|| {
             BitFunError::tool("Remote workspace shell is unavailable".to_string())
@@ -197,7 +198,7 @@ impl FileReadTool {
             start_line,
             limit,
             self.max_line_chars,
-            self.max_total_chars,
+            max_total_chars,
         )
         .map_err(BitFunError::tool)?;
 
@@ -257,6 +258,7 @@ impl FileReadTool {
         resolved_path: &str,
         limit: usize,
         context: &ToolUseContext,
+        max_total_chars: usize,
     ) -> BitFunResult<tool_runtime::fs::read_file::ReadFileResult> {
         let ws_shell = context.ws_shell().ok_or_else(|| {
             BitFunError::tool("Remote workspace shell is unavailable".to_string())
@@ -266,7 +268,7 @@ impl FileReadTool {
             resolved_path,
             limit,
             self.max_line_chars,
-            self.max_total_chars,
+            max_total_chars,
         )
         .map_err(BitFunError::tool)?;
 
@@ -316,6 +318,7 @@ impl FileReadTool {
     }
 
     #[cfg(feature = "document-read")]
+    #[allow(clippy::too_many_arguments)] // R-THR-01 批2 2-10：+max_total_chars 后 9 参数（调用方唯一，捆绑传参）
     async fn read_document_window(
         &self,
         resolved_path: &str,
@@ -325,6 +328,7 @@ impl FileReadTool {
         tail: bool,
         uses_remote_workspace_backend: bool,
         context: &ToolUseContext,
+        max_total_chars: usize,
     ) -> BitFunResult<(ReadFileResult, DocumentReadMetadata)> {
         let bytes = if uses_remote_workspace_backend {
             let ws_fs = context.ws_fs().ok_or_else(|| {
@@ -404,7 +408,7 @@ impl FileReadTool {
                 &converted.markdown,
                 limit,
                 self.max_line_chars,
-                self.max_total_chars,
+                max_total_chars,
             )
         } else {
             read_text(
@@ -412,7 +416,7 @@ impl FileReadTool {
                 start_line,
                 limit,
                 self.max_line_chars,
-                self.max_total_chars,
+                max_total_chars,
             )
         }
         .map_err(BitFunError::tool)?;
@@ -700,6 +704,10 @@ Usage:
         input: &Value,
         context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
+        // R-THR-01 批2 2-10：文件读取上限配置化（`ai.thresholds.file_read.max_total_chars`）。
+        // 配置服务不可用时回退构造默认（64_000）——零行为变化铁律。
+        let max_total_chars =
+            crate::service::config::types::configured_file_read_max_total_chars().await;
         let file_path = input
             .get("file_path")
             .and_then(|v| v.as_str())
@@ -792,6 +800,7 @@ Usage:
                     tail,
                     resolved.uses_remote_workspace_backend(),
                     context,
+                    max_total_chars,
                 )
                 .await?,
             )
@@ -807,14 +816,25 @@ Usage:
         } else if resolved.uses_remote_workspace_backend() {
             if tail {
                 (
-                    self.read_remote_tail_window(&resolved.resolved_path, limit, context)
-                        .await?,
+                    self.read_remote_tail_window(
+                        &resolved.resolved_path,
+                        limit,
+                        context,
+                        max_total_chars,
+                    )
+                    .await?,
                     None,
                 )
             } else {
                 (
-                    self.read_remote_window(&resolved.resolved_path, start_line, limit, context)
-                        .await?,
+                    self.read_remote_window(
+                        &resolved.resolved_path,
+                        start_line,
+                        limit,
+                        context,
+                        max_total_chars,
+                    )
+                    .await?,
                     None,
                 )
             }
@@ -824,7 +844,7 @@ Usage:
                     &resolved.resolved_path,
                     limit,
                     self.max_line_chars,
-                    self.max_total_chars,
+                    max_total_chars,
                 )
                 .map_err(BitFunError::tool)?,
                 None,
@@ -836,7 +856,7 @@ Usage:
                     start_line,
                     limit,
                     self.max_line_chars,
-                    self.max_total_chars,
+                    max_total_chars,
                 )
                 .map_err(BitFunError::tool)?,
                 None,

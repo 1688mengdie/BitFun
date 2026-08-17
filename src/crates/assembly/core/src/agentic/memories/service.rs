@@ -509,7 +509,7 @@ async fn process_single_session(
         return Ok(false);
     }
 
-    let stage_one_max_tokens = stage_one_output_max_tokens(&ai_client.config);
+    let stage_one_max_tokens = configured_memory_stage_one_max_tokens().await;
     let configured_rollout_limit = configured_memory_rollout_token_limit().await;
     let rollout_token_limit =
         stage_one_rollout_token_limit_with_fallback(&ai_client.config, configured_rollout_limit);
@@ -566,7 +566,7 @@ async fn process_single_session(
                 "Memory phase1 extraction failed after all attempts: session_id={}, workspace_path={}, attempts={}, error={}",
                 source.session_id,
                 source.workspace_path,
-                PHASE1_EXTRACTION_MAX_ATTEMPTS,
+                configured_memory_phase1_extraction_max_attempts().await,
                 error
             );
             return Err(error);
@@ -708,6 +708,48 @@ async fn configured_memory_transcript_limits(
     }
 }
 
+/// Resolve the configured stage-one max tokens
+/// (`ai.thresholds.memories.stage_one_max_tokens`), falling back to
+/// `STAGE_ONE_DEFAULT_MAX_TOKENS = 8_192` when unset or invalid
+/// (R-THR-01 批2 2-6).
+async fn configured_memory_stage_one_max_tokens() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return STAGE_ONE_DEFAULT_MAX_TOKENS;
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return STAGE_ONE_DEFAULT_MAX_TOKENS;
+    };
+    let limit = thresholds.memories.stage_one_max_tokens;
+    if limit == 0 {
+        return STAGE_ONE_DEFAULT_MAX_TOKENS;
+    }
+    limit
+}
+
+/// Resolve the configured phase-1 extraction max attempts
+/// (`ai.thresholds.memories.phase1_extraction_max_attempts`), falling back to
+/// `PHASE1_EXTRACTION_MAX_ATTEMPTS = 3` when unset or invalid
+/// (R-THR-01 批2 2-7).
+async fn configured_memory_phase1_extraction_max_attempts() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return PHASE1_EXTRACTION_MAX_ATTEMPTS;
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return PHASE1_EXTRACTION_MAX_ATTEMPTS;
+    };
+    let attempts = thresholds.memories.phase1_extraction_max_attempts;
+    if attempts == 0 {
+        return PHASE1_EXTRACTION_MAX_ATTEMPTS;
+    }
+    attempts
+}
+
 fn format_unix_secs(unix_secs: u64) -> String {
     let Ok(unix_secs_i64) = i64::try_from(unix_secs) else {
         return unix_secs.to_string();
@@ -811,8 +853,12 @@ async fn run_phase1_extraction_attempts_with_request<'a, F>(
 where
     F: FnMut() -> BoxFuture<'a, anyhow::Result<bitfun_ai_adapters::GeminiResponse>>,
 {
+    // R-THR-01 批2 2-7：提取重试次数配置化（`ai.thresholds.memories.phase1_extraction_max_attempts`）。
+    let max_attempts = configured_memory_phase1_extraction_max_attempts()
+        .await
+        .max(1);
     let mut last_error = None;
-    for attempt_index in 0..PHASE1_EXTRACTION_MAX_ATTEMPTS {
+    for attempt_index in 0..max_attempts {
         let attempt_number = attempt_index + 1;
         let model_call_started_at = Instant::now();
         let response = match send_request().await {
@@ -825,7 +871,7 @@ where
                     source.session_id,
                     source.workspace_path,
                     attempt_number,
-                    PHASE1_EXTRACTION_MAX_ATTEMPTS,
+                    max_attempts,
                     model_call_started_at.elapsed().as_millis(),
                     error
                 );
@@ -840,7 +886,7 @@ where
             source.session_id,
             source.workspace_path,
             attempt_number,
-            PHASE1_EXTRACTION_MAX_ATTEMPTS,
+            max_attempts,
             response.text.len(),
             reasoning_content.len(),
             model_call_started_at.elapsed().as_millis(),
@@ -856,7 +902,7 @@ where
                         source.session_id,
                         source.workspace_path,
                         attempt_number,
-                        PHASE1_EXTRACTION_MAX_ATTEMPTS
+                        max_attempts
                     );
                 }
                 return Ok(record);
@@ -867,7 +913,7 @@ where
                     source.session_id,
                     source.workspace_path,
                     attempt_number,
-                    PHASE1_EXTRACTION_MAX_ATTEMPTS,
+                    max_attempts,
                     error
                 );
                 last_error = Some(error);

@@ -70,6 +70,9 @@ pub struct SessionControlInput {
 pub struct SessionControlValidationContext<'a> {
     pub current_session_id: Option<&'a str>,
     pub has_workspace_root: bool,
+    /// R-THR-01 批2 2-8：短名上限覆盖值（`ai.thresholds.session_control.short_name_max_chars`）。
+    /// `None` = 使用默认 [`SHORT_NAME_MAX_CHARS`]（= 60）。
+    pub short_name_max_chars: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -285,9 +288,13 @@ pub fn validate_session_control_input(
                 return invalid("detail is only allowed for list");
             }
             if let Some(short_name) = input.short_name.as_deref() {
-                if short_name.trim().chars().count() > SHORT_NAME_MAX_CHARS {
+                let short_name_max_chars = context
+                    .short_name_max_chars
+                    .unwrap_or(SHORT_NAME_MAX_CHARS)
+                    .max(1);
+                if short_name.trim().chars().count() > short_name_max_chars {
                     return invalid(format!(
-                        "short_name must be at most {SHORT_NAME_MAX_CHARS} characters"
+                        "short_name must be at most {short_name_max_chars} characters"
                     ));
                 }
             }
@@ -435,6 +442,7 @@ mod tests {
         SessionControlValidationContext {
             current_session_id: current,
             has_workspace_root: true,
+            short_name_max_chars: None,
         }
     }
 
@@ -448,6 +456,69 @@ mod tests {
         assert_eq!(input.action, SessionControlAction::Compact);
         assert_eq!(input.session_id.as_deref(), Some("worker_1"));
         assert_eq!(SessionControlAction::Compact.as_str(), "compact");
+    }
+
+    #[test]
+    fn short_name_60_characters_passes_and_61_rejected() {
+        // R-THR-01 批2 2-8 边界断言：60 过 / 61 拒（SHORT_NAME_MAX_CHARS = 60）。
+        let base = SessionControlInput {
+            action: SessionControlAction::Create,
+            workspace: Some("C:\\work".to_string()),
+            session_id: None,
+            session_name: None,
+            agent_type: None,
+            short_name: None,
+            model_id: None,
+            worktree: None,
+            detail: None,
+        };
+        let ctx = SessionControlValidationContext {
+            current_session_id: Some("creator"),
+            has_workspace_root: true,
+            short_name_max_chars: None,
+        };
+
+        let mut sixty = base.clone();
+        sixty.short_name = Some("a".repeat(60));
+        let result = validate_session_control_input(&sixty, ctx);
+        assert!(result.result, "60 chars must pass: {:?}", result.message);
+
+        let mut sixty_one = base;
+        sixty_one.short_name = Some("a".repeat(61));
+        let result = validate_session_control_input(&sixty_one, ctx);
+        assert!(!result.result, "61 chars must be rejected");
+        assert!(result
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("short_name must be at most 60"));
+    }
+
+    #[test]
+    fn short_name_custom_limit_from_context_overrides_default() {
+        // R-THR-01 批2 2-8：context.short_name_max_chars 覆盖默认 60。
+        let base = SessionControlInput {
+            action: SessionControlAction::Create,
+            workspace: Some("C:\\work".to_string()),
+            session_id: None,
+            session_name: None,
+            agent_type: None,
+            short_name: Some("b".repeat(80)),
+            model_id: None,
+            worktree: None,
+            detail: None,
+        };
+        let ctx = SessionControlValidationContext {
+            current_session_id: Some("creator"),
+            has_workspace_root: true,
+            short_name_max_chars: Some(100),
+        };
+        let result = validate_session_control_input(&base, ctx);
+        assert!(
+            result.result,
+            "80 chars pass with 100 limit: {:?}",
+            result.message
+        );
     }
 
     #[test]

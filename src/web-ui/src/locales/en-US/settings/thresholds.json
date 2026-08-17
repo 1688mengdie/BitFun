@@ -33,7 +33,9 @@
       "recent_context_tokens": "Recent-context tokens",
       "retry_step_tokens": "Compression retry step (tokens)",
       "max_retained_user_tokens": "Max retained user tokens",
-      "image_bearing_messages": "Image-bearing message rounds"
+      "image_bearing_messages": "Image-bearing message rounds",
+      "trigger_percent": "Compression trigger (% of context window)",
+      "background_follow_up_text_limit": "Background follow-up truncation (chars)"
     },
     "model_retry": {
       "__title": "Model stream retry",
@@ -66,7 +68,9 @@
       "mcp_render_chars": "MCP render cap (chars)",
       "diff_page_chars": "Diff page budget (chars)",
       "diff_total_chars": "Diff total budget (chars)",
-      "diff_new_file_bytes": "Diff new-file limit (bytes)"
+      "diff_new_file_bytes": "Diff new-file limit (bytes)",
+      "browser_max_wait_ms": "Browser wait max (ms)",
+      "browser_condition_timeout_ms": "Browser condition timeout (ms)"
     },
     "knowledge_search": {
       "__title": "Knowledge-base search",
@@ -104,7 +108,10 @@
       "tool_input_token_limit": "Transcript tool-input tokens",
       "tool_result_token_limit": "Transcript tool-result tokens",
       "tool_error_token_limit": "Transcript tool-error tokens",
-      "rollout_token_limit": "Rollout token limit"
+      "rollout_token_limit": "Rollout token limit",
+      "stage_one_max_tokens": "Stage-one max tokens",
+      "phase1_extraction_max_attempts": "Phase-1 extraction max attempts",
+      "rollout_slug_max_len": "Rollout slug max length"
     },
     "output_tokens": {
       "__title": "Output token tiers",
@@ -126,6 +133,37 @@
       "no_progress_results": "Unchanged tool-result rounds",
       "tool_calls_per_turn": "Max tool calls per turn",
       "empty_input_guard": "Block empty-input rounds"
+    },
+    "insights": {
+      "__title": "Insights",
+      "max_transcript_chars": "Transcript cap (chars)",
+      "max_text_per_message": "Per-message text cap (chars)",
+      "tail_reserve_chars": "Tail reserve (chars)",
+      "activity_gap_threshold_secs": "Activity-gap threshold (s)",
+      "max_prompt_session_summaries": "Prompt session-summaries cap",
+      "max_prompt_friction_details": "Prompt friction-details cap",
+      "max_prompt_user_instructions": "Prompt user-instructions cap",
+      "max_concurrent_facet_extractions": "Concurrent facet extractions"
+    },
+    "file_read": {
+      "__title": "File read",
+      "max_total_chars": "Max chars per Read call"
+    },
+    "session_title": {
+      "__title": "Session title",
+      "truncate_user_message_chars": "User-message truncation (chars)"
+    },
+    "persistence": {
+      "__title": "Persistence",
+      "session_reference_transcript_char_limit": "Session-reference transcript limit (chars)"
+    },
+    "user_questions": {
+      "__title": "AskUserQuestion",
+      "header_max_chars": "Question header max chars"
+    },
+    "session_control": {
+      "__title": "Session control",
+      "short_name_max_chars": "Session short-name max chars"
     }
   }
 }

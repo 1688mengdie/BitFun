@@ -1357,7 +1357,6 @@ fn lineage_post_admission_cancellation_error(
     ))
 }
 
-
 /// Register a parent→child session-tree edge idempotently.
 ///
 /// `SessionTreeManager::register_child` appends the child to the parent's
@@ -4215,7 +4214,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .await?
         };
 
-
         Ok(session)
     }
 
@@ -6470,7 +6468,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 .session_manager
                 .get_session(&session_id)
                 .ok_or_else(|| {
-                    BitFunError::NotFound(format!("Session not found after binding update: {session_id}"))
+                    BitFunError::NotFound(format!(
+                        "Session not found after binding update: {session_id}"
+                    ))
                 })?;
         }
 
@@ -10737,7 +10737,10 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // Retain entries inside the frequency window (also covers the daily
         // ceiling, which only needs a count over the last 24h).
         entries.retain(|timestamp| *timestamp >= daily_floor);
-        let window_count = entries.iter().filter(|timestamp| **timestamp >= window_floor).count();
+        let window_count = entries
+            .iter()
+            .filter(|timestamp| **timestamp >= window_floor)
+            .count();
         let daily_count = entries.len();
         if freq_cap > 0 && window_count >= freq_cap {
             return Err(BitFunError::tool(format!(
@@ -11749,8 +11752,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         .await;
                         // token 黑洞 R-MR-12: bill the settled continuation's
                         // token usage into the per-session 24h ledger.
-                        self.record_subagent_send_input_usage(&session_id, exec_result.total_tokens)
-                            .await;
+                        self.record_subagent_send_input_usage(
+                            &session_id,
+                            exec_result.total_tokens,
+                        )
+                        .await;
                         Self::finalize_persisted_turn_in_workspace_if_needed(
                             self.session_manager.as_ref(),
                             &session_id,
@@ -13741,10 +13747,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 // 由 None 改为 Some(全文)。全文与通知 turn 同源组装（同一
                 // background_subagent_follow_up_message），组装结果仅计算一次，
                 // 事件与通知共用同一 String，不产生第二份全文（防双路）。
-                let follow_up_message = background_subagent_follow_up_message(
+                let follow_up_message = background_subagent_follow_up_message_with_limit(
                     &subagent_session_id_for_emit,
                     &agent_type,
                     completion_text.as_deref(),
+                    configured_background_follow_up_text_limit().await,
                 );
                 let _ = event_queue
                     .enqueue(
@@ -13915,10 +13922,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             // 由 None 改为 Some(全文)。全文与通知 turn 同源组装（同一
             // background_subagent_follow_up_message），组装结果仅计算一次，
             // 事件与通知共用同一 String，不产生第二份全文（防双路）。
-            let follow_up_message = background_subagent_follow_up_message(
+            let follow_up_message = background_subagent_follow_up_message_with_limit(
                 &subagent_session_id_for_emit,
                 &agent_type,
                 completion_text.as_deref(),
+                configured_background_follow_up_text_limit().await,
             );
             let _ = event_queue
                 .enqueue(
@@ -14333,6 +14341,27 @@ pub(crate) fn test_coordinator_access_lock_sync() -> std::sync::MutexGuard<'stat
 /// 前缀摘要 + "完整回复见 SessionHistory(session_id)" 指引，防止上下文膨胀。
 const BACKGROUND_FOLLOW_UP_TEXT_LIMIT: usize = 16_000;
 
+/// Resolve the configured background follow-up text limit
+/// (`ai.thresholds.compression.background_follow_up_text_limit`), falling back
+/// to the legacy `BACKGROUND_FOLLOW_UP_TEXT_LIMIT = 16_000` when unset or zero.
+/// R-THR-01 批2 2-5.
+pub(crate) async fn configured_background_follow_up_text_limit() -> usize {
+    let Ok(config_service) = crate::service::config::get_global_config_service().await else {
+        return BACKGROUND_FOLLOW_UP_TEXT_LIMIT;
+    };
+    let Ok(thresholds) = config_service
+        .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+        .await
+    else {
+        return BACKGROUND_FOLLOW_UP_TEXT_LIMIT;
+    };
+    let limit = thresholds.compression.background_follow_up_text_limit;
+    if limit == 0 {
+        return BACKGROUND_FOLLOW_UP_TEXT_LIMIT;
+    }
+    limit
+}
+
 fn background_subagent_follow_up_notice(session_id: &str, agent_type: &str) -> String {
     let identity = if agent_type.trim().is_empty() {
         "agent".to_string()
@@ -14346,19 +14375,39 @@ fn background_subagent_follow_up_notice(session_id: &str, agent_type: &str) -> S
 
 /// 组装后台完成通知主文：通知句 + 最终结果全文（截断护栏）。
 /// `full_text` 为 None（失败/无文本）时退化为纯通知句。
+/// R-THR-01 批2 2-5：生产路径使用配置化 limit
+/// （`configured_background_follow_up_text_limit`），本函数保留 legacy 常量
+/// 供存量测试使用（零行为变化）。
 pub(crate) fn background_subagent_follow_up_message(
     session_id: &str,
     agent_type: &str,
     full_text: Option<&str>,
 ) -> String {
+    background_subagent_follow_up_message_with_limit(
+        session_id,
+        agent_type,
+        full_text,
+        BACKGROUND_FOLLOW_UP_TEXT_LIMIT,
+    )
+}
+
+/// Same as [`background_subagent_follow_up_message`] but with an explicit
+/// truncation limit (chars) resolved by the caller from
+/// `ai.thresholds.compression.background_follow_up_text_limit`.
+pub(crate) fn background_subagent_follow_up_message_with_limit(
+    session_id: &str,
+    agent_type: &str,
+    full_text: Option<&str>,
+    limit: usize,
+) -> String {
+    let limit = limit.max(1);
     let notice = background_subagent_follow_up_notice(session_id, agent_type);
     match full_text {
         Some(text) if !text.trim().is_empty() => {
-            if text.chars().count() > BACKGROUND_FOLLOW_UP_TEXT_LIMIT {
-                let truncated: String =
-                    text.chars().take(BACKGROUND_FOLLOW_UP_TEXT_LIMIT).collect();
+            if text.chars().count() > limit {
+                let truncated: String = text.chars().take(limit).collect();
                 format!(
-                    "{notice}\n\n{truncated}\n\n[完整回复超过 {BACKGROUND_FOLLOW_UP_TEXT_LIMIT} 字符，已截断；全文见 SessionHistory({session_id})]"
+                    "{notice}\n\n{truncated}\n\n[完整回复超过 {limit} 字符，已截断；全文见 SessionHistory({session_id})]"
                 )
             } else {
                 format!("{notice}\n\n{text}")
@@ -16735,21 +16784,20 @@ mod tests {
         configured_background_command_watchdog_max_lifetime,
         configured_background_command_watchdog_poll_interval, has_running_background_command,
         is_main_session_by_creator, lineage_active_turn_after_transcript,
-        lineage_post_admission_cancellation_error, lineage_session_is_settling_without_active_state,
-        logical_subagent_type_or_runtime, merge_prepended_messages_for_turn,
-        normalize_subagent_max_concurrency_with_cap,
+        lineage_post_admission_cancellation_error,
+        lineage_session_is_settling_without_active_state, logical_subagent_type_or_runtime,
+        merge_prepended_messages_for_turn, normalize_subagent_max_concurrency_with_cap,
         permission_mode_from_metadata, register_session_tree_edge_idempotent,
         resolve_agent_session_create_created_by, resolve_agent_submission_turn_id,
         resolve_subagent_model_selection, resolve_submission_permission_mode,
-        revoke_interrupted_turn_intent_or_observe_commit,
-        runtime_port_error_preserving_message, runtime_session_summary,
-        runtime_tool_restrictions_for_session_lifetime, runtime_transcript_messages_from_turns,
-        session_storage_workspace_locator, turn_review_manifest_for_agent,
-        validate_required_lineage_turns_settled, ActiveSubagentExecution,
-        BackgroundSubagentWaitMode, ContextCompactionOutcome, ConversationCoordinator,
-        ManualCompactionCommitGate, SessionMemoryMode, SessionReferenceLocator,
-        SessionRelationshipKind, SubagentExecutionRequest, InterruptedTurnIntentState,
-        BACKGROUND_FOLLOW_UP_TEXT_LIMIT, TEST_AGENT_MODEL_DEFAULTS,
+        revoke_interrupted_turn_intent_or_observe_commit, runtime_port_error_preserving_message,
+        runtime_session_summary, runtime_tool_restrictions_for_session_lifetime,
+        runtime_transcript_messages_from_turns, session_storage_workspace_locator,
+        turn_review_manifest_for_agent, validate_required_lineage_turns_settled,
+        ActiveSubagentExecution, BackgroundSubagentWaitMode, ContextCompactionOutcome,
+        ConversationCoordinator, InterruptedTurnIntentState, ManualCompactionCommitGate,
+        SessionMemoryMode, SessionReferenceLocator, SessionRelationshipKind,
+        SubagentExecutionRequest, BACKGROUND_FOLLOW_UP_TEXT_LIMIT, TEST_AGENT_MODEL_DEFAULTS,
     };
     use crate::agentic::agents::ExternalSubagentModelBinding;
     use crate::agentic::coordination::coordination_store::{
@@ -16873,18 +16921,6 @@ mod tests {
             );
         }
     }
-
-
-
-
-
-
-
-
-
-
-
-
 
     #[test]
     fn external_command_delegation_uses_the_resolved_primary_binding() {
@@ -17191,9 +17227,7 @@ mod tests {
 
         // Narrow window: scheduler still tracks an active turn for this
         // otherwise-idle session -> busy projection must apply.
-        let projected = apply_scheduler_busy_projection(&mut summary, |id| {
-            id == "busy-session"
-        });
+        let projected = apply_scheduler_busy_projection(&mut summary, |id| id == "busy-session");
         assert!(projected, "idle + active turn must project busy");
         assert_eq!(summary.display_state, SessionDisplayState::Processing);
         assert!(
@@ -18040,7 +18074,9 @@ mod tests {
             .await
             .expect_err("cumulative tokens past the 24h cap must be rejected");
         assert!(
-            error.to_string().contains("Subagent token budget exhausted"),
+            error
+                .to_string()
+                .contains("Subagent token budget exhausted"),
             "unexpected error: {error}"
         );
     }

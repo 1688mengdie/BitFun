@@ -250,9 +250,7 @@ async fn recycle_acp_flow_session(
 /// 16k 截断护栏）；`full_text=None` 时退化纯通知句。data.response 仍保持全文。
 fn acp_send_input_notice(full_text: Option<&str>, session_id: &str) -> String {
     crate::agentic::coordination::background_subagent_follow_up_message(
-        session_id,
-        "acp",
-        full_text,
+        session_id, "acp", full_text,
     )
 }
 
@@ -969,10 +967,12 @@ impl TaskTool {
                         )
                         .await;
                         Some(
-                            crate::agentic::coordination::background_subagent_follow_up_message(
+                            crate::agentic::coordination::background_subagent_follow_up_message_with_limit(
                                 &flow_session_id_for_task,
                                 &agent_type_for_task,
                                 Some(&result.response),
+                                crate::agentic::coordination::configured_background_follow_up_text_limit()
+                                    .await,
                             ),
                         )
                     }

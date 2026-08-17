@@ -282,17 +282,17 @@ describe('ThresholdsConfig', () => {
     setConfigMock.mockResolvedValue(undefined);
     await renderConfig();
 
-    // Persist max_rounds change: the execution section is the last section, and
-    // max_rounds is its first numeric field. Locate it by walking the rendered
-    // section titles: the input whose preceding section is fields.execution.__title
-    // is the first execution field. Simpler: take the last input whose value is 50
-    // (execution.max_rounds renders after knowledge_search.default_max_results, so
-    // among the two "50" inputs the execution one comes later).
-    const fiftyInputs = [...container.querySelectorAll('input[type="number"]')].filter(
-      (input) => input.value === '50'
-    ) as HTMLInputElement[];
-    expect(fiftyInputs.length).toBeGreaterThanOrEqual(2);
-    const maxRoundsInput = fiftyInputs[fiftyInputs.length - 1];
+    // Persist max_rounds change. R-THR-01 批2 新增 insights 组后多个字段共享
+    // 默认值 50，不能再用「最后一个 50」定位；改用 label span 反查父行定位
+    // fields.execution.max_rounds 的 NumberInput。
+    const labelSpans = [...container.querySelectorAll('span')] as HTMLElement[];
+    const maxRoundsLabel = labelSpans.find(
+      (span) => span.textContent === 'fields.execution.max_rounds'
+    )!;
+    expect(maxRoundsLabel).not.toBeUndefined();
+    const maxRoundsInput = maxRoundsLabel.parentElement!.querySelector(
+      'input[type="number"]'
+    ) as HTMLInputElement;
     await act(async () => {
       const setter = Object.getOwnPropertyDescriptor(
         window.HTMLInputElement.prototype,

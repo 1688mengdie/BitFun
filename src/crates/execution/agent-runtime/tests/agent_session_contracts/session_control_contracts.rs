@@ -41,6 +41,7 @@ fn rejects_current_session_mutation_when_context_matches() {
         SessionControlValidationContext {
             current_session_id: Some("session_a"),
             has_workspace_root: true,
+            short_name_max_chars: None,
         },
     );
 
@@ -71,6 +72,7 @@ fn validates_create_requires_workspace_and_creator_session() {
         SessionControlValidationContext {
             current_session_id: Some("session_a"),
             has_workspace_root: true,
+            short_name_max_chars: None,
         },
     );
 
@@ -135,6 +137,7 @@ fn create_parses_model_id_and_forwards_to_validation() {
         SessionControlValidationContext {
             current_session_id: Some("session_a"),
             has_workspace_root: true,
+            short_name_max_chars: None,
         },
     );
     assert!(result.result, "{:?}", result.message);
