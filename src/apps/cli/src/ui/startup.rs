@@ -30,7 +30,6 @@ use crate::config::CliConfig;
 /// - Model/Agent/Session/Skill/Subagent selector popups
 /// - Random tips
 use anyhow::{anyhow, Result};
-use bitfun_core_types::model::ModelMutation;
 use bitfun_product_domains::agent_catalog::{SkillSummary, SubagentSummary};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
