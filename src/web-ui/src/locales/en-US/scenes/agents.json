@@ -532,7 +532,9 @@
       "model": "Model"
     },
     "remove": "Remove",
-    "rename": "Click to rename"
+    "rename": "Click to rename",
+    "save": "Save",
+    "cancel": "Cancel"
   },
   "gallery": {
     "title": "Agent Gallery",
@@ -557,6 +559,8 @@
     "blankCreate": "Blank",
     "cancel": "Cancel",
     "create": "Create",
+    "deleteTeam": "Delete Team",
+    "deleteConfirm": "Delete team \"{{name}}\"? This cannot be undone.",
     "form": {
       "namePlaceholder": "Agent Team name",
       "descriptionPlaceholder": "Description (optional)"

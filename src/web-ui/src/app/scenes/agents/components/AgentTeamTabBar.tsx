@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Plus, X, Code2, BarChart2, LayoutTemplate, Rocket, Users, Briefcase, Layers, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { confirmDanger } from '@/component-library';
 import { useAgentsStore, AGENT_TEAM_TEMPLATES } from '../agentsStore';
 import { AGENT_TEAM_ICON_MAP, getAgentTeamAccent } from '../agentsIcons';
 import './AgentTeamTabBar.scss';
@@ -42,10 +43,23 @@ interface NewTeamForm { name: string; icon: string; description: string }
 const AgentTeamTabBar: React.FC = () => {
   const { t } = useTranslation('scenes/agents');
   const { agentTeams, activeAgentTeamId, setActiveAgentTeam, addAgentTeam, deleteAgentTeam } = useAgentsStore();
-  const [panel, setPanel] = useState<'none' | 'create' | 'templates'>('none');
+  const [panel, setPanel] = useState<'none' | 'create'>('none');
+  const [panelTab, setPanelTab] = useState<'blank' | 'templates'>('blank');
   const [form, setForm] = useState<NewTeamForm>({ name: '', icon: 'rocket', description: '' });
 
-  const closePanel = () => setPanel('none');
+  const closePanel = () => {
+    setPanel('none');
+    setPanelTab('blank');
+  };
+
+  const openPanel = () => {
+    if (panel === 'none') {
+      setPanelTab('blank');
+      setPanel('create');
+    } else {
+      closePanel();
+    }
+  };
 
   const handleCreate = () => {
     if (!form.name.trim()) return;
@@ -66,9 +80,15 @@ const AgentTeamTabBar: React.FC = () => {
     closePanel();
   };
 
-  const handleDelete = (e: React.MouseEvent, id: string) => {
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (agentTeams.length <= 1) return;
+    const team = agentTeams.find((t) => t.id === id);
+    const ok = await confirmDanger(
+      t('tabbar.deleteTeam'),
+      t('tabbar.deleteConfirm', { name: team?.name ?? '' }),
+    );
+    if (!ok) return;
     deleteAgentTeam(id);
   };
 
@@ -111,7 +131,7 @@ const AgentTeamTabBar: React.FC = () => {
           className={`bt-tabbar__new ${panel !== 'none' ? 'is-open' : ''}`}
           data-bf-component="agent-team-tab-bar"
           data-bf-part="new"
-          onClick={() => setPanel(panel === 'none' ? 'create' : 'none')}
+          onClick={openPanel}
         >
           <Plus size={12} />
           <span>{t('tabbar.newTeam')}</span>
@@ -121,94 +141,96 @@ const AgentTeamTabBar: React.FC = () => {
       {/* Create panel */}
       {panel === 'create' && (
         <div className="bt-tabbar__panel" data-bf-component="agent-team-tab-bar" data-bf-part="panel">
-          {/* Icon selector */}
-          <div className="bt-tabbar__icon-row">
-            {ICON_OPTIONS.map(({ key, Icon }) => (
-              <button
-                key={key}
-                className={`bt-tabbar__icon-opt ${form.icon === key ? 'is-sel' : ''}`}
-                onClick={() => setForm((f) => ({ ...f, icon: key }))}
-                style={form.icon === key ? { color: getAgentTeamAccent(`team-${key}`) } : undefined}
-              >
-                <Icon size={14} />
-              </button>
-            ))}
-          </div>
-
-          <input
-            className="bt-tabbar__field"
-            placeholder={t('tabbar.form.namePlaceholder')}
-            value={form.name}
-            onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-            onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-            autoFocus
-          />
-          <input
-            className="bt-tabbar__field"
-            placeholder={t('tabbar.form.descriptionPlaceholder')}
-            value={form.description}
-            onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-          />
-
-          <div className="bt-tabbar__panel-row">
+          {/* Panel tabs: blank vs templates */}
+          <div className="bt-tabbar__panel-tabs" data-bf-component="agent-team-tab-bar" data-bf-part="panelTabs">
             <button
-              className="bt-tabbar__action bt-tabbar__action--ghost"
-              onClick={() => setPanel('templates')}
+              className={`bt-tabbar__panel-tab ${panelTab === 'blank' ? 'is-active' : ''}`}
+              onClick={() => setPanelTab('blank')}
             >
-              {t('tabbar.fromTemplate')}
-            </button>
-            <div style={{ flex: 1 }} />
-            <button className="bt-tabbar__action bt-tabbar__action--ghost" onClick={closePanel}>
-              {t('tabbar.cancel')}
+              {t('tabbar.blankCreate')}
             </button>
             <button
-              className="bt-tabbar__action bt-tabbar__action--primary"
-              onClick={handleCreate}
-              disabled={!form.name.trim()}
+              className={`bt-tabbar__panel-tab ${panelTab === 'templates' ? 'is-active' : ''}`}
+              onClick={() => setPanelTab('templates')}
             >
-              {t('tabbar.create')}
+              {t('tabbar.templateTitle')}
             </button>
           </div>
-        </div>
-      )}
 
-      {/* Templates panel */}
-      {panel === 'templates' && (
-        <div className="bt-tabbar__panel bt-tabbar__panel--wide" data-bf-component="agent-team-tab-bar" data-bf-part="panel">
-          <div className="bt-tabbar__tpl-head">
-            <span className="bt-tabbar__tpl-title">{t('tabbar.templateTitle')}</span>
-            <button className="bt-tabbar__close-btn" onClick={closePanel}><X size={12} /></button>
-          </div>
-          <div className="bt-tabbar__tpl-grid">
-            {AGENT_TEAM_TEMPLATES.map((tpl) => {
-              const key = tpl.icon as keyof typeof AGENT_TEAM_ICON_MAP;
-              const IconComp = AGENT_TEAM_ICON_MAP[key] ?? Users;
-              const accent = getAgentTeamAccent(`team-${tpl.id}`);
-              return (
-                <button
-                  key={tpl.id}
-                  className="bt-tabbar__tpl-card"
-                  onClick={() => handleUseTemplate(tpl)}
-                >
-                  <span className="bt-tabbar__tpl-icon" style={{ color: accent, borderColor: `${accent}30` }}>
-                    <IconComp size={16} />
-                  </span>
-                  <div className="bt-tabbar__tpl-info">
-                    <span className="bt-tabbar__tpl-name">{tpl.name}</span>
-                    <span className="bt-tabbar__tpl-desc">{tpl.description}</span>
-                  </div>
-                  <span className="bt-tabbar__tpl-cnt">{tpl.memberIds.length}</span>
+          {panelTab === 'blank' && (
+            <>
+              {/* Icon selector */}
+              <div className="bt-tabbar__icon-row">
+                {ICON_OPTIONS.map(({ key, Icon }) => (
+                  <button
+                    key={key}
+                    className={`bt-tabbar__icon-opt ${form.icon === key ? 'is-sel' : ''}`}
+                    onClick={() => setForm((f) => ({ ...f, icon: key }))}
+                    style={form.icon === key ? { color: getAgentTeamAccent(`team-${key}`) } : undefined}
+                  >
+                    <Icon size={14} />
+                  </button>
+                ))}
+              </div>
+
+              <input
+                className="bt-tabbar__field"
+                placeholder={t('tabbar.form.namePlaceholder')}
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+                autoFocus
+              />
+              <input
+                className="bt-tabbar__field"
+                placeholder={t('tabbar.form.descriptionPlaceholder')}
+                value={form.description}
+                onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+              />
+
+              <div className="bt-tabbar__panel-row">
+                <div style={{ flex: 1 }} />
+                <button className="bt-tabbar__action bt-tabbar__action--ghost" onClick={closePanel}>
+                  {t('tabbar.cancel')}
                 </button>
-              );
-            })}
-          </div>
-          <button
-            className="bt-tabbar__action bt-tabbar__action--ghost"
-            style={{ width: '100%', marginTop: 4 }}
-            onClick={() => setPanel('create')}
-          >
-            {`← ${t('tabbar.blankCreate')}`}
-          </button>
+                <button
+                  className="bt-tabbar__action bt-tabbar__action--primary"
+                  onClick={handleCreate}
+                  disabled={!form.name.trim()}
+                >
+                  {t('tabbar.create')}
+                </button>
+              </div>
+            </>
+          )}
+
+          {panelTab === 'templates' && (
+            <>
+              <div className="bt-tabbar__tpl-grid">
+                {AGENT_TEAM_TEMPLATES.map((tpl) => {
+                  const key = tpl.icon as keyof typeof AGENT_TEAM_ICON_MAP;
+                  const IconComp = AGENT_TEAM_ICON_MAP[key] ?? Users;
+                  const accent = getAgentTeamAccent(`team-${tpl.id}`);
+                  return (
+                    <button
+                      key={tpl.id}
+                      className="bt-tabbar__tpl-card"
+                      onClick={() => handleUseTemplate(tpl)}
+                    >
+                      <span className="bt-tabbar__tpl-icon" style={{ color: accent, borderColor: `${accent}30` }}>
+                        <IconComp size={16} />
+                      </span>
+                      <div className="bt-tabbar__tpl-info">
+                        <span className="bt-tabbar__tpl-name">{tpl.name}</span>
+                        <span className="bt-tabbar__tpl-desc">{tpl.description}</span>
+                      </div>
+                      <span className="bt-tabbar__tpl-cnt">{tpl.memberIds.length}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </div>
       )}
 

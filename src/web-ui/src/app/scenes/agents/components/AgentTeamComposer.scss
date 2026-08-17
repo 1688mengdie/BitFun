@@ -59,6 +59,22 @@
     width: 120px;
   }
 
+  &__name-action {
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: $font-weight-medium;
+    cursor: pointer;
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    background: transparent;
+    color: var(--bf-appearance-token-color-text-muted);
+    transition: all $motion-fast $easing-standard;
+    font-family: var(--bf-appearance-token-font-family-sans);
+    white-space: nowrap;
+
+    &:hover { background: var(--bf-appearance-token-element-bg-subtle); color: var(--bf-appearance-token-color-text-secondary); }
+  }
+
   &__sep {
     color: var(--bf-appearance-token-color-text-disabled);
     font-size: 0.75rem;

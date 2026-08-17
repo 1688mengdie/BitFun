@@ -131,12 +131,22 @@ const FormationNode: React.FC<NodeProps> = ({
     ? t('shared:statuses.done')
     : t(`formation.state.${state}`);
 
+  const nodeClick = wireMode
+    ? (e: React.MouseEvent) => {
+        // Interactive controls (port, delete, role, jump) never drop a wire;
+        // only clicks on the node body are valid wire targets.
+        const el = e.target as HTMLElement;
+        if (el.closest('button')) return;
+        onDropWire();
+      }
+    : undefined;
+
   return (
     <div
       className="tcf__node"
       style={{ left: pos.x, top: pos.y, width: NODE_W }}
       data-member-id={member.agentId}
-      onClick={wireMode ? onDropWire : undefined}
+      onClick={nodeClick}
     >
       <div className="tcf__node-card" style={{ borderTopColor: roleColor }}>
         {/* Row 1: name + role + delete */}
@@ -466,6 +476,10 @@ const AgentTeamComposer: React.FC = () => {
     setEditingName(false);
   }, [team, nameVal, updateAgentTeam]);
 
+  const cancelEdit = useCallback(() => {
+    setEditingName(false);
+  }, []);
+
   if (!team) {
     return (
       <div className="tc tc--empty">
@@ -480,20 +494,39 @@ const AgentTeamComposer: React.FC = () => {
       <div className="tc__bar" data-bf-component="agent-team-composer" data-bf-part="bar">
         <div className="tc__bar-left">
           {editingName ? (
-            <input
-              ref={nameRef}
-              className="tc__name-input"
-              data-bf-component="agent-team-composer"
-              data-bf-part="name"
-              value={nameVal}
-              onChange={(e) => setNameVal(e.target.value)}
-              onBlur={commitName}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commitName();
-                if (e.key === 'Escape') setEditingName(false);
-              }}
-              autoFocus
-            />
+            <>
+              <input
+                ref={nameRef}
+                className="tc__name-input"
+                data-bf-component="agent-team-composer"
+                data-bf-part="name"
+                value={nameVal}
+                onChange={(e) => setNameVal(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') commitName();
+                  if (e.key === 'Escape') cancelEdit();
+                }}
+                autoFocus
+              />
+              <button
+                className="tc__name-action"
+                data-bf-component="agent-team-composer"
+                data-bf-part="renameSave"
+                data-testid="tc-name-save"
+                onClick={commitName}
+              >
+                {t('composer.save')}
+              </button>
+              <button
+                className="tc__name-action"
+                data-bf-component="agent-team-composer"
+                data-bf-part="renameCancel"
+                data-testid="tc-name-cancel"
+                onClick={cancelEdit}
+              >
+                {t('composer.cancel')}
+              </button>
+            </>
           ) : (
             <span className="tc__name" data-bf-component="agent-team-composer" data-bf-part="name" onClick={startEdit} title={t('composer.rename')}>
               {team.name}

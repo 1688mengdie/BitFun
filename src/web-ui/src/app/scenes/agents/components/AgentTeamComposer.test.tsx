@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
@@ -142,46 +143,25 @@ vi.mock('@/flow_chat/state-machine/types', () => ({
   SESSION_DISPLAY_STATES: ['standby', 'processing', 'completed', 'hung', 'interrupted', 'pending_attention', 'viewed'],
 }));
 
-let JSDOMCtor: (new (
-  html?: string,
-  options?: { pretendToBeVisual?: boolean }
-) => { window: Window & typeof globalThis }) | null = null;
-
-try {
-  const jsdom = await import('jsdom');
-  JSDOMCtor = jsdom.JSDOM as typeof JSDOMCtor;
-} catch {
-  JSDOMCtor = null;
-}
-
-const describeWithJsdom = JSDOMCtor ? describe : describe.skip;
+const describeWithJsdom = describe;
 
 describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
-  let dom: { window: Window & typeof globalThis };
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
-    dom = new JSDOMCtor!('<!doctype html><html><body></body></html>', {
-      pretendToBeVisual: true,
-      url: 'http://localhost',
-    });
-    const { window } = dom;
-    vi.stubGlobal('window', window);
-    vi.stubGlobal('document', window.document);
-    vi.stubGlobal('navigator', window.navigator);
-    vi.stubGlobal('HTMLElement', window.HTMLElement);
-    vi.stubGlobal('MutationObserver', window.MutationObserver);
-    Object.defineProperty(window, 'matchMedia', {
-      writable: true,
-      value: vi.fn().mockImplementation(() => ({
-        matches: false,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-      })),
-    });
+    if (typeof window.matchMedia !== 'function') {
+      Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        value: vi.fn().mockImplementation(() => ({
+          matches: false,
+          addEventListener: vi.fn(),
+          removeEventListener: vi.fn(),
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+        })),
+      });
+    }
     vi.stubGlobal(
       'ResizeObserver',
       class {
@@ -190,7 +170,6 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
         disconnect() {}
       },
     );
-    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -201,7 +180,6 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
       root.unmount();
     });
     container.remove();
-    dom.window.close();
     vi.unstubAllGlobals();
     mocks.openMainSession.mockClear();
     // Restore the default active team so later tests render the mock seed.
@@ -293,5 +271,90 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
       jumps[0]!.click();
     });
     expect(mocks.openMainSession).toHaveBeenCalled();
+  });
+
+  it('P1-6: clicking the port while wiring cancels without creating an edge', async () => {
+    await act(async () => {
+      root.render(<AgentTeamComposer />);
+    });
+    const teamId = useAgentsStore.getState().activeAgentTeamId!;
+    const team = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
+    const beforeCount = team.edges.length;
+
+    const nodes = Array.from(container.querySelectorAll<HTMLElement>('.tcf__node'));
+    const srcPort = nodes[0]!.querySelector<HTMLButtonElement>('[data-testid="tcf-node-port"]')!;
+    // enter wire mode from source port
+    await act(async () => {
+      srcPort.click();
+    });
+    expect(container.querySelector('[data-testid="tcf-wire-active"]')).toBeTruthy();
+
+    // click the same port again to cancel; no node onClick should fire
+    await act(async () => {
+      srcPort.click();
+    });
+    const after = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
+    expect(after.edges.length).toBe(beforeCount);
+    expect(container.querySelector('[data-testid="tcf-wire-active"]')).toBeFalsy();
+  });
+
+  it('P0-2: rename shows explicit save and cancel buttons and commits on save', async () => {
+    await act(async () => {
+      root.render(<AgentTeamComposer />);
+    });
+    const teamId = useAgentsStore.getState().activeAgentTeamId!;
+    const name = container.querySelector('.tc__name') as HTMLElement;
+    await act(async () => {
+      name.click();
+    });
+    const input = container.querySelector('.tc__name-input') as HTMLInputElement;
+    expect(input).toBeTruthy();
+    const saveBtn = container.querySelector('[data-testid="tc-name-save"]');
+    const cancelBtn = container.querySelector('[data-testid="tc-name-cancel"]');
+    expect(saveBtn).toBeTruthy();
+    expect(cancelBtn).toBeTruthy();
+
+    // React controlled input: use the native value setter so the change is
+    // picked up by the onChange handler.
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!;
+    await act(async () => {
+      valueSetter.call(input, 'Renamed Team');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      (saveBtn as HTMLElement).click();
+    });
+    const team = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
+    expect(team.name).toBe('Renamed Team');
+    expect(container.querySelector('.tc__name-input')).toBeFalsy();
+  });
+
+  it('P0-2: Escape cancels the rename without committing', async () => {
+    await act(async () => {
+      root.render(<AgentTeamComposer />);
+    });
+    const teamId = useAgentsStore.getState().activeAgentTeamId!;
+    const name = container.querySelector('.tc__name') as HTMLElement;
+    await act(async () => {
+      name.click();
+    });
+    const input = container.querySelector('.tc__name-input') as HTMLInputElement;
+    const valueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )!.set!;
+    await act(async () => {
+      valueSetter.call(input, 'Discarded Name');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    const team = useAgentsStore.getState().agentTeams.find((t) => t.id === teamId)!;
+    expect(team.name).not.toBe('Discarded Name');
+    expect(container.querySelector('.tc__name-input')).toBeFalsy();
   });
 });
