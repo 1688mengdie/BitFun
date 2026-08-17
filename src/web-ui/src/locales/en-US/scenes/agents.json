@@ -299,7 +299,7 @@
       "createSuccess": "Created agent \"{{name}}\"",
       "createFailed": "Create failed: ",
       "review": "Review",
-      "reviewToolsHint": "Additional checks use only read-only tools."
+      "reviewToolsHint": "Readonly mode restricts the agent to read-only tools."
     }
   },
   "reviewTeams": {
