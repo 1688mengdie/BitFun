@@ -818,6 +818,10 @@ pub struct AIConfig {
     #[serde(default)]
     pub skill_settings: SkillSettingsConfig,
 
+    /// User-level Tool availability shared by every agent profile.
+    #[serde(default)]
+    pub tool_settings: ToolSettingsConfig,
+
     /// Review team configuration.
     /// team_id -> ReviewTeamConfig
     #[serde(default = "default_review_team_configs")]
@@ -2449,6 +2453,15 @@ pub struct SkillSettingsConfig {
     pub globally_disabled_user_skills: Vec<String>,
 }
 
+/// User-level Tool configuration shared by every agent profile.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ToolSettingsConfig {
+    /// User-level Tool names disabled for every agent profile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub globally_disabled_user_tool_names: Vec<String>,
+}
+
 /// API view of a mode configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -3530,6 +3543,7 @@ impl Default for AIConfig {
             agent_model_defaults: AgentModelDefaultsConfig::default(),
             agent_profiles: std::collections::HashMap::new(),
             skill_settings: SkillSettingsConfig::default(),
+            tool_settings: ToolSettingsConfig::default(),
             review_teams: default_review_team_configs(),
             review_team_rate_limit_status: default_review_team_rate_limit_status(),
             subagent_max_concurrency: default_subagent_max_concurrency(),

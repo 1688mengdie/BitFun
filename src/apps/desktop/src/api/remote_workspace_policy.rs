@@ -1569,6 +1569,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     (
+        "replace_mode_tool_selection",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
         "report_canvas_runtime_error",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -1579,6 +1583,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     (
         "reset_agent_profile_config",
         RemoteWorkspacePolicy::LegacyUnaudited,
+    ),
+    (
+        "reset_mode_tool_selection",
+        RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
         "reset_assistant_workspace",
@@ -1784,6 +1792,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "set_global_skill_disabled",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "set_global_tool_disabled",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("set_macos_edit_menu_mode", RemoteWorkspacePolicy::LocalOnly),
