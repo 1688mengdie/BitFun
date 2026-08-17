@@ -292,8 +292,9 @@ describeWithJsdom('AgentsScene', () => {
     );
 
     // Two minCardWidth=360 grids in the base scene (core agents + agents) plus
-    // the legion gallery grid added by the LegionCard wiring (d7-P2-1/L1-P1-1).
-    expect(sceneSource.match(/<GalleryGrid\b[^>]*\bminCardWidth=\{360\}[^>]*>/g)).toHaveLength(3);
+    // the legion gallery grid added by the LegionCard wiring (d7-P2-1/L1-P1-1)
+    // plus the agent team gallery grid recovered by R-WF-13.
+    expect(sceneSource.match(/<GalleryGrid\b[^>]*\bminCardWidth=\{360\}[^>]*>/g)).toHaveLength(4);
     expect(agentCardStyles).toMatch(/\.agent-card \{\s+width: 100%;\s+min-width: 0;/);
     expect(coreCardSurfaceStyles).toMatch(/width: 100%;\s+min-width: 0;/);
     expect(agentCardStyles).not.toContain('width: 360px;');
