@@ -1439,6 +1439,8 @@ pub async fn run() {
             add_skill,
             delete_skill,
             git_is_repository,
+            git_get_repository_trust,
+            git_trust_repository,
             git_get_repository_basic,
             git_resolve_revision,
             git_get_repository,
