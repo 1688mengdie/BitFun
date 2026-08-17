@@ -455,7 +455,7 @@ export const capabilityContractDependencyRules = [
           capabilityForwarder('workspace-runtime', 'workspace-ports'),
         ],
         ['local-storage', 'permission', 'workspace-runtime'],
-        ['session-git'],
+        ['session-git', 'token-usage-statistics'],
       )],
       ['bitfun-services-integrations', capabilityConsumer(
         [capabilityEdge([], { optional: true })],
