@@ -20,6 +20,7 @@ export type SceneTabId =
   | 'pages'
   | 'browser'
   | 'assistant'
+  | 'workflow-claw'
   | 'todos'
   | 'insights'
   | 'shell'

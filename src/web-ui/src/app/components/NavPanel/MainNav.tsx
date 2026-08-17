@@ -451,6 +451,10 @@ const MainNav: React.FC<MainNavProps> = ({
     switchLeftPanelTab,
   ]);
 
+  const handleOpenWorkflowClaw = useCallback(() => {
+    openScene('workflow-claw');
+  }, [openScene]);
+
   const handleOpenTodos = useCallback(() => {
     openScene('todos');
   }, [openScene]);
@@ -575,9 +579,11 @@ const MainNav: React.FC<MainNavProps> = ({
   const createCodeTooltip = t('nav.sessions.newCodeSession');
   const createCoworkTooltip = t('nav.sessions.newCoworkSession');
   const assistantTooltip = t('nav.items.persona');
+  const workflowClawTooltip = t('nav.tooltips.workflowClaw');
   const todosTooltip = t('nav.tooltips.todos');
   const addWorkspaceTooltip = t('nav.tooltips.addWorkspace');
   const isAssistantActive = activeTabId === 'assistant';
+  const isWorkflowClawActive = activeTabId === 'workflow-claw';
   const isTodosActive = activeTabId === 'todos';
   const agentsTooltip = t('nav.tooltips.agents');
   const skillsTooltip = t('nav.tooltips.skills');
@@ -668,6 +674,25 @@ const MainNav: React.FC<MainNavProps> = ({
               <User size={15} />
             </span>
             <span>{t('nav.items.persona')}</span>
+          </button>
+        </Tooltip>
+
+        <Tooltip content={workflowClawTooltip} placement="right" followCursor>
+          <button
+            type="button"
+            className={`bitfun-nav-panel__top-action-btn${isWorkflowClawActive ? ' is-active' : ''}`}
+            data-bf-component="nav-panel"
+            data-bf-part="topAction"
+            data-bf-action="workflow-claw"
+            data-bf-state={isWorkflowClawActive ? 'active' : ''}
+            onClick={handleOpenWorkflowClaw}
+            aria-label={workflowClawTooltip}
+            data-testid="nav-workflow-claw-btn"
+          >
+            <span className="bitfun-nav-panel__top-action-icon-slot" aria-hidden="true">
+              <GitBranch size={15} />
+            </span>
+            <span>{t('nav.items.workflowClaw')}</span>
           </button>
         </Tooltip>
 
