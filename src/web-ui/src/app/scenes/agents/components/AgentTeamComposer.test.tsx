@@ -16,6 +16,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, opts?: { defaultValue?: string; count?: number; from?: string }) => {
       if (key.startsWith('formation.state.')) return `state:${key.split('.').pop()}`;
+      if (key === 'shared:statuses.done') return 'state:completed';
       return opts?.defaultValue ?? key;
     },
   }),
@@ -203,6 +204,8 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
     dom.window.close();
     vi.unstubAllGlobals();
     mocks.openMainSession.mockClear();
+    // Restore the default active team so later tests render the mock seed.
+    useAgentsStore.getState().setActiveAgentTeam(MOCK_AGENT_TEAMS[0].id);
   });
 
   it('renders formation nodes for the active team', async () => {
@@ -214,15 +217,28 @@ describeWithJsdom('AgentTeamComposer (R-WF-17 DAG canvas)', () => {
   });
 
   it('shows the seven-state badge on each member node (assertion 2)', async () => {
-    await act(async () => {
-      root.render(<AgentTeamComposer />);
-    });
     const states = new Set<string>();
-    for (const badge of container.querySelectorAll('.tcf__node-state')) {
-      states.add(badge.textContent ?? '');
+    const { agentTeams, setActiveAgentTeam } = useAgentsStore.getState();
+    // Mock teams cover all seven states in aggregate; iterate every team so
+    // hung/interrupted/pending_attention (spread across teams) are asserted too.
+    for (const team of agentTeams) {
+      setActiveAgentTeam(team.id);
+      await act(async () => {
+        root.render(<AgentTeamComposer />);
+      });
+      for (const badge of container.querySelectorAll('.tcf__node-state')) {
+        states.add(badge.textContent ?? '');
+      }
     }
-    // Mock teams cover all seven states in aggregate.
-    for (const expected of ['state:standby', 'state:processing', 'state:completed', 'state:viewed']) {
+    for (const expected of [
+      'state:standby',
+      'state:processing',
+      'state:completed',
+      'state:hung',
+      'state:interrupted',
+      'state:pending_attention',
+      'state:viewed',
+    ]) {
       expect(states).toContain(expected);
     }
   });

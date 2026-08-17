@@ -605,7 +605,6 @@
     "state": {
       "standby": "Standby",
       "processing": "Processing",
-      "completed": "Completed",
       "hung": "Hung",
       "interrupted": "Interrupted",
       "pending_attention": "Needs attention",

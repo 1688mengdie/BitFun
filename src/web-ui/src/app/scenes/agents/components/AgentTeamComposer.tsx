@@ -125,7 +125,11 @@ const FormationNode: React.FC<NodeProps> = ({
     reviewer: t('composer.role.reviewer'),
   };
   const state = member.displayState ?? 'standby';
-  const stateLabel = t(`formation.state.${state}`);
+  // completed reuses the shared statuses.done term (same value in all three
+  // locales) to avoid sharedTermDuplicates governance violations.
+  const stateLabel = state === 'completed'
+    ? t('shared:statuses.done')
+    : t(`formation.state.${state}`);
 
   return (
     <div

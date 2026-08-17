@@ -596,7 +596,7 @@
   "formation": {
     "empty": "从左侧选择 Agent 加入团队",
     "emptySub": "点击 Agent 卡片上的 + 按钮",
-    "hint": "拖拽连线端口可新建连线，点击连线起点圆点可删除连线",
+    "hint": "点击节点上的连线端口可新建连线，点击连线起点圆点可删除连线",
     "startWire": "开始连线",
     "cancelWire": "取消连线",
     "wireActive": "连线中（源：{{from}}）——点击另一节点完成，点击端口取消",
@@ -605,7 +605,6 @@
     "state": {
       "standby": "待命",
       "processing": "处理中",
-      "completed": "已完成",
       "hung": "挂起",
       "interrupted": "已中断",
       "pending_attention": "待关注",

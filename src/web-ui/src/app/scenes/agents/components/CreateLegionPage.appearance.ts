@@ -10,6 +10,8 @@ export const createLegionPageAppearanceDescriptor: AppearanceSurfaceDescriptor =
     { id: 'patternChip' },
     { id: 'patternChipIcon' },
     { id: 'summary' },
+    { id: 'canvasSection' },
+    { id: 'canvas' },
     { id: 'nodes' },
     { id: 'edges' },
     { id: 'actions' },

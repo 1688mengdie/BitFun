@@ -605,7 +605,6 @@
     "state": {
       "standby": "待命",
       "processing": "處理中",
-      "completed": "已完成",
       "hung": "掛起",
       "interrupted": "已中斷",
       "pending_attention": "待關注",
