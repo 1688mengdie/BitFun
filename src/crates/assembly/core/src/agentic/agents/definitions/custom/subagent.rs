@@ -265,6 +265,9 @@ mod tests {
         subagent.set_review(true, false);
 
         assert!(subagent.data.review);
-        assert!(!subagent.data.readonly, "set_review must not force readonly");
+        assert!(
+            !subagent.data.readonly,
+            "set_review must not force readonly"
+        );
     }
 }

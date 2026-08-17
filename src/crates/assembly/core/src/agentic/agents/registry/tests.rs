@@ -1031,7 +1031,11 @@ async fn load_strips_writable_tools_from_readonly_disk_definition() {
         Some("BadReadonly"),
         Some("Hand-edited readonly subagent"),
         Some(CustomAgentKind::Subagent),
-        Some(vec!["Read".to_string(), "Write".to_string(), "Edit".to_string()]),
+        Some(vec![
+            "Read".to_string(),
+            "Write".to_string(),
+            "Edit".to_string(),
+        ]),
         Some(true),
         Some(false),
         Some("fast"),

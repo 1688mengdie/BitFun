@@ -899,8 +899,7 @@ mod tests {
         let tools = vec!["Read".to_string(), "Write".to_string(), "Edit".to_string()];
         let readonly_tools = ["Read".to_string()];
 
-        let (kept, stripped) =
-            readonly_tool_stripping(tools.clone(), false, &readonly_tools);
+        let (kept, stripped) = readonly_tool_stripping(tools.clone(), false, &readonly_tools);
         assert_eq!(kept, tools);
         assert!(stripped.is_empty());
 
