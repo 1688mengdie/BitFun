@@ -476,9 +476,10 @@ const AgentTeamComposer: React.FC = () => {
     setEditingName(false);
   }, [team, nameVal, updateAgentTeam]);
 
-  const cancelEdit = useCallback(() => {
+  const cancelNameEdit = useCallback(() => {
+    if (team) setNameVal(team.name);
     setEditingName(false);
-  }, []);
+  }, [team]);
 
   if (!team) {
     return (
@@ -504,27 +505,29 @@ const AgentTeamComposer: React.FC = () => {
                 onChange={(e) => setNameVal(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') commitName();
-                  if (e.key === 'Escape') cancelEdit();
+                  if (e.key === 'Escape') cancelNameEdit();
                 }}
                 autoFocus
               />
               <button
-                className="tc__name-action"
+                type="button"
+                className="tc__edit-action tc__edit-action--save"
                 data-bf-component="agent-team-composer"
                 data-bf-part="renameSave"
                 data-testid="tc-name-save"
                 onClick={commitName}
               >
-                {t('composer.save')}
+                {t('composer.saveTeam')}
               </button>
               <button
-                className="tc__name-action"
+                type="button"
+                className="tc__edit-action"
                 data-bf-component="agent-team-composer"
                 data-bf-part="renameCancel"
                 data-testid="tc-name-cancel"
-                onClick={cancelEdit}
+                onClick={cancelNameEdit}
               >
-                {t('composer.cancel')}
+                {t('composer.cancelEdit')}
               </button>
             </>
           ) : (

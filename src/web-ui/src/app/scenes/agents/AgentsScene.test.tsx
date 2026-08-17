@@ -1,3 +1,5 @@
+﻿// @vitest-environment jsdom
+
 import React, { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -83,13 +85,14 @@ vi.mock('./components/ToolGroupPicker', () => ({
 
 vi.mock('@/component-library', () => ({
   Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
-  Button: ({ children, onClick, disabled, 'data-testid': testId }: {
+  Button: ({ children, onClick, disabled, variant, 'data-testid': testId }: {
     children: React.ReactNode;
     onClick?: () => void;
     disabled?: boolean;
+    variant?: string;
     'data-testid'?: string;
   }) => (
-    <button type="button" onClick={onClick} disabled={disabled} data-testid={testId}>{children}</button>
+    <button type="button" onClick={onClick} disabled={disabled} data-testid={testId} data-bf-variant={variant}>{children}</button>
   ),
   IconButton: ({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) => (
     <button type="button" onClick={onClick}>{children}</button>
@@ -101,13 +104,17 @@ vi.mock('@/component-library', () => ({
 }));
 
 vi.mock('@/app/components', () => ({
-  GalleryDetailModal: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  GalleryDetailModal: ({ children, actions }: { children?: React.ReactNode; actions?: React.ReactNode }) => (
+    <div>{children}{actions}</div>
+  ),
   GalleryEmpty: () => <div />,
   GalleryGrid: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
   GalleryLayout: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <main className={className}>{children}</main>
   ),
-  GalleryPageHeader: () => <header />,
+  GalleryPageHeader: ({ extraContent, actions }: { extraContent?: React.ReactNode; actions?: React.ReactNode }) => (
+    <header>{extraContent}{actions}</header>
+  ),
   GallerySkeleton: () => <div />,
   // Spread props so data-testid/id reach the DOM like the real GalleryZone
   // (production spreads ...sectionProps onto <section>).
@@ -208,22 +215,25 @@ describe('agent editability', () => {
 });
 
 describeWithJsdom('AgentsScene', () => {
-  let dom: { window: Window & typeof globalThis };
   let container: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
-    dom = new JSDOMCtor!('<!doctype html><html><body></body></html>', {
-      pretendToBeVisual: true,
-      url: 'http://localhost',
-    });
-
-    const { window } = dom;
-    vi.stubGlobal('window', window);
-    vi.stubGlobal('document', window.document);
-    vi.stubGlobal('navigator', window.navigator);
-    vi.stubGlobal('HTMLElement', window.HTMLElement);
+    // The jsdom environment (via the `// @vitest-environment jsdom` pragma)
+    // provides a real document before react-dom initializes its event system,
+    // so controlled input events dispatch like a real browser.
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
     vi.stubGlobal('MutationObserver', window.MutationObserver);
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
     Object.defineProperty(window, 'matchMedia', {
       writable: true,
       value: vi.fn().mockImplementation(() => ({
@@ -234,14 +244,9 @@ describeWithJsdom('AgentsScene', () => {
         removeListener: vi.fn(),
       })),
     });
-    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
 
     useAgentsStore.getState().openHome();
     mockAgentsList();
-    container = document.createElement('div');
-    document.body.appendChild(container);
-    root = createRoot(container, {
-    });
   });
 
   afterEach(() => {
@@ -249,7 +254,6 @@ describeWithJsdom('AgentsScene', () => {
       root.unmount();
     });
     container.remove();
-    dom.window.close();
     vi.unstubAllGlobals();
     useAgentsStore.getState().openHome();
   });
@@ -268,7 +272,7 @@ describeWithJsdom('AgentsScene', () => {
 
   it('keeps agent subpages stretched across the active scene viewport', () => {
     const stylesheet = readFileSync(
-      fileURLToPath(new URL('./AgentsScene.scss', import.meta.url)),
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'AgentsScene.scss'),
       'utf8',
     );
 
@@ -279,15 +283,15 @@ describeWithJsdom('AgentsScene', () => {
 
   it('uses the shared responsive gallery grid and lets agent cards fill each track', () => {
     const sceneSource = readFileSync(
-      fileURLToPath(new URL('./AgentsScene.tsx', import.meta.url)),
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'AgentsScene.tsx'),
       'utf8',
     );
     const agentCardStyles = readFileSync(
-      fileURLToPath(new URL('./components/AgentCard.scss', import.meta.url)),
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'components/AgentCard.scss'),
       'utf8',
     );
     const coreCardSurfaceStyles = readFileSync(
-      fileURLToPath(new URL('./components/_AgentSurfaceCard.scss', import.meta.url)),
+      fileURLToPath(import.meta.url).replace(/AgentsScene\.test\.tsx$/, 'components/_AgentSurfaceCard.scss'),
       'utf8',
     );
 
@@ -354,7 +358,7 @@ describeWithJsdom('AgentsScene', () => {
     expect(container.querySelector('[data-testid="agent-detail-skill-groups"]')).toBeTruthy();
   });
 
-  // ── Legion chain regression tests (L1-P1-3) ─────────────────────────
+  // 鈹€鈹€ Legion chain regression tests (L1-P1-3) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   // Guard the two historical break-points: the create entry (L1-P0-1: the
   // create_legion_preset command was never registered on the Rust side) and
   // the disabled save button (L1-P0-2: LEGION_CREATE_BACKEND_READY=false).
@@ -396,7 +400,7 @@ describeWithJsdom('AgentsScene', () => {
     expect(container.querySelectorAll('[data-testid="legion-pattern-option"]').length).toBeGreaterThan(0);
   }, 10_000);
 
-  it('exposes the pattern selector as a radiogroup and fires on Space key (前端-P2-3)', async () => {
+  it('exposes the pattern selector as a radiogroup and fires on Space key (鍓嶇-P2-3)', async () => {
     const { default: AgentsScene } = await import('./AgentsScene');
 
     await act(async () => {
@@ -418,7 +422,7 @@ describeWithJsdom('AgentsScene', () => {
     const inactive = options.find((o) => o.getAttribute('aria-checked') !== 'true');
     expect(inactive).toBeTruthy();
     await act(async () => {
-      inactive!.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      inactive!.dispatchEvent(new window.KeyboardEvent('keydown', { key: ' ', bubbles: true }));
     });
     const selected = [...container.querySelectorAll('[role="radio"]')].find(
       (o) => o.getAttribute('aria-checked') === 'true',
@@ -426,7 +430,7 @@ describeWithJsdom('AgentsScene', () => {
     expect(selected?.getAttribute('data-pattern-id')).toBe(inactive?.getAttribute('data-pattern-id'));
   }, 10_000);
 
-  it('announces the pattern summary through aria-live (前端-P2-4)', async () => {
+  it('announces the pattern summary through aria-live (鍓嶇-P2-4)', async () => {
     const { default: AgentsScene } = await import('./AgentsScene');
 
     await act(async () => {
@@ -459,7 +463,7 @@ describeWithJsdom('AgentsScene', () => {
     expect(canvas?.querySelector('svg')).toBeTruthy();
   }, 10_000);
 
-  it('marks the createLegion page with the agents scene-root contract (前端-P2-6)', async () => {
+  it('marks the createLegion page with the agents scene-root contract (鍓嶇-P2-6)', async () => {
     const { default: AgentsScene } = await import('./AgentsScene');
 
     await act(async () => {
@@ -556,5 +560,140 @@ describeWithJsdom('AgentsScene', () => {
     const summary = container.querySelector('[data-testid="agent-detail-tool-summary"]');
     expect(summary?.textContent).toBe('Read');
     expect(summary?.textContent).not.toContain('mcp__github__list_issues');
+  });
+
+  // 鈹€鈹€ Batch B: AgentsScene zone/action layout (P1-1/P1-2/P1-3/P1-4/P1-7) 鈹€鈹€
+
+  it('orders agents-zone tools with the primary create-agent action first', async () => {
+    const { default: AgentsScene } = await import('./AgentsScene');
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+
+    const zone = container.querySelector('[data-testid="agents-custom-zone"]');
+    expect(zone).toBeTruthy();
+    const toolIds = Array.from(zone?.querySelectorAll<HTMLElement>('[data-testid]') ?? [])
+      .map((el) => el.getAttribute('data-testid'));
+    const createIdx = toolIds.indexOf('agents-create-agent-btn');
+    const legionIdx = toolIds.indexOf('agents-create-legion-btn');
+    const reviewIdx = toolIds.indexOf('agents-open-review-team-btn');
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(legionIdx).toBeGreaterThan(createIdx);
+    expect(reviewIdx).toBeGreaterThan(legionIdx);
+    // The create-agent button carries the primary highlight.
+    const createBtn = zone?.querySelector('[data-testid="agents-create-agent-btn"]');
+    expect(createBtn?.className).toContain('gallery-action-btn--primary');
+    // A visual separator sits between the primary action and secondary ones.
+    const seps = Array.from(zone?.querySelectorAll('.gallery-action-sep') ?? []);
+    expect(seps.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('keeps top-level zones flat and adds all four anchors', async () => {
+    const { default: AgentsScene } = await import('./AgentsScene');
+    const { LegionPresetAPI } = await import('@/infrastructure/api/service-api/LegionPresetAPI');
+    const listPresets = LegionPresetAPI.listPresets as ReturnType<typeof vi.fn>;
+    listPresets.mockResolvedValue([
+      {
+        id: 'sparc-dev',
+        name: 'SPARC Development',
+        description: '5-stage pipeline',
+        nodes: [],
+        edges: [],
+      },
+    ]);
+
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const zones = Array.from(container.querySelectorAll<HTMLElement>('section[id]'))
+      .map((s) => s.getAttribute('id'));
+    expect(zones).toContain('core-agents-zone');
+    expect(zones).toContain('agents-zone');
+    expect(zones).toContain('legions-zone');
+    expect(zones).toContain('agent-teams-zone');
+
+    // The teams zone is no longer nested inside agents-zone.
+    const agentsZone = container.querySelector('[data-testid="agents-custom-zone"]');
+    const teamsZone = container.querySelector('[data-testid="agents-teams-zone"]');
+    expect(agentsZone?.contains(teamsZone ?? null)).toBe(false);
+
+    // Anchor bar exposes all four zones.
+    for (const testId of [
+      'agents-anchor-core',
+      'agents-anchor-custom',
+      'agents-anchor-legions',
+      'agents-anchor-teams',
+    ]) {
+      expect(container.querySelector(`[data-testid="${testId}"]`)).toBeTruthy();
+    }
+  });
+
+  it('marks the delete button as danger and keeps it separated from edit', async () => {
+    const subagent = {
+      key: 'user::delete-me',
+      id: 'delete-me',
+      name: 'Delete me',
+      description: 'Custom subagent.',
+      isReadonly: false,
+      isReview: false,
+      toolCount: 0,
+      defaultTools: [],
+      defaultEnabled: true,
+      effectiveEnabled: true,
+      source: 'user',
+      agentKind: 'subagent' as const,
+      capabilities: [],
+    };
+    mockAgentsList({
+      allAgents: [subagent],
+      filteredAgents: [subagent],
+    });
+    const { default: AgentsScene } = await import('./AgentsScene');
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === subagent.name)
+        ?.click();
+    });
+
+    const deleteBtn = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'agentsOverview.deleteAgent');
+    expect(deleteBtn).toBeTruthy();
+    expect(deleteBtn?.getAttribute('data-bf-variant')).toBe('danger');
+    const actionsRow = deleteBtn?.parentElement;
+    expect(actionsRow?.getAttribute('style')).toMatch(/gap:\s*16/);
+    const editBtn = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'agentsOverview.editAgent');
+    expect(editBtn).toBeTruthy();
+  });
+
+  it('opens the team editor from the details modal with the save-chained action', async () => {
+    const { default: AgentsScene } = await import('./AgentsScene');
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+
+    const teamName = useAgentsStore.getState().agentTeams[0]?.name ?? '';
+    const card = Array.from(container.querySelectorAll<HTMLElement>('.agent-team-card'))
+      .find((el) => el.getAttribute('aria-label') === teamName);
+    expect(card).toBeTruthy();
+    await act(async () => {
+      card?.click();
+    });
+
+    const editAction = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === 'composer.saveTeam');
+    expect(editAction).toBeTruthy();
+    await act(async () => {
+      editAction?.click();
+    });
+    expect(container.querySelector('.bitfun-agents-scene--page')).toBeTruthy();
   });
 });

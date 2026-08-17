@@ -17,6 +17,7 @@
   "nav": {
     "coreAgents": "核心智能体",
     "agents": "Agent",
+    "legions": "工作流",
     "teams": "Agent Team"
   },
   "filters": {
@@ -299,7 +300,7 @@
       "createSuccess": "已创建 Agent「{{name}}」",
       "createFailed": "创建失败：",
       "review": "评审",
-      "reviewToolsHint": "只读模式将代理限制为仅使用只读工具。"
+      "reviewToolsHint": "补充检查仅使用只读工具。"
     }
   },
   "reviewTeams": {
@@ -479,6 +480,7 @@
     "noEdges": "无连线",
     "canvas": "画布预览",
     "usePattern": "使用此模式",
+    "savePreset": "保存预设",
     "planning": "规划中",
     "saved": "工作流编排模式「{{name}}」已保存",
     "saveFailed": "保存工作流编排模式失败",
@@ -533,8 +535,8 @@
     },
     "remove": "移出",
     "rename": "点击编辑",
-    "save": "保存",
-    "cancel": "取消"
+    "saveTeam": "保存",
+    "cancelEdit": "取消"
   },
   "gallery": {
     "title": "Agent 图鉴",
