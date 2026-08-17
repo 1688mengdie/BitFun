@@ -252,6 +252,16 @@ Invoke-CIStep 'rust-build-check' 'workspace 编译检查' `
     return $LASTEXITCODE
 }
 
+# 实际 feature 组合验证（C-13）：--all-features/裸默认 feature 均掩盖 feature 装配缺口。
+# 裸 `cargo check -p bitfun-core`（default=[]）下 configured_* 消费点在 feature 门控后 → 7 dead_code warning
+# （C-10 -D warnings 下必挂）；CI 合约组合 = desktop 依赖 product-full（src/apps/desktop/Cargo.toml:23），
+# 消费点全激活 → 0e0w。此 step 对齐 CI 合约实际 feature 组合，复现并守住 bitfun-core 0e0w 门禁。
+Invoke-CIStep 'rust-build-check' 'bitfun-core 实际 feature 组合验证（product-full 对齐 CI 合约）' `
+    "cargo check -p bitfun-core --features product-full --jobs 4" -Mode strict -Body {
+    cargo check -p bitfun-core --features product-full --jobs 4 2>&1 | Select-Object -Last 2
+    return $LASTEXITCODE
+}
+
 Invoke-CIStep 'rust-build-check' 'installer 编译检查（Windows 专属步骤）' `
     "cargo check --manifest-path BitFun-Installer/src-tauri/Cargo.toml" -Mode strict -Body {
     cargo check --manifest-path BitFun-Installer/src-tauri/Cargo.toml 2>&1 | Select-Object -Last 2
