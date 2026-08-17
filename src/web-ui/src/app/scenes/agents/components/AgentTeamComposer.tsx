@@ -11,14 +11,15 @@ import {
   type CapabilityCategory,
 } from '../agentsStore';
 import { AGENT_ICON_MAP } from '../agentsIcons';
+import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
 import './AgentTeamComposer.scss';
 
 // Constants
 
 const ROLE_COLORS: Record<MemberRole, string> = {
-  leader: '#60a5fa',
-  member: '#6eb88c',
-  reviewer: '#c9944d',
+  leader: APPEARANCE_DOMAIN_TOKENS.agentTeam.roleLeader,
+  member: APPEARANCE_DOMAIN_TOKENS.agentTeam.roleMember,
+  reviewer: APPEARANCE_DOMAIN_TOKENS.agentTeam.roleReviewer,
 };
 
 interface NodePos { x: number; y: number; memberId: string }

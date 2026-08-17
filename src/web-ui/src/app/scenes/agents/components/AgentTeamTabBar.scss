@@ -295,7 +295,7 @@
 
     &--primary {
       background: var(--bf-appearance-token-color-accent-500);
-      color: #fff;
+      color: var(--bf-appearance-token-color-overlay-white-95);
       &:hover:not(:disabled) { opacity: 0.88; }
       &:disabled { opacity: 0.35; cursor: not-allowed; }
     }

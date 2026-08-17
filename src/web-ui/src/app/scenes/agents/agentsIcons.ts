@@ -24,6 +24,7 @@ import {
   type LucideProps,
 } from 'lucide-react';
 import type React from 'react';
+import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
 export { CAPABILITY_ACCENT } from './agentAppearance';
 
 export type AgentIconKey =
@@ -63,14 +64,7 @@ export const AGENT_TEAM_ICON_MAP: Record<AgentTeamIconKey, React.FC<LucideProps>
 };
 
 // Each agent team has a deterministic accent derived from its id.
-const AGENT_TEAM_ACCENTS = [
-  'var(--bf-appearance-token-color-indigo-500)',
-  '#6eb88c',
-  'var(--bf-appearance-token-color-purple-500)',
-  '#c9944d',
-  '#e879a0',
-  '#5ea3a3',
-];
+const AGENT_TEAM_ACCENTS = APPEARANCE_DOMAIN_TOKENS.agentTeam.accents;
 
 export function getAgentTeamAccent(id: string): string {
   let hash = 0;
