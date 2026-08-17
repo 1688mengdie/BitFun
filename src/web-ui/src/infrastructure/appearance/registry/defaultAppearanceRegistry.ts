@@ -207,6 +207,7 @@ import { navBarAppearanceDescriptor } from '@/app/components/NavBar/NavBar.appea
 import { splashScreenAppearanceDescriptor } from '@/app/components/SplashScreen/SplashScreen.appearance';
 import { chatPaneAppearanceDescriptor } from '@/app/scenes/session/ChatPane.appearance';
 import { groupChatViewAppearanceDescriptor } from '@/app/scenes/session/GroupChatView.appearance';
+import { groupLogViewAppearanceDescriptor } from '@/app/scenes/session/GroupLogView.appearance';
 import {
   groupMemberPickerDialogAppearanceDescriptor,
   groupForkDialogAppearanceDescriptor,
@@ -398,6 +399,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(splashScreenAppearanceDescriptor)
     .registerComponent(chatPaneAppearanceDescriptor)
     .registerComponent(groupChatViewAppearanceDescriptor)
+    .registerComponent(groupLogViewAppearanceDescriptor)
     .registerComponent(createGroupChatDialogAppearanceDescriptor)
     .registerComponent(groupMemberPickerDialogAppearanceDescriptor)
     .registerComponent(groupForkDialogAppearanceDescriptor)

@@ -7078,12 +7078,16 @@ config: {
           remoteSshHost,
         );
         const persistedCurrentContextUsage = persistedCurrentContextUsageValue(metadata);
-        // R-GC-35: group sessions are ordinary sessions whose group marker
-        // lives in the backend session metadata (`customMetadata.groupChats` =
+        // R-GC-35 / R-WF-14: group sessions are ordinary sessions whose group
+        // marker lives in the backend session metadata (`customMetadata.groupChats` =
         // member session id array, written by group_room_tools.rs). A group
         // whose customMetadata carries a non-empty groupChats array restores
-        // isGroupChat after a restart, so SessionScene keeps routing it to
-        // GroupChatView. Empty/missing arrays keep the marker undefined.
+        // isGroupChat after a restart, so SessionScene keeps routing it to the
+        // read-only GroupLogView (R-WF-14, acceptance: isGroupChat restored from
+        // metadata, not hardcoded). Empty/missing arrays keep the marker undefined.
+        // NOTE (P2-1, batch7 plan): FlowChatStore.ts is W1f-owned — only
+        // R-WF-02/R-WF-10/R-WF-14 touch it, in that serial order (main Plan
+        // §worktree isolation :314). R-WF-15/16 must NOT write this file.
         const rawGroupChats = (metadata as any)?.customMetadata?.groupChats;
         const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
           ? true
@@ -7567,10 +7571,11 @@ config: {
             remoteSshHost,
           );
           const persistedCurrentContextUsage = persistedCurrentContextUsageValue(metadata);
-          // R-GC-35: restore the group chat marker from backend session
-          // metadata (`customMetadata.groupChats`, group_room_tools.rs) so
-          // group sessions keep routing to GroupChatView after a restart.
-          // Empty/missing arrays keep the marker undefined.
+          // R-GC-35 / R-WF-14: restore the group chat marker from backend
+          // session metadata (`customMetadata.groupChats`, group_room_tools.rs)
+          // so group sessions keep routing to the read-only GroupLogView
+          // (R-WF-14) after a restart. Empty/missing arrays keep the marker
+          // undefined.
           const rawGroupChats = (metadata as any)?.customMetadata?.groupChats;
           const restoredGroupChat = Array.isArray(rawGroupChats) && rawGroupChats.length > 0
             ? true

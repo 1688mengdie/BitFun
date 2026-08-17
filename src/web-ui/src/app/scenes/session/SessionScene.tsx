@@ -13,11 +13,10 @@ import React, { useRef, useState, useCallback, useEffect, useLayoutEffect, useMe
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../../hooks/useApp';
 import ChatPane from './ChatPane';
-import GroupChatView from './GroupChatView';
+import GroupLogView from './GroupLogView';
 import AuxPane, { type AuxPaneRef } from './AuxPane';
 import BottomTerminalPane from './BottomTerminalPane';
 import { useActiveSession } from '../../../flow_chat/store/modernFlowChatStore';
-import { useWorkspaceContext } from '@/infrastructure/contexts/WorkspaceContext';
 import {
   getCachedTerminalPanelPosition,
   onTerminalPanelPositionChange,
@@ -66,14 +65,6 @@ const SessionScene: React.FC<SessionSceneProps> = ({
     toggleBottomTerminalPanel,
   } = useApp();
   const auxPaneRef = useRef<AuxPaneRef>(null);
-
-  // R-GC-32 (2026-08-14, owner-verified P0): invite/fork member source must
-  // match create-group (real Claw sessions). assistantWorkspacesList comes from
-  // useWorkspaceContext (same source as MainNav assistantWorkspacesList,
-  // WorkspaceProvider.tsx WorkspaceKind.Assistant filter), passed to GroupChatView
-  // then injected into invite/fork pickers (GroupMemberPickerDialog /
-  // GroupForkDialog).
-  const { assistantWorkspacesList } = useWorkspaceContext();
 
   const [isDraggingRight, setIsDraggingRight] = useState(false);
   const [isDraggingBottom, setIsDraggingBottom] = useState(false);
@@ -151,9 +142,11 @@ const SessionScene: React.FC<SessionSceneProps> = ({
 
   const isChatFullWidth = state.layout.chatFullWidth;
 
-  // R-GC-14: group chat detection (UI-local isGroupChat marker set by MainNav
-  // when creating/opening a group). GroupChatView needs groupId + workspacePath:
-  // a group session is itself an ordinary session (v3 decision).
+  // R-GC-14 / R-WF-14: group chat detection (UI-local isGroupChat marker set by
+  // MainNav when creating/opening a group, restored from backend metadata —
+  // `customMetadata.groupChats`, FlowChatStore R-GC-35). A group session is
+  // itself an ordinary session (v3 decision); it routes to the read-only
+  // GroupLogView (R-WF-14: bubble timeline without composer/member table).
   const activeSession = useActiveSession();
   const activeSessionId = activeSession?.sessionId ?? '';
   const isGroupChatActive = activeSessionId !== '' && activeSession?.isGroupChat === true;
@@ -575,7 +568,7 @@ const SessionScene: React.FC<SessionSceneProps> = ({
       ].filter(Boolean).join(' ') || undefined}
     >
       <div className="bitfun-session-scene__main-row" data-bf-scene="session" data-bf-part="main">
-        {/* ChatPane — FlowChat conversation (GroupChatView for group chats, R-GC-14) */}
+        {/* ChatPane — FlowChat conversation (GroupLogView for group chats, R-WF-14) */}
         {!isChatHidden && (
           <div
             className={`bitfun-session-scene__chat-pane ${isDragging ? 'bitfun-session-scene__chat-pane--dragging' : ''}`}
@@ -584,12 +577,10 @@ const SessionScene: React.FC<SessionSceneProps> = ({
             data-bf-part="chat"
           >
             {isGroupChatActive ? (
-              <GroupChatView
+              <GroupLogView
                 groupId={activeSessionId}
                 workspacePath={workspacePath || activeSession?.workspacePath || ''}
-                groupName={activeSession?.title}
                 isSceneActive={isActive}
-                assistantWorkspaces={assistantWorkspacesList}
               />
             ) : (
               <ChatPane
