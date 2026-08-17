@@ -4,15 +4,16 @@ use crate::events::turn_outcome_kind;
 use crate::thread_goal::{build_objective_updated_plan, build_thread_goal_continuation_plan};
 use bitfun_runtime_ports::{
     should_skip_agent_session_reply, should_suppress_agent_session_cancelled_reply,
-    AgentDialogPrependedReminder, AgentInputAttachment, AgentSessionReplyRoute, DialogQueuePriority,
-    DialogRoundInjectionSource, DialogSessionStateFact, DialogSteerOutcome, DialogSubmissionPolicy,
-    DialogTriggerSource, RoundInjection, RoundInjectionKind, RoundInjectionTarget,
-    RoundInjectionToolPreemption, ThreadGoal, MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
+    AgentDialogPrependedReminder, AgentInputAttachment, AgentSessionReplyRoute,
+    DialogQueuePriority, DialogRoundInjectionSource, DialogSessionStateFact, DialogSteerOutcome,
+    DialogSubmissionPolicy, DialogTriggerSource, RoundInjection, RoundInjectionKind,
+    RoundInjectionTarget, RoundInjectionToolPreemption, ThreadGoal,
+    MAX_THREAD_GOAL_AUTO_CONTINUATIONS,
 };
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_MAX_DIALOG_QUEUE_DEPTH: usize = 20;
 
@@ -177,20 +178,6 @@ impl ActiveDialogTurnStore {
         self.inner
             .get(session_id)
             .map(|turn| turn.user_input().to_string())
-    }
-
-    /// Agent type + user input of the currently active turn for session_id,
-    /// if any. Consumed by the background-notification coalescing guard
-    /// (R-AR-03): the dedupe key is the (session_id, agent_type) tuple, so the
-    /// active turn must expose its agent type alongside the user input instead
-    /// of relying on exact user-input text equality.
-    pub fn active_turn_agent_type_and_user_input(&self, session_id: &str) -> Option<(String, String)> {
-        self.inner.get(session_id).map(|turn| {
-            (
-                turn.agent_type_owned(),
-                turn.user_input().to_string(),
-            )
-        })
     }
 
     pub fn suppression_key_for_requester(
@@ -646,29 +633,16 @@ pub struct SessionRoundInjectionBuffer {
     pending_steering_ids: dashmap::DashMap<(String, String), String>,
 }
 
-/// Time window within which same-kind background-result notifications for the
-/// same session are coalesced into a single model request (5s). A notification
-/// that arrives after the window is a genuinely new event and is delivered.
-pub const NOTIFICATION_DEDUP_WINDOW: Duration = Duration::from_secs(5);
-
+/// R-ASYNC-01（项1）：移除 buffer push 5s 窗口去重。
+/// 同 (session_id, agent_type) 键的多条后台通知不再合并——全部入队逐条注入。
+/// 消费确认（mark_steering_consumed / acknowledge_injection，TOKEN-01）保留。
 impl SessionRoundInjectionBuffer {
-    /// Push a round injection, deduplicating against pending entries for the
-    /// same session so a notification storm cannot turn N identical events into
-    /// N model requests.
+    /// Push a round injection into the per-session pending buffer.
     ///
-    /// Dedup keys (窗口语义：同会话 5 秒窗口内）:
-    /// - `BackgroundResult` / `ThreadGoalObjectiveUpdated`: the notification
-    ///   identity is the caller-supplied `dedupKey` metadata tuple
-    ///   `(session_id, agent_type)` (R-AR-03/R-AR-05) — R-AR-05 起注入内容为
-    ///   完整回复全文，按正文相等查重必然失效（每份组装不同），键与正文解耦；
-    ///   同键条目在 5s 窗口内视为同一通知风暴，保留首条、丢弃其余。无键条目
-    ///   回退窗口语义（同 kind 5s 内合并，如 ThreadGoal 注入）。窗口外的条目
-    ///   保留：真正的后续通知必须到达模型（后台通知 = 必要功能，只去风暴不去
-    ///   通知）。
-    /// - `UserSteering`: the user message text is the prompt payload; two
-    ///   pending entries with the same content within the window are the same
-    ///   message re-steered, so keep only the first. Distinct messages always
-    ///   both survive, regardless of timing.
+    /// R-ASYNC-01（项1）：不再按窗口/键去重——BackgroundResult 同键多条、
+    /// ThreadGoal 窗口内重复、UserSteering 同内容多条均逐条保留（移除排队合并，
+    /// 通知不再被丢弃）。UserSteering 消费确认（TOKEN-01）保留：已注入过
+    /// （acked）的同 steering_id/同内容不重复注入。
     ///
     /// The dedup happens at push time, before the engine drains the buffer at a
     /// round boundary. It never mutates the injected text, the injection
@@ -690,38 +664,10 @@ impl SessionRoundInjectionBuffer {
             );
             return;
         }
-        let mut entry = self.inner.entry(session_id.to_string()).or_default();
-        let duplicate = entry
-            .iter()
-            .any(|existing| match (&existing.kind, &message.kind) {
-                (RoundInjectionKind::BackgroundResult, RoundInjectionKind::BackgroundResult) => {
-                    // R-AR-05：注入键 (session_id, agent_type) 元数据优先——
-                    // 全文注入后正文必然不同，按正文查重失效。同键 + 同 5s 窗口
-                    // 视为同一通知风暴。无键条目回退窗口语义（按 kind 合并）。
-                    Self::same_background_result_key(existing, &message)
-                        && Self::within_dedup_window(existing, &message)
-                }
-                (
-                    RoundInjectionKind::ThreadGoalObjectiveUpdated,
-                    RoundInjectionKind::ThreadGoalObjectiveUpdated,
-                ) => Self::within_dedup_window(existing, &message),
-                (RoundInjectionKind::UserSteering, RoundInjectionKind::UserSteering) => {
-                    existing.content == message.content
-                        && existing.prepended_reminders == message.prepended_reminders
-                        && existing.dedup_key() == message.dedup_key()
-                }
-                _ => false,
-            });
-        if duplicate {
-            log::debug!(
-                "Round injection deduplicated: session_id={}, kind={:?}, pending={}",
-                session_id,
-                message.kind,
-                entry.len()
-            );
-            return;
-        }
-        entry.push(message);
+        self.inner
+            .entry(session_id.to_string())
+            .or_default()
+            .push(message);
     }
 
     /// Record that a UserSteering was actually injected for the session, so
@@ -753,32 +699,6 @@ impl SessionRoundInjectionBuffer {
                 session_id.to_string(),
                 format!("content:{}", message.content),
             )),
-        }
-    }
-
-    /// R-AR-05 注入键判定：`BackgroundResult` 优先按注入元数据 `dedupKey`
-    /// （(session_id, agent_type) 元组，scheduler 注入时写入）判断，与正文解耦；
-    /// 无键条目（遗留/测试构造）回退按 kind 恒等（窗口内合并）。
-    fn same_background_result_key(left: &RoundInjection, right: &RoundInjection) -> bool {
-        let left_key = left.metadata.get("dedupKey");
-        let right_key = right.metadata.get("dedupKey");
-        match (left_key, right_key) {
-            (Some(left_key), Some(right_key)) => left_key == right_key,
-            _ => true,
-        }
-    }
-
-    /// Whether `existing` and `candidate` fall inside the same notification
-    /// dedup window (5s). Time is monotonic-ish for this purpose: created_at
-    /// values are SystemTime; the window test is `|a - b| <= 5s`. A backwards
-    /// clock (Err) is treated as within the window — both entries are still
-    /// pending, so coalescing them is safe.
-    fn within_dedup_window(existing: &RoundInjection, candidate: &RoundInjection) -> bool {
-        // 对称窗口：|existing.created_at - candidate.created_at| <= 5s。
-        // 方向无关——无论哪条更早，只要落在同一 5s 窗口内即视为同一风暴。
-        match existing.created_at.duration_since(candidate.created_at) {
-            Ok(diff) => diff <= NOTIFICATION_DEDUP_WINDOW,
-            Err(system_time_error) => system_time_error.duration() <= NOTIFICATION_DEDUP_WINDOW,
         }
     }
 
@@ -1295,12 +1215,17 @@ pub fn resolve_agent_session_reply_action(
     active_turn: &ActiveDialogTurn,
     outcome: &TurnOutcome,
     suppressed_cancelled_reply: bool,
+    suppress_injected_turn_reply: bool,
 ) -> AgentSessionReplyAction {
     if !active_turn.is_agent_session_request() {
         return AgentSessionReplyAction::NoReply;
     }
 
-    if should_skip_agent_session_reply(turn_outcome_kind(outcome), suppressed_cancelled_reply) {
+    if should_skip_agent_session_reply(
+        turn_outcome_kind(outcome),
+        suppressed_cancelled_reply,
+        suppress_injected_turn_reply,
+    ) {
         return AgentSessionReplyAction::SkipSuppressedCancelledReply;
     }
 
@@ -1433,82 +1358,8 @@ mod tests {
         }
     }
 
-    /// Test helper：给 BackgroundResult 注入附加 R-AR-05 键元数据
-    /// `dedupKey = (session_id, agent_type)`，模拟 scheduler 注入路径。
-    fn keyed_background_injection(session_id: &str, agent_type: &str, content: &str) -> RoundInjection {
-        let mut injection = injection(RoundInjectionKind::BackgroundResult, content);
-        injection.metadata.insert(
-            "dedupKey".to_string(),
-            serde_json::json!({
-                "sessionId": session_id,
-                "agentType": agent_type,
-            }),
-        );
-        injection
-    }
-
     fn uuid_like() -> String {
         format!("injection-{}", std::process::id())
-    }
-
-    #[test]
-    fn injection_buffer_deduplicates_background_result_notifications() {
-        let buffer = SessionRoundInjectionBuffer::default();
-        // A notification storm: N identical background-result entries for the
-        // same session within the 5s window must collapse to a single pending
-        // entry (one model request).
-        for _ in 0..5 {
-            buffer.push(
-                "session-1",
-                injection(RoundInjectionKind::BackgroundResult, "bg"),
-            );
-        }
-        let pending = buffer.drain_for_turn("session-1", "turn-1");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].kind, RoundInjectionKind::BackgroundResult);
-    }
-
-    #[test]
-    fn injection_buffer_merges_same_key_different_body_background_within_window() {
-        // R-AR-05 键对齐：同 (session_id, agent_type) 键、正文不同（全文注入后
-        // 每份组装不同）的 BackgroundResult 在 5s 窗口内必须合并——查重键与正文
-        // 解耦，通知风暴仍被守卫。
-        let buffer = SessionRoundInjectionBuffer::default();
-        buffer.push(
-            "session-1",
-            keyed_background_injection("child-1", "GeneralPurpose", "first full reply body"),
-        );
-        buffer.push(
-            "session-1",
-            keyed_background_injection(
-                "child-1",
-                "GeneralPurpose",
-                "second, differently assembled full reply body",
-            ),
-        );
-        let pending = buffer.drain_for_turn("session-1", "turn-1");
-        assert_eq!(
-            pending.len(),
-            1,
-            "same (session_id, agent_type) key must coalesce regardless of body text"
-        );
-    }
-
-    #[test]
-    fn injection_buffer_keeps_distinct_keys_within_window() {
-        // R-AR-05 键语义：不同 (session_id, agent_type) 键（不同子会话）在窗口内
-        // 各自保留——通知功能不丢失。
-        let buffer = SessionRoundInjectionBuffer::default();
-        buffer.push(
-            "session-1",
-            keyed_background_injection("child-a", "GeneralPurpose", "reply a"),
-        );
-        buffer.push(
-            "session-1",
-            keyed_background_injection("child-b", "GeneralPurpose", "reply b"),
-        );
-        let pending = buffer.drain_for_turn("session-1", "turn-1");
-        assert_eq!(pending.len(), 2);
     }
 
     #[test]
@@ -1569,26 +1420,6 @@ mod tests {
     }
 
     #[test]
-    fn injection_buffer_keeps_background_result_notification_after_window() {
-        let buffer = SessionRoundInjectionBuffer::default();
-        // 后台通知 = 必要功能：5s 窗口之外的同类通知是新的真实事件，必须保留。
-        let now = SystemTime::now();
-        let first = RoundInjection {
-            created_at: now - NOTIFICATION_DEDUP_WINDOW - Duration::from_secs(1),
-            ..injection(RoundInjectionKind::BackgroundResult, "bg")
-        };
-        let second = injection(RoundInjectionKind::BackgroundResult, "bg");
-        buffer.push("session-1", first);
-        buffer.push("session-1", second);
-        let pending = buffer.drain_for_turn("session-1", "turn-1");
-        assert_eq!(
-            pending.len(),
-            2,
-            "notification beyond the window is a new event"
-        );
-    }
-
-    #[test]
     fn consumed_steering_is_not_reinjected_after_acknowledge() {
         let buffer = SessionRoundInjectionBuffer::default();
         // 用户消息注入（drain）后经 acknowledge 标记已消费：同一内容再次
@@ -1640,27 +1471,6 @@ mod tests {
         assert_eq!(undelivered[0].content, "still pending");
         // 取出后缓冲为空：不残留。
         assert_eq!(buffer.pending_count("session-1"), 0);
-    }
-
-    #[test]
-    fn injection_buffer_deduplicates_identical_user_steering() {
-        let buffer = SessionRoundInjectionBuffer::default();
-        // The same user message re-steered 3 times must be injected once.
-        buffer.push(
-            "session-1",
-            injection(RoundInjectionKind::UserSteering, "check tests"),
-        );
-        buffer.push(
-            "session-1",
-            injection(RoundInjectionKind::UserSteering, "check tests"),
-        );
-        buffer.push(
-            "session-1",
-            injection(RoundInjectionKind::UserSteering, "check tests"),
-        );
-        let pending = buffer.drain_for_turn("session-1", "turn-1");
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].content, "check tests");
     }
 
     #[test]

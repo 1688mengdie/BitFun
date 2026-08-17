@@ -28,7 +28,7 @@ use crate::agentic::image_analysis::{
     build_multimodal_message_with_images, process_image_contexts_for_provider, ImageContextData,
     ImageLimits,
 };
-use crate::agentic::round_preempt::{RoundInjection, RoundInjectionKind};
+use crate::agentic::round_preempt::RoundInjectionKind;
 use crate::agentic::session::{
     ContextCompressor, SessionManager, TokenAnchor, TokenAnchorInput, UserContextCacheIdentity,
     INTERRUPTED_TURN_MODEL_BINDING_FINGERPRINT_METADATA_KEY,
@@ -1421,55 +1421,9 @@ impl ExecutionEngine {
         has_assistant_message && !used_local_final_response_synthesis
     }
 
-    /// 队列批量化合并（主人定标：N 条通知 → 1 次模型请求）。
-    ///
-    /// Same-kind `BackgroundResult` notifications with the same dedup key
-    /// collapse to the first entry — one model request handles the whole storm.
-    /// The dedup key is the caller-supplied `dedupKey` metadata tuple
-    /// `(session_id, agent_type)` (R-AR-03/R-AR-05), decoupled from the body:
-    /// after R-AR-05 every injection carries the full final reply, so exact
-    /// content equality would never match (each assembly differs) and the storm
-    /// guard would silently degrade. Distinct keys (different child sessions or
-    /// agent types) and all `UserSteering` / `ThreadGoalObjectiveUpdated`
-    /// entries are preserved verbatim. Injections without the metadata key fall
-    /// back to the legacy content-equality guard (deterministic merge of
-    /// byte-identical notifications; prompt-cache prefix stays stable).
-    fn coalesce_round_injections(pending: Vec<RoundInjection>) -> Vec<RoundInjection> {
-        let mut merged: Vec<RoundInjection> = Vec::with_capacity(pending.len());
-        for injection in pending {
-            if injection.kind == RoundInjectionKind::BackgroundResult {
-                let duplicate = merged.iter().any(|existing| {
-                    existing.kind == RoundInjectionKind::BackgroundResult
-                        && Self::same_background_result_dedup_key(existing, &injection)
-                });
-                if duplicate {
-                    log::debug!(
-                        "Background notification coalesced into a single request: dedup_key={:?}, content_len={}",
-                        injection
-                            .metadata
-                            .get("dedupKey")
-                            .map(serde_json::Value::to_string),
-                        injection.content.len()
-                    );
-                    continue;
-                }
-            }
-            merged.push(injection);
-        }
-        merged
-    }
-
-    /// R-AR-05 注入查重键：优先按注入元数据 `dedupKey`（(session_id, agent_type)
-    /// 元组）判断，与正文解耦；无键的遗留条目回退内容相等守卫。
-    fn same_background_result_dedup_key(left: &RoundInjection, right: &RoundInjection) -> bool {
-        let left_key = left.metadata.get("dedupKey");
-        let right_key = right.metadata.get("dedupKey");
-        match (left_key, right_key) {
-            (Some(left_key), Some(right_key)) => left_key == right_key,
-            _ => left.content == right.content,
-        }
-    }
-
+    /// R-ASYNC-01（项1）：移除 round 边界排队合并。同一轮边界排队的 N 条
+    /// 后台完成通知不再合并——N 条独立注入，逐条到达模型。
+    /// 排队消费语义（drain_for_turn / acknowledge_consumed）保留。
     fn build_finalize_cache_anchor_messages(turn_id: &str, reminder_text: &str) -> Vec<Message> {
         vec![
             Message::internal_reminder(
@@ -5650,13 +5604,9 @@ impl ExecutionEngine {
             if let Some(source) = context.round_injection.as_ref() {
                 let pending = source.take_pending(&context.session_id, &context.dialog_turn_id);
                 if !pending.is_empty() {
-                    // 队列批量化合并（主人定标）：同一轮边界排队的 N 条后台完成
-                    // 通知合并为 1 条注入 → 一次模型请求处理全部，而非每条触发
-                    // 一次请求。合并按 (kind + 通知文本) 精确匹配：相同文本的
-                    // BackgroundResult 通知只保留首条（文本即固定模板，合并结果
-                    // 逐字节稳定，缓存前缀不漂移）；UserSteering / ThreadGoal
-                    // 保持原样逐条注入。后台通知功能本身保留（主人裁决：必要）。
-                    let pending = Self::coalesce_round_injections(pending);
+                    // R-ASYNC-01（项1）：移除 round 边界排队合并。
+                    // 同轮边界排队的 N 条后台完成通知全部逐条注入（不合并），排队消费
+                    // 语义（drain_for_turn / acknowledge_consumed）保留。
                     info!(
                         "Injecting {} round message(s) at round boundary: session_id={}, dialog_turn_id={}, round_index={}",
                         pending.len(),
@@ -6408,7 +6358,7 @@ mod tests {
     use crate::agentic::events::{EventQueue, EventQueueConfig};
     use crate::agentic::execution::{ExecutionEngineConfig, RoundExecutor, StreamProcessor};
     use crate::agentic::persistence::PersistenceManager;
-    use crate::agentic::round_preempt::{RoundInjection, RoundInjectionKind, RoundInjectionTarget};
+
     use crate::agentic::session::compression::CompressionConfig;
     use crate::agentic::session::PromptCacheScope;
     use crate::agentic::session::{
@@ -8264,135 +8214,6 @@ mod tests {
             !ExecutionEngine::build_local_final_response_message("max_rounds")
                 .contains("finalize mode")
         );
-    }
-
-    fn test_injection(kind: RoundInjectionKind, content: &str) -> RoundInjection {
-        let mut injection = RoundInjection {
-            id: format!("inj-{}", std::process::id()),
-            kind,
-            execution_policy: kind.default_execution_policy(),
-            target: RoundInjectionTarget::CurrentRunningTurn,
-            content: content.to_string(),
-            display_content: content.to_string(),
-            attachments: Vec::new(),
-            metadata: serde_json::Map::new(),
-            created_at: std::time::SystemTime::now(),
-            prepended_reminders: Vec::new(),
-        };
-        if kind == RoundInjectionKind::BackgroundResult {
-            injection.metadata.insert(
-                "dedupKey".to_string(),
-                serde_json::json!({
-                    "sessionId": "child-1",
-                    "agentType": "GeneralPurpose",
-                }),
-            );
-        }
-        injection
-    }
-
-    #[test]
-    fn coalesce_round_injections_merges_identical_background_notifications() {
-        // 主人定标：N 条通知排队 → 合并为 1 条注入 → 1 次模型请求。
-        // R-AR-05 起按 (session_id, agent_type) 键合并：正文不同的同键通知
-        // 同样合并（全文注入后正文必然不同）。合并结果保留第一条注入的全文
-        // （注入=全文，不因合并退化为摘要）。
-        let full_reply = format!("FULL_REPLY_MARKER_{}", "x".repeat(1024));
-        let notice = "Background agent session child-1 (GeneralPurpose) has replied; use SessionHistory to view the full reply.\n\n".to_string() + &full_reply;
-        let pending = vec![
-            test_injection(RoundInjectionKind::BackgroundResult, &notice),
-            test_injection(RoundInjectionKind::BackgroundResult, &notice),
-            test_injection(RoundInjectionKind::BackgroundResult, &notice),
-            test_injection(RoundInjectionKind::UserSteering, "check tests"),
-        ];
-        let merged = ExecutionEngine::coalesce_round_injections(pending);
-        assert_eq!(merged.len(), 2, "N identical notifications collapse to one");
-        assert_eq!(merged[0].kind, RoundInjectionKind::BackgroundResult);
-        // 合并后注入仍携带全文（内容未被丢弃/摘要化）。
-        assert!(
-            merged[0].content.contains(&full_reply),
-            "kept injection must carry the full reply text"
-        );
-        assert_eq!(merged[0].content, notice);
-        assert_eq!(merged[1].kind, RoundInjectionKind::UserSteering);
-    }
-
-    #[test]
-    fn coalesce_round_injections_merges_same_key_different_body_background() {
-        // R-AR-05 验收断言（coalesce 键对齐）：同 (session_id, agent_type) 键、
-        // 正文不同（模拟全文注入后每份组装不同）的 BackgroundResult 必须合并为
-        // 一条注入——查重键与正文解耦，通知风暴仍被守卫；合并保留第一条注入
-        // 的全文（注入=全文语义不被合并破坏）。
-        let first_full = "first full reply body";
-        let second_full = "second, differently assembled full reply body";
-        let pending = vec![
-            test_injection(RoundInjectionKind::BackgroundResult, first_full),
-            test_injection(RoundInjectionKind::BackgroundResult, second_full),
-        ];
-        let merged = ExecutionEngine::coalesce_round_injections(pending);
-        assert_eq!(
-            merged.len(),
-            1,
-            "same (session_id, agent_type) key must coalesce regardless of body text"
-        );
-        // 合并结果保留第一条注入的完整全文（正文不同也合并，但全文不丢）。
-        assert_eq!(
-            merged[0].content, first_full,
-            "coalesced injection must keep the first full reply text"
-        );
-        assert!(
-            !merged[0].content.contains(second_full),
-            "only the first body survives coalescing"
-        );
-    }
-
-    #[test]
-    fn coalesce_round_injections_preserves_distinct_notifications_and_steering() {
-        // 通知功能保留：不同子代理（不同 (session_id, agent_type) 键）各自保留；
-        // UserSteering 原样。键元数据仅在构造时生成（每注入独立），正文不作为
-        // 查重依据。
-        let notice_a =
-            "Background agent session child-a (GeneralPurpose) has replied; use SessionHistory to view the full reply.";
-        let notice_b =
-            "Background agent session child-b (GeneralPurpose) has replied; use SessionHistory to view the full reply.";
-        let mut injection_a = test_injection(RoundInjectionKind::BackgroundResult, notice_a);
-        injection_a.metadata.insert(
-            "dedupKey".to_string(),
-            serde_json::json!({ "sessionId": "child-a", "agentType": "GeneralPurpose" }),
-        );
-        let mut injection_b = test_injection(RoundInjectionKind::BackgroundResult, notice_b);
-        injection_b.metadata.insert(
-            "dedupKey".to_string(),
-            serde_json::json!({ "sessionId": "child-b", "agentType": "GeneralPurpose" }),
-        );
-        let pending = vec![
-            injection_a,
-            injection_b,
-            test_injection(RoundInjectionKind::UserSteering, "steer one"),
-            test_injection(RoundInjectionKind::UserSteering, "steer two"),
-        ];
-        let merged = ExecutionEngine::coalesce_round_injections(pending);
-        assert_eq!(
-            merged.len(),
-            4,
-            "distinct notifications and steering survive"
-        );
-    }
-
-    #[test]
-    fn coalesce_round_injections_output_is_deterministic() {
-        // 缓存前缀稳定性：两次相同场景合并结果逐字节一致（不因时序产生变体）。
-        let notice = "Background agent session child-1 (GeneralPurpose) has replied; use SessionHistory to view the full reply.";
-        let make = || {
-            ExecutionEngine::coalesce_round_injections(vec![
-                test_injection(RoundInjectionKind::BackgroundResult, notice),
-                test_injection(RoundInjectionKind::BackgroundResult, notice),
-            ])
-        };
-        let first = make();
-        let second = make();
-        assert_eq!(first.len(), second.len());
-        assert_eq!(first[0].content, second[0].content);
     }
 
     #[test]
