@@ -87,6 +87,17 @@ impl AgentRegistry {
                 permission_constraints: Default::default(),
             };
         };
+        // R-WF-16: user-level global Tool availability (ai.tool_settings) must
+        // gate every agent's runtime tool set. This mirrors the skills-side
+        // `globally_disabled_user_skill_keys` consumption in the skill registry:
+        // a globally disabled tool is filtered out of both the mode resolved
+        // set and the sub-agent default set, so the RBAC gate rejects it.
+        let globally_disabled_tool_names: HashSet<String> =
+            crate::agentic::tools::implementations::tools::mode_overrides::load_globally_disabled_user_tools()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
         match entry.category {
             AgentCategory::Mode => {
                 let mode_configs = get_mode_configs().await;
@@ -106,8 +117,20 @@ impl AgentRegistry {
                 // 这是设计意图（这些工具本就模式 default 可见，放行 = 可见即
                 // 可用的一致性修复），回归对照表（17 号文档 §9.5）如实记录。
                 let resolved_tools = resolve_effective_tools(&default_tools, config, &valid_tools);
+                // R-WF-16: apply user-level global tool availability to the
+                // effective mode tool set.
+                let resolved_tools = crate::agentic::tools::implementations::tools::mode_overrides::filter_globally_disabled_tools(
+                    resolved_tools,
+                    &globally_disabled_tool_names,
+                );
                 let allowed_tools =
                     merge_dynamic_mcp_tools(resolved_tools.clone(), &registered_tool_names);
+                // R-WF-16: globally disabled tools (including dynamic MCP tools)
+                // must never be admitted even when merged into the visible set.
+                let allowed_tools = crate::agentic::tools::implementations::tools::mode_overrides::filter_globally_disabled_tools(
+                    allowed_tools,
+                    &globally_disabled_tool_names,
+                );
                 let allowed_tool_set: HashSet<&str> =
                     allowed_tools.iter().map(String::as_str).collect();
                 let mut exposure_overrides = entry.agent.tool_exposure_overrides().clone();
@@ -123,6 +146,12 @@ impl AgentRegistry {
             }
             AgentCategory::SubAgent | AgentCategory::Hidden => {
                 let allowed_tools = entry.agent.default_tools();
+                // R-WF-16: apply user-level global tool availability to
+                // sub-agent default tool sets as well.
+                let allowed_tools = crate::agentic::tools::implementations::tools::mode_overrides::filter_globally_disabled_tools(
+                    allowed_tools,
+                    &globally_disabled_tool_names,
+                );
                 let allowed_tool_set: HashSet<&str> =
                     allowed_tools.iter().map(String::as_str).collect();
                 let mut exposure_overrides = entry.agent.tool_exposure_overrides().clone();

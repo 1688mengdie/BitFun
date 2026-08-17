@@ -81,6 +81,21 @@ pub fn mode_tool_profile_id(mode_id: &str) -> String {
     resolve_profile_id(mode_id)
 }
 
+/// Filter a tool list against the user-level global disabled set.
+///
+/// Used by the agent tool-policy resolver so a globally disabled tool is
+/// removed from every agent's effective tool set (mirrors the skills-side
+/// `filter_globally_disabled_candidates`).
+pub fn filter_globally_disabled_tools(
+    tools: Vec<String>,
+    globally_disabled_tool_names: &HashSet<String>,
+) -> Vec<String> {
+    tools
+        .into_iter()
+        .filter(|name| !globally_disabled_tool_names.contains(name))
+        .collect()
+}
+
 /// Reset user-level mode tool overrides back to the mode defaults.
 ///
 /// Symmetric to the skills-side reset: clears `added_tools`/`removed_tools`
@@ -92,7 +107,8 @@ pub async fn clear_user_mode_tool_overrides(mode_id: &str) -> BitFunResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_tool_names;
+    use super::{filter_globally_disabled_tools, normalize_tool_names};
+    use std::collections::HashSet;
 
     #[test]
     fn normalize_tool_names_dedupes_and_trims() {
@@ -118,5 +134,32 @@ mod tests {
             ]),
             vec!["B".to_string(), "A".to_string(), "C".to_string()]
         );
+    }
+
+    #[test]
+    fn filter_globally_disabled_tools_removes_disabled_and_keeps_others() {
+        let disabled: HashSet<String> =
+            ["Read".to_string(), "mcp__github__search".to_string()]
+                .into_iter()
+                .collect();
+        assert_eq!(
+            filter_globally_disabled_tools(
+                vec![
+                    "Read".to_string(),
+                    "Write".to_string(),
+                    "mcp__github__search".to_string(),
+                    "Grep".to_string(),
+                ],
+                &disabled,
+            ),
+            vec!["Write".to_string(), "Grep".to_string()]
+        );
+    }
+
+    #[test]
+    fn filter_globally_disabled_tools_empty_disabled_is_noop() {
+        let disabled = HashSet::new();
+        let tools = vec!["Read".to_string(), "Write".to_string()];
+        assert_eq!(filter_globally_disabled_tools(tools.clone(), &disabled), tools);
     }
 }

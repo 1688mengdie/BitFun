@@ -53,6 +53,10 @@ vi.mock('@/shared/notification-system', () => ({
   }),
 }));
 
+vi.mock('@/infrastructure/event-bus', () => ({
+  globalEventBus: { emit: vi.fn() },
+}));
+
 vi.mock('./ToolGroupPicker', () => ({
   GroupManagerModal: () => <div data-testid="tool-group-manager">manager</div>,
   ToolGroupPicker: () => <div />,
@@ -179,6 +183,11 @@ describeWithJsdom('ToolSuiteView', () => {
 
     await act(async () => {
       saveButton?.click();
+      // Flush the full async save chain: replaceModeToolSelection await +
+      // setState batches + event-bus import (mocked). Multiple microtask
+      // flushes keep React act warnings and unmount-time setState away.
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
     });
 

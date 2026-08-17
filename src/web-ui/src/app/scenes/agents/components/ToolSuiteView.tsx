@@ -360,13 +360,13 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
   }, [currentMode.labelKey, draftEnabledNames, notification, suiteModeId, t, workspacePath]);
 
   return (
-    <div className="skills-suite" data-bf-scene="agents" data-bf-part="toolSuite" data-bf-mode={suiteModeId}>
-      <div className="skills-suite__hero" data-bf-scene="agents" data-bf-part="toolSuiteHero">
-        <div className="skills-suite__hero-copy" data-bf-scene="agents" data-bf-part="toolSuiteHeroCopy">
+    <div className="skills-suite" data-bf-scene="tools" data-bf-part="toolSuite" data-bf-mode={suiteModeId}>
+      <div className="skills-suite__hero" data-bf-scene="tools" data-bf-part="toolSuiteHero">
+        <div className="skills-suite__hero-copy" data-bf-scene="tools" data-bf-part="toolSuiteHeroCopy">
           <h2 className="skills-suite__title">{t('agentsOverview.toolGroups.suiteTitle')}</h2>
           <p className="skills-suite__subtitle">{t('agentsOverview.toolGroups.suiteSubtitle')}</p>
         </div>
-        <div className="skills-suite__hero-actions" data-bf-scene="agents" data-bf-part="toolSuiteHeroActions">
+        <div className="skills-suite__hero-actions" data-bf-scene="tools" data-bf-part="toolSuiteHeroActions">
           <Button
             variant="secondary"
             size="small"
@@ -390,8 +390,8 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
         </div>
       </div>
 
-      <div className="skills-suite__mode-toolbar" data-bf-scene="agents" data-bf-part="toolSuiteModeToolbar">
-        <div className="skills-suite__modes" role="tablist" aria-label={t('suite.modeLabel')} data-bf-scene="agents" data-bf-part="toolSuiteModes">
+      <div className="skills-suite__mode-toolbar" data-bf-scene="tools" data-bf-part="toolSuiteModeToolbar">
+        <div className="skills-suite__modes" role="tablist" aria-label={t('suite.modeLabel')} data-bf-scene="tools" data-bf-part="toolSuiteModes">
           {SUITE_MODES.map((mode) => (
             <button
               key={mode.id}
@@ -404,12 +404,12 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
               onClick={() => handleModeSelect(mode.id)}
               disabled={isSaving}
               title={t(mode.descKey)}
-              data-bf-scene="agents"
+              data-bf-scene="tools"
               data-bf-part="toolSuiteModeTab"
               data-bf-mode={mode.id}
               data-bf-state={suiteModeId === mode.id ? 'active' : undefined}
             >
-              <span className="skills-suite__mode-tab-label" data-bf-scene="agents" data-bf-part="toolSuiteModeTabLabel">{t(mode.labelKey)}</span>
+              <span className="skills-suite__mode-tab-label" data-bf-scene="tools" data-bf-part="toolSuiteModeTabLabel">{t(mode.labelKey)}</span>
             </button>
           ))}
         </div>
@@ -429,21 +429,21 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
       </div>
 
       {loading && (
-        <div className="skills-suite__loading" aria-busy="true" aria-label={t('suite.loading')} data-bf-scene="agents" data-bf-part="toolSuiteLoading">
+        <div className="skills-suite__loading" aria-busy="true" aria-label={t('suite.loading')} data-bf-scene="tools" data-bf-part="toolSuiteLoading">
           <RefreshCw size={16} className="skills-suite__loading-icon" />
           <span>{t('suite.loading')}</span>
         </div>
       )}
 
       {!loading && error && (
-        <div className="skills-main__empty skills-main__empty--error" data-bf-scene="agents" data-bf-part="toolSuiteError">
+        <div className="skills-main__empty skills-main__empty--error" data-bf-scene="tools" data-bf-part="toolSuiteError">
           <Package size={28} strokeWidth={1.2} />
           <span>{error}</span>
         </div>
       )}
 
       {!loading && !error && suiteGroups.length === 0 && (
-        <div className="skills-main__empty" data-bf-scene="agents" data-bf-part="toolSuiteEmpty">
+        <div className="skills-main__empty" data-bf-scene="tools" data-bf-part="toolSuiteEmpty">
           <Package size={28} strokeWidth={1.2} />
           <span>{t('suite.empty')}</span>
         </div>
@@ -455,14 +455,14 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
           role="tabpanel"
           aria-labelledby={`tool-suite-tab-${suiteModeId}`}
           className="skills-suite__sections"
-          data-bf-scene="agents"
+          data-bf-scene="tools"
           data-bf-part="toolSuiteSections"
           data-bf-mode={suiteModeId}
         >
           {suiteSections.map(([sectionLabel, sectionGroups]) => (
-            <section key={sectionLabel} className="skills-suite__section" data-bf-scene="agents" data-bf-part="toolSuiteSection">
-              <span className="skills-suite__section-label" data-bf-scene="agents" data-bf-part="toolSuiteSectionLabel">{sectionLabel}</span>
-              <div className="skills-suite__grid" data-bf-scene="agents" data-bf-part="toolSuiteGrid">
+            <section key={sectionLabel} className="skills-suite__section" data-bf-scene="tools" data-bf-part="toolSuiteSection">
+              <span className="skills-suite__section-label" data-bf-scene="tools" data-bf-part="toolSuiteSectionLabel">{sectionLabel}</span>
+              <div className="skills-suite__grid" data-bf-scene="tools" data-bf-part="toolSuiteGrid">
                 {sectionGroups.map((group) => {
                   const allEnabled = group.enabledCount === group.totalCount;
                   const someEnabled = group.enabledCount > 0;
@@ -482,22 +482,22 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
                     <section
                       key={group.id}
                       className="skills-suite__group-card"
-                      data-bf-scene="agents"
+                      data-bf-scene="tools"
                       data-bf-part="toolSuiteGroupCard"
                       data-bf-state={allEnabled ? 'enabled' : undefined}
                     >
-                      <div className="skills-suite__group-head" data-bf-scene="agents" data-bf-part="toolSuiteGroupHead">
-                        <div className="skills-suite__group-title-wrap" data-bf-scene="agents" data-bf-part="toolSuiteGroupTitleWrap">
-                          <div className="skills-suite__group-title-row" data-bf-scene="agents" data-bf-part="toolSuiteGroupTitleRow">
-                            <span className="skills-suite__group-title" data-bf-scene="agents" data-bf-part="toolSuiteGroupTitle">{group.label}</span>
+                      <div className="skills-suite__group-head" data-bf-scene="tools" data-bf-part="toolSuiteGroupHead">
+                        <div className="skills-suite__group-title-wrap" data-bf-scene="tools" data-bf-part="toolSuiteGroupTitleWrap">
+                          <div className="skills-suite__group-title-row" data-bf-scene="tools" data-bf-part="toolSuiteGroupTitleRow">
+                            <span className="skills-suite__group-title" data-bf-scene="tools" data-bf-part="toolSuiteGroupTitle">{group.label}</span>
                             <Badge variant={groupStateVariant}>{groupStateLabel}</Badge>
                           </div>
-                          <span className="skills-suite__group-count" data-bf-scene="agents" data-bf-part="toolSuiteGroupCount">
+                          <span className="skills-suite__group-count" data-bf-scene="tools" data-bf-part="toolSuiteGroupCount">
                             {t('suite.groupCount', { total: group.totalCount })}
                           </span>
                         </div>
 
-                        <div className="skills-suite__group-actions" data-bf-scene="agents" data-bf-part="toolSuiteGroupActions">
+                        <div className="skills-suite__group-actions" data-bf-scene="tools" data-bf-part="toolSuiteGroupActions">
                           {showSaveButton ? (
                             <Button
                               variant="primary"
@@ -521,7 +521,7 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
                         </div>
                       </div>
 
-                      <div className="skills-suite__skills" data-bf-scene="agents" data-bf-part="toolSuiteTools">
+                      <div className="skills-suite__skills" data-bf-scene="tools" data-bf-part="toolSuiteTools">
                         {group.tools.map((tool) => {
                           const draftEnabled = draftEnabledNameSet.has(tool.name);
                           const dirty = committedEnabledNameSet.has(tool.name) !== draftEnabled;
@@ -540,7 +540,7 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
                               aria-label={`${tool.name}. ${accessibleStatus}`}
                               aria-pressed={draftEnabled}
                               disabled={isSaving}
-                              data-bf-scene="agents"
+                              data-bf-scene="tools"
                               data-bf-part="toolSuiteTool"
                               data-bf-state={[
                                 draftEnabled && 'enabled',
@@ -558,14 +558,14 @@ const ToolSuiteView: React.FC<ToolSuiteViewProps> = ({
                                 });
                               }}
                             >
-                              <span className="skills-suite__skill-chip-name" data-bf-scene="agents" data-bf-part="toolSuiteToolName">{tool.name}</span>
+                              <span className="skills-suite__skill-chip-name" data-bf-scene="tools" data-bf-part="toolSuiteToolName">{tool.name}</span>
                               {draftEnabled ? (
                                 <ShieldCheck size={11} />
                               ) : (
                                 <ShieldAlert size={11} />
                               )}
                               {dirty && (
-                                <span className="skills-suite__skill-chip-status" data-bf-scene="agents" data-bf-part="toolSuiteToolStatus">
+                                <span className="skills-suite__skill-chip-status" data-bf-scene="tools" data-bf-part="toolSuiteToolStatus">
                                   {t('suite.skillState.pending')}
                                 </span>
                               )}

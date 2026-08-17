@@ -15,7 +15,7 @@ interface ModeConfigView {
 }
 
 const ToolsScene: React.FC = () => {
-  const { t } = useTranslation('scenes/skills');
+  const { t } = useTranslation('scenes/agents');
   const { groups: userToolGroups, saveGroups: saveUserToolGroups } = useUserToolGroups();
   const [tools, setTools] = useState<Array<{
     name: string;
