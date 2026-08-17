@@ -81,6 +81,7 @@
       "agents": "Agents",
       "skills": "Skills",
       "tools": "Tools",
+      "workflow": "Workflows",
       "terminal": "Shell",
       "git": "Git",
       "miniApps": "Mini App",
@@ -92,6 +93,7 @@
       "agents": "Which agents it can call",
       "skills": "What it knows — specialized knowledge files",
       "tools": "What it can use — built-in tools & MCP services",
+      "workflow": "Workflows — orchestrate multiple agents for complex tasks",
       "addWorkspace": "Add workspace"
     },
     "sections": {
@@ -1239,6 +1241,7 @@
     "fileViewer": "File Viewer",
     "agents": "Agents",
     "skills": "Skills",
+    "tools": "Tools",
     "miniApps": "Mini App",
     "browser": "Browser",
     "insights": "Insights",

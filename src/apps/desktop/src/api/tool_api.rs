@@ -509,8 +509,6 @@ pub async fn replace_mode_tool_selection(
     request: ReplaceModeToolSelectionRequest,
 ) -> Result<String, String> {
     let enabled_tool_names = normalize_tool_name_list(request.enabled_tool_names);
-    let enabled_set: std::collections::HashSet<String> =
-        enabled_tool_names.iter().cloned().collect();
 
     // Validate against the live registry (same strictness as skill keys).
     let known_tools = bitfun_core::agentic::tools::get_all_tools().await;
