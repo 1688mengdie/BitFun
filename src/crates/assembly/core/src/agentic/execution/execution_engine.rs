@@ -69,8 +69,8 @@ use crate::util::types::Message as AIMessage;
 use crate::util::types::ToolDefinition;
 use crate::util::{elapsed_ms_u64, truncate_at_char_boundary};
 use bitfun_agent_runtime::output_surface::TOOL_CONTEXT_INLINE_MARKDOWN_IMAGE_DISPLAY_KEY;
-use bitfun_agent_runtime::prompt::RuntimeFactsUsage;
 use bitfun_agent_runtime::permission::PERMISSION_MODE_CONTEXT_KEY;
+use bitfun_agent_runtime::prompt::RuntimeFactsUsage;
 use bitfun_agent_runtime::remote_file_delivery::TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY;
 use bitfun_agent_runtime::thread_goal_tools::ensure_thread_goal_tools;
 use bitfun_ai_adapters::ModelExchangeTraceConfig;
@@ -672,6 +672,28 @@ impl ExecutionEngine {
         reserve
     }
 
+    /// Resolve the configured compression trigger percent
+    /// (`ai.thresholds.compression.trigger_percent`), falling back to `None`
+    /// (legacy fixed-token algorithm) when unset, zero, or invalid.
+    ///
+    /// R-THR-01 批1：合法值域 1-99；0 = 合法特殊值（同 None = 现算法）；
+    /// 越界（101+）或非数字 → 回退 None → 零变化铁律。
+    async fn configured_compression_trigger_percent() -> Option<u8> {
+        let Ok(config_service) = get_global_config_service().await else {
+            return None;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return None;
+        };
+        match thresholds.compression.trigger_percent {
+            Some(percent) if (1..=99).contains(&percent) => Some(percent),
+            _ => None,
+        }
+    }
+
     /// Resolve the configured compression overflow / recovery / pass budgets
     /// (`ai.thresholds.compression.*`), falling back to the legacy constants.
     async fn configured_compression_counts() -> (
@@ -991,12 +1013,14 @@ impl ExecutionEngine {
             .unwrap_or(automatic_output_reserve);
         let ratio_percent =
             crate::service::config::types::configured_output_tokens_ratio_percent().await;
+        let trigger_percent = Self::configured_compression_trigger_percent().await;
         Self::compression_trigger_budget_with_output_reserve_and_ratio(
             context_window,
             configured_max_tokens,
             Self::configured_compression_safety_reserve_tokens().await,
             output_reserve_tokens,
             ratio_percent,
+            trigger_percent,
         )
     }
 
@@ -1013,6 +1037,7 @@ impl ExecutionEngine {
             Self::AUTO_COMPRESSION_SAFETY_RESERVE_TOKENS,
             automatic_max_output_tokens(context_window as u32) as usize,
             MAX_CONFIGURED_OUTPUT_TOKENS_RATIO_PERCENT,
+            None,
         )
     }
 
@@ -1026,6 +1051,7 @@ impl ExecutionEngine {
         safety_reserve_tokens: usize,
         output_reserve_tokens: usize,
         ratio_percent: u32,
+        trigger_percent: Option<u8>,
     ) -> CompressionTriggerBudget {
         let output_reserve_tokens = configured_max_tokens
             .map(|value| value as usize)
@@ -1041,6 +1067,22 @@ impl ExecutionEngine {
         // reserves are summed.
         let input_limit = context_window
             .saturating_sub(output_reserve_tokens.saturating_add(safety_reserve_tokens));
+
+        // R-THR-01 批1：`ai.thresholds.compression.trigger_percent`（窗口百分比触发线）。
+        // 合法值域 1-99；0 = 合法特殊值（同 None）；越界（101+/非数字 → None）按 None 处理
+        // （零变化铁律：非法配置回退 None 后触发点与现算法完全一致）。
+        // min 语义：百分比触发线是**上限约束**（更早压缩），小窗口（128k/200k）现算法
+        // 已优于百分比线时 min 取现算法 → 配置不改变触发点（合法非 bug）。
+        let input_limit = match trigger_percent {
+            Some(percent) if (1..=99).contains(&percent) => {
+                // round（非 floor）：契约断言 1M×85% = 891,290（1,048,576×0.85 =
+                // 891,289.6 → round 891,290）。
+                let percent_limit =
+                    (context_window as f64 * percent as f64 / 100.0).round() as usize;
+                input_limit.min(percent_limit)
+            }
+            _ => input_limit,
+        };
 
         CompressionTriggerBudget {
             input_limit,
@@ -5167,8 +5209,7 @@ impl ExecutionEngine {
                 // 防御：本轮无新增消息（理论上主循环每轮必追加 assistant + 工具
                 // 结果）时不判定——空序列指纹恒定，避免任何空切片误拦。
                 if !new_messages.is_empty() {
-                    let current_fingerprint =
-                        Self::messages_sequence_fingerprint(new_messages);
+                    let current_fingerprint = Self::messages_sequence_fingerprint(new_messages);
                     if Self::is_duplicate_message_fingerprint(
                         &current_fingerprint,
                         &recent_message_fingerprints,
@@ -5187,9 +5228,8 @@ impl ExecutionEngine {
                     }
                     recent_message_fingerprints.push(current_fingerprint);
                     if recent_message_fingerprints.len() > duplicate_message_window {
-                        recent_message_fingerprints.drain(
-                            0..recent_message_fingerprints.len() - duplicate_message_window,
-                        );
+                        recent_message_fingerprints
+                            .drain(0..recent_message_fingerprints.len() - duplicate_message_window);
                     }
                 }
             }
@@ -6166,9 +6206,9 @@ impl ExecutionEngine {
                 // R-MR-10 消息重复闸门拦截：不调 API，本地合成 final response。
                 // 与 max_rounds / thinking_only_budget 同为「本地收尾」路径——不
                 // 再发起任何模型请求（拦截即停），把本地合成的终止说明写入会话。
-                let local_msg = Message::assistant(
-                    Self::build_local_final_response_message("duplicate_messages"),
-                )
+                let local_msg = Message::assistant(Self::build_local_final_response_message(
+                    "duplicate_messages",
+                ))
                 .with_turn_id(context.dialog_turn_id.clone());
                 messages.push(local_msg.clone());
                 if let Err(e) = self
@@ -6176,10 +6216,7 @@ impl ExecutionEngine {
                     .add_message(&context.session_id, local_msg)
                     .await
                 {
-                    warn!(
-                        "Failed to persist duplicate-message final response: {}",
-                        e
-                    );
+                    warn!("Failed to persist duplicate-message final response: {}", e);
                 }
                 has_final_response = true;
             }
@@ -6383,9 +6420,9 @@ mod tests {
     use crate::agentic::tools::{ToolPipeline, ToolStateManager};
     use crate::agentic::workspace::{local_workspace_services, WorkspaceBinding};
     use crate::infrastructure::PathManager;
-    use crate::instruction_sources::test_support::{lock_environment, InstructionSwitches};
     #[cfg(feature = "external-sources")]
     use crate::instruction_sources::test_support::EnvironmentGuard;
+    use crate::instruction_sources::test_support::{lock_environment, InstructionSwitches};
     use crate::service::config::types::AIConfig;
     use crate::service::config::types::AIModelConfig;
     use crate::service::remote_ssh::workspace_state::workspace_session_identity;
@@ -7334,6 +7371,78 @@ mod tests {
     }
 
     #[test]
+    fn compression_trigger_percent_1m_window_85_percent_activates_before_legacy_limit() {
+        // R-THR-01 批1（B1-1）：1M 窗口 × 85% → input_limit = 891,290（1,048,576×0.85）。
+        // 修复前 974,576（legacy 算式）→ 修复后 891,290（铁证差异）。
+        let budget = ExecutionEngine::compression_trigger_budget_with_output_reserve_and_ratio(
+            1_048_576,
+            None,
+            10_000,
+            64_000,
+            40,
+            Some(85),
+        );
+        assert_eq!(budget.input_limit, 891_290);
+        assert_eq!(budget.output_reserve_tokens, 64_000);
+        assert_eq!(budget.safety_reserve_tokens, 10_000);
+    }
+
+    #[test]
+    fn compression_trigger_percent_128k_window_85_percent_min_keeps_legacy_limit() {
+        // R-THR-01 批1（B1-2）：128k 窗口 × 85% → min(89,072, 111,411) = 89,072。
+        // 现算法 89,072（68%）< 85% 线 111,411 → min 取现算法 → 配置 85% 对 128k 不生效（合法非 bug）。
+        // 禁断言 111,411。
+        let budget = ExecutionEngine::compression_trigger_budget_with_output_reserve_and_ratio(
+            131_072,
+            None,
+            10_000,
+            32_000,
+            40,
+            Some(85),
+        );
+        assert_eq!(budget.input_limit, 89_072);
+        assert_eq!(budget.input_limit, (131_072 - 32_000 - 10_000));
+    }
+
+    #[test]
+    fn compression_trigger_percent_none_preserves_legacy_limit() {
+        // R-THR-01 批1（B1-3）：不配置（None）→ 现算法不变（1M = 974,576）。
+        let budget = ExecutionEngine::compression_trigger_budget_with_output_reserve_and_ratio(
+            1_048_576, None, 10_000, 64_000, 40, None,
+        );
+        assert_eq!(budget.input_limit, 974_576);
+    }
+
+    #[test]
+    fn compression_trigger_percent_zero_is_valid_special_value_preserving_legacy_limit() {
+        // R-THR-01 批1（B1-4）：0 = 合法特殊值（同 None）→ 现算法不变（1M = 974,576）。
+        let budget = ExecutionEngine::compression_trigger_budget_with_output_reserve_and_ratio(
+            1_048_576,
+            None,
+            10_000,
+            64_000,
+            40,
+            Some(0),
+        );
+        assert_eq!(budget.input_limit, 974_576);
+    }
+
+    #[test]
+    fn compression_trigger_percent_out_of_range_degrades_to_none_preserving_legacy_limit() {
+        // R-THR-01 批1（B1-5）：非法值（101+/非数字 → 后端校验回退 None）→ 现算法不变（1M = 974,576 零变化铁证）。
+        // 101 直接传参时按 None 处理（合法值域 1-99，0 特殊；越界 = 忽略）。
+        let budget = ExecutionEngine::compression_trigger_budget_with_output_reserve_and_ratio(
+            1_048_576,
+            None,
+            10_000,
+            64_000,
+            40,
+            Some(101),
+        );
+        assert_eq!(budget.input_limit, 974_576);
+    }
+
+    #[test]
     fn auto_compression_pressure_uses_provider_input_anchor_plus_tail_estimate() {
         let prefix = vec![
             Message::system("system prompt".to_string()),
@@ -8218,10 +8327,7 @@ mod tests {
         let second_full = "second, differently assembled full reply body";
         let pending = vec![
             test_injection(RoundInjectionKind::BackgroundResult, first_full),
-            test_injection(
-                RoundInjectionKind::BackgroundResult,
-                second_full,
-            ),
+            test_injection(RoundInjectionKind::BackgroundResult, second_full),
         ];
         let merged = ExecutionEngine::coalesce_round_injections(pending);
         assert_eq!(
@@ -8832,7 +8938,11 @@ mod tests {
     }
 
     /// 模拟一轮「模型输出 + 工具结果」追加进 messages 后的新增序列。
-    fn appended_round_messages(assistant_text: &str, tool_name: &str, result_value: serde_json::Value) -> Vec<Message> {
+    fn appended_round_messages(
+        assistant_text: &str,
+        tool_name: &str,
+        result_value: serde_json::Value,
+    ) -> Vec<Message> {
         vec![
             Message::assistant_with_tools(
                 assistant_text.to_string(),
@@ -8863,7 +8973,11 @@ mod tests {
         assert_eq!(fingerprint_1, fingerprint_2, "死循环两轮指纹应相同");
 
         let mut window: Vec<String> = Vec::new();
-        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_1, &window, 3));
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+            &fingerprint_1,
+            &window,
+            3
+        ));
         window.push(fingerprint_1.clone());
         // 第二次出现相同指纹 → 窗口内重复 → 拦
         assert!(
@@ -8889,13 +9003,25 @@ mod tests {
 
         let mut window: Vec<String> = Vec::new();
         // 第 1 轮：空窗口 → 放行，入窗
-        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_1, &window, 3));
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+            &fingerprint_1,
+            &window,
+            3
+        ));
         window.push(fingerprint_1.clone());
         // 第 2 轮：新指纹不在窗口内 → 放行，入窗
-        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_2, &window, 3));
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+            &fingerprint_2,
+            &window,
+            3
+        ));
         window.push(fingerprint_2.clone());
         // 第 3 轮：新指纹不在窗口内 → 放行
-        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_3, &window, 3));
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+            &fingerprint_3,
+            &window,
+            3
+        ));
     }
 
     #[test]
@@ -8939,12 +9065,18 @@ mod tests {
         // 模拟主循环滑窗：每轮放行后入窗，窗口上限 3。
         let mut window: Vec<String> = Vec::new();
         for fp in [&fingerprint_1, &fingerprint_2, &fingerprint_3] {
-            assert!(!ExecutionEngine::is_duplicate_message_fingerprint(fp, &window, 3));
+            assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+                fp, &window, 3
+            ));
             window.push(fp.clone());
         }
         assert_eq!(window.len(), 3);
         // 第 4 轮：f4 不在窗口内 → 放行；入窗前先滑动（丢弃最旧 f1）。
-        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_4, &window, 3));
+        assert!(!ExecutionEngine::is_duplicate_message_fingerprint(
+            &fingerprint_4,
+            &window,
+            3
+        ));
         window.push(fingerprint_4.clone());
         if window.len() > 3 {
             window.drain(0..window.len() - 3);
@@ -8973,8 +9105,7 @@ mod tests {
     #[test]
     fn duplicate_message_fingerprint_covers_tool_calls_and_results() {
         // 契约 §二.1：指纹 hash 全部消息内容 + 工具调用 + 工具结果，逐字节。
-        let assistant_only =
-            Message::assistant("call Bash".to_string());
+        let assistant_only = Message::assistant("call Bash".to_string());
         let assistant_with_tools = Message::assistant_with_tools(
             "call Bash".to_string(),
             vec![crate::agentic::core::ToolCall {
@@ -9008,7 +9139,10 @@ mod tests {
     fn duplicate_message_local_final_response_mentions_loop() {
         // 拦截动作：本地合成 final response 文案说明死循环（不调 API）。
         let message = ExecutionEngine::build_local_final_response_message("duplicate_messages");
-        assert!(message.contains("loop"), "duplicate_messages 文案应说明循环");
+        assert!(
+            message.contains("loop"),
+            "duplicate_messages 文案应说明循环"
+        );
         assert!(!message.is_empty());
     }
 
