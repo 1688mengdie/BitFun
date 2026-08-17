@@ -97,6 +97,10 @@ export enum SessionExecutionEvent {
   TOOL_REJECTED = 'tool_rejected',
   BACKEND_STREAM_COMPLETED = 'backend_stream_completed',
   FINISHING_SETTLED = 'finishing_settled',
+  /** A background ExecCommand child process is still running for the session
+   * after the dialog turn reported completion (R-WF-25). Keeps the session
+   * visually PROCESSING instead of settling to IDLE. */
+  BACKGROUND_COMMAND_RUNNING = 'background_command_running',
   USER_CANCEL = 'user_cancel',
   USER_CANCEL_FAILED = 'user_cancel_failed',
   ERROR_OCCURRED = 'error_occurred',

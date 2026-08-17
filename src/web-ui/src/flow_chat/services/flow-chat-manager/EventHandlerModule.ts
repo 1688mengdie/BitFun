@@ -116,6 +116,33 @@ function isStreamingExecutionState(state: SessionExecutionState): boolean {
   return state === SessionExecutionState.PROCESSING || state === SessionExecutionState.FINISHING;
 }
 
+/**
+ * R-WF-25: after a background command lifecycle transition, settle the state
+ * machine back to IDLE when no `running` activity remains for the session and
+ * the machine is stuck in the background-command PROCESSING projection.
+ */
+function handleBackgroundCommandLifecycleForStateMachine(
+  eventData: import('../../store/backgroundCommandActivityStore').BackgroundCommandLifecycleEvent,
+): void {
+  const agentSessionId = eventData.agentSessionId ?? eventData.agent_session_id;
+  if (!agentSessionId) {
+    return;
+  }
+  const activities = Object.values(
+    useBackgroundCommandActivityStore.getState().activities,
+  );
+  const hasRunning = activities.some(
+    activity => activity.agentSessionId === agentSessionId && activity.status === 'running',
+  );
+  if (hasRunning) {
+    return;
+  }
+  const currentState = stateMachineManager.getCurrentState(agentSessionId);
+  if (currentState === SessionExecutionState.PROCESSING) {
+    stateMachineManager.transition(agentSessionId, SessionExecutionEvent.FINISHING_SETTLED);
+  }
+}
+
 const RECOVERABLE_IDLE_TURN_STATUSES = new Set<DialogTurn['status']>([
   'pending',
   'image_analyzing',
@@ -1102,6 +1129,7 @@ export async function initializeEventListeners(
   const unlistenBackgroundCommandLifecycle = api.listen('backend-event-backgroundcommandlifecycle', (payload: any) => {
     const eventData = (payload as any)?.value || payload;
     useBackgroundCommandActivityStore.getState().applyLifecycleEvent(eventData);
+    handleBackgroundCommandLifecycleForStateMachine(eventData);
   });
   const unlistenMcpInteractionRequest = api.listen('backend-event-mcpinteractionrequest', (payload: any) => {
     void handleMcpInteractionRequest((payload as any)?.value || payload);
@@ -1482,7 +1510,16 @@ function finalizeTurnCompletionState(
   reconcileBackgroundSubagentSession(sessionId);
 
   const currentState = stateMachineManager.getCurrentState(sessionId);
-  if (isStreamingExecutionState(currentState)) {
+  // R-WF-25: if a background ExecCommand child is still running for this
+  // session, do NOT settle to IDLE -- the running icon must stay lit until the
+  // command exits. The lifecycle listener settles the machine when the last
+  // command finishes.
+  const hasRunningBackgroundCommand = Object.values(
+    useBackgroundCommandActivityStore.getState().activities,
+  ).some(activity => activity.agentSessionId === sessionId && activity.status === 'running');
+  if (hasRunningBackgroundCommand) {
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.BACKGROUND_COMMAND_RUNNING);
+  } else if (isStreamingExecutionState(currentState)) {
     stateMachineManager.transition(sessionId, SessionExecutionEvent.FINISHING_SETTLED);
   } else {
     log.debug('Skipping FINISHING_SETTLED transition', { currentState, sessionId, turnId });
