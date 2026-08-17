@@ -864,6 +864,7 @@ pub async fn refresh_account_with_options(
 ) -> Result<SubscriptionAccount> {
     match provider {
         SubscriptionProvider::Opencode => opencode::refresh_profile(options).await?,
+        SubscriptionProvider::Qoder => qoder::refresh_profile(options).await?,
         _ => {
             resolve_with_options(provider, options).await?;
         }

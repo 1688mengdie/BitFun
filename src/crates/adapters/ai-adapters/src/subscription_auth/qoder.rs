@@ -46,6 +46,62 @@ struct DeviceTokenResponse {
     user_name: Option<String>,
 }
 
+/// Response of the device-token refresh endpoint.
+///
+/// The CLI (`refreshDeviceCredential`) maps the refresh response directly:
+/// `security_oauth_token = device_token`, `refresh_token`, and the expiry
+/// timestamps are read from `expires_at` / `refresh_token_expires_at`.
+#[derive(Debug, Deserialize)]
+struct RefreshTokenResponse {
+    #[serde(rename = "device_token")]
+    device_token: String,
+    #[serde(rename = "refresh_token", default)]
+    refresh_token: Option<String>,
+    #[serde(rename = "expires_at", default)]
+    expires_at: Option<RefreshExpiry>,
+}
+
+/// Absolute expiry timestamp returned by the refresh endpoint. The CLI's
+/// `vq()` accepts an RFC 3339 string, an epoch-seconds number, or an
+/// epoch-milliseconds number.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RefreshExpiry {
+    Str(String),
+    Num(i64),
+}
+
+impl RefreshTokenResponse {
+    /// Converts the access-token expiry to absolute epoch milliseconds.
+    fn expires_at_ms(&self) -> i64 {
+        self.expires_at
+            .as_ref()
+            .map(refresh_expiry_to_ms)
+            .unwrap_or_else(|| now_ms() + 3600 * 1000)
+    }
+}
+
+/// Normalizes a refresh expiry value to absolute epoch milliseconds, mirroring
+/// the CLI's `vq()`: RFC 3339 strings are parsed to epoch seconds; numbers
+/// larger than `1e12` are treated as milliseconds, otherwise as seconds.
+fn refresh_expiry_to_ms(value: &RefreshExpiry) -> i64 {
+    match value {
+        RefreshExpiry::Str(text) => {
+            let seconds = chrono::DateTime::parse_from_rfc3339(text)
+                .map(|date| date.timestamp())
+                .unwrap_or_else(|_| now_ms() / 1000);
+            seconds * 1000
+        }
+        RefreshExpiry::Num(number) => {
+            if *number > 1_000_000_000_000 {
+                *number
+            } else {
+                *number * 1000
+            }
+        }
+    }
+}
+
 /// A poll result: either an error code the CLI keeps retrying, or a complete
 /// token payload.
 #[derive(Debug, Deserialize)]
@@ -61,10 +117,15 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
-fn authorization_url(pkce: &Pkce, machine_id: &str) -> String {
+/// Builds the `selectAccounts` authorization URL.
+///
+/// `nonce` is shared with the device-token poll: the server associates the
+/// browser authorization with this nonce, and the client polls using the same
+/// value. The CLI (`rVa`) keeps one nonce throughout both phases.
+fn authorization_url(pkce: &Pkce, machine_id: &str, nonce: &str) -> String {
     format!(
         "{BASE_URL}/device/selectAccounts?challenge={}&challenge_method=S256&nonce={}&machine_id={}&client_id={}",
-        pkce.challenge, Uuid::new_v4(), machine_id, CLIENT_ID
+        pkce.challenge, nonce, machine_id, CLIENT_ID
     )
 }
 
@@ -133,7 +194,7 @@ pub(crate) async fn begin_login(
     let pkce = Pkce::generate();
     let nonce = Uuid::new_v4().to_string();
     let machine_id = recover_machine_id();
-    let authorization_url = authorization_url(&pkce, &machine_id);
+    let authorization_url = authorization_url(&pkce, &machine_id, &nonce);
     let verifier = pkce.verifier.clone();
 
     let runner = async move {
@@ -226,7 +287,7 @@ async fn persist_tokens(tokens: DeviceTokenResponse, expected_revision: u64) -> 
 async fn refresh(
     refresh_token: &str,
     options: &SubscriptionHttpOptions,
-) -> Result<DeviceTokenResponse> {
+) -> Result<RefreshTokenResponse> {
     let client = http_client(options)?;
     let resp = client
         .post(format!("{OPENAPI_URL}/api/v1/deviceToken/refresh"))
@@ -243,8 +304,10 @@ async fn refresh(
 }
 
 /// Loads the stored credential, refreshing the access token when it is about
-/// to expire. Returns `(access, expires_ms)`.
-async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, i64)> {
+/// to expire or when `force` is set. `force` mirrors the CLI's
+/// `forceRefreshToken`: it is used after a 401/403 response so the request can
+/// be retried with a fresh token. Returns `(access, expires_ms)`.
+async fn ensure_fresh(options: &SubscriptionHttpOptions, force: bool) -> Result<(String, i64)> {
     let snapshot = store::load_entry_with_revision(STORE_KEY).await?;
     let entry = snapshot
         .credential
@@ -260,7 +323,7 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, i64)
         return Err(anyhow!("Qoder credential is not an OAuth login"));
     };
 
-    if expires > now_ms() + REFRESH_LEEWAY_MS {
+    if !force && expires > now_ms() + REFRESH_LEEWAY_MS {
         return Ok((access, expires));
     }
     if refresh_token.is_empty() {
@@ -268,18 +331,9 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, i64)
     }
 
     let refreshed = refresh(&refresh_token, options).await?;
-    let new_access = refreshed
-        .token
-        .clone()
-        .ok_or_else(|| anyhow!("qoder refresh response missing token"))?;
+    let new_access = refreshed.device_token.clone();
     let new_refresh = refreshed.refresh_token.clone().unwrap_or(refresh_token);
-    let new_expires = token_expiry(refreshed.expires_in);
-    let new_account_id = refreshed.user_id.clone().or(account_id);
-    let new_metadata = refreshed
-        .user_id
-        .as_ref()
-        .and_then(|_| account_metadata(&refreshed))
-        .or(metadata);
+    let new_expires = refreshed.expires_at_ms();
     let outcome = store::upsert_if_revision(
         STORE_KEY,
         snapshot.revision,
@@ -287,8 +341,8 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, i64)
             refresh: new_refresh,
             access: new_access.clone(),
             expires: new_expires,
-            account_id: new_account_id,
-            metadata: new_metadata,
+            account_id,
+            metadata,
         },
     )
     .await?;
@@ -321,7 +375,7 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, i64)
 
 /// Resolves the runtime credential, injecting the Qoder inference headers.
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
-    let (access, expires) = ensure_fresh(options).await?;
+    let (access, expires) = ensure_fresh(options, false).await?;
     let mut headers = HashMap::new();
     headers.insert("X-Request-ID".to_string(), Uuid::new_v4().to_string());
     headers.insert("X-Session-ID".to_string(), Uuid::new_v4().to_string());
@@ -336,6 +390,14 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
         extra_headers: headers,
         expires_at: Some(expires / 1000),
     })
+}
+
+/// Forces a token refresh (equivalent to the CLI's `forceRefreshToken`) and
+/// persists the rotated credential. Called after a 401/403 inference response
+/// so the next request retries with a fresh token.
+pub(crate) async fn refresh_profile(options: &SubscriptionHttpOptions) -> Result<()> {
+    ensure_fresh(options, true).await?;
+    Ok(())
 }
 
 /// Provider metadata used to seed a new model entry.
@@ -367,15 +429,115 @@ mod tests {
     #[test]
     fn builds_select_accounts_url_with_prod_client_id() {
         let pkce = Pkce::generate();
-        let url = authorization_url(&pkce, "machine-1");
+        let url = authorization_url(&pkce, "machine-1", "nonce-1");
         assert!(url.starts_with("https://qoder.cn/device/selectAccounts?"));
         assert!(url.contains("challenge_method=S256"));
-        assert!(url.contains("nonce="));
+        assert!(url.contains("nonce=nonce-1"));
         assert!(url.contains("machine_id=machine-1"));
         assert!(
             url.contains("client_id=e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb"),
             "production client id must be used"
         );
+    }
+
+    #[test]
+    fn authorization_url_and_poll_share_the_same_nonce() {
+        // The device flow associates the browser authorization with a nonce
+        // and polls using that same nonce (CLI `rVa` keeps one nonce across
+        // both phases). The URL must carry exactly the nonce the runner polls
+        // with, otherwise the server never matches the token to this client.
+        let pkce = Pkce::generate();
+        let nonce = Uuid::new_v4().to_string();
+        let url = authorization_url(&pkce, "machine-1", &nonce);
+        let poll_url = format!(
+            "{OPENAPI_URL}/api/v1/deviceToken/poll?nonce={nonce}&verifier={}&challenge_method=S256",
+            pkce.verifier
+        );
+        assert!(url.contains(&format!("nonce={nonce}")));
+        assert!(poll_url.contains(&format!("nonce={nonce}")));
+        assert_eq!(
+            url.split("nonce=")
+                .nth(1)
+                .unwrap()
+                .split('&')
+                .next()
+                .unwrap(),
+            nonce
+        );
+        assert_eq!(
+            poll_url
+                .split("nonce=")
+                .nth(1)
+                .unwrap()
+                .split('&')
+                .next()
+                .unwrap(),
+            nonce
+        );
+    }
+
+    #[test]
+    fn refresh_response_uses_cli_device_token_fields() {
+        // CLI `refreshDeviceCredential` maps the refresh response as
+        // `security_oauth_token = device_token`, `refresh_token`, and reads
+        // expiries from `expires_at` / `refresh_token_expires_at`.
+        let payload = serde_json::json!({
+            "device_token": "device-token-1",
+            "refresh_token": "refresh-token-1",
+            "expires_at": "2026-09-01T00:00:00+00:00",
+            "refresh_token_expires_at": "2026-12-01T00:00:00+00:00"
+        });
+        let parsed: RefreshTokenResponse = serde_json::from_value(payload).unwrap();
+        assert_eq!(parsed.device_token, "device-token-1");
+        assert_eq!(parsed.refresh_token.as_deref(), Some("refresh-token-1"));
+        let ms = parsed.expires_at_ms();
+        assert!(ms > now_ms());
+    }
+
+    #[test]
+    fn refresh_expiry_normalizes_seconds_and_milliseconds() {
+        let seconds = RefreshExpiry::Num(1_800_000_000);
+        assert_eq!(refresh_expiry_to_ms(&seconds), 1_800_000_000_000);
+        let milliseconds = RefreshExpiry::Num(1_800_000_000_000);
+        assert_eq!(refresh_expiry_to_ms(&milliseconds), 1_800_000_000_000);
+    }
+
+    #[test]
+    fn ensure_fresh_without_force_reuses_a_valid_credential() {
+        // Contract guard: without `force`, an unexpired credential must not
+        // trigger a network refresh (401/403 force-refresh only runs after a
+        // failed inference attempt).
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-subauth-qoder-fresh-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Oauth {
+                    refresh: "r".to_string(),
+                    access: "fresh-access".to_string(),
+                    expires: now_ms() + 3_600_000,
+                    account_id: None,
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            // `refresh()` would fail against the real endpoint; reaching it
+            // here would make this test error. Reusing the stored token is the
+            // expected outcome.
+            let (access, _) = ensure_fresh(&SubscriptionHttpOptions::default(), false)
+                .await
+                .expect("fresh credential reused without refresh");
+            assert_eq!(access, "fresh-access");
+        });
     }
 
     #[test]

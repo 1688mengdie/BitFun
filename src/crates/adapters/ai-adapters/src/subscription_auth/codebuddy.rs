@@ -136,7 +136,9 @@ async fn poll_for_token(
             continue;
         }
         if let Ok(payload) = serde_json::from_str::<TokenPendingError>(&body) {
-            if matches!(payload.code, Some(2311) | Some(10004) | Some(10005)) {
+            // The official client (`RetryFetchToken = 11217`) keeps polling
+            // while the login is still in progress.
+            if matches!(payload.code, Some(11217)) {
                 tokio::select! {
                     _ = cancel.cancelled() => return Err(anyhow!("login cancelled")),
                     _ = tokio::time::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS)) => {}
@@ -380,6 +382,12 @@ async fn refresh(refresh_token: &str, options: &SubscriptionHttpOptions) -> Resu
 }
 
 /// Resolves the runtime credential, injecting the CodeBuddy identity headers.
+///
+/// Mirrors the official desktop client's `buildAuthHeaders`: `X-User-Id` is
+/// the signed-in account's `uid`, `X-Enterprise-Id` + `X-Tenant-Id` are the
+/// account's `enterpriseId` (same value), `X-Department-Info` is the account's
+/// `departmentFullName`, and `X-Domain` is the product domain. Conditional
+/// headers are only emitted when the corresponding account metadata exists.
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
     let (access, _account_id, expires) = ensure_fresh(options).await?;
     let mut headers = HashMap::new();
@@ -390,6 +398,7 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
             StoredCredential::Api { metadata, .. } => metadata,
         });
     let metadata_map = metadata.and_then(|value| value.as_object().cloned());
+    // X-User-Id: account.uid (stored from the login account fetch).
     if let Some(uid) = metadata_map
         .as_ref()
         .and_then(|map| map.get("uid"))
@@ -397,6 +406,8 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
     {
         headers.insert("X-User-Id".to_string(), uid.to_string());
     }
+    // X-Enterprise-Id + X-Tenant-Id: account.enterpriseId, both set to the
+    // same value when present (official `buildAuthHeaders`).
     if let Some(enterprise_id) = metadata_map
         .as_ref()
         .and_then(|map| map.get("enterprise_id"))
@@ -405,6 +416,7 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
         headers.insert("X-Enterprise-Id".to_string(), enterprise_id.to_string());
         headers.insert("X-Tenant-Id".to_string(), enterprise_id.to_string());
     }
+    // X-Department-Info: account.departmentFullName when present.
     if let Some(department) = metadata_map
         .as_ref()
         .and_then(|map| map.get("department_full_name"))
@@ -412,6 +424,7 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
     {
         headers.insert("X-Department-Info".to_string(), department.to_string());
     }
+    // X-Domain: always the codebuddy product domain.
     headers.insert("X-Domain".to_string(), DOMAIN.to_string());
 
     Ok(ResolvedCredential {
