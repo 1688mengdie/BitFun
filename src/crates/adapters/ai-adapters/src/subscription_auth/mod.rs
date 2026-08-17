@@ -9,11 +9,13 @@
 //! There is no upgrade path for the previous Codex/Gemini CLI disk-scan import.
 
 mod antigravity;
+mod codebuddy;
 mod codex;
 mod jwt;
 mod oauth_server;
 mod opencode;
 mod pkce;
+mod qoder;
 pub mod store;
 
 pub use store::{set_store_path_for_test, StoredCredential};
@@ -38,6 +40,9 @@ pub enum SubscriptionProvider {
     Codex,
     Antigravity,
     Opencode,
+    #[serde(rename = "codebuddy")]
+    CodeBuddy,
+    Qoder,
 }
 
 /// Transport policy shared by subscription-auth requests.
@@ -61,7 +66,13 @@ impl SubscriptionHttpOptions {
 
 impl SubscriptionProvider {
     /// All providers, in display order.
-    pub const ALL: [SubscriptionProvider; 3] = [Self::Codex, Self::Antigravity, Self::Opencode];
+    pub const ALL: [SubscriptionProvider; 5] = [
+        Self::Codex,
+        Self::Antigravity,
+        Self::Opencode,
+        Self::CodeBuddy,
+        Self::Qoder,
+    ];
 
     /// Stable store key / serde tag for this provider.
     pub fn key(self) -> &'static str {
@@ -69,6 +80,8 @@ impl SubscriptionProvider {
             Self::Codex => "codex",
             Self::Antigravity => "antigravity",
             Self::Opencode => "opencode",
+            Self::CodeBuddy => "codebuddy",
+            Self::Qoder => "qoder",
         }
     }
 
@@ -78,6 +91,8 @@ impl SubscriptionProvider {
             "codex" => Some(Self::Codex),
             "antigravity" => Some(Self::Antigravity),
             "opencode" => Some(Self::Opencode),
+            "codebuddy" => Some(Self::CodeBuddy),
+            "qoder" => Some(Self::Qoder),
             _ => None,
         }
     }
@@ -87,6 +102,8 @@ impl SubscriptionProvider {
             Self::Codex => "Codex (ChatGPT)",
             Self::Antigravity => "Antigravity (Google)",
             Self::Opencode => "OpenCode",
+            Self::CodeBuddy => "CodeBuddy",
+            Self::Qoder => "Qoder",
         }
         .to_string()
     }
@@ -96,6 +113,8 @@ impl SubscriptionProvider {
             Self::Codex => codex::suggested(),
             Self::Antigravity => antigravity::suggested(),
             Self::Opencode => opencode::suggested(),
+            Self::CodeBuddy => codebuddy::suggested(),
+            Self::Qoder => qoder::suggested(),
         }
     }
 }
@@ -313,10 +332,14 @@ pub(crate) fn store_lock(provider: SubscriptionProvider) -> &'static tokio::sync
     static CODEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     static ANTIGRAVITY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     static OPENCODE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static CODEBUDDY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    static QODER: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     match provider {
         SubscriptionProvider::Codex => &CODEX,
         SubscriptionProvider::Antigravity => &ANTIGRAVITY,
         SubscriptionProvider::Opencode => &OPENCODE,
+        SubscriptionProvider::CodeBuddy => &CODEBUDDY,
+        SubscriptionProvider::Qoder => &QODER,
     }
 }
 
@@ -542,6 +565,13 @@ pub async fn start_login_with_options(
             }
             SubscriptionProvider::Opencode => {
                 opencode::begin_login(begin_cancel.clone(), expected_revision, options).await
+            }
+            SubscriptionProvider::CodeBuddy => {
+                codebuddy::begin_login(begin_cancel.clone(), expected_revision, options.clone())
+                    .await
+            }
+            SubscriptionProvider::Qoder => {
+                qoder::begin_login(begin_cancel, expected_revision, options).await
             }
         }
     };
@@ -801,6 +831,8 @@ pub async fn resolve_with_options(
         SubscriptionProvider::Codex => codex::resolve(options).await,
         SubscriptionProvider::Antigravity => antigravity::resolve(options).await,
         SubscriptionProvider::Opencode => opencode::resolve(options).await,
+        SubscriptionProvider::CodeBuddy => codebuddy::resolve(options).await,
+        SubscriptionProvider::Qoder => qoder::resolve(options).await,
     }
 }
 
@@ -853,7 +885,7 @@ mod tests {
     /// Serializes these tests against the shared on-disk store. Async-aware so
     /// the guard may be held across the awaits each test performs, matching how
     /// `store_lock` above already guards the real store.
-    fn test_lock() -> &'static tokio::sync::Mutex<()> {
+    pub(crate) fn test_lock() -> &'static tokio::sync::Mutex<()> {
         static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
         &LOCK
     }
@@ -886,6 +918,25 @@ mod tests {
             Some(SubscriptionProvider::Codex)
         );
         assert_eq!(SubscriptionProvider::from_key("unknown"), None);
+        assert_eq!(
+            serde_json::to_value(SubscriptionProvider::CodeBuddy).unwrap(),
+            serde_json::json!("codebuddy")
+        );
+        assert_eq!(
+            serde_json::to_value(SubscriptionProvider::Qoder).unwrap(),
+            serde_json::json!("qoder")
+        );
+        assert_eq!(
+            SubscriptionProvider::from_key("codebuddy"),
+            Some(SubscriptionProvider::CodeBuddy)
+        );
+        assert_eq!(
+            SubscriptionProvider::from_key("qoder"),
+            Some(SubscriptionProvider::Qoder)
+        );
+        assert_eq!(SubscriptionProvider::ALL.len(), 5);
+        assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::CodeBuddy));
+        assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::Qoder));
     }
 
     #[tokio::test]

@@ -443,6 +443,8 @@ fn to_adapter_provider(provider: SubscriptionProvider) -> AdapterProvider {
         SubscriptionProvider::Codex => AdapterProvider::Codex,
         SubscriptionProvider::Antigravity => AdapterProvider::Antigravity,
         SubscriptionProvider::Opencode => AdapterProvider::Opencode,
+        SubscriptionProvider::CodeBuddy => AdapterProvider::CodeBuddy,
+        SubscriptionProvider::Qoder => AdapterProvider::Qoder,
     }
 }
 
