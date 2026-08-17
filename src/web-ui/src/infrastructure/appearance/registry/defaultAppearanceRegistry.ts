@@ -115,6 +115,7 @@ import { terminalAppearanceDescriptor } from '@/app/scenes/terminal/appearance';
 import { aboutDialogAppearanceDescriptor } from '@/app/components/AboutDialog/appearance';
 import { navPanelAppearanceDescriptor } from '@/app/components/NavPanel/appearance';
 import { sessionsSectionAppearanceDescriptor } from '@/app/components/NavPanel/sections/sessions/appearance';
+import { groupChatsSectionAppearanceDescriptor } from '@/app/components/NavPanel/sections/group-chats/GroupChatsSection.appearance';
 import { contentCanvasAppearanceDescriptor } from '@/app/components/panels/content-canvas/appearance';
 import { filesPanelAppearanceDescriptor } from '@/app/components/panels/FilesPanel.appearance';
 import { reviewPlatformAppearanceDescriptor } from '@/app/components/panels/review-platform/appearance';
@@ -423,6 +424,7 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(aboutDialogAppearanceDescriptor)
     .registerComponent(navPanelAppearanceDescriptor)
     .registerComponent(sessionsSectionAppearanceDescriptor)
+    .registerComponent(groupChatsSectionAppearanceDescriptor)
     .registerComponent(contentCanvasAppearanceDescriptor)
     .registerComponent(filesPanelAppearanceDescriptor)
     .registerComponent(reviewPlatformAppearanceDescriptor)
