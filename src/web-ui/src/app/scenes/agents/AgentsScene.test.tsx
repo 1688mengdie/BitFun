@@ -443,6 +443,22 @@ describeWithJsdom('AgentsScene', () => {
     expect(liveRegions.some((r) => r.getAttribute('aria-atomic') === 'true')).toBe(true);
   }, 10_000);
 
+  it('renders the DAG canvas preview on the CreateLegionPage (R-WF-17 assertion 1)', async () => {
+    const { default: AgentsScene } = await import('./AgentsScene');
+
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
+    await act(async () => {
+      createBtn?.click();
+    });
+
+    const canvas = container.querySelector('[data-testid="legion-pattern-canvas"]');
+    expect(canvas).toBeTruthy();
+    expect(canvas?.querySelector('svg')).toBeTruthy();
+  }, 10_000);
+
   it('marks the createLegion page with the agents scene-root contract (前端-P2-6)', async () => {
     const { default: AgentsScene } = await import('./AgentsScene');
 

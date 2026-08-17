@@ -477,6 +477,7 @@
     "nodes": "節點（{{count}}）",
     "edges": "連線（{{count}}）",
     "noEdges": "無連線",
+    "canvas": "畫布預覽",
     "usePattern": "使用此模式",
     "planning": "規劃中",
     "saved": "工作流編排模式「{{name}}」已儲存",
@@ -594,7 +595,21 @@
   },
   "formation": {
     "empty": "從左側選擇 Agent 加入團隊",
-    "emptySub": "點擊 Agent 卡片上的 + 按鈕"
+    "emptySub": "點擊 Agent 卡片上的 + 按鈕",
+    "hint": "點擊節點上的連線端口可建立連線，點擊連線起點圓點可刪除連線",
+    "startWire": "開始連線",
+    "cancelWire": "取消連線",
+    "wireActive": "連線中（源：{{from}}）——點擊另一節點完成，點擊端口取消",
+    "removeEdge": "刪除此連線",
+    "openSession": "開啟會話",
+    "state": {
+      "standby": "待命",
+      "processing": "處理中",
+      "hung": "掛起",
+      "interrupted": "已中斷",
+      "pending_attention": "待關注",
+      "viewed": "已查看"
+    }
   },
   "capability": {
     "warning": "{{cats}} 能力缺失",
