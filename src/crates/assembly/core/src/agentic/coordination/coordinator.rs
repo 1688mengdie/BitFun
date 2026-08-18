@@ -6552,6 +6552,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         let mut hook_context_sections = native_hooks::take_pending_session_context(&session_id);
         hook_context_sections.extend(hook_prompt_decision.additional_context);
         for section in hook_context_sections {
+            if section.trim().is_empty() {
+                continue;
+            }
             additional_prepended_messages.push(Message::internal_reminder(
                 InternalReminderKind::HookContext,
                 format!("<hook_context>\n{section}\n</hook_context>"),
@@ -11387,6 +11390,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             native_hooks::dispatch_subagent_start(subagent_hook_facts, &session_id, &agent_type)
                 .await
         {
+            if section.trim().is_empty() {
+                continue;
+            }
             initial_messages.push(Message::internal_reminder(
                 InternalReminderKind::HookContext,
                 format!("<hook_context>\n{section}\n</hook_context>"),
@@ -11399,10 +11405,12 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .build_subagent_legion_context(subagent_parent_info.as_ref(), &session_id)
             .await
         {
-            initial_messages.push(Message::internal_reminder(
-                InternalReminderKind::LifecycleContext,
-                format!("<legion_context>\n{legion_context}\n</legion_context>"),
-            ));
+            if !legion_context.trim().is_empty() {
+                initial_messages.push(Message::internal_reminder(
+                    InternalReminderKind::LifecycleContext,
+                    format!("<legion_context>\n{legion_context}\n</legion_context>"),
+                ));
+            }
         }
 
         let subagent_services = Self::build_workspace_services(&subagent_workspace).await;
