@@ -6697,11 +6697,24 @@ config: {
     let didClear = false;
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
-      if (!session || !session.hasUnreadCompletion) return prev;
+      if (!session) return prev;
+
+      // R-12: a completed session is only fully "read" when the third-source
+      // projection (displayState) is cleared as well. Collapse COMPLETED to
+      // VIEWED so the green dot cannot resurface on the next three-source
+      // recompute after the row stops being active. Other display states
+      // (processing, pending_attention, ...) keep their meaning.
+      const nextDisplayState = session.displayState === SessionDisplayState.COMPLETED
+        ? SessionDisplayState.VIEWED
+        : session.displayState;
+      const stateChanged = Boolean(session.hasUnreadCompletion)
+        || session.displayState !== nextDisplayState;
+      if (!stateChanged) return prev;
 
       const updatedSession: Session = {
         ...session,
         hasUnreadCompletion: undefined,
+        displayState: nextDisplayState,
       };
 
       const newSessions = new Map(prev.sessions);
@@ -7872,6 +7885,59 @@ config: {
       // when it exists; this reconcile only upgrades stale historical rows.
       log.debug('Failed to reconcile displayState from runtime session list', {
         workspacePath,
+        error,
+      });
+    }
+  }
+
+  /**
+   * R-12: refresh the runtime displayState projection for one session after a
+   * backend state change (e.g. touch_session set viewed=true). The startup-only
+   * reconcile leaves the in-memory projection stale for the whole runtime;
+   * this single-session refresh closes the gap without a full list round-trip.
+   */
+  public async refreshDisplayStateForSession(
+    sessionId: string,
+    workspacePath?: string,
+    remoteConnectionId?: string,
+    remoteSshHost?: string,
+  ): Promise<void> {
+    try {
+      if (typeof agentAPI.listSessions !== 'function' || !workspacePath) {
+        return;
+      }
+      const runtimeSessions = await agentAPI.listSessions(
+        workspacePath,
+        remoteConnectionId,
+        remoteSshHost,
+      );
+      if (!Array.isArray(runtimeSessions)) {
+        return;
+      }
+      const scope = getActiveSurfaceScope();
+      const info = runtimeSessions.find(entry => entry?.sessionId === sessionId);
+      const normalized = info ? normalizeSessionDisplayState(info.displayState) : undefined;
+      this.setState(prev => {
+        if (!scope.isCurrent()) {
+          return prev;
+        }
+        const session = prev.sessions.get(sessionId);
+        if (!session || session.displayState === normalized) {
+          return prev;
+        }
+        const newSessions = new Map(prev.sessions);
+        newSessions.set(sessionId, {
+          ...session,
+          displayState: normalized,
+        });
+        return { ...prev, sessions: newSessions };
+      });
+    } catch (error) {
+      // Non-fatal: the event-driven markers and the local viewed projection
+      // already cover the read state; this refresh only upgrades the
+      // persisted projection.
+      log.debug('Failed to refresh displayState for session', {
+        sessionId,
         error,
       });
     }

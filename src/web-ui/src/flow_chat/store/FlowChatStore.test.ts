@@ -7,6 +7,7 @@ import {
   isSurfaceChangedError,
 } from '@/infrastructure/peer-device/deviceSurface';
 import type { FlowChatState, Session } from '../types/flow-chat';
+import { SessionDisplayState } from '../state-machine/types';
 import { startupTrace } from '@/shared/utils/startupTrace';
 import { projectEffectiveToolItem } from '../utils/toolInvocationIdentity';
 import { dispatchJobStore } from '@/features/dispatch/dispatchJobStore';
@@ -588,6 +589,63 @@ describe('FlowChatStore metadata persistence callbacks', () => {
 
     expect(persist).toHaveBeenCalledTimes(1);
     expect(persist).toHaveBeenCalledWith(session.sessionId, undefined);
+  });
+
+  it('R-12: clear session unread completion also collapses COMPLETED displayState to VIEWED', () => {
+    const session = createSession({
+      hasUnreadCompletion: 'completed',
+      displayState: SessionDisplayState.COMPLETED,
+    });
+
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.clearSessionUnreadCompletion(session.sessionId);
+
+    const clearedSession = flowChatStore.getState().sessions.get(session.sessionId)!;
+    expect(clearedSession.hasUnreadCompletion).toBeUndefined();
+    expect(clearedSession.displayState).toBe(SessionDisplayState.VIEWED);
+  });
+
+  it('R-12: clear session unread completion clears a displayState-only green dot (no unread marker)', () => {
+    // Restored historical sessions can carry only the displayState projection
+    // (no local unread event was ever emitted). Clearing must still collapse
+    // COMPLETED to VIEWED so the dot cannot resurface after switching away.
+    const session = createSession({
+      displayState: SessionDisplayState.COMPLETED,
+    });
+
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.clearSessionUnreadCompletion(session.sessionId);
+
+    const clearedSession = flowChatStore.getState().sessions.get(session.sessionId)!;
+    expect(clearedSession.displayState).toBe(SessionDisplayState.VIEWED);
+  });
+
+  it('R-12: clear session unread completion preserves child-session displayState semantics', () => {
+    // EphemeralChild sessions have no backend projection (displayState is
+    // undefined); clearing must not fabricate a VIEWED projection for them.
+    const session = createSession({
+      hasUnreadCompletion: 'completed',
+      displayState: undefined,
+    });
+
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.clearSessionUnreadCompletion(session.sessionId);
+
+    const clearedSession = flowChatStore.getState().sessions.get(session.sessionId)!;
+    expect(clearedSession.hasUnreadCompletion).toBeUndefined();
+    expect(clearedSession.displayState).toBeUndefined();
   });
 });
 
