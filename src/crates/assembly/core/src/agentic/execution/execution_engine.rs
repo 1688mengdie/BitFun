@@ -8510,18 +8510,22 @@ mod tests {
             .content
             .as_deref()
             .is_some_and(|c| c.contains("<system_reminder>")));
-        // 空文本的 internal_reminder 壳内容为空 → 不产生可注入内容（消费端不 push，
-        // 空校验核查表：所有 internal_reminder 调用点输入均为非空常量/模板）。
+        // 空文本的 internal_reminder：W1 工厂分道 + 空防护后返回空串（无
+        // <system_reminder> 壳）→ 空 payload 不取 injection shape（W1 防护目标）。
         let empty_reminder =
             Message::internal_reminder(InternalReminderKind::Generic, String::new());
         let rendered = message_text(&empty_reminder).expect("internal_reminder 产 Text 内容");
-        assert!(
-            rendered.contains("<system_reminder>"),
-            "工厂仍包壳（W1 后分道），空文本壳不得被注入"
+        assert_eq!(
+            rendered, "",
+            "W1 空防护：空文本 internal_reminder 返回空串（无壳）"
         );
         assert!(
-            crate::agentic::core::is_system_reminder_only(rendered),
-            "空文本壳仍满足 system_reminder-only → 守卫不会误判为真实内容"
+            !rendered.contains("<system_reminder>"),
+            "空文本 internal_reminder 不产壳"
+        );
+        assert!(
+            !crate::agentic::core::is_system_reminder_only(rendered),
+            "空文本不满足 system_reminder-only → 守卫不误判为注入"
         );
     }
 
