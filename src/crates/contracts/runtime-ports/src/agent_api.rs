@@ -844,7 +844,6 @@ pub const fn should_skip_agent_session_reply(
     outcome_kind: DialogTurnOutcomeKind,
     suppressed_cancelled_reply: bool,
     suppress_injected_turn_reply: bool,
-    has_normal_reply_obligation: bool,
 ) -> bool {
     // R-ASYNC-01（P1-1 扩展点）：引导注入 turn 完成时抑制自动回传——无论
     // outcome kind（含 Completed）均 NoReply/Skip。urgent 注入（UserSteering）
@@ -852,14 +851,7 @@ pub const fn should_skip_agent_session_reply(
     // 现役判定只覆盖 Interrupted / (Cancelled && suppressed_cancelled_reply)，
     // Completed+suppress=true 仍 Forward（assembly scheduler.rs:6274-6284
     // 现役测试实证）——本分支根除该盲区。
-    //
-    // R-15（2026-08-18）：注入抑制必须携带「来源判别」——当目标 turn 本身
-    // 承载 normal 回传义务（该 turn 由普通 SessionMessage 发起、reply_route
-    // 存在，普通消息发起者在等回传）时，urgent 中途插入不得吞掉这份回传：
-    // suppress_injected_turn_reply && !has_normal_reply_obligation 才 Skip，
-    // 有 normal 义务 → 仍 Forward（普通消息发起者最终收到回复）。
-    // 纯 urgent 注入（turn 无 reply_route 义务）语义不回退（R-ASYNC-01 需求 1）。
-    (suppress_injected_turn_reply && !has_normal_reply_obligation)
+    suppress_injected_turn_reply
         || matches!(outcome_kind, DialogTurnOutcomeKind::Interrupted)
         || matches!(outcome_kind, DialogTurnOutcomeKind::Cancelled) && suppressed_cancelled_reply
 }
@@ -2664,11 +2656,9 @@ mod tests {
             DialogTurnOutcomeKind::Cancelled,
             true,
             false,
-            false,
         ));
         assert!(!should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Cancelled,
-            false,
             false,
             false,
         ));
@@ -2676,12 +2666,10 @@ mod tests {
             DialogTurnOutcomeKind::Completed,
             true,
             false,
-            false,
         ));
         assert!(!should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Failed,
             true,
-            false,
             false,
         ));
 
@@ -2692,35 +2680,11 @@ mod tests {
             DialogTurnOutcomeKind::Completed,
             true,
             true,
-            false,
         ));
         assert!(should_skip_agent_session_reply(
             DialogTurnOutcomeKind::Interrupted,
             true,
             false,
-            false,
-        ));
-
-        // R-15（2026-08-18）：来源判别——turn 承载 normal 回传义务时，
-        // suppress_injected_turn_reply 命中也不 Skip（普通消息发起者最终收到
-        // 回复）；无义务才 Skip（纯 urgent 注入语义保留）。
-        assert!(should_skip_agent_session_reply(
-            DialogTurnOutcomeKind::Completed,
-            false,
-            true,
-            false,
-        ));
-        assert!(!should_skip_agent_session_reply(
-            DialogTurnOutcomeKind::Completed,
-            false,
-            true,
-            true,
-        ));
-        assert!(!should_skip_agent_session_reply(
-            DialogTurnOutcomeKind::Cancelled,
-            false,
-            true,
-            true,
         ));
     }
 

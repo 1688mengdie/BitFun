@@ -73,7 +73,6 @@ use bitfun_runtime_ports::{
     AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest, AgentTurnCancellationPort,
     AgentTurnCancellationRequest, AgentTurnCancellationResult, DialogSessionStateFact,
     DialogSubmitQueueAction, DialogSubmitQueueFacts, PortError, PortErrorKind, PortResult,
-    RoundInjection, RoundInjectionExecutionPolicy, RoundInjectionKind, RoundInjectionTarget,
     SessionStoragePathRequest, SessionStorePort, SessionTranscriptRequest,
 };
 pub use bitfun_runtime_ports::{
@@ -106,32 +105,6 @@ async fn configured_goal_idle_wakeup_delay_ms() -> u64 {
 /// R-THR-01 批2 2-5 后生产路径走配置化 limit，本常量仅存量测试引用。
 #[cfg(test)]
 const BACKGROUND_INJECTION_TEXT_LIMIT: usize = 16_000;
-
-/// R-15：urgent steering 注入元数据键（与 session_message_tool.rs 同名字面量
-/// ——session_message_tool.rs:URGENT_SOURCE_SESSION_METADATA_KEY，跨模块私有
-/// 不导出，scheduler 侧以同值字面量消费同一契约）。残留 steering 转交时从
-/// steering.metadata 读 urgent 发起方 session_id，补回传路由（断链修复）。
-const URGENT_SOURCE_SESSION_METADATA_KEY: &str = "urgentSourceSessionId";
-
-/// R-15（断链修复 · 纯函数，单测可达）：从残留 steering 的元数据解析 urgent
-/// 发起方 reply_route——urgent 发起方（SessionMessage source_session_id）由
-/// steering 元数据携带（session_message_tool.rs steer 时写入），转交 turn 完成
-/// 后回传发起方，不再因 reply_route=None 而 NoReply（断链）。无发起方信息的
-/// 残留 steering（旧版/非 urgent）返回 None（保持 reply_route=None 原语义）。
-fn resolve_steering_reply_route(steering: &RoundInjection) -> Option<AgentSessionReplyRoute> {
-    let urgent_source_session_id = steering
-        .metadata
-        .get(URGENT_SOURCE_SESSION_METADATA_KEY)
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    urgent_source_session_id.map(|source_session_id| AgentSessionReplyRoute {
-        source_session_id,
-        source_workspace_path: String::new(),
-        source_remote_connection_id: None,
-        source_remote_ssh_host: None,
-    })
-}
 
 /// A message waiting to be dispatched to the coordinator
 #[derive(Debug, Clone)]
@@ -694,19 +667,6 @@ impl DialogScheduler {
             }) => Some(current_turn_id),
             _ => None,
         }
-    }
-
-    /// R-15：目标 turn 是否承载 normal 回传义务（该 turn 由 AgentSession 发起
-    /// 且带 reply_route，普通消息发起者在等回传）。urgent 注入成功后，若该
-    /// turn 有 normal 义务，则**不得**整 turn 抑制回传——最终回复仍异步回传
-    /// 普通消息发起者（source_session_id）；仅无义务的纯注入 turn 才抑制。
-    pub fn active_turn_has_agent_session_reply_obligation(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-    ) -> bool {
-        self.active_turns
-            .matches_agent_session_request(session_id, turn_id)
     }
 
     /// Submit a user "steering" message into the currently running dialog turn.
@@ -3293,12 +3253,6 @@ impl DialogScheduler {
                         .get_session(session_id)
                         .map(|session| session.agent_type.clone())
                         .unwrap_or_else(|| "agentic".to_string());
-                    // R-15（断链修复）：残留 steering 转交补回传路由——urgent
-                    // 发起方（SessionMessage source_session_id）由 steering 元数据
-                    // 携带（session_message_tool.rs steer 时写入），转交 turn 完成
-                    // 后回传发起方，不再因 reply_route=None 而 NoReply（断链）。
-                    // 无发起方信息的残留 steering（旧版/非 urgent）保持 reply_route=None。
-                    let reply_route = resolve_steering_reply_route(&steering);
                     if let Err(error) = self
                         .submit_with_prepended_messages(
                             steering_session,
@@ -3310,7 +3264,7 @@ impl DialogScheduler {
                             None,
                             None,
                             DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                            reply_route,
+                            None,
                             None,
                             Vec::new(),
                             None,
@@ -3361,16 +3315,6 @@ impl DialogScheduler {
                     AgentSessionReplyAction::SkipSuppressedCancelledReply => {
                         debug!(
                             "Skipping cancelled auto-reply because the source session explicitly cancelled its own SessionMessage request: session_id={}, turn_id={}",
-                            session_id,
-                            outcome.turn_id()
-                        );
-                    }
-                    AgentSessionReplyAction::SkipSuppressedInjectedReply => {
-                        // R-15（R-10-E 文案）：注入抑制语义与 cancelled 语义拆分——
-                        // turn 被 urgent 注入标记抑制且无 normal 回传义务，注入消息的
-                        // 回复由注入通道交付，不再自动回传（R-ASYNC-01 需求 1）。
-                        debug!(
-                            "Skipping injected-turn auto-reply because the injected message's reply was delivered by the injection channel: session_id={}, turn_id={}",
                             session_id,
                             outcome.turn_id()
                         );
@@ -6235,22 +6179,6 @@ mod tests {
         )
     }
 
-    /// R-15：无 normal 回传义务的 turn fixture（Cli 发起、reply_route=None）——
-    /// urgent 注入目标为纯注入 turn 时，完成仍抑制自动回传（R-ASYNC-01 需求 1）。
-    fn plain_cli_active_turn() -> ActiveDialogTurn {
-        ActiveDialogTurn::new(
-            "turn_1".to_string(),
-            Some("/workspace".to_string()),
-            None,
-            None,
-            "agentic".to_string(),
-            "hello".to_string(),
-            None,
-            DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
-            None,
-        )
-    }
-
     #[test]
     fn requester_matching_reply_route_suppresses_cancelled_reply() {
         let active_turn = agent_session_active_turn("session_a");
@@ -6314,13 +6242,6 @@ mod tests {
         // 修复前 Completed+suppress=true 仍 Forward（现役测试实证：上方
         // cancelled_reply_is_skipped_only_when_suppressed 第 3 个断言），
         // suppress_injected_turn_reply=true 必须改变该行为（S-9 前后对比）。
-        //
-        // R-15（2026-08-18 语义修正）：该行为只适用于**无 normal 回传义务**的
-        // 纯注入 turn（Cli 发起、reply_route=None）——完成仍抑制自动回传
-        // （R-ASYNC-01 需求 1 不回退）。**有 normal 义务的 turn**（AgentSession
-        // 发起、普通消息发起者在等回传）在 urgent 插入后**仍 Forward 最终回复**
-        // （R-15 断链修复：不吞普通消息发起者的回传）。下方 fixture 均为
-        // agent_session_active_turn（有 reply_route）→ 新语义下应 Forward。
         let active_turn = agent_session_active_turn("session_a");
         let completed = TurnOutcome::Completed {
             turn_id: "turn_1".to_string(),
@@ -6334,9 +6255,8 @@ mod tests {
             execution_generation: 0,
         };
 
-        // R-15：有 normal 义务 + suppress_injected_turn_reply=true → 仍 Forward
-        //（普通消息发起者最终收到回复，修复前为 Skip = 断链）。
-        assert!(matches!(
+        // Completed + suppress_injected_turn_reply=true → Skip（修复前 Forward）。
+        assert_eq!(
             resolve_agent_session_reply_action(
                 "session_b",
                 None,
@@ -6346,39 +6266,10 @@ mod tests {
                 false,
                 true,
             ),
-            AgentSessionReplyAction::Forward(_)
-        ));
-        // 无义务纯注入 turn（Cli 发起）+ suppress → SkipSuppressedInjectedReply
-        //（R-ASYNC-01 需求 1 保留：纯 urgent 注入 turn 完成不自动回传）。
-        let plain_turn = plain_cli_active_turn();
-        assert_eq!(
-            resolve_agent_session_reply_action(
-                "session_b",
-                None,
-                None,
-                &plain_turn,
-                &completed,
-                false,
-                true,
-            ),
-            AgentSessionReplyAction::SkipSuppressedInjectedReply
+            AgentSessionReplyAction::SkipSuppressedCancelledReply
         );
-        // 无义务纯注入 turn + 无 suppress → NoReply（UI/Cli 正常 turn 不回传）。
+        // Cancelled / Interrupted + suppress=true → 同样 Skip。
         assert_eq!(
-            resolve_agent_session_reply_action(
-                "session_b",
-                None,
-                None,
-                &plain_turn,
-                &completed,
-                false,
-                false,
-            ),
-            AgentSessionReplyAction::NoReply
-        );
-        // R-15：有 normal 义务的 turn 被 urgent 插入后 Cancelled → 仍回传发起方
-        //（发起方需知结果；suppress_injected 只作用于无义务纯注入 turn）。
-        assert!(matches!(
             resolve_agent_session_reply_action(
                 "session_b",
                 None,
@@ -6388,10 +6279,8 @@ mod tests {
                 false,
                 true,
             ),
-            AgentSessionReplyAction::Forward(_)
-        ));
-        // Interrupted（可恢复 turn）→ 保持原语义 Skip（恢复时继续，最终完成才回传；
-        // 中途 Interrupted 不回传防中间态）。
+            AgentSessionReplyAction::SkipSuppressedCancelledReply
+        );
         assert_eq!(
             resolve_agent_session_reply_action(
                 "session_b",
@@ -6417,70 +6306,6 @@ mod tests {
             ),
             AgentSessionReplyAction::Forward(_)
         ));
-    }
-
-    #[test]
-    fn undelivered_steering_resolves_urgent_requester_reply_route() {
-        // R-15（B3 断链修复）：残留 steering 转交补回传路由——urgent 发起方
-        // （SessionMessage source_session_id）由 steering 元数据携带，转交 turn
-        // 完成后回传发起方，不再因 reply_route=None 而 NoReply（断链）。
-        // 无发起方信息的残留 steering（旧版/非 urgent）保持 reply_route=None。
-        let mut metadata = serde_json::Map::new();
-        metadata.insert(
-            URGENT_SOURCE_SESSION_METADATA_KEY.to_string(),
-            serde_json::json!("requester-session-1"),
-        );
-        let urgent_steering = RoundInjection {
-            id: "steering-1".to_string(),
-            kind: RoundInjectionKind::UserSteering,
-            execution_policy: RoundInjectionExecutionPolicy::default(),
-            target: RoundInjectionTarget::ExactTurn("turn-1".to_string()),
-            content: "please fix this".to_string(),
-            display_content: "please fix this".to_string(),
-            attachments: Vec::new(),
-            metadata,
-            created_at: std::time::SystemTime::now(),
-            prepended_reminders: Vec::new(),
-        };
-        let route = resolve_steering_reply_route(&urgent_steering)
-            .expect("urgent steering must carry requester reply route");
-        assert_eq!(route.source_session_id, "requester-session-1");
-        assert!(route.source_workspace_path.is_empty());
-
-        // 无 urgent 发起方元数据的残留 steering → 保持 reply_route=None（旧语义）。
-        let legacy_steering = RoundInjection {
-            id: "steering-2".to_string(),
-            kind: RoundInjectionKind::UserSteering,
-            execution_policy: RoundInjectionExecutionPolicy::default(),
-            target: RoundInjectionTarget::ExactTurn("turn-1".to_string()),
-            content: "legacy steering".to_string(),
-            display_content: "legacy steering".to_string(),
-            attachments: Vec::new(),
-            metadata: serde_json::Map::new(),
-            created_at: std::time::SystemTime::now(),
-            prepended_reminders: Vec::new(),
-        };
-        assert_eq!(resolve_steering_reply_route(&legacy_steering), None);
-
-        // 空串发起方 → 视为无路由（防御）。
-        let mut empty_metadata = serde_json::Map::new();
-        empty_metadata.insert(
-            URGENT_SOURCE_SESSION_METADATA_KEY.to_string(),
-            serde_json::json!(""),
-        );
-        let empty_steering = RoundInjection {
-            id: "steering-3".to_string(),
-            kind: RoundInjectionKind::UserSteering,
-            execution_policy: RoundInjectionExecutionPolicy::default(),
-            target: RoundInjectionTarget::ExactTurn("turn-1".to_string()),
-            content: "empty requester".to_string(),
-            display_content: "empty requester".to_string(),
-            attachments: Vec::new(),
-            metadata: empty_metadata,
-            created_at: std::time::SystemTime::now(),
-            prepended_reminders: Vec::new(),
-        };
-        assert_eq!(resolve_steering_reply_route(&empty_steering), None);
     }
 
     #[test]
