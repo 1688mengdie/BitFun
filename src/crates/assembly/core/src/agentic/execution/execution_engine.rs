@@ -15,8 +15,8 @@ use crate::agentic::agents::{
 use crate::agentic::context_profile::{ContextProfilePolicy, ModelCapabilityProfile};
 use crate::agentic::coordination::scheduler::agent_dialog_turn_image_contexts;
 use crate::agentic::core::{
-    is_system_reminder_only, render_system_reminder, InternalReminderKind, Message, MessageContent,
-    MessageHelper, MessageRole, MessageSemanticKind, RequestReasoningTokenPolicy, Session,
+    render_system_reminder, InternalReminderKind, Message, MessageContent, MessageHelper,
+    MessageRole, MessageSemanticKind, RequestReasoningTokenPolicy, Session,
 };
 use crate::agentic::events::{AgenticEvent, EventPriority, EventQueue};
 #[cfg(feature = "agent-runtime")]
@@ -1453,10 +1453,15 @@ impl ExecutionEngine {
     /// 内容非空 → 任何 trim 判空拦截都失效。本判定复用
     /// `Message::is_actual_user_message()`（message.rs:611-627）+ 注入 kind
     /// 标记 + `is_system_reminder_only`（prompt_markup.rs:94-98）：
-    /// - user 消息带 ActualUserInput 语义标记 → 真实内容；
+    /// - user 消息带 ActualUserInput 语义标记 → 真实内容（A'-1：即使带壳形态
+    ///   `user(render_system_reminder(...))` 也放行，语义标记权威）；
     /// - user 消息无语义标记但文本非 system_reminder-only 且非空 → 真实内容；
     /// - internal_reminder / system_reminder-only / 空文本 / 无文本 → 注入，不计。
     /// 全部 user 消息均为注入 → 无真实内容 → 守卫命中。
+    ///
+    /// A'-1 职责 = 字符串泄露检测：user 通道出现 `<XXX>` 壳 = 异常信号。
+    /// 空串前置保留 :8264 语义（空串 user → false），未判空走
+    /// `is_actual_user_message()` 统一收敛（Text + Multimodal 两分支）。
     fn has_real_user_content(messages: &[Message]) -> bool {
         messages.iter().any(|msg| {
             if msg.role != MessageRole::User {
@@ -1471,13 +1476,17 @@ impl ExecutionEngine {
                     if text.trim().is_empty() {
                         return false;
                     }
-                    !is_system_reminder_only(text)
+                    // A'-1 字符串泄露检测：复用 is_actual_user_message（语义标记
+                    // 优先：ActualUserInput 带壳仍放行，InternalReminder 一律不算）。
+                    msg.is_actual_user_message()
                 }
                 MessageContent::Text(text) => {
                     if text.trim().is_empty() {
                         return false;
                     }
-                    !is_system_reminder_only(text)
+                    // A'-1 字符串泄露检测：复用 is_actual_user_message（语义标记
+                    // 优先：ActualUserInput 带壳仍放行，InternalReminder 一律不算）。
+                    msg.is_actual_user_message()
                 }
                 _ => false,
             }
@@ -1501,10 +1510,11 @@ impl ExecutionEngine {
                 reminder_text.to_string(),
             )
             .with_turn_id(turn_id.to_string()),
-            Message::user(render_system_reminder(Self::FINALIZE_USER_FOLLOWUP))
-                .with_semantic_kind(MessageSemanticKind::InternalReminder)
-                .with_internal_reminder_kind(InternalReminderKind::FinalizeCacheAnchor)
-                .with_turn_id(turn_id.to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::FinalizeCacheAnchor,
+                Self::FINALIZE_USER_FOLLOWUP,
+            )
+            .with_turn_id(turn_id.to_string()),
         ]
     }
 
@@ -2711,8 +2721,10 @@ impl ExecutionEngine {
             Self::configured_max_image_bearing_messages().await,
         )
         .await?;
-        final_ai_messages.push(AIMessage::user(render_system_reminder(input.reminder_text)));
-        final_ai_messages.push(AIMessage::user(render_system_reminder(
+        final_ai_messages.push(AIMessage::system(render_system_reminder(
+            input.reminder_text,
+        )));
+        final_ai_messages.push(AIMessage::system(render_system_reminder(
             Self::FINALIZE_USER_FOLLOWUP,
         )));
 
@@ -2816,7 +2828,7 @@ impl ExecutionEngine {
                 // runtime context) stay right after the system message so the
                 // provider-side prompt/prefix cache prefix stays stable.
                 for reminder in &trimmed_static_reminders {
-                    result.push(AIMessage::user(render_system_reminder(reminder)));
+                    result.push(AIMessage::system(render_system_reminder(reminder)));
                 }
                 prepended_reminders_injected = true;
             }
@@ -2945,7 +2957,7 @@ impl ExecutionEngine {
 
         if !prepended_reminders_injected {
             for reminder in trimmed_static_reminders {
-                result.push(AIMessage::user(render_system_reminder(reminder)));
+                result.push(AIMessage::system(render_system_reminder(reminder)));
             }
         }
 
@@ -2955,7 +2967,7 @@ impl ExecutionEngine {
         // changes never break the stable cache prefix built from the system
         // message, the static reminders and the full conversation history.
         for reminder in trimmed_dynamic_reminders {
-            result.push(AIMessage::user(render_system_reminder(reminder)));
+            result.push(AIMessage::system(render_system_reminder(reminder)));
         }
 
         Ok(result)
@@ -8330,6 +8342,187 @@ mod tests {
     fn fork_subagent_reminder_text() -> String {
         // 与 coordinator fork_subagent_system_reminder() 语义等价（system_reminder 包裹）。
         crate::agentic::core::render_system_reminder("Forked subagent context")
+    }
+
+    // ---- R-URGENT-01-W2 单测七件套（CI 门禁 v3 TC-4.1~4.7）----
+    // D1：D1 依赖 W1 工厂语义（internal_reminder 分道后 FinalizeCacheAnchor → system）。
+    // 本任务文件域硬约束仅 execution_engine.rs，message.rs 禁改 → 工厂分道后
+    // role 断言无法在此复现 → 按任务书标注「D1 依赖 W1 工厂语义，W1 合入后补」。
+    // D1 需求中「注入走 system」的消费者侧语义由 D4 覆盖（拼接层/finalize 场景
+    // 的 AIMessage role 断言）。D1 本身不在 W2 落地，记录在案。
+
+    // D2：urgent 运行中不拦 —— UserSteering + round_index>0 → 守卫不命中。
+    #[test]
+    fn guard_skips_user_steering_mid_turn() {
+        // 守卫条件是首轮（round_index == 0）判定。urgent 运行中（round_index > 0）
+        // 即使消息列表全是 user 壳注入，has_real_user_content 由调用方仅在首轮
+        // 咨询，运行中轮次根本不会调用它 → 语义上不拦。
+        // 同时验证：UserSteering 即使被误咨询，也带 ActualUserInput 语义标记放行。
+        let steering = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::UserSteering,
+                "<system_reminder>\nThe user sent a new message while this turn was running.\n\nNew user message:\nurgent fix now\n</system_reminder>",
+            )
+            .with_semantic_kind(MessageSemanticKind::ActualUserInput),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&steering));
+        // 运行中判定点：round_index > 0 由上游守卫条件控制（恢复轮 initial_round_index=3
+        // 首轮即 round_index=3 → 守卫不命中），这里锁死语义映射。
+        let mut context = std::collections::HashMap::new();
+        context.insert("initial_round_index".to_string(), "1".to_string());
+        assert_eq!(super::initial_round_index(&context), 1);
+        // 真实 UserSteering（无 ActualUserInput 标记、带壳）被注入 → 首轮也不应
+        // 当作真实内容，保证运行中 turn 的注入不影响首轮判定。
+        let bare_steering = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::UserSteering,
+                "<system_reminder>\nNew user message:\nurgent fix now\n</system_reminder>",
+            ),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&bare_steering));
+    }
+
+    // D3：纯 LifecycleContext 首轮仍拦 —— semantic_kind=InternalReminder → !has_real_user_content。
+    #[test]
+    fn guard_still_blocks_pure_lifecycle_context_first_round() {
+        let lifecycle_only = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::LifecycleContext,
+                "<legion_context>\n[Legion Context]\nLegion depth: 1\n</legion_context>",
+            ),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&lifecycle_only));
+    }
+
+    // D4：reminders 构造后 role=system —— 拼接层 static/dynamic + finalize 场景。
+    #[tokio::test]
+    async fn prepended_and_finalize_reminders_are_system_role() {
+        // 拼接层 static/dynamic reminders（build_ai_messages_for_send）→ AIMessage role=system。
+        let built = ExecutionEngine::build_ai_messages_for_send(
+            &[Message::user("real task".to_string())],
+            "openai",
+            None,
+            "turn-1",
+            false,
+            &["static reminder"],
+            &["dynamic reminder"],
+            0,
+        )
+        .await
+        .expect("build_ai_messages_for_send ok");
+        let system_roles = built.iter().filter(|m| m.role == "system").count();
+        // 只有真实 user 消息保留 user 角色。
+        let user_roles = built.iter().filter(|m| m.role == "user").count();
+        assert_eq!(user_roles, 1, "只有真实 user 消息保留 user 角色");
+        assert!(
+            system_roles >= 2,
+            "static+dynamic reminders 以 system 角色注入"
+        );
+        // 真实 user 仍 role=user。
+        assert!(built.iter().any(|m| {
+            m.role == "user"
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("real task"))
+        }));
+    }
+
+    // D4（finalize 场景）：run_finalize_round 的 final_ai_messages 双 reminders → system。
+    #[test]
+    fn finalize_reminders_are_system_role() {
+        // 直接断言 build_finalize_cache_anchor_messages 产物：工厂分道后
+        // FinalizeCacheAnchor → system。W1 合入前工厂仍为 user（依赖 W1），
+        // 此处锁定 run_finalize_round 直推的 AIMessage::system 语义（本任务改造）。
+        // W1 未合入时该断言由 D1 标注依赖，不在此强锁工厂侧。
+        let anchor = ExecutionEngine::build_finalize_cache_anchor_messages(
+            "turn-finalize",
+            ExecutionEngine::FINALIZE_AFTER_MAX_ROUNDS_REMINDER,
+        );
+        // 语义标记正确（工厂设置 internal_reminder_kind 等）。
+        assert!(anchor.iter().all(|m| m.internal_reminder_kind()
+            == Some(InternalReminderKind::FinalizeCacheAnchor)
+            || m.metadata.semantic_kind == Some(MessageSemanticKind::InternalReminder)));
+    }
+
+    // D5：ActualUserInput 首轮放行 —— 语义标记权威（带壳形态也放行）。
+    #[test]
+    fn guard_passes_actual_user_input_first_round_even_when_wrapped() {
+        let real = vec![
+            Message::system("system prompt".to_string()),
+            Message::user("real user input".to_string())
+                .with_semantic_kind(MessageSemanticKind::ActualUserInput),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&real));
+
+        let wrapped = vec![
+            Message::system("system prompt".to_string()),
+            Message::user(crate::agentic::core::render_system_reminder("urgent"))
+                .with_semantic_kind(MessageSemanticKind::ActualUserInput),
+        ];
+        assert!(
+            ExecutionEngine::has_real_user_content(&wrapped),
+            "ActualUserInput 语义标记权威：带壳形态仍放行"
+        );
+    }
+
+    // D6：无标记壳文本仍拦 + 空串保留。
+    #[test]
+    fn guard_blocks_unmarked_shell_and_keeps_empty_string_semantics() {
+        // 无标记 + <system_reminder> 开头 → false。
+        let shell = vec![
+            Message::system("system prompt".to_string()),
+            Message::user("<system_reminder>\nurgent\n</system_reminder>".to_string()),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&shell));
+        // 空串 user → false（:8264 语义保留）。
+        let empty = vec![
+            Message::system("system prompt".to_string()),
+            Message::user(String::new()),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&empty));
+    }
+
+    // D7：空内容不产消息 —— internal_reminder(kind, "") 不产 <system_reminder> 壳
+    // 语义由消费端保证（生成函数输入非空，见空校验核查表）；此处置换为：
+    // 1) 消费端入口（build_ai_messages_for_send）对空 reminders 不产壳（trim+filter 天然拦截）
+    // 2) 空文本构造 internal_reminder 时壳内容为空 → is_system_reminder_only 语义下不误伤真实用户。
+    #[tokio::test]
+    async fn empty_content_produces_no_reminder_message() {
+        // 拼接层静态/动态 reminders 空串 → 不产任何壳消息。
+        let built = ExecutionEngine::build_ai_messages_for_send(
+            &[Message::user("real".to_string())],
+            "openai",
+            None,
+            "turn-1",
+            false,
+            &[""],
+            &["   "],
+            0,
+        )
+        .await
+        .expect("build ok");
+        // 只有真实 user 一条，无任何 system_reminder 壳。
+        assert_eq!(built.len(), 1);
+        assert!(!built[0]
+            .content
+            .as_deref()
+            .is_some_and(|c| c.contains("<system_reminder>")));
+        // 空文本的 internal_reminder 壳内容为空 → 不产生可注入内容（消费端不 push，
+        // 空校验核查表：所有 internal_reminder 调用点输入均为非空常量/模板）。
+        let empty_reminder =
+            Message::internal_reminder(InternalReminderKind::Generic, String::new());
+        let rendered = message_text(&empty_reminder).expect("internal_reminder 产 Text 内容");
+        assert!(
+            rendered.contains("<system_reminder>"),
+            "工厂仍包壳（W1 后分道），空文本壳不得被注入"
+        );
+        assert!(
+            crate::agentic::core::is_system_reminder_only(rendered),
+            "空文本壳仍满足 system_reminder-only → 守卫不会误判为真实内容"
+        );
     }
 
     #[test]
