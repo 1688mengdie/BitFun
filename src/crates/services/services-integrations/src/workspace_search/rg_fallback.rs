@@ -550,6 +550,12 @@ mod tests {
                 workspace_overlay_root: String::new(),
                 phase: WorkspaceSearchRepoPhase::Ready,
                 snapshot_key: None,
+                base_head_commit: None,
+                workspace_head_commit: None,
+                base_advance_in_progress: false,
+                base_advance_target_head: None,
+                base_delta_depth: 0,
+                base_compaction_recommended: false,
                 last_probe_unix_secs: None,
                 last_rebuild_unix_secs: None,
                 dirty_files: WorkspaceSearchDirtyFiles {
@@ -557,10 +563,11 @@ mod tests {
                     deleted: 0,
                     new: 0,
                 },
-                rebuild_recommended: false,
                 active_task_id: None,
                 probe_healthy: true,
+                workspace_probe_pending: false,
                 last_error: None,
+                last_maintenance_error: None,
                 overlay: None,
             }
         }
@@ -633,6 +640,12 @@ mod tests {
             workspace_overlay_root: String::new(),
             phase: WorkspaceSearchRepoPhase::Ready,
             snapshot_key: None,
+            base_head_commit: None,
+            workspace_head_commit: None,
+            base_advance_in_progress: false,
+            base_advance_target_head: None,
+            base_delta_depth: 0,
+            base_compaction_recommended: false,
             last_probe_unix_secs: None,
             last_rebuild_unix_secs: None,
             dirty_files: WorkspaceSearchDirtyFiles {
@@ -640,10 +653,11 @@ mod tests {
                 deleted: 0,
                 new: 0,
             },
-            rebuild_recommended: false,
             active_task_id: None,
             probe_healthy: true,
+            workspace_probe_pending: false,
             last_error: None,
+            last_maintenance_error: None,
             overlay: None,
         };
 

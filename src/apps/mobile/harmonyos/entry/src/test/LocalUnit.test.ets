@@ -5,8 +5,11 @@ import lifecycleUnitTest from './LifecycleUnit.test';
 import appRootLifecycleUnitTest from './AppRootLifecycleUnit.test';
 import remoteControllersUnitTest from './RemoteControllersUnit.test';
 import appRootRuntimeStartupUnitTest from './AppRootRuntimeStartupUnit.test';
+import deviceDirectoryUnitTest from './DeviceDirectoryUnit.test';
+import i18nUnitTest from './I18nUnit.test';
 
 export default function localUnitTest() {
+  i18nUnitTest();
   transportAndGeneralChatUnitTest();
   conversationStateUnitTest();
   conversationPresentationUnitTest();
@@ -14,4 +17,5 @@ export default function localUnitTest() {
   appRootLifecycleUnitTest();
   remoteControllersUnitTest();
   appRootRuntimeStartupUnitTest();
+  deviceDirectoryUnitTest();
 }

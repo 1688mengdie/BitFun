@@ -1,7 +1,7 @@
 pub(crate) use super::protocol::{
-    DirtyFileStats, FileCount, OpenRepoParams, PathScope, QuerySpec, RefreshPolicyConfig,
-    RepoConfig, RepoPhase, RepoStatus, SearchBackend, SearchModeConfig, SearchResults, TaskKind,
-    TaskPhase, TaskState, TaskStatus, WorkspaceOverlayStatus,
+    DirtyFileStats, FileCount, GroupedLineMatchResults, OpenRepoParams, PathScope, QuerySpec,
+    RefreshPolicyConfig, RepoConfig, RepoPhase, RepoStatus, SearchBackend, SearchModeConfig,
+    SearchResults, TaskKind, TaskPhase, TaskState, TaskStatus, WorkspaceOverlayStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -21,6 +21,13 @@ pub(crate) struct SearchOutcome {
     pub backend: SearchBackend,
     pub status: RepoStatus,
     pub results: SearchResults,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GroupedLineMatchOutcome {
+    pub backend: SearchBackend,
+    pub status: RepoStatus,
+    pub results: GroupedLineMatchResults,
 }
 
 #[derive(Debug, Clone)]
