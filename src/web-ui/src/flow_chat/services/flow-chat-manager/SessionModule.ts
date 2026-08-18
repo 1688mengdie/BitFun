@@ -749,20 +749,7 @@ export async function switchChatSession(
           sessionProjectWorkspacePath(latestSession),
           latestSession.remoteConnectionId,
           latestSession.remoteSshHost
-        ).then(() => {
-          // R-12: after touch_session persisted viewed=true, refresh the local
-          // displayState projection so the row dot stays cleared after the
-          // row stops being active (startup-only reconcile would keep it stale).
-          if (!surfaceScope.isCurrent()) {
-            return;
-          }
-          void context.flowChatStore.refreshDisplayStateForSession(
-            sessionId,
-            sessionProjectWorkspacePath(latestSession),
-            latestSession.remoteConnectionId,
-            latestSession.remoteSshHost
-          );
-        }).catch(error => {
+        ).catch(error => {
           if (isSurfaceChangedError(error)) {
             return;
           }
