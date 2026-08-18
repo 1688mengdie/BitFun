@@ -3649,9 +3649,19 @@ fn agent_dialog_turn_prepended_messages(
                     ));
                 }
             };
-            Ok(Message::internal_reminder(kind, reminder.text.clone()))
+            // 空文本防护：BackgroundResult（真实用户消息）由守卫兜底不判空；
+            // 系统类 reminder（SessionMessageRequest/ScheduledJob）空文本直接丢弃，
+            // 避免空系统注入进入模型请求。
+            if reminder.text.trim().is_empty() && kind != InternalReminderKind::BackgroundResult {
+                return Ok(None);
+            }
+            Ok(Some(Message::internal_reminder(
+                kind,
+                reminder.text.clone(),
+            )))
         })
-        .collect()
+        .collect::<PortResult<Vec<_>>>()
+        .map(|messages| messages.into_iter().flatten().collect())
 }
 
 impl DialogScheduler {

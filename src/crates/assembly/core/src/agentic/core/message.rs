@@ -234,6 +234,28 @@ impl InternalReminderKind {
     pub fn is_listing_diff(self) -> bool {
         matches!(self, Self::SkillListingDiff | Self::AgentListingDiff)
     }
+
+    /// Whether an internal reminder of this kind must be delivered on the
+    /// system channel (MessageRole::System) instead of the user channel.
+    ///
+    /// Classification basis (a3 §5.2 分类表 + 源码实证): among the 26 named
+    /// variants, 23 are injected by the runtime as system-channel scaffolding
+    /// (agent listing, modes, lifecycle context, hooks, conditional
+    /// instructions, scheduling, compression, goal mode, ...) and 3 are
+    /// real user-meaningful content that must stay on the user channel so the
+    /// model treats them as turn-boundary input:
+    ///   - `UserSteering`: mid-turn steering carries actual user intent.
+    ///   - `BackgroundResult`: asynchronous background results surfaced to the
+    ///     user as user-channel content.
+    ///   - `SideQuestion`: user side questions that expect a model answer.
+    /// `Unknown` (future/upstream variant fallback) routes to the system
+    /// channel as a conservative default.
+    pub fn routes_to_system_channel(self) -> bool {
+        !matches!(
+            self,
+            Self::UserSteering | Self::BackgroundResult | Self::SideQuestion
+        )
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -508,15 +530,31 @@ impl Message {
         }
     }
 
+    /// Build an internal reminder, routing the role by kind (a3 §5.2):
+    /// runtime system-channel scaffolding (23 named variants + `Unknown`
+    /// fallback) becomes `MessageRole::System`; real user-meaningful kinds
+    /// (`UserSteering` / `BackgroundResult` / `SideQuestion`) stay on the
+    /// `MessageRole::User` channel so the model treats them as turn-boundary
+    /// input. See `InternalReminderKind::routes_to_system_channel`.
     pub fn internal_reminder(reminder_kind: InternalReminderKind, text: impl Into<String>) -> Self {
-        Self::user(Self::render_internal_reminder(text))
-            .with_semantic_kind(MessageSemanticKind::InternalReminder)
+        let base = if reminder_kind.routes_to_system_channel() {
+            Self::system(Self::render_internal_reminder(text))
+        } else {
+            Self::user(Self::render_internal_reminder(text))
+        };
+        base.with_semantic_kind(MessageSemanticKind::InternalReminder)
             .with_internal_reminder_kind(reminder_kind)
     }
 
     /// An internal reminder that also carries images — used when a message that
     /// arrives mid-turn (steering) has attachments, so the model sees the same
     /// multimodal payload it would have seen at a turn boundary.
+    ///
+    /// Role exception (a3 §5.2): image injection keeps the user multimodal
+    /// constructor regardless of kind, because provider system channels do not
+    /// accept image attachments. The kind-based split (`routes_to_system_channel`)
+    /// therefore does NOT apply to the multimodal path — the constructor stays
+    /// `user_multimodal` for every kind.
     pub fn internal_reminder_multimodal(
         reminder_kind: InternalReminderKind,
         text: impl Into<String>,
@@ -527,8 +565,17 @@ impl Message {
             .with_internal_reminder_kind(reminder_kind)
     }
 
+    /// Render internal-reminder text, wrapping it in `<system_reminder>` markup
+    /// when it does not already carry prompt markup.
+    ///
+    /// Empty-content guard (defense in depth): whitespace-only text returns an
+    /// empty string WITHOUT the `<system_reminder>` shell, so an empty payload
+    /// cannot take an injection shape that downstream channels might misread.
     fn render_internal_reminder(text: impl Into<String>) -> String {
         let text = text.into();
+        if text.trim().is_empty() {
+            return String::new();
+        }
         if crate::agentic::core::has_prompt_markup(&text) {
             text
         } else {
@@ -1043,6 +1090,105 @@ mod tests {
             full_restored.metadata.internal_reminder_kind,
             Some(InternalReminderKind::UserSteering)
         );
+    }
+
+    #[test]
+    fn d1_internal_reminder_routes_role_by_kind() {
+        use super::{InternalReminderKind, Message, MessageRole};
+
+        // a3 §5.2 分类表 + 源码实证：27 变体（26 命名 + Unknown 兜底）逐一断言角色。
+        // 23 命名 + Unknown → System；UserSteering/BackgroundResult/SideQuestion → User。
+        let system_kinds: &[InternalReminderKind] = &[
+            InternalReminderKind::Generic,
+            InternalReminderKind::SkillListingDiff,
+            InternalReminderKind::AgentListingDiff,
+            InternalReminderKind::AgentMode,
+            InternalReminderKind::InitAgentsMd,
+            InternalReminderKind::ScheduledJob,
+            InternalReminderKind::ForkSubagent,
+            InternalReminderKind::GoalMode,
+            InternalReminderKind::GoalContinuation,
+            InternalReminderKind::GoalObjectiveUpdated,
+            InternalReminderKind::RemoteFileDelivery,
+            InternalReminderKind::SessionMessageRequest,
+            InternalReminderKind::SessionMessageReply,
+            InternalReminderKind::LoopRecovery,
+            InternalReminderKind::PeriodicLoopRecovery,
+            InternalReminderKind::InterruptedContinue,
+            InternalReminderKind::ThinkingOnlyRescue,
+            InternalReminderKind::FinalizeCacheAnchor,
+            InternalReminderKind::CompressionContinuation,
+            InternalReminderKind::StopHookBlock,
+            InternalReminderKind::HookContext,
+            InternalReminderKind::ConditionalInstructions,
+            InternalReminderKind::LifecycleContext,
+            InternalReminderKind::Unknown,
+        ];
+        for &kind in system_kinds {
+            let msg = Message::internal_reminder(kind, "payload");
+            assert_eq!(
+                msg.role,
+                MessageRole::System,
+                "kind {:?} should route to System",
+                kind
+            );
+            assert!(kind.routes_to_system_channel());
+        }
+
+        let user_kinds: &[InternalReminderKind] = &[
+            InternalReminderKind::UserSteering,
+            InternalReminderKind::BackgroundResult,
+            InternalReminderKind::SideQuestion,
+        ];
+        for &kind in user_kinds {
+            let msg = Message::internal_reminder(kind, "payload");
+            assert_eq!(
+                msg.role,
+                MessageRole::User,
+                "kind {:?} should route to User",
+                kind
+            );
+            assert!(!kind.routes_to_system_channel());
+        }
+    }
+
+    #[test]
+    fn d7_internal_reminder_empty_text_produces_no_shell() {
+        use super::{InternalReminderKind, Message, MessageContent};
+
+        for kind in [
+            InternalReminderKind::Generic,
+            InternalReminderKind::UserSteering,
+            InternalReminderKind::SideQuestion,
+        ] {
+            for empty in ["", "   ", "\n\t "] {
+                let msg = Message::internal_reminder(kind, empty);
+                let rendered = match &msg.content {
+                    MessageContent::Text(text) => text.as_str(),
+                    _ => panic!("empty internal reminder must stay Text content"),
+                };
+                assert_eq!(
+                    rendered, "",
+                    "empty text must NOT be wrapped in <system_reminder> shell (kind={:?}, input={:?})",
+                    kind, empty
+                );
+                assert!(
+                    !rendered.contains("system_reminder"),
+                    "empty payload must not take injection shape (kind={:?}, input={:?})",
+                    kind,
+                    empty
+                );
+            }
+        }
+
+        // 非空文本仍正常套壳（回归护栏）。
+        let normal = Message::internal_reminder(InternalReminderKind::Generic, "real payload");
+        let rendered = match &normal.content {
+            MessageContent::Text(text) => text.as_str(),
+            _ => panic!("text internal reminder must stay Text content"),
+        };
+        assert!(rendered.contains("<system_reminder>"));
+        assert!(rendered.contains("real payload"));
     }
 }
 
