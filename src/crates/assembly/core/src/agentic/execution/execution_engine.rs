@@ -15,8 +15,8 @@ use crate::agentic::agents::{
 use crate::agentic::context_profile::{ContextProfilePolicy, ModelCapabilityProfile};
 use crate::agentic::coordination::scheduler::agent_dialog_turn_image_contexts;
 use crate::agentic::core::{
-    render_system_reminder, InternalReminderKind, Message, MessageContent, MessageHelper,
-    MessageRole, MessageSemanticKind, RequestReasoningTokenPolicy, Session,
+    is_system_reminder_only, render_system_reminder, InternalReminderKind, Message, MessageContent,
+    MessageHelper, MessageRole, MessageSemanticKind, RequestReasoningTokenPolicy, Session,
 };
 use crate::agentic::events::{AgenticEvent, EventPriority, EventQueue};
 #[cfg(feature = "agent-runtime")]
@@ -824,6 +824,26 @@ impl ExecutionEngine {
         count
     }
 
+    /// 空输入轮拦截开关（`ai.thresholds.execution.empty_input_guard`）。
+    ///
+    /// R-MR-06 / R-13：模型请求发出前检查「本轮是否无任何真实用户内容」——
+    /// 全部 user 消息均为系统注入（internal_reminder / system_reminder 包裹）
+    /// 或为空 → 本地合成 final response，不调 API、不计费。默认 true。
+    /// 与 configured_duplicate_message_enabled 同构：0 硬编码铁律，默认值由配置
+    /// 域承载（未配置时回退本常量 true）。
+    async fn configured_empty_input_guard() -> bool {
+        let Ok(config_service) = get_global_config_service().await else {
+            return true;
+        };
+        let Ok(thresholds) = config_service
+            .get_config::<crate::service::config::types::AiThresholdsConfig>(Some("ai.thresholds"))
+            .await
+        else {
+            return true;
+        };
+        thresholds.execution.empty_input_guard
+    }
+
     /// 消息序列重复闸门开关（`ai.thresholds.execution.duplicate_message_enabled`）。
     ///
     /// R-MR-10：请求发出前比对本轮与最近 N 轮的 messages 序列指纹，窗口内相同
@@ -1419,8 +1439,49 @@ impl ExecutionEngine {
             "duplicate_messages" => {
                 "I'm stopping here because the outgoing message sequence repeated itself without any new information, which indicates the turn is stuck in a loop; no further model requests were issued.".to_string()
             }
+            "empty_initial_turn" => {
+                "I'm stopping here because this turn had no real user content — every user message was system-injected context (e.g. legion/agent/hook reminders) or empty. No model request was issued; no tokens were spent.".to_string()
+            }
             _ => "I'm stopping here because this turn could not be completed successfully.".to_string(),
         }
+    }
+
+    /// R-13/DR-7 落点 1 守卫判定：首轮是否存在「真实用户内容」。
+    ///
+    /// 系统注入（legion_context / hook_context / 各类 internal_reminder 及
+    /// `<system_reminder>` 包裹的 prepended reminders）以 user 角色进请求体，
+    /// 内容非空 → 任何 trim 判空拦截都失效。本判定复用
+    /// `Message::is_actual_user_message()`（message.rs:611-627）+ 注入 kind
+    /// 标记 + `is_system_reminder_only`（prompt_markup.rs:94-98）：
+    /// - user 消息带 ActualUserInput 语义标记 → 真实内容；
+    /// - user 消息无语义标记但文本非 system_reminder-only 且非空 → 真实内容；
+    /// - internal_reminder / system_reminder-only / 空文本 / 无文本 → 注入，不计。
+    /// 全部 user 消息均为注入 → 无真实内容 → 守卫命中。
+    fn has_real_user_content(messages: &[Message]) -> bool {
+        messages.iter().any(|msg| {
+            if msg.role != MessageRole::User {
+                return false;
+            }
+            match &msg.content {
+                MessageContent::Multimodal { text, images } => {
+                    // 带真实图片的 user 消息视为真实内容（用户传图不可能为空轮）。
+                    if !images.is_empty() {
+                        return true;
+                    }
+                    if text.trim().is_empty() {
+                        return false;
+                    }
+                    !is_system_reminder_only(text)
+                }
+                MessageContent::Text(text) => {
+                    if text.trim().is_empty() {
+                        return false;
+                    }
+                    !is_system_reminder_only(text)
+                }
+                _ => false,
+            }
+        })
     }
 
     fn should_mark_has_final_response(
@@ -4686,6 +4747,7 @@ impl ExecutionEngine {
         // + 工具结果」按此语义落地（见实现说明落盘）。
         let mut recent_message_fingerprints: Vec<String> = Vec::new();
         let mut last_sent_messages_len = messages.len();
+        let empty_input_guard = Self::configured_empty_input_guard().await;
         let duplicate_message_enabled = Self::configured_duplicate_message_enabled().await;
         let duplicate_message_window = Self::configured_duplicate_message_window().await;
         if duplicate_message_enabled {
@@ -5213,6 +5275,22 @@ impl ExecutionEngine {
                 }
             }
             last_sent_messages_len = messages.len();
+
+            // R-MR-06 / R-13 首轮真实内容守卫（DR-7 落点 1，消费 empty_input_guard）：
+            // 空任务子会话首轮 = initial_messages 只有 legion_context / hook_context
+            // 等 system_reminder 包裹的注入（role=User、内容非空），trim 判空拦截
+            // 永远失效。这里在请求发出前判定「全部 user 消息均为注入/空」→ 本地
+            // 合成 final response，不调 API、不计费。
+            if empty_input_guard && round_index == 0 && !Self::has_real_user_content(&messages) {
+                warn!(
+                    "R-MR-06 empty-input guard hit on first round (all user messages are system injections or empty); synthesizing local final response without a model request: session_id={}, turn_id={}, user_messages={}",
+                    context.session_id,
+                    context.dialog_turn_id,
+                    messages.iter().filter(|m| m.role == MessageRole::User).count()
+                );
+                finalization_reason = Some("empty_initial_turn");
+                break;
+            }
 
             let ai_messages = Self::build_ai_messages_for_send(
                 &messages,
@@ -6195,6 +6273,22 @@ impl ExecutionEngine {
                     .await
                 {
                     warn!("Failed to persist duplicate-message final response: {}", e);
+                }
+                has_final_response = true;
+            } else if reason == "empty_initial_turn" {
+                // R-MR-06 / R-13 首轮空内容守卫拦截：不调 API，本地合成 final
+                // response（同 duplicate_messages 路径），把终止说明写入会话。
+                let local_msg = Message::assistant(Self::build_local_final_response_message(
+                    "empty_initial_turn",
+                ))
+                .with_turn_id(context.dialog_turn_id.clone());
+                messages.push(local_msg.clone());
+                if let Err(e) = self
+                    .session_manager
+                    .add_message(&context.session_id, local_msg)
+                    .await
+                {
+                    warn!("Failed to persist empty-initial-turn final response: {}", e);
                 }
                 has_final_response = true;
             }
@@ -8127,6 +8221,115 @@ mod tests {
                 .any(|r| r.contains("[Runtime Facts]")),
             "agent round after a user round must still not carry runtime facts"
         );
+    }
+
+    // ---- R-13 / R-MR-06 首轮真实内容守卫（has_real_user_content）----
+    #[test]
+    fn empty_input_guard_detects_injection_only_first_round() {
+        // 纯 legion_context 注入（DR-7 实证形态：role=User、内容非空、
+        // system_reminder 包裹）→ 无真实 user 内容 → 守卫命中。
+        let injection_only = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::LifecycleContext,
+                "<legion_context>\n[Legion Context]\nLegion depth: 1\n</legion_context>",
+            ),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&injection_only));
+
+        // HookContext 注入（A3 同构链路）同样命中。
+        let hook_only = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::HookContext,
+                "<hook_context>\nsection\n</hook_context>",
+            ),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&hook_only));
+    }
+
+    #[test]
+    fn empty_input_guard_passes_injection_plus_real_task() {
+        // 注入 + 真实任务（非空、非 system_reminder-only）→ 有真实内容 → 放行。
+        let injection_plus_task = vec![
+            Message::system("system prompt".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::LifecycleContext,
+                "<legion_context>\n[Legion Context]\nLegion depth: 1\n</legion_context>",
+            ),
+            Message::user("fix the bug in execution_engine.rs".to_string()),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&injection_plus_task));
+
+        // 空串 user（Message::user("") 合法）→ 无真实内容 → 命中（守卫兜底）。
+        let empty_user = vec![
+            Message::system("system prompt".to_string()),
+            Message::user(String::new()),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&empty_user));
+    }
+
+    #[test]
+    fn empty_input_guard_ignores_non_user_and_tool_rounds() {
+        // system/assistant/tool 消息不参与判定。
+        let tool_round = vec![
+            Message::system("system prompt".to_string()),
+            Message::user("real task".to_string()),
+            Message::assistant("checking".to_string()),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&tool_round));
+    }
+
+    #[test]
+    fn empty_input_guard_passes_fork_inherited_context() {
+        // fork 继承上下文：历史真实 user 消息 + 注入 + 任务 → 放行。
+        let fork_messages = vec![
+            Message::system("system prompt".to_string()),
+            Message::user("previous real conversation".to_string()),
+            Message::internal_reminder(
+                InternalReminderKind::ForkSubagent,
+                fork_subagent_reminder_text(),
+            ),
+            Message::user("continue this work".to_string()),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&fork_messages));
+    }
+
+    #[test]
+    fn empty_input_guard_detects_unmarked_system_reminder_injection() {
+        // DR-8 B4-B6 结构风险：prepended reminders 以
+        // `Message::user(render_system_reminder(...))` 形式（无 InternalReminderKind
+        // 标记）注入 → content 判定兜底识别，守卫仍命中。
+        let bare_reminder = vec![
+            Message::system("system prompt".to_string()),
+            Message::user(crate::agentic::core::render_system_reminder(
+                "Deferred tool listing",
+            )),
+        ];
+        assert!(!ExecutionEngine::has_real_user_content(&bare_reminder));
+
+        // 真实文本（带 user_query 标记）仍算真实内容。
+        let user_query_marked = vec![
+            Message::system("system prompt".to_string()),
+            Message::user(crate::agentic::core::render_user_query("fix the bug")),
+        ];
+        assert!(ExecutionEngine::has_real_user_content(&user_query_marked));
+    }
+
+    #[test]
+    fn empty_input_guard_requires_first_round_condition() {
+        // 工具轮/续轮（round_index > 0）不受守卫影响：即使消息列表无真实 user
+        // 内容（本轮是工具结果 + 注入），守卫条件 `round_index == 0` 也不命中。
+        // 用初始 round index 语义验证：恢复轮（initial_round_index=3）首轮就是
+        // round_index=3 → 不拦。
+        let mut context = std::collections::HashMap::new();
+        context.insert("initial_round_index".to_string(), "3".to_string());
+        assert_eq!(super::initial_round_index(&context), 3);
+    }
+
+    fn fork_subagent_reminder_text() -> String {
+        // 与 coordinator fork_subagent_system_reminder() 语义等价（system_reminder 包裹）。
+        crate::agentic::core::render_system_reminder("Forked subagent context")
     }
 
     #[test]

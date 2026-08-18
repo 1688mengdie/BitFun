@@ -1159,6 +1159,15 @@ impl TaskTool {
                 "Required parameters: prompt and description. Missing prompt".to_string(),
             )
         })?;
+        // R-13 空任务校验：Task 工具 prompt 空串/纯空白 → 拒绝（对齐
+        // execute_internal_agent coordinator.rs:13460-13465 的空任务校验，
+        // 补上 DR-7 §四 落点 2 缺口——空任务子会话会携带纯注入首轮调 API 计费）。
+        if prompt.trim().is_empty() {
+            return Err(BitFunError::tool(format!(
+                "Task prompt must not be empty (description={})",
+                description.unwrap_or_else(|| "(none)".to_string())
+            )));
+        }
         let context_mode = invocation.context_mode;
         // ACP bridge delegation: a `acp__<client>` spawn targets a real
         // external ACP flow session (same shape as SessionControl acp__ create)
