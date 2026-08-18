@@ -114,6 +114,12 @@ const ACP_FLOW_METADATA_PROVIDER_KEY: &str = "provider";
 const ACP_FLOW_METADATA_PROVIDER_VALUE: &str = "acp";
 const ACP_FLOW_METADATA_CLIENT_ID_KEY: &str = "acpClientId";
 
+/// R-15：urgent steering 注入元数据键——携带 urgent 发起方 session_id。
+/// steering 通道（RoundInjection）无 reply_route 字段，注入未被轮边界消费
+/// 而走残留转交时，转交侧（assembly/scheduler.rs process_turn_outcome）从此
+/// 键读出发起方，构造 reply_route 补回传路由（发起方最终收到回复，断链修复）。
+const URGENT_SOURCE_SESSION_METADATA_KEY: &str = "urgentSourceSessionId";
+
 /// COORD-03 流会话注册表判定结果：会话 id 形状（`acp_<client>_<uuid>`）
 /// 只作线索，注册表记录才是「是否为活跃外部 ACP 流会话」的权威事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2622,6 +2628,15 @@ impl SessionMessageTool {
             match resolve_urgent_delivery(scheduler.current_processing_turn_id(&target_session_id))
             {
                 UrgentDelivery::Steer { turn_id } => {
+                    // R-15（B3 前置）：携带发起方路由——steering 通道（RoundInjection）
+                    // 无 reply_route 字段，若本次注入在轮边界前未被消费（turn 提前完成
+                    // 走残留转交），转交侧需知道 urgent 发起方是谁才能补回传路由。
+                    // 元数据最小传递：仅写入 source_session_id，不新增通道字段。
+                    let mut steer_metadata = serde_json::Map::new();
+                    steer_metadata.insert(
+                        URGENT_SOURCE_SESSION_METADATA_KEY.to_string(),
+                        serde_json::json!(source_session_id),
+                    );
                     match scheduler
                         .steer_dialog_turn(AgentDialogSteerRequest {
                             session_id: target_session_id.clone(),
@@ -2630,7 +2645,7 @@ impl SessionMessageTool {
                             display_content: Some(message.clone()),
                             prepended_reminders: prepended_messages.clone(),
                             attachments: Vec::new(),
-                            metadata: serde_json::Map::new(),
+                            metadata: steer_metadata,
                         })
                         .await
                     {
@@ -2640,8 +2655,21 @@ impl SessionMessageTool {
                             // turn——完成时抑制自动回传（双回复根除）。注入消息的
                             // 回复由注入通道交付，注入 turn 再自动回传即产生双回复
                             // （该 turn 的 reply_route 是发起方等待回传时设定的）。
-                            scheduler
-                                .mark_injected_turn_reply_suppressed(&target_session_id, &turn_id);
+                            //
+                            // R-15（来源判别）：若该 turn 本身承载 normal 回传义务
+                            // （由普通 SessionMessage 发起、reply_route 存在，普通
+                            // 消息发起者在等回传），则**不得**置整 turn 抑制——最终
+                            // 回复仍异步回传普通消息发起者；仅无 normal 义务的纯注入
+                            // turn 才抑制（R-ASYNC-01 需求 1 不回退）。
+                            if !scheduler.active_turn_has_agent_session_reply_obligation(
+                                &target_session_id,
+                                &turn_id,
+                            ) {
+                                scheduler.mark_injected_turn_reply_suppressed(
+                                    &target_session_id,
+                                    &turn_id,
+                                );
+                            }
                             info!(
                                 "Urgent SessionMessage steered into running turn: source_session_id={}, target_session_id={}, turn_id={}",
                                 source_session_id, target_session_id, turn_id
@@ -3724,7 +3752,6 @@ mod tests {
         assert!(!reminders[0].text.contains("From depth:"));
         assert!(!reminders[0].text.contains("From agent:"));
     }
-
 
     #[test]
     fn session_message_input_parses_batch_items() {
@@ -4938,7 +4965,6 @@ mod tests {
         ))
     }
 
-
     #[tokio::test]
     async fn delivery_authz_rejects_unrelated_caller_without_metadata() {
         // Not owner, target has no created_by, no ancestor relationship
@@ -5029,5 +5055,4 @@ mod tests {
         .await
         .expect("ancestor should be authorized to deliver");
     }
-
 }
