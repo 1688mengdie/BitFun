@@ -225,9 +225,12 @@ function eventOwnsLatestSessionTurn(
   sessionId: string,
   turnId: string,
 ): boolean {
-  if (session.dialogTurns.at(-1)?.id !== turnId) return false;
   const machine = stateMachineManager.get(sessionId);
   const currentTurnId = machine?.getContext().currentDialogTurnId;
+  // 优先以状态机 currentDialogTurnId 匹配（乐观创建的 follow-up turn 使
+  // dialogTurns.at(-1) 非本 turn 时，完成事件不应被丢弃 → busy 卡死根因断点 A）。
+  if (currentTurnId && currentTurnId === turnId) return true;
+  if (session.dialogTurns.at(-1)?.id !== turnId) return false;
   return !currentTurnId || currentTurnId === turnId;
 }
 
@@ -3138,13 +3141,13 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
   
   const currentState = stateMachineManager.getCurrentState(sessionId);
   if (ownsSessionSettlement && isStreamingExecutionState(currentState)) {
-    stateMachineManager.transition(sessionId, SessionExecutionEvent.ERROR_OCCURRED, {
+    // busy 卡死修复（断点 A 关联）：失败路径统一走 FINISHING_SETTLED 单跳复位，
+    // 不再用 ERROR_OCCURRED→RESET 两连跳（RESET 清空 context.currentDialogTurnId，
+    // 导致后续完成事件判定失真 → 状态机永留 PROCESSING → busy 必现）。
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.FINISHING_SETTLED, {
       error: error || 'Execution failed'
     }).catch(err => {
-      log.error('State machine transition failed on error occurred', { sessionId, error: err });
-    });
-    stateMachineManager.transition(sessionId, SessionExecutionEvent.RESET).catch(err => {
-      log.error('State machine transition failed on reset', { sessionId, error: err });
+      log.error('State machine transition failed on error settled', { sessionId, error: err });
     });
   }
   
