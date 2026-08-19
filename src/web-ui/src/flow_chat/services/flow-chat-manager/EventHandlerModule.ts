@@ -3122,7 +3122,17 @@ export function handleDialogTurnComplete(
   reconcileBackgroundSubagentSession(sessionId);
 
   const currentState = stateMachineManager.getCurrentState(sessionId);
-  if (ownsSessionSettlement && currentState === SessionExecutionState.PROCESSING) {
+  // busy 卡死根治（R-BUSY-V6）：DialogTurnCompleted 到达 = 该会话某 turn 正常
+  // 完成 → 状态机在 PROCESSING 即无条件结算（与官方一致——官方无状态机，
+  // 完成事件到达即释放）。不再用 ownsSessionSettlement 拦截（eventOwnsLatestSessionTurn
+  // 的 :207 fallback `dialogTurns.at(-1)?.id !== turnId` 会误拦截：前端乐观
+  // turn id 与后端完成事件 turn id 不一致时 currentTurnId 不匹配 + dialogTurns
+  // 最新一条也不是该 turn → 返回 false → BACKEND_STREAM_COMPLETED + beginTurnCompletion
+  // 全被跳过 → FINISHING_SETTLED 永不发 → 状态机永留 PROCESSING → busy 卡死。
+  // 后端 Completed 事件只发一次且在该 turn 结束后立即发（新 turn 未开始），
+  // 不存在「旧 turn Completed 晚到破坏新 turn」的场景（Cancelled 才有晚到，
+  // 走独立 handler）。完成 = 完成，必须结算。
+  if (currentState === SessionExecutionState.PROCESSING) {
     void stateMachineManager
       .transition(sessionId, SessionExecutionEvent.BACKEND_STREAM_COMPLETED)
       .catch(error => {
@@ -3132,9 +3142,11 @@ export function handleDialogTurnComplete(
     log.debug('Skipping BACKEND_STREAM_COMPLETED transition', { currentState, sessionId, turnId });
   }
 
-  if (ownsSessionSettlement) {
-    beginTurnCompletion(context, sessionId, turnId, partialRecoveryReason);
-  }
+  // 无条件 beginTurnCompletion（完成事件到达即结算，与官方一致）：
+  // recovered/非 settlement 场景状态机可能非 PROCESSING，但完成事件仍必须
+  // 走结算（finalize 内部对状态机做幂等 FINISHING_SETTLED，UI turn 更新
+  // 已在上方完成）。禁以状态机状态/ownsSessionSettlement 拦截完成结算。
+  beginTurnCompletion(context, sessionId, turnId, partialRecoveryReason);
 }
 
 function normalizeDialogErrorDetail(event: any): AiErrorDetail {

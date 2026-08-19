@@ -369,6 +369,58 @@ describe('interrupted turn lifecycle', () => {
     );
   });
 
+  it('settles the state machine when completion arrives for a non-latest turn (R-BUSY-V6 root cause)', async () => {
+    // 根因场景：状态机 PROCESSING 执行 turn-1，但 dialogTurns 里已有更新的
+    // turn-2（follow-up 乐观创建）→ 旧逻辑 eventOwnsLatestSessionTurn 的
+    // :207 fallback（dialogTurns.at(-1).id !== turnId）返回 false → 拦截
+    // BACKEND_STREAM_COMPLETED + beginTurnCompletion → FINISHING_SETTLED 永不发
+    // → 状态机永留 PROCESSING → busy 卡死。
+    // R-BUSY-V6：DialogTurnCompleted 到达即无条件结算 → 状态机回 IDLE。
+    vi.useFakeTimers();
+    const turn1: DialogTurn = {
+      id: 'turn-1',
+      sessionId: 'session-1',
+      agentType: 'agentic',
+      userMessage: { id: 'user-1', content: 'first', timestamp: 1 },
+      modelRounds: [],
+      status: 'processing',
+      startTime: 1,
+    };
+    const turn2: DialogTurn = {
+      id: 'turn-2',
+      sessionId: 'session-1',
+      agentType: 'agentic',
+      userMessage: { id: 'user-2', content: 'follow-up', timestamp: 2 },
+      modelRounds: [],
+      status: 'processing',
+      startTime: 2,
+    };
+    createSessionWithTurn(turn1);
+    FlowChatStore.getInstance().setState(state => {
+      const sessions = new Map(state.sessions);
+      sessions.set('session-1', { ...sessions.get('session-1')!, dialogTurns: [turn1, turn2] });
+      return { ...state, sessions };
+    });
+    await stateMachineManager.transition('session-1', SessionExecutionEvent.START, {
+      taskId: 'session-1',
+      dialogTurnId: 'turn-1',
+    });
+    const context = createFlowChatContext();
+
+    handleDialogTurnComplete(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      success: true,
+      finishReason: 'complete',
+    }, vi.fn());
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(stateMachineManager.getCurrentState('session-1')).toBe(SessionExecutionState.IDLE);
+    expect(FlowChatStore.getInstance().getState().sessions
+      .get('session-1')!.dialogTurns[0]).toMatchObject({ id: 'turn-1', status: 'completed' });
+    vi.useRealTimers();
+  });
+
   it('holds finishing when backend idle arrives before the cancellation outcome', async () => {
     const turn: DialogTurn = {
       id: 'turn-1',
