@@ -386,8 +386,10 @@ impl HookImportStore {
         if !matches!(load_index(&index_path).await?, LoadedIndex::Corrupt(_)) {
             return Err(HookImportStoreError::InvalidInput("store is not corrupt"));
         }
-        let mut index = StoreIndexV1::default();
-        index.generation = reset_generation();
+        let index = StoreIndexV1 {
+            generation: reset_generation(),
+            ..StoreIndexV1::default()
+        };
         json_store
             .write_atomic_strict(&index_path, &index)
             .await
@@ -558,14 +560,14 @@ async fn publish_bundle(
         && validate_bundle_content(root, final_path, content_digest)
             .await
             .is_ok()
-        {
-            return Ok(BundlePublication {
-                root: root.to_path_buf(),
-                final_path: final_path.to_path_buf(),
-                retired_path: None,
-                changed: false,
-            });
-        }
+    {
+        return Ok(BundlePublication {
+            root: root.to_path_buf(),
+            final_path: final_path.to_path_buf(),
+            retired_path: None,
+            changed: false,
+        });
+    }
     let staging = root
         .join(".staging")
         .join(format!("import-{}", uuid::Uuid::new_v4()));

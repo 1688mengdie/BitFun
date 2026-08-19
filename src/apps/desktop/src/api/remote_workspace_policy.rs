@@ -349,6 +349,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ("create_miniapp", RemoteWorkspacePolicy::LegacyUnaudited),
     ("create_session", RemoteWorkspacePolicy::LegacyUnaudited),
     ("create_subagent", RemoteWorkspacePolicy::LegacyUnaudited),
+    ("create_legion_preset", RemoteWorkspacePolicy::LocalOnly),
     ("debug_close_devtools", RemoteWorkspacePolicy::LocalOnly),
     ("debug_devtools_available", RemoteWorkspacePolicy::LocalOnly),
     ("debug_element_picked", RemoteWorkspacePolicy::LocalOnly),
@@ -380,6 +381,9 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     ("delete_session", RemoteWorkspacePolicy::LegacyUnaudited),
+    // Cascade deletion resolves the remote session storage path through the
+    // same desktop session scope as the single delete command.
+    ("delete_session_tree", RemoteWorkspacePolicy::RemoteRouted),
     ("delete_skill", RemoteWorkspacePolicy::LegacyUnaudited),
     ("delete_subagent", RemoteWorkspacePolicy::LegacyUnaudited),
     // Detached dispatch is routed by its own immutable target and observer
@@ -894,6 +898,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "list_agent_companion_pets",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
+    ("list_legion_presets", RemoteWorkspacePolicy::LocalOnly),
     (
         "list_agent_tool_names",
         RemoteWorkspacePolicy::LegacyUnaudited,
@@ -945,6 +950,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     (
         "list_persisted_sessions",
         RemoteWorkspacePolicy::LegacyUnaudited,
+    ),
+    (
+        "list_deleted_session_ids",
+        RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
         "list_persisted_sessions_page",
@@ -1573,6 +1582,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
     (
+        "replace_mode_tool_selection",
+        RemoteWorkspacePolicy::RemoteUnsupported,
+    ),
+    (
         "report_canvas_runtime_error",
         RemoteWorkspacePolicy::LegacyUnaudited,
     ),
@@ -1583,6 +1596,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     (
         "reset_agent_profile_config",
         RemoteWorkspacePolicy::LegacyUnaudited,
+    ),
+    (
+        "reset_mode_tool_selection",
+        RemoteWorkspacePolicy::RemoteUnsupported,
     ),
     (
         "reset_assistant_workspace",
@@ -1788,6 +1805,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
     ),
     (
         "set_global_skill_disabled",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
+        "set_global_tool_disabled",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("set_macos_edit_menu_mode", RemoteWorkspacePolicy::LocalOnly),

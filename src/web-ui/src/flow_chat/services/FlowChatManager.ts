@@ -649,7 +649,7 @@ export class FlowChatManager {
         },
         undefined,
         response.sessionName,
-        128128,
+        1048576,
         response.agentType,
         workspacePath,
         config.remoteConnectionId,
@@ -956,6 +956,7 @@ export class FlowChatManager {
         id: todo.id,
         content: todo.content,
         status: todo.status,
+        dependencies: todo.dependencies,
       }));
 
       if (result.merge) {
@@ -1002,6 +1003,7 @@ export class FlowChatManager {
       id: todo.id,
       content: todo.content,
       status: todo.status,
+      dependencies: todo.dependencies,
     }));
     
     if (context) {

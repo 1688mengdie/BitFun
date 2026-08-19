@@ -4227,6 +4227,7 @@ mod tests {
     }
 
     #[derive(Default)]
+    #[allow(dead_code)]
     struct FakeInteractionHost;
 
     #[async_trait::async_trait]

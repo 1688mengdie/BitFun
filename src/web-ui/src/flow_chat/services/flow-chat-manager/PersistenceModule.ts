@@ -586,6 +586,7 @@ export async function updateSessionMetadata(
         'todos',
         'unreadCompletion',
         'needsUserAttention',
+        'displayState',
         'titleMetadata',
       ],
       session.remoteConnectionId,

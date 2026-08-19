@@ -194,6 +194,7 @@ impl WorkspaceStdio {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn spawn_local_process(executable: &str, args: &[String]) -> anyhow::Result<Self> {
         Self::spawn_local_process_with_signal_hook(executable, args, None)
     }
@@ -675,7 +676,13 @@ mod ssh_channel_tests {
                         let _ = handle.eof(channel).await;
                         settle().await;
                         let _ = handle
-                            .exit_signal_request(channel, russh::Sig::TERM, false, String::new(), String::new())
+                            .exit_signal_request(
+                                channel,
+                                russh::Sig::TERM,
+                                false,
+                                String::new(),
+                                String::new(),
+                            )
                             .await;
                         let _ = handle.close(channel).await;
                     }
@@ -723,9 +730,8 @@ mod ssh_channel_tests {
             .local_addr()
             .expect("test SSH listener should report its address");
         let server_config = Arc::new(russh::server::Config {
-            keys: vec![
-                russh_keys::key::KeyPair::generate_ed25519().expect("test host key should generate"),
-            ],
+            keys: vec![russh_keys::key::KeyPair::generate_ed25519()
+                .expect("test host key should generate")],
             ..Default::default()
         });
         tokio::spawn(async move {
@@ -820,6 +826,7 @@ mod ssh_channel_tests {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]
@@ -837,9 +844,11 @@ mod tests {
     #[tokio::test]
     #[cfg(unix)]
     async fn local_process_signal_death_reports_a_conventional_status() {
-        let transport =
-            WorkspaceStdio::spawn_local_process("sh", &["-lc".to_string(), "kill -TERM $$".to_string()])
-                .unwrap();
+        let transport = WorkspaceStdio::spawn_local_process(
+            "sh",
+            &["-lc".to_string(), "kill -TERM $$".to_string()],
+        )
+        .unwrap();
         let (_stdin, _stdout, _stderr, _control, completion) = transport.into_parts();
 
         let exit = tokio::time::timeout(Duration::from_secs(5), completion.wait())

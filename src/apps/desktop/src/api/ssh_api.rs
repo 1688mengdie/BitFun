@@ -540,8 +540,7 @@ fn validate_remote_name_for_local_download(name: &str) -> Result<(), String> {
 fn local_download_name_key(name: &str) -> String {
     #[cfg(any(windows, target_os = "macos"))]
     {
-        name.trim_end_matches(['.', ' '])
-            .to_lowercase()
+        name.trim_end_matches(['.', ' ']).to_lowercase()
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
@@ -1123,9 +1122,9 @@ pub async fn remote_get_workspace_info(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        hydrate_stored_password, local_download_name_key, validate_remote_name_for_local_download,
-    };
+    use super::{hydrate_stored_password, validate_remote_name_for_local_download};
+    #[cfg(any(windows, target_os = "macos"))]
+    use super::local_download_name_key;
 
     #[test]
     fn download_names_cannot_escape_the_selected_local_directory() {

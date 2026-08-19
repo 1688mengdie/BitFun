@@ -15,9 +15,11 @@ import { resetLiveSessionInteractionStoreForTest } from '../services/liveSession
 const apiMocks = vi.hoisted(() => ({
   listSessions: vi.fn(),
   listSessionsPage: vi.fn(),
+  listDeletedSessionIds: vi.fn(),
   loadSessionTurns: vi.fn(),
   saveSessionTurn: vi.fn(),
   deleteSession: vi.fn(),
+  deleteSessionTree: vi.fn(),
   restoreSession: vi.fn(),
   restoreSessionView: vi.fn(),
   restoreSessionWithTurns: vi.fn(),
@@ -28,6 +30,7 @@ const apiMocks = vi.hoisted(() => ({
   onPermissionRequestEvent: vi.fn(() => () => {}),
   subscribePermissionRequests: vi.fn(async () => undefined),
   listPendingPermissionRequests: vi.fn(async () => []),
+  getAvailableModes: vi.fn(async () => []),
 }));
 
 const peerModeFlagMock = vi.hoisted(() => ({ active: false }));
@@ -55,12 +58,14 @@ const stateMachineManagerMock = vi.hoisted(() => ({
   getOrCreate: vi.fn(),
   reset: vi.fn(),
   transition: vi.fn(async () => true),
+  subscribeGlobal: vi.fn(),
 }));
 
 vi.mock('@/infrastructure/api', () => ({
   sessionAPI: {
     listSessions: apiMocks.listSessions,
     listSessionsPage: apiMocks.listSessionsPage,
+    listDeletedSessionIds: apiMocks.listDeletedSessionIds,
     loadSessionTurns: apiMocks.loadSessionTurns,
     saveSessionTurn: apiMocks.saveSessionTurn,
   },
@@ -70,6 +75,7 @@ vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
   sessionAPI: {
     listSessions: apiMocks.listSessions,
     listSessionsPage: apiMocks.listSessionsPage,
+    listDeletedSessionIds: apiMocks.listDeletedSessionIds,
     loadSessionTurns: apiMocks.loadSessionTurns,
     saveSessionTurn: apiMocks.saveSessionTurn,
   },
@@ -79,6 +85,7 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
   agentAPI: {
     cancelSession: apiMocks.cancelSession,
     deleteSession: apiMocks.deleteSession,
+    deleteSessionTree: apiMocks.deleteSessionTree,
     restoreSession: apiMocks.restoreSession,
     get restoreSessionView() {
       return apiMocks.restoreSessionView;
@@ -88,6 +95,7 @@ vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
     onPermissionRequestEvent: apiMocks.onPermissionRequestEvent,
     subscribePermissionRequests: apiMocks.subscribePermissionRequests,
     listPendingPermissionRequests: apiMocks.listPendingPermissionRequests,
+    getAvailableModes: apiMocks.getAvailableModes,
   },
 }));
 
@@ -159,6 +167,10 @@ const resetStore = () => {
   ((flowChatStore as any).unsupportedRestoreCommands as Set<string> | undefined)?.clear();
   ((flowChatStore as any).pendingRemoveSessionOptions as Map<string, unknown> | undefined)?.clear();
   ((flowChatStore as any).userQuestionSnapshotRevisions as Map<string, number> | undefined)?.clear();
+  // R-WF-10: reset the mode tool catalog projection + in-flight request so
+  // tests observe a clean backend-default projection state.
+  (flowChatStore as any).modeToolCatalog = null;
+  (flowChatStore as any).modeToolCatalogRequest = null;
   flowChatStore.setState((): FlowChatState => ({
     sessions: new Map(),
     activeSessionId: null,
@@ -179,7 +191,7 @@ const createSession = (overrides: Partial<Session> = {}): Session => ({
   error: null,
   isHistorical: false,
   todos: [],
-  maxContextTokens: 128128,
+  maxContextTokens: 1048576,
   mode: 'agentic',
   workspacePath: 'D:/workspace/BitFun',
   isTransient: false,
@@ -283,6 +295,43 @@ describe('FlowChatStore lazy worktree preference', () => {
       flowChatStore.getState().sessions.get(session.sessionId)?.config
         .worktreeIsolationRequested,
     ).toBeUndefined();
+  });
+});
+
+describe('FlowChatStore group chat marker (R-GC-14)', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('marks a session as a group chat and stays idempotent', () => {
+    const session = createSession({
+      config: { workspacePath: '/repo', projectWorkspacePath: '/repo' },
+      workspacePath: '/repo',
+      projectWorkspacePath: '/repo',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    flowChatStore.markSessionAsGroupChat(session.sessionId);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)?.isGroupChat).toBe(true);
+
+    // 幂等：重复调用不产生新 state 提交（isGroupChat 已为 true）。
+    const before = flowChatStore.getState().sessions.get(session.sessionId);
+    flowChatStore.markSessionAsGroupChat(session.sessionId);
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBe(before);
+  });
+
+  it('is a no-op for a session that does not exist and surfaces the skip (R-GC-35)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    flowChatStore.markSessionAsGroupChat('missing-session');
+    expect(flowChatStore.getState().sessions.has('missing-session')).toBe(false);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('markSessionAsGroupChat skipped: session not found'),
+      expect.objectContaining({ sessionId: 'missing-session' }),
+    );
+    warnSpy.mockRestore();
   });
 });
 
@@ -575,8 +624,8 @@ describe('FlowChatStore session removal active selection', () => {
   });
 
   it('reuses pending delete intent when a concurrent local remove wins the race', async () => {
-    const deleteDeferred = createDeferred<void>();
-    apiMocks.deleteSession.mockImplementation(() => deleteDeferred.promise);
+    const deleteDeferred = createDeferred<string[]>();
+    apiMocks.deleteSessionTree.mockImplementation(() => deleteDeferred.promise);
     const keepSession = createSession({
       sessionId: 'session-keep',
       title: 'Keep me',
@@ -605,12 +654,69 @@ describe('FlowChatStore session removal active selection', () => {
     expect(removedSessionIds).toEqual(['session-remove']);
     expect(flowChatStore.getState().activeSessionId).toBeNull();
 
-    deleteDeferred.resolve();
+    deleteDeferred.resolve(['session-remove']);
     await deleting;
 
     expect(flowChatStore.getState().activeSessionId).toBeNull();
     expect(Array.from(flowChatStore.getState().sessions.keys())).toEqual(['session-keep']);
-  });
+  }, 15_000);
+
+  it('invalidates metadata request caches after a confirmed delete', async () => {
+    const session = createSession({
+      sessionId: 'session-remove',
+      title: 'Remove me',
+      workspacePath: 'D:/workspace/BitFun',
+    });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+    }));
+
+    apiMocks.deleteSessionTree.mockResolvedValueOnce(['session-remove']);
+    apiMocks.listDeletedSessionIds.mockResolvedValue([]);
+    apiMocks.listSessionsPage.mockResolvedValue({
+      sessions: [
+        {
+          sessionId: 'session-keep',
+          title: 'Saved session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 1,
+      loadedTopLevelCount: 1,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'delete_invalidation_test'
+    );
+    expect(apiMocks.listSessionsPage).toHaveBeenCalledTimes(1);
+
+    await flowChatStore.deleteSession(session.sessionId, { nextActiveSessionId: null });
+    expect(flowChatStore.getState().sessions.get(session.sessionId)).toBeUndefined();
+
+    // The same key as before must hit the backend again: the dedupe caches
+    // were invalidated by the confirmed delete, so the pre-deletion list
+    // cannot be served from cache ("deleted session still visible").
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'delete_invalidation_test'
+    );
+    expect(apiMocks.listSessionsPage).toHaveBeenCalledTimes(2);
+  }, 15_000);
 });
 
 describe('FlowChatStore token usage', () => {
@@ -1235,6 +1341,57 @@ describe('FlowChatStore ACP context usage', () => {
   });
 });
 
+describe('FlowChatStore ACP session tree tools (R-WF-10)', () => {
+  afterEach(() => {
+    resetStore();
+  });
+
+  it('projects the backend default tools for an acp__ session (no hard-coded subset)', async () => {
+    const backendTools = ['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'WebSearch', 'Git'];
+    apiMocks.getAvailableModes.mockResolvedValue([
+      {
+        id: 'acp__opencode',
+        name: 'OpenCode',
+        description: 'External ACP coding agent: run delegated implementation and analysis through the configured ACP client',
+        isReadonly: false,
+        toolCount: backendTools.length,
+        defaultTools: backendTools,
+        promptCacheScopeKey: 'acp__opencode',
+        configProfileId: 'acp__opencode',
+        configProfileMemberModeIds: ['acp__opencode'],
+        source: 'builtin',
+      },
+    ]);
+
+    await flowChatStore.refreshModeToolCatalog();
+
+    const session = createSession({ mode: 'acp__opencode' });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    const tree = flowChatStore.getSessionTree(session.sessionId);
+    expect(tree?.tools).toEqual(backendTools);
+    expect(tree?.tools).not.toEqual(['Read', 'Write', 'Edit', 'Grep', 'Glob', 'ExecCommand', 'Task', 'SessionControl']);
+    expect(tree?.isAcpExternal).toBe(true);
+  });
+
+  it('keeps the acp: flow-session line untouched (single colon, no backend projection)', () => {
+    const session = createSession({ mode: 'acp:codex' });
+    flowChatStore.setState(() => ({
+      sessions: new Map([[session.sessionId, session]]),
+      activeSessionId: session.sessionId,
+    }));
+
+    const tree = flowChatStore.getSessionTree(session.sessionId);
+    // The `acp:` single-colon flow-session line never matches `acp__`; it is
+    // not a backend registry id and keeps the plain empty fallback.
+    expect(tree?.tools).toEqual([]);
+    expect(tree?.isAcpExternal).toBe(false);
+  });
+});
+
 describe('FlowChatStore session model selection', () => {
   afterEach(() => {
     resetStore();
@@ -1428,6 +1585,132 @@ describe('FlowChatStore historical session hydration state', () => {
       historyState: 'metadata-only',
       dialogTurns: [],
     });
+  });
+
+  it('restores the group chat marker from backend metadata after reload (R-GC-35)', async () => {
+    // R-GC-35: after a restart the store reloads session metadata from the
+    // backend; a group session's metadata carries `customMetadata.groupChats`
+    // (member session id array written by group_room_tools.rs), so it must
+    // come back as isGroupChat = true and keep routing to GroupChatView.
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'group-1',
+        title: '项目群',
+        agentType: 'group',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { groupChats: ['claw-1', 'claw-2'] },
+      },
+      {
+        sessionId: 'plain-1',
+        title: 'Plain session',
+        agentType: 'agentic',
+        modelName: 'auto',
+        createdAt: 11,
+        lastActiveAt: 21,
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('group-1')?.isGroupChat).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-1')?.isGroupChat).toBeUndefined();
+  });
+
+  it('does not treat an empty groupChats array as a group chat (R-GC-35)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'empty-group',
+        title: 'Empty group metadata',
+        agentType: 'group',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { groupChats: [] },
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('empty-group')?.isGroupChat).toBeUndefined();
+  });
+
+  it('restores the workflow-member Claw marker from backend metadata after reload (R-WF-12)', async () => {
+    // R-WF-12: a Claw deployed as a group/workflow member carries
+    // `customMetadata.legionNodeId` (legion_control_tool.rs). On reload the
+    // store mirrors it into Session.workflowMember so the Claw list can hide
+    // workflow-owned Claws.
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessions.mockResolvedValueOnce([
+      {
+        sessionId: 'workflow-claw-1',
+        title: 'Group member Claw',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 10,
+        lastActiveAt: 20,
+        customMetadata: { legionNodeId: 'node-1' },
+      },
+      {
+        sessionId: 'plain-claw-1',
+        title: 'User Claw',
+        agentType: 'Claw',
+        modelName: 'auto',
+        createdAt: 11,
+        lastActiveAt: 21,
+      },
+    ]);
+
+    await flowChatStore.initializeFromDisk('D:/workspace/BitFun');
+
+    expect(flowChatStore.getState().sessions.get('workflow-claw-1')?.workflowMember).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-claw-1')?.workflowMember).toBeUndefined();
+  });
+
+  it('restores the workflow-member Claw marker from a paged metadata reload (R-WF-12)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessionsPage.mockResolvedValueOnce({
+      sessions: [
+        {
+          sessionId: 'workflow-claw-page-1',
+          title: 'Group member Claw',
+          agentType: 'Claw',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+          customMetadata: { legionNodeId: 'node-1' },
+        },
+        {
+          sessionId: 'plain-page-2',
+          title: 'Plain session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 11,
+          lastActiveAt: 21,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 2,
+      loadedTopLevelCount: 2,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'nav_initial'
+    );
+
+    expect(flowChatStore.getState().sessions.get('workflow-claw-page-1')?.workflowMember).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-page-2')?.workflowMember).toBeUndefined();
   });
 
   it('keeps persisted workspace identity separate from remote execution scope', async () => {
@@ -2937,6 +3220,87 @@ describe('FlowChatStore historical session hydration state', () => {
     });
   });
 
+  it('restores the group chat marker from a paged metadata reload (R-GC-35)', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce([]);
+    apiMocks.listSessionsPage.mockResolvedValueOnce({
+      sessions: [
+        {
+          sessionId: 'group-page-1',
+          title: '项目群',
+          agentType: 'group',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+          customMetadata: { groupChats: ['claw-1', 'claw-2'] },
+        },
+        {
+          sessionId: 'plain-page-1',
+          title: 'Plain session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 11,
+          lastActiveAt: 21,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 2,
+      loadedTopLevelCount: 2,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'nav_initial'
+    );
+
+    expect(flowChatStore.getState().sessions.get('group-page-1')?.isGroupChat).toBe(true);
+    expect(flowChatStore.getState().sessions.get('plain-page-1')?.isGroupChat).toBeUndefined();
+  });
+
+  it('filters tombstone-deleted sessions out of the paged metadata path', async () => {
+    apiMocks.listDeletedSessionIds.mockResolvedValueOnce(['tombstone-filtered-1']);
+    apiMocks.listSessionsPage.mockResolvedValueOnce({
+      sessions: [
+        {
+          sessionId: 'tombstone-filtered-1',
+          title: 'Deleted session',
+          agentType: 'agentic',
+          modelName: 'auto',
+          createdAt: 10,
+          lastActiveAt: 20,
+          workspaceHostname: 'localhost',
+        },
+      ],
+      totalTopLevelCount: 1,
+      loadedTopLevelCount: 1,
+      nextCursor: undefined,
+      hasMore: false,
+    });
+
+    const page = await flowChatStore.loadSessionMetadataPage(
+      'D:/workspace/BitFun',
+      5,
+      undefined,
+      undefined,
+      undefined,
+      'nav_initial'
+    );
+
+    expect(apiMocks.listDeletedSessionIds).toHaveBeenCalledWith(
+      'D:/workspace/BitFun',
+      undefined,
+      undefined,
+    );
+    expect(page.sessions).toHaveLength(1);
+    expect(flowChatStore.getState().sessions.get('tombstone-filtered-1')).toBeUndefined();
+  });
+
   it('loads a paged metadata slice without requesting the full session list', async () => {
     apiMocks.listSessionsPage.mockResolvedValueOnce({
       sessions: [
@@ -2972,7 +3336,7 @@ describe('FlowChatStore historical session hydration state', () => {
       cursor: undefined,
       remoteConnectionId: undefined,
       remoteSshHost: undefined,
-    });
+    }, false);
     expect(page).toMatchObject({
       totalTopLevelCount: 12,
       nextCursor: '5',
