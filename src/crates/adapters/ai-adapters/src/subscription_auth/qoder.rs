@@ -885,8 +885,10 @@ mod tests {
         assert_eq!(restored.encrypt_user_info, "encrypted-blob");
         assert_eq!(restored.key, "sig-key");
         // Legacy device-flow metadata has no signature block.
-        assert!(signature_materials_from_metadata(Some(&serde_json::json!({ "email": "x@y.z" })))
-            .is_none());
+        assert!(
+            signature_materials_from_metadata(Some(&serde_json::json!({ "email": "x@y.z" })))
+                .is_none()
+        );
         assert!(signature_materials_from_metadata(None).is_none());
     }
 

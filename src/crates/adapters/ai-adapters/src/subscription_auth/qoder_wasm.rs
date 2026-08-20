@@ -20,9 +20,8 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 use anyhow::{anyhow, Context, Result};
-use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use wasmi::{Caller, Engine, Linker, Memory, Module, Store, TypedFunc};
 
 /// Wasm bytes embedded from the extraction output (297,238 bytes, CLI 1.1.23).
@@ -45,8 +44,10 @@ enum JsValue {
     /// A `Uint8Array`. Two forms exist in the glue:
     /// - `MemView { ptr, len }`: a view over wasm linear memory (the glue's
     ///   `yCA(ptr, len)` helper) — reads/writes go straight to wasm memory.
-    /// - `HostBuf(Rc<RefCell<Vec<u8>>>)`: a host-owned JS `Uint8Array` created
+    /// - `HostBuf(Arc<Mutex<Vec<u8>>>)`: a host-owned JS `Uint8Array` created
     ///   by `new Uint8Array(len)` — the buffer lives outside wasm memory.
+    ///   `Arc<Mutex<_>>` (not `Rc<RefCell<_>>`) so `QoderWasm` stays `Send`,
+    ///   which tauri commands require for async futures crossing threads.
     U8Array(U8ArrayData),
     /// A UTF-8 string decoded into host memory.
     Str(String),
@@ -59,7 +60,7 @@ enum JsValue {
 #[derive(Clone)]
 enum U8ArrayData {
     MemView { ptr: u32, len: u32 },
-    HostBuf(Rc<RefCell<Vec<u8>>>),
+    HostBuf(Arc<Mutex<Vec<u8>>>),
 }
 
 /// wasm-bindgen reference table with free-list allocation, mirroring the
@@ -144,6 +145,17 @@ pub(crate) struct PreparedRequest {
     /// Optional request body (absent when the signature only produced headers).
     pub(crate) body: Option<Vec<u8>>,
 }
+
+/// Compile-time proof that `QoderWasm` (and its host state) is `Send`, which
+/// tauri commands require when an async command future crosses threads. A
+/// regression to `Rc`/`RefCell` here breaks the `bitfun-desktop` build, so the
+/// bound is asserted at compile time.
+const _: () = {
+    fn assert_send<T: Send>() {}
+    fn _proof() {
+        assert_send::<QoderWasm>();
+    }
+};
 
 impl PreparedRequest {
     /// Parses the headers JSON into a `(name, value)` list.
@@ -907,8 +919,8 @@ fn register_host_imports(linker: &mut Linker<QoderWasmHost>) -> Result<()> {
             caller
                 .data_mut()
                 .refs
-                .alloc(JsValue::U8Array(U8ArrayData::HostBuf(Rc::new(
-                    RefCell::new(vec![0u8; len as usize]),
+                .alloc(JsValue::U8Array(U8ArrayData::HostBuf(Arc::new(
+                    Mutex::new(vec![0u8; len as usize]),
                 )))) as i32
         }
     );
@@ -921,7 +933,9 @@ fn register_host_imports(linker: &mut Linker<QoderWasmHost>) -> Result<()> {
      -> i32 {
         match caller.data().refs.get(reference as u32) {
             Some(JsValue::U8Array(U8ArrayData::MemView { len, .. })) => *len as i32,
-            Some(JsValue::U8Array(U8ArrayData::HostBuf(buffer))) => buffer.borrow().len() as i32,
+            Some(JsValue::U8Array(U8ArrayData::HostBuf(buffer))) => {
+                buffer.lock().map(|data| data.len() as i32).unwrap_or(0)
+            }
             Some(JsValue::Str(text)) => text.len() as i32,
             _ => 0,
         }
@@ -940,12 +954,14 @@ fn register_host_imports(linker: &mut Linker<QoderWasmHost>) -> Result<()> {
         let value = match caller.data().refs.get(reference as u32) {
             Some(JsValue::U8Array(U8ArrayData::HostBuf(buffer))) => {
                 let slice = {
-                    let data = buffer.borrow();
+                    let data = buffer
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     let b = (begin as usize).min(data.len());
                     let e = (end as usize).min(data.len());
                     data[b..e].to_vec()
                 };
-                JsValue::U8Array(U8ArrayData::HostBuf(Rc::new(RefCell::new(slice))))
+                JsValue::U8Array(U8ArrayData::HostBuf(Arc::new(Mutex::new(slice))))
             }
             Some(JsValue::U8Array(U8ArrayData::MemView { ptr, .. })) => {
                 JsValue::U8Array(U8ArrayData::MemView {
@@ -964,7 +980,9 @@ fn register_host_imports(linker: &mut Linker<QoderWasmHost>) -> Result<()> {
         "__wbg_prototypesetcall_3e05eb9545565046",
         |mut caller: Caller<'_, QoderWasmHost>, dest_ptr: i32, _dest_len: i32, src_ref: i32| {
             let bytes = match caller.data().refs.get(src_ref as u32) {
-                Some(JsValue::U8Array(U8ArrayData::HostBuf(buffer))) => buffer.borrow().clone(),
+                Some(JsValue::U8Array(U8ArrayData::HostBuf(buffer))) => {
+                    buffer.lock().map(|data| data.clone()).unwrap_or_default()
+                }
                 Some(JsValue::U8Array(U8ArrayData::MemView { ptr, len })) => caller
                     .data()
                     .memory
@@ -1150,8 +1168,10 @@ fn fill_random_memory(mut caller: Caller<'_, QoderWasmHost>, ptr: usize, len: us
 }
 
 /// Fills a host-backed Uint8Array buffer with CSPRNG data.
-fn fill_random_buffer(buffer: &Rc<RefCell<Vec<u8>>>) {
-    let mut data = buffer.borrow_mut();
+fn fill_random_buffer(buffer: &Arc<Mutex<Vec<u8>>>) {
+    let mut data = buffer
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     if let Err(error) = getrandom::getrandom(&mut data) {
         panic!("qoder wasm getrandom failed: {error}");
     }
