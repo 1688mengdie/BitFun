@@ -1339,6 +1339,30 @@ const AIModelConfig: React.FC = () => {
     }
   }, [notification, refreshSubscriptionAccounts, t]);
 
+  // Qoder PAT (Personal Access Token) login. The PAT is exchanged server-side
+  // for a short-lived job token before inference; it is never stored in code.
+  const [patInputs, setPatInputs] = useState<Partial<Record<SubscriptionProvider, string>>>({});
+  const [patLoggingIn, setPatLoggingIn] = useState<SubscriptionProvider | null>(null);
+
+  const handlePatLogin = useCallback(async (provider: SubscriptionProvider) => {
+    const pat = (patInputs[provider] || '').trim();
+    if (!pat) {
+      notification.warning(t('subscriptionAuth.patRequired'));
+      return;
+    }
+    setPatLoggingIn(provider);
+    try {
+      await aiApi.startSubscriptionPatLogin(provider, pat);
+      await refreshSubscriptionAccounts();
+      setPatInputs(prev => ({ ...prev, [provider]: '' }));
+      notification.success(t('subscriptionAuth.patLoginSuccess'));
+    } catch (e) {
+      notification.error(t('subscriptionAuth.patLoginFailed', { error: String(e) }));
+    } finally {
+      setPatLoggingIn(null);
+    }
+  }, [aiApi, notification, patInputs, refreshSubscriptionAccounts, t]);
+
   
   const handleSelectProvider = (providerId: string) => {
     const template = providerTemplates[providerId];
@@ -3272,15 +3296,42 @@ const AIModelConfig: React.FC = () => {
                           {t('subscriptionAuth.retryVault')}
                         </Button>
                       ) : (
-                        <Button
-                          size="small"
-                          variant="primary"
-                          isLoading={isLoggingIn}
-                          disabled={anyLoginInProgress}
-                          onClick={() => void handleSubscriptionLogin(account.provider)}
-                        >
-                          {t('subscriptionAuth.login')}
-                        </Button>
+                        <>
+                          <Button
+                            size="small"
+                            variant="primary"
+                            isLoading={isLoggingIn}
+                            disabled={anyLoginInProgress}
+                            onClick={() => void handleSubscriptionLogin(account.provider)}
+                          >
+                            {t('subscriptionAuth.login')}
+                          </Button>
+                          {account.provider === 'qoder' && (
+                            <>
+                              <Input
+                                type="password"
+                                placeholder={t('subscriptionAuth.patPlaceholder')}
+                                value={patInputs[account.provider] || ''}
+                                disabled={anyLoginInProgress}
+                                inputSize="small"
+                                onChange={(e) => setPatInputs(prev => ({
+                                  ...prev,
+                                  [account.provider]: e.target.value,
+                                }))}
+                                style={{ width: 220 }}
+                              />
+                              <Button
+                                size="small"
+                                variant="secondary"
+                                isLoading={patLoggingIn === account.provider}
+                                disabled={anyLoginInProgress}
+                                onClick={() => void handlePatLogin(account.provider)}
+                              >
+                                {t('subscriptionAuth.patLogin')}
+                              </Button>
+                            </>
+                          )}
+                        </>
                       )}
                       {isLoggingIn && (
                         <Button

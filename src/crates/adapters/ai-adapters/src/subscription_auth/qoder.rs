@@ -21,15 +21,67 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 const BASE_URL: &str = "https://qoder.cn";
+/// OpenAPI host used by the device-token poll, PAT exchange and refresh
+/// endpoints. Matches the Qoder CN CLI (`@qodercn-ai/qoderclicn`) which
+/// targets `qoder.com.cn` for China-region accounts. The international
+/// production host (`openapi.qoder.sh`) is used by the global `qodercli`;
+/// this adapter is aligned with the CN variant.
 const OPENAPI_URL: &str = "https://openapi.qoder.com.cn";
 const CLIENT_ID: &str = "e883ade2-e6e3-4d6d-adf7-f92ceff5fdcb";
-const MODEL_BASE_URL: &str = "https://api2-v2.qoder.sh";
-const MODEL_REQUEST_URL: &str = "https://api2-v2.qoder.sh/model/v1/chat/completions";
+/// Production inference host for China-region accounts (Qoder CN CLI
+/// endpoint cache: `gateway.qoder.com.cn`).
+const MODEL_BASE_URL: &str = "https://gateway.qoder.com.cn";
+const MODEL_REQUEST_URL: &str = "https://gateway.qoder.com.cn/model/v1/chat/completions";
 const DEFAULT_MODEL: &str = "auto";
 const STORE_KEY: &str = "qoder";
+/// Marker prefix stored in the credential `refresh` field for PAT-based
+/// logins, mirroring pi-free's `pat|...` encoding. The PAT itself is a
+/// long-lived personal access token that must be exchanged for a short-lived
+/// job token before inference; on expiry the PAT is re-exchanged.
+const PAT_REFRESH_PREFIX: &str = "pat";
 const REFRESH_LEEWAY_MS: i64 = 5 * 60 * 1000;
 const POLL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const POLL_RETRY_MS: Duration = Duration::from_secs(1);
+
+/// Response of the PAT → job-token exchange endpoint.
+///
+/// Mirrors the Qoder CN CLI (`exchangePersonalToken`): the response carries
+/// the job token as `token` (or `device_token`/`access_token`), plus expiry
+/// fields. The PAT itself is retained for re-exchange on expiry, so the
+/// exchange's own `refresh_token` is intentionally not stored.
+#[derive(Debug, Deserialize)]
+struct JobTokenResponse {
+    #[serde(rename = "token", default)]
+    token: Option<String>,
+    #[serde(rename = "device_token", default)]
+    device_token: Option<String>,
+    #[serde(rename = "access_token", default)]
+    access_token: Option<String>,
+    #[serde(rename = "expires_at", default)]
+    expires_at: Option<RefreshExpiry>,
+    #[serde(rename = "expires_in", default)]
+    expires_in: Option<i64>,
+}
+
+impl JobTokenResponse {
+    fn access(&self) -> Option<String> {
+        self.token
+            .clone()
+            .or_else(|| self.device_token.clone())
+            .or_else(|| self.access_token.clone())
+    }
+
+    /// Absolute expiry in epoch milliseconds.
+    fn expires_ms(&self) -> i64 {
+        if let Some(expires_at) = self.expires_at.as_ref() {
+            return refresh_expiry_to_ms(expires_at);
+        }
+        match self.expires_in {
+            Some(seconds) if seconds > 0 => now_ms() + seconds * 1000,
+            _ => now_ms() + 3600 * 1000,
+        }
+    }
+}
 
 /// Response of the device-token poll endpoint.
 #[derive(Debug, Deserialize)]
@@ -38,8 +90,13 @@ struct DeviceTokenResponse {
     token: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
+    /// Relative expiry in seconds (fallback when `expires_at` is absent).
     #[serde(default)]
     expires_in: Option<i64>,
+    /// Absolute expiry timestamp (RFC 3339 string or epoch ms), preferred over
+    /// `expires_in` when present.
+    #[serde(default)]
+    expires_at: Option<RefreshExpiry>,
     #[serde(default)]
     user_id: Option<String>,
     #[serde(default)]
@@ -235,8 +292,14 @@ pub(crate) async fn begin_login(
     })
 }
 
-fn token_expiry(expires_in: Option<i64>) -> i64 {
-    match expires_in {
+/// Resolves the poll-response expiry to absolute epoch milliseconds. Prefers
+/// the absolute `expires_at` timestamp (RFC 3339 string or epoch ms), falling
+/// back to `expires_in` relative seconds, then a 1-hour default.
+fn token_expiry(tokens: &DeviceTokenResponse) -> i64 {
+    if let Some(expires_at) = tokens.expires_at.as_ref() {
+        return refresh_expiry_to_ms(expires_at);
+    }
+    match tokens.expires_in {
         Some(seconds) if seconds > 0 => now_ms() + seconds * 1000,
         _ => now_ms() + 3600 * 1000,
     }
@@ -264,7 +327,7 @@ async fn persist_tokens(tokens: DeviceTokenResponse, expected_revision: u64) -> 
         .clone()
         .ok_or_else(|| anyhow!("qoder device token response missing token"))?;
     let refresh = tokens.refresh_token.clone().unwrap_or_default();
-    let expires = token_expiry(tokens.expires_in);
+    let expires = token_expiry(&tokens);
     let account_id = tokens.user_id.clone();
     let metadata = account_metadata(&tokens);
     let outcome = store::upsert_if_revision(
@@ -329,6 +392,77 @@ async fn refresh(
     resp.json().await.context("parse qoder refresh response")
 }
 
+/// Exchanges a Qoder Personal Access Token for a short-lived job token.
+///
+/// Mirrors the Qoder CN CLI (`exchangePersonalToken`): `POST
+/// {openapi}/api/v1/jobToken/exchange` with `{ "personal_token": pat }`.
+/// The returned job token is what inference requests use as Bearer — the PAT
+/// itself is not accepted by the inference gateway.
+async fn exchange_pat(pat: &str, options: &SubscriptionHttpOptions) -> Result<JobTokenResponse> {
+    let client = http_client(options)?;
+    let resp = client
+        .post(format!("{}/api/v1/jobToken/exchange", openapi_base_url()))
+        .json(&serde_json::json!({ "personal_token": pat }))
+        .send()
+        .await
+        .context("call qoder job token exchange endpoint")?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(anyhow!(
+            "qoder job token exchange failed: HTTP {status}: {body}"
+        ));
+    }
+    resp.json()
+        .await
+        .context("parse qoder job token exchange response")
+}
+
+/// Logs in with a Qoder Personal Access Token: exchanges it for a job token
+/// and persists the credential. The PAT itself is kept in the `refresh`
+/// field (prefixed with `PAT_REFRESH_PREFIX`) so expiry can re-exchange it.
+pub(crate) async fn pat_login(
+    pat: &str,
+    expected_revision: u64,
+    options: &SubscriptionHttpOptions,
+) -> Result<()> {
+    let pat = pat.trim();
+    if pat.is_empty() {
+        return Err(anyhow!("Qoder personal access token is empty"));
+    }
+    let exchanged = exchange_pat(pat, options).await?;
+    let access = exchanged
+        .access()
+        .ok_or_else(|| anyhow!("qoder job token exchange response missing token"))?;
+    let refresh = format!("{PAT_REFRESH_PREFIX}|{pat}");
+    let expires = exchanged.expires_ms();
+    let outcome = store::upsert_if_revision(
+        STORE_KEY,
+        expected_revision,
+        StoredCredential::Oauth {
+            refresh,
+            access,
+            expires,
+            account_id: None,
+            metadata: None,
+        },
+    )
+    .await?;
+    super::require_current_store_revision(super::SubscriptionProvider::Qoder, outcome)?;
+    log::info!("qoder PAT login saved (job token exchanged)");
+    Ok(())
+}
+
+/// Returns `(pat, job_token)` when the stored credential is PAT-based, or
+/// `None` for device-flow credentials.
+fn pat_parts(refresh: &str) -> Option<(&str, &str)> {
+    refresh.strip_prefix(PAT_REFRESH_PREFIX).and_then(|rest| {
+        let rest = rest.strip_prefix('|')?;
+        let (pat, job_token) = rest.split_once('|')?;
+        Some((pat, job_token))
+    })
+}
+
 /// Loads the stored credential, refreshing the access token when it is about
 /// to expire or when `force` is set. `force` mirrors the CLI's
 /// `forceRefreshToken`: it is used after a 401/403 response so the request can
@@ -352,6 +486,60 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions, force: bool) -> Result<
     if !force && expires > now_ms() + REFRESH_LEEWAY_MS {
         return Ok((access, expires));
     }
+
+    // PAT-based login refreshes by re-exchanging the stored PAT (the Qoder CN
+    // CLI `refreshPatCredential`); device-flow credentials use the
+    // device-token refresh endpoint.
+    if let Some((pat, _old_job_token)) = pat_parts(&refresh_token) {
+        if pat.is_empty() {
+            return Err(anyhow!("Qoder credential has no personal access token"));
+        }
+        let exchanged = exchange_pat(pat, options).await?;
+        let new_access = exchanged
+            .access()
+            .ok_or_else(|| anyhow!("qoder job token exchange response missing token"))?;
+        let new_expires = exchanged.expires_ms();
+        let outcome = store::upsert_if_revision(
+            STORE_KEY,
+            snapshot.revision,
+            StoredCredential::Oauth {
+                refresh: format!("{PAT_REFRESH_PREFIX}|{pat}|{new_access}"),
+                access: new_access.clone(),
+                expires: new_expires,
+                account_id,
+                metadata,
+            },
+        )
+        .await?;
+        return match outcome {
+            store::ConditionalCommitOutcome::Committed { .. } => {
+                log::info!("qoder PAT credential re-exchanged");
+                Ok((new_access, new_expires))
+            }
+            store::ConditionalCommitOutcome::Conflict { current_revision } => {
+                let current = super::load_current_store_after_conflict(
+                    super::SubscriptionProvider::Qoder,
+                    current_revision,
+                )
+                .await?;
+                match current.credential {
+                    Some(StoredCredential::Oauth {
+                        access, expires, ..
+                    }) if expires > now_ms() => {
+                        log::info!(
+                            "qoder PAT refresh reused tokens committed by a concurrent refresh"
+                        );
+                        Ok((access, expires))
+                    }
+                    _ => Err(super::store_revision_conflict(
+                        super::SubscriptionProvider::Qoder,
+                        current_revision,
+                    )),
+                }
+            }
+        };
+    }
+
     if refresh_token.is_empty() {
         return Err(anyhow!("Qoder credential has no refresh token"));
     }
@@ -400,6 +588,11 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions, force: bool) -> Result<
 }
 
 /// Resolves the runtime credential, injecting the Qoder inference headers.
+///
+/// The `gateway.qoder.com.cn` inference gateway is standard OpenAI-compatible
+/// and authenticates with a plain `Authorization: Bearer {job token}` (the
+/// Qoder CN CLI `openResponse`). No `Cosy-*` client-attribution headers are
+/// required on this endpoint.
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
     let (access, expires) = ensure_fresh(options, false).await?;
     let mut headers = HashMap::new();
@@ -648,10 +841,13 @@ mod tests {
             assert_eq!(resolved.extra_headers["Content-Type"], "application/json");
             assert!(resolved.extra_headers.contains_key("X-Request-ID"));
             assert!(resolved.extra_headers.contains_key("X-Session-ID"));
+            assert!(!resolved.extra_headers.contains_key("Cosy-ClientType"));
+            assert!(!resolved.extra_headers.contains_key("Cosy-Version"));
+            assert!(!resolved.extra_headers.contains_key("Cosy-MachineOS"));
             assert!(!resolved.extra_headers.contains_key("X-Qoder-Model"));
             assert_eq!(
                 resolved.request_url.as_deref(),
-                Some("https://api2-v2.qoder.sh/model/v1/chat/completions")
+                Some("https://gateway.qoder.com.cn/model/v1/chat/completions")
             );
         });
     }

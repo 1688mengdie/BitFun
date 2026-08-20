@@ -1394,6 +1394,7 @@ pub async fn run() {
             list_ai_models_by_config,
             list_subscription_accounts,
             start_subscription_login,
+            start_subscription_pat_login,
             get_subscription_login_status,
             cancel_subscription_login,
             logout_subscription_account,

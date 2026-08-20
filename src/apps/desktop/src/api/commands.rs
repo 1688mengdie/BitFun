@@ -5095,6 +5095,13 @@ pub struct SubscriptionLoginRequest {
     pub session_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionPatLoginRequest {
+    pub provider: bitfun_core::infrastructure::subscription_auth::SubscriptionProvider,
+    pub pat: String,
+}
+
 async fn configured_ai_proxy(
     state: &State<'_, AppState>,
 ) -> Result<Option<bitfun_core::service::config::types::ProxyConfig>, String> {
@@ -5146,6 +5153,25 @@ pub async fn get_subscription_login_status(
     )
     .await
     .map_err(|e| format!("Failed to get subscription login status: {e:#}"))
+}
+
+#[tauri::command]
+pub async fn start_subscription_pat_login(
+    state: State<'_, AppState>,
+    request: SubscriptionPatLoginRequest,
+) -> Result<(), String> {
+    let proxy_config = configured_ai_proxy(&state).await?;
+    let options = bitfun_core::infrastructure::subscription_auth::SubscriptionHttpOptions::new(
+        proxy_config,
+        false,
+    );
+    bitfun_core::infrastructure::subscription_auth::start_pat_login_with_options(
+        request.provider,
+        request.pat,
+        options,
+    )
+    .await
+    .map_err(|e| format!("Failed to log in with personal access token: {e:#}"))
 }
 
 #[tauri::command]

@@ -656,6 +656,35 @@ pub async fn start_login_with_options(
     })
 }
 
+/// Logs in with a Personal Access Token, supported by providers whose gateways
+/// exchange a PAT for a short-lived job token (currently Qoder). The exchange
+/// happens synchronously and the resulting credential is persisted, so the
+/// account is immediately connected on success.
+pub async fn start_pat_login(provider: SubscriptionProvider, pat: String) -> Result<()> {
+    start_pat_login_with_options(provider, pat, SubscriptionHttpOptions::default()).await
+}
+
+/// PAT login with an explicit transport policy.
+pub async fn start_pat_login_with_options(
+    provider: SubscriptionProvider,
+    pat: String,
+    options: SubscriptionHttpOptions,
+) -> Result<()> {
+    match provider {
+        SubscriptionProvider::Qoder => {
+            let guard = store_lock(provider).lock().await;
+            let expected_revision = store::credential_revision(provider.key()).await?;
+            let result = qoder::pat_login(&pat, expected_revision, &options).await;
+            drop(guard);
+            result
+        }
+        other => Err(anyhow!(
+            "{} does not support personal access token login",
+            other.display_label()
+        )),
+    }
+}
+
 async fn finalize_session(
     provider: SubscriptionProvider,
     session_id: &str,

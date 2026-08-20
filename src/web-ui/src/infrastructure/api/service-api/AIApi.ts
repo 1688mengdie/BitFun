@@ -426,6 +426,19 @@ export class AIApi {
     }
   }
 
+  async startSubscriptionPatLogin(
+    provider: SubscriptionProvider,
+    pat: string,
+  ): Promise<void> {
+    try {
+      await api.invoke('start_subscription_pat_login', {
+        request: { provider, pat },
+      });
+    } catch (error) {
+      throw createTauriCommandError('start_subscription_pat_login', error, { provider });
+    }
+  }
+
   async getSubscriptionLoginStatus(
     provider: SubscriptionProvider,
     sessionId: string,
