@@ -1361,7 +1361,7 @@ const AIModelConfig: React.FC = () => {
     } finally {
       setPatLoggingIn(null);
     }
-  }, [aiApi, notification, patInputs, refreshSubscriptionAccounts, t]);
+  }, [notification, patInputs, refreshSubscriptionAccounts, t]);
 
   
   const handleSelectProvider = (providerId: string) => {
