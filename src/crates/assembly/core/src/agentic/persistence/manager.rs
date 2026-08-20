@@ -558,71 +558,21 @@ impl PersistenceManager {
     /// managed sessions directory. Local workspace roots are slugified under
     /// `~/.bitfun/projects/`; already-resolved local/remote sessions
     /// directories are used as-is.
-    ///
-    /// The resolved branch is canonicalized before being returned so every
-    /// persist/load/delete operation lands on the same physical root even when
-    /// callers pass an already-resolved sessions directory that was produced by
-    /// a different resolution path (e.g. `effective_storage_path_for_config`
-    /// vs `metadata_workspace_path_for_update`). Without this, a create that
-    /// wrote through the raw (non-canonical) form and an update that re-resolved
-    /// the workspace root could diverge when canonicalization outcome changes
-    /// between calls (RAD08/E-5: ubuntu /tmp canonicalize timing), yielding
-    /// `Session metadata not found` for a session that was just persisted.
     fn project_sessions_dir(&self, workspace_path: &Path) -> PathBuf {
         let resolved = self.is_resolved_sessions_dir(workspace_path);
-        let derived = self.path_manager.project_sessions_dir(workspace_path);
         #[cfg(test)]
         eprintln!(
             "[ci-probe] project_sessions_dir: resolved={}, workspace_path={}, derived={}, workspace_exists={}, parent_exists={}",
             resolved,
             workspace_path.display(),
-            derived.display(),
+            self.path_manager.project_sessions_dir(workspace_path).display(),
             workspace_path.exists(),
             workspace_path.parent().map(|p| p.exists()).unwrap_or(false),
         );
-        let sessions_dir = if resolved {
-            workspace_path.to_path_buf()
-        } else {
-            derived
-        };
-        // Unify on the canonical form so every persist/load/delete lands on the
-        // same physical root. A plain `dunce::canonicalize` on the full path
-        // fails while the directory does not exist yet, which would make a
-        // create (raw path) and a later update (canonical path) diverge when
-        // the raw path differs from its canonical form (e.g. /tmp symlinked to
-        // /private/tmp, RAD08/E-5 ubuntu flake). Canonicalize the nearest
-        // existing ancestor instead and re-append the missing tail, so the
-        // result is stable across the create/update boundary.
-        Self::canonicalize_with_missing_tail(&sessions_dir)
-    }
-
-    /// Canonicalize `path` even when trailing components do not exist yet, by
-    /// canonicalizing the nearest existing ancestor and re-appending the
-    /// missing tail. This keeps the resolved sessions root byte-identical
-    /// across a create (directory absent) and a later update (directory
-    /// present), which a plain `dunce::canonicalize` cannot guarantee when the
-    /// raw path and its canonical form differ (RAD08/E-5 ubuntu /tmp flake).
-    /// Falls back to the raw path when even the ancestor cannot be resolved.
-    fn canonicalize_with_missing_tail(path: &Path) -> PathBuf {
-        let mut existing = path.to_path_buf();
-        let mut missing_tail = Vec::new();
-        while !existing.exists() {
-            match (existing.parent(), existing.file_name()) {
-                (Some(parent), Some(name)) => {
-                    missing_tail.push(name.to_os_string());
-                    existing = parent.to_path_buf();
-                }
-                _ => return path.to_path_buf(),
-            }
+        if resolved {
+            return workspace_path.to_path_buf();
         }
-        let mut canonical = match dunce::canonicalize(&existing) {
-            Ok(canonical) => canonical,
-            Err(_) => return path.to_path_buf(),
-        };
-        for component in missing_tail.into_iter().rev() {
-            canonical.push(component);
-        }
-        canonical
+        self.path_manager.project_sessions_dir(workspace_path)
     }
 
     /// Hold this across a multi-step Session write that is not already owned by
