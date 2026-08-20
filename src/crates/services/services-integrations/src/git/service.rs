@@ -1741,7 +1741,7 @@ mod review_path_tests {
         let renamed = GitService::rename_branch(directory.path(), "task/1", "task/2")
             .await
             .expect("branch rename should succeed");
-        assert_eq!(renamed.success, true);
+        assert!(renamed.success);
         assert_eq!(
             renamed
                 .data
@@ -1755,7 +1755,7 @@ mod review_path_tests {
         let noop = GitService::rename_branch(directory.path(), "task/2", "task/2")
             .await
             .expect("identical rename should be a no-op");
-        assert_eq!(noop.success, true);
+        assert!(noop.success);
         assert_eq!(
             noop.data
                 .as_ref()

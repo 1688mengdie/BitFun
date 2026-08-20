@@ -10,8 +10,8 @@ pub use bitfun_agent_runtime::events::FinishReason;
 use bitfun_agent_tools::LoadedDeferredToolSpec;
 use bitfun_core_types::ModelRequestContext;
 use bitfun_runtime_ports::{
-    DelegationPolicy, DialogTriggerSource, PermissionConstraintLayer,
-    PermissionDelegationContext, PermissionRuntimeCeiling, RemoteExecPort, TerminalPort,
+    DelegationPolicy, DialogTriggerSource, PermissionConstraintLayer, PermissionDelegationContext,
+    PermissionRuntimeCeiling, RemoteExecPort, TerminalPort,
 };
 use serde_json::Value;
 use std::collections::HashMap;

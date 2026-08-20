@@ -929,15 +929,12 @@ impl SessionManager {
         session: &Session,
         ai_config: &crate::service::config::types::AIConfig,
     ) -> Option<String> {
-        let Some(preset_id) = session
+        let preset_id = session
             .config
             .reasoning_preset
             .as_deref()
             .map(str::trim)
-            .filter(|preset_id| !preset_id.is_empty() && !preset_id.eq_ignore_ascii_case("auto"))
-        else {
-            return None;
-        };
+            .filter(|preset_id| !preset_id.is_empty() && !preset_id.eq_ignore_ascii_case("auto"))?;
         let Some(model) = concrete_model_for_session_selection(ai_config, session) else {
             // Model reconciliation owns unavailable model selectors. Do not
             // erase the preset while the concrete model is unresolved.
@@ -6196,7 +6193,7 @@ impl SessionManager {
         // marker left by a previous incarnation so finalization persists.
         // The durable unmark also clears the on-disk tombstone so a restart
         // cannot keep hiding the restored session from lists and restores.
-        self.unmark_session_deleted(&session_storage_path, session_id)
+        self.unmark_session_deleted(session_storage_path, session_id)
             .await;
         Ok(session)
     }
@@ -6833,7 +6830,7 @@ impl SessionManager {
             // （OwnerMismatch/CandidateUnavailable）。按原有语义适配——
             // Err 视为无绑定：External owner 继续 fail-closed（保持绑定），
             // 非 External 走可执行 fallback。
-            if let Some(binding) = persisted_binding.ok() {
+            if let Ok(binding) = persisted_binding {
                 if session.config.agent_route_owner != binding.route_owner {
                     session.config.agent_route_owner = binding.route_owner;
                     should_persist_restored_session = true;
@@ -7723,7 +7720,7 @@ impl SessionManager {
                 });
             }
             summaries.sort_by_key(|summary| std::cmp::Reverse(summary.last_activity_at));
-            return Ok(summaries);
+            Ok(summaries)
         } else {
             // Non-persistent mode: the in-memory sessions table is the only
             // source. A confirmed-deleted session is already removed from
@@ -9816,11 +9813,13 @@ impl SessionManager {
             .and_then(|metadata| metadata.get(INTERRUPTED_TURN_REASONING_PRESET_METADATA_KEY))
         {
             Some(serde_json::Value::Null) => None,
-            Some(serde_json::Value::String(value)) => value
-                .trim()
-                .is_empty()
-                .then_some(None)
-                .unwrap_or_else(|| Some(value.trim().to_string())),
+            Some(serde_json::Value::String(value)) => {
+                if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.trim().to_string())
+                }
+            }
             _ => {
                 return Err(BitFunError::Validation(
                     "Interrupted turn has no frozen reasoning preset; start a new turn instead"
@@ -9845,11 +9844,13 @@ impl SessionManager {
                 metadata.get(INTERRUPTED_TURN_REASONING_SELECTION_METADATA_KEY)
             }) {
                 Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(value)) => value
-                    .trim()
-                    .is_empty()
-                    .then_some(None)
-                    .unwrap_or_else(|| Some(value.trim().to_string())),
+                Some(serde_json::Value::String(value)) => {
+                    if value.trim().is_empty() {
+                        None
+                    } else {
+                        Some(value.trim().to_string())
+                    }
+                }
                 _ => return Err(BitFunError::Validation(
                     "Interrupted turn has no frozen reasoning selection; start a new turn instead"
                         .to_string(),
@@ -15200,7 +15201,7 @@ mod tests {
         // Simulate an external directory-level deletion (GC / manual removal).
         std::fs::remove_dir_all(sessions_dir.join(&session.session_id))
             .expect("session dir should be removable");
-        assert!(sessions_dir.join(&session.session_id).exists() == false);
+        assert!(!sessions_dir.join(&session.session_id).exists());
 
         let summaries = manager
             .list_sessions(&sessions_dir)
@@ -18690,7 +18691,7 @@ mod tests {
             .persistence_manager
             .save_session(
                 workspace.path(),
-                &*manager.sessions.get(&session_id).expect("live"),
+                &manager.sessions.get(&session_id).expect("live"),
             )
             .await
             .expect("disk snapshot should persist");

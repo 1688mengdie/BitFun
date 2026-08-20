@@ -104,7 +104,9 @@ impl Agent for AcpAgent {
 #[cfg(test)]
 mod tests {
     use super::{AcpAgent, Agent};
-    use crate::agentic::agents::{shared_coding_mode_tools, shared_coding_mode_user_context_policy};
+    use crate::agentic::agents::{
+        shared_coding_mode_tools, shared_coding_mode_user_context_policy,
+    };
 
     #[test]
     fn acp_agent_default_tools_match_agentic_plus_forwarding_tool() {

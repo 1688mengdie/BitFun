@@ -355,7 +355,7 @@ fn custom_agent_validation_keeps_review_subagent_tools_when_not_readonly() {
         },
     );
 
-    assert_eq!(definition.readonly, false);
+    assert!(!definition.readonly);
     assert_eq!(definition.tools, ["Read", "Write"]);
     assert_eq!(report.invalid_tools, ["UnknownTool"]);
     assert!(report.writable_review_tools.is_empty());
@@ -438,8 +438,8 @@ fn custom_agent_review_and_readonly_fields_round_trip_through_save() {
 
     let loaded = custom_agent_read_markdown_file(&path, CustomAgentLevel::User)
         .expect("saved markdown should load");
-    assert_eq!(loaded.definition.readonly, false);
-    assert_eq!(loaded.definition.review, true);
+    assert!(!loaded.definition.readonly);
+    assert!(loaded.definition.review);
     assert_eq!(loaded.definition.tools, ["Read", "Write"]);
 }
 

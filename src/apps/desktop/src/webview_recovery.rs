@@ -147,36 +147,43 @@ mod windows {
         prune_expired_restart_attempts(context);
 
         let app_for_handler = app.clone();
-        if let Err(error) = window.with_webview(move |platform_webview| unsafe {
-            let webview = match platform_webview.controller().CoreWebView2() {
-                Ok(webview) => webview,
-                Err(error) => {
-                    log::warn!("Failed to access WebView2 for process recovery: {}", error);
-                    return;
-                }
-            };
-            let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
-                let Some(args) = args else {
-                    log::warn!("WebView2 process failure did not include event arguments");
-                    return Ok(());
+        if let Err(error) = window.with_webview(move |platform_webview| {
+            // SAFETY: the WebView2 COM interfaces (controller / ICoreWebView2 /
+            // event handler) are only touched while the owning webview window
+            // is alive, which `with_webview` guarantees for this closure. The
+            // handler is registered on the live webview and stays reachable by
+            // WebView2 for the webview's lifetime.
+            unsafe {
+                let webview = match platform_webview.controller().CoreWebView2() {
+                    Ok(webview) => webview,
+                    Err(error) => {
+                        log::warn!("Failed to access WebView2 for process recovery: {}", error);
+                        return;
+                    }
                 };
-                let mut native_kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
-                args.ProcessFailedKind(&mut native_kind)?;
-                handle_failure(
-                    &app_for_handler,
-                    map_failure_kind(native_kind),
-                    native_kind.0,
-                );
-                Ok(())
-            }));
-            let mut token = 0i64;
-            if let Err(error) = webview.add_ProcessFailed(&handler, &mut token) {
-                log::warn!(
-                    "Failed to register WebView2 process recovery handler: {}",
-                    error
-                );
-            } else {
-                log::info!("Registered WebView2 process recovery handler");
+                let handler = ProcessFailedEventHandler::create(Box::new(move |_sender, args| {
+                    let Some(args) = args else {
+                        log::warn!("WebView2 process failure did not include event arguments");
+                        return Ok(());
+                    };
+                    let mut native_kind = COREWEBVIEW2_PROCESS_FAILED_KIND::default();
+                    args.ProcessFailedKind(&mut native_kind)?;
+                    handle_failure(
+                        &app_for_handler,
+                        map_failure_kind(native_kind),
+                        native_kind.0,
+                    );
+                    Ok(())
+                }));
+                let mut token = 0i64;
+                if let Err(error) = webview.add_ProcessFailed(&handler, &mut token) {
+                    log::warn!(
+                        "Failed to register WebView2 process recovery handler: {}",
+                        error
+                    );
+                } else {
+                    log::info!("Registered WebView2 process recovery handler");
+                }
             }
         }) {
             log::warn!(

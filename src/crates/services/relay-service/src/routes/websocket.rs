@@ -858,6 +858,9 @@ async fn complete_pending_device_activation_if_authorized(
     Ok(true)
 }
 
+// Connection-lifecycle helper carrying the full device/auth context it
+// needs; kept flat for readability over parameter bundling.
+#[allow(clippy::too_many_arguments)]
 async fn activate_pending_device_if_authorized(
     db: &crate::db::DbPool,
     device_manager: &crate::relay::DeviceManager,

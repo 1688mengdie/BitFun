@@ -491,18 +491,12 @@ mod tests {
         let subagents = super::subagent_default_tools();
         for tool_name in super::GROUP_CHAT_TOOL_NAMES {
             assert_eq!(
-                shared
-                    .iter()
-                    .filter(|name| *name == tool_name)
-                    .count(),
+                shared.iter().filter(|name| *name == tool_name).count(),
                 1,
                 "{tool_name} must appear exactly once in shared coding mode tools"
             );
             assert_eq!(
-                subagents
-                    .iter()
-                    .filter(|name| *name == tool_name)
-                    .count(),
+                subagents.iter().filter(|name| *name == tool_name).count(),
                 1,
                 "{tool_name} must appear exactly once in subagent tools"
             );

@@ -277,11 +277,8 @@ mod tests {
 
     #[test]
     fn non_marker_creator_is_never_orphaned() {
-        let page = build_session_metadata_page(
-            vec![metadata("user-1", Some("alice"), None)],
-            None,
-            10,
-        );
+        let page =
+            build_session_metadata_page(vec![metadata("user-1", Some("alice"), None)], None, 10);
         assert!(!page.sessions[0].orphaned);
         assert_eq!(page.sessions[0].orphan_kind, None);
     }
@@ -296,7 +293,11 @@ mod tests {
         sessions.push(metadata("orphan-1", None, Some("ghost")));
         let page = build_session_metadata_page(sessions, None, 20);
         assert_eq!(page.total_top_level_count, 20);
-        let orphan = page.sessions.iter().find(|m| m.session_id == "orphan-1").expect("orphan present");
+        let orphan = page
+            .sessions
+            .iter()
+            .find(|m| m.session_id == "orphan-1")
+            .expect("orphan present");
         assert!(orphan.orphaned);
         assert_eq!(orphan.orphan_kind.as_deref(), Some("DanglingChild"));
     }

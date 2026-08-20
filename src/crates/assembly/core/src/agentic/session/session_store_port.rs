@@ -165,14 +165,10 @@ impl CoreSessionStorePort {
                     }
                     _ => candidate == projects_root.as_path(),
                 };
-                let confined_root: &Path = canonical_root
-                    .as_deref()
-                    .unwrap_or(projects_root.as_path());
-                let confined_path: &Path = canonical_candidate
-                    .as_deref()
-                    .unwrap_or(candidate);
-                shape_matches
-                    && Self::is_confined_to_managed_root(confined_root, confined_path)
+                let confined_root: &Path =
+                    canonical_root.as_deref().unwrap_or(projects_root.as_path());
+                let confined_path: &Path = canonical_candidate.as_deref().unwrap_or(candidate);
+                shape_matches && Self::is_confined_to_managed_root(confined_root, confined_path)
             });
         has_local_shape.then_some(SessionStorageKind::Local)
     }
@@ -348,7 +344,8 @@ mod tests {
         std::fs::create_dir_all(&sessions_dir).expect("create sessions dir");
 
         let path_manager = port.path_manager();
-        let raw_kind = CoreSessionStorePort::resolved_sessions_dir_kind(&path_manager, &sessions_dir);
+        let raw_kind =
+            CoreSessionStorePort::resolved_sessions_dir_kind(&path_manager, &sessions_dir);
         let canonical_dir = dunce::canonicalize(&sessions_dir).expect("canonicalize sessions dir");
         let canonical_kind =
             CoreSessionStorePort::resolved_sessions_dir_kind(&path_manager, &canonical_dir);

@@ -248,6 +248,7 @@ impl InternalReminderKind {
     ///   - `BackgroundResult`: asynchronous background results surfaced to the
     ///     user as user-channel content.
     ///   - `SideQuestion`: user side questions that expect a model answer.
+    ///
     /// `Unknown` (future/upstream variant fallback) routes to the system
     /// channel as a conservative default.
     pub fn routes_to_system_channel(self) -> bool {

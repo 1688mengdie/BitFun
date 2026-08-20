@@ -455,11 +455,8 @@ impl ModelConfigFormState {
     }
 
     fn toggle_active_bool(&mut self) {
-        match self.active_field {
-            FormField::SkipSslVerify => {
-                self.skip_ssl_verify = !self.skip_ssl_verify;
-            }
-            _ => {}
+        if self.active_field == FormField::SkipSslVerify {
+            self.skip_ssl_verify = !self.skip_ssl_verify;
         }
     }
 

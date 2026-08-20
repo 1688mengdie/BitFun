@@ -168,7 +168,7 @@ pub async fn handle_openai_stream(
         let event_json: Value = match serde_json::from_str(&raw) {
             Ok(json) => json,
             Err(e) => {
-                let error_msg = format!("SSE parsing error: {}, data: {}", e, &raw);
+                let error_msg = format!("SSE parsing error: {}, data: {}", e, raw);
                 stats.increment("error:sse_parsing");
                 stats.log_summary("sse_parsing_error");
                 error!("{}", error_msg);
@@ -203,7 +203,7 @@ pub async fn handle_openai_stream(
         let sse_data: OpenAISSEData = match serde_json::from_value(event_json) {
             Ok(event) => event,
             Err(e) => {
-                let error_msg = format!("SSE data schema error: {}, data: {}", e, &raw);
+                let error_msg = format!("SSE data schema error: {}, data: {}", e, raw);
                 stats.increment("error:schema");
                 stats.log_summary("sse_data_schema_error");
                 error!("{}", error_msg);

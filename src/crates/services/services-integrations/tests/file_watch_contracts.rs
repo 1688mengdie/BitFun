@@ -92,10 +92,12 @@ async fn file_watch_can_include_build_named_directories_for_semantic_sources() {
     let temp = tempfile::tempdir().expect("tempdir");
     let build_skill = temp.path().join("build");
     fs::create_dir_all(&build_skill).expect("build-named skill directory");
-    let mut config = FileWatcherConfig::default();
-    config.debounce_interval_ms = 40;
-    config.ignore_hidden_files = false;
-    config.ignore_common_build_directories = false;
+    let config = FileWatcherConfig {
+        debounce_interval_ms: 40,
+        ignore_hidden_files: false,
+        ignore_common_build_directories: false,
+        ..Default::default()
+    };
     let service = FileWatchService::new(config.clone());
     let mut events = service.subscribe();
     service

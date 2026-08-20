@@ -190,7 +190,9 @@ impl Tool for PlanListTool {
                         todo_total = total;
                         todo_completed = completed;
                         completion_pct = if total > 0 {
-                            completed * 100 / total
+                            completed
+                                .checked_mul(100)
+                                .map_or(0, |scaled| scaled / total)
                         } else {
                             0
                         };

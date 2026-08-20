@@ -511,9 +511,8 @@ impl SkillRegistry {
 
     fn get_project_skill_roots(workspace_path: &Path) -> Vec<SkillRootEntry> {
         let mut entries = Vec::new();
-        let mut priority = 0usize;
 
-        for spec in PROJECT_SKILL_ROOTS {
+        for (priority, spec) in PROJECT_SKILL_ROOTS.iter().enumerate() {
             let path = workspace_path.join(spec.parent).join(spec.subdir);
             entries.push(SkillRootEntry {
                 path,
@@ -524,7 +523,6 @@ impl SkillRegistry {
                 priority,
                 is_builtin: false,
             });
-            priority += 1;
         }
         entries
     }
@@ -899,11 +897,11 @@ impl SkillRegistry {
                 let path = canonical_candidate_path(candidate);
                 !existing_paths.contains(&path) && configured_paths.insert(path)
             });
-            return Self::merge_configured_opencode_candidates(
+            Self::merge_configured_opencode_candidates(
                 standard,
                 configured,
                 workspace_root.is_some(),
-            );
+            )
         }
 
         #[cfg(not(feature = "external-sources"))]

@@ -159,7 +159,8 @@ use tokio::sync::{mpsc, oneshot, watch, OwnedSemaphorePermit, RwLock, Semaphore}
 use tokio::time::{sleep, Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use tool_runtime::background_command_output::{
-    background_command_output_capture, BackgroundCommandOutputStatus, ListBackgroundCommandOutputRequest,
+    background_command_output_capture, BackgroundCommandOutputStatus,
+    ListBackgroundCommandOutputRequest,
 };
 const MANUAL_COMPACTION_COMMAND: &str = "/compact";
 const CONTEXT_COMPRESSION_TOOL_NAME: &str = "ContextCompression";
@@ -227,7 +228,9 @@ async fn configured_background_command_watchdog_poll_interval() -> Duration {
     else {
         return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK);
     };
-    let secs = thresholds.execution.background_command_watchdog_poll_interval_secs;
+    let secs = thresholds
+        .execution
+        .background_command_watchdog_poll_interval_secs;
     if secs == 0 {
         return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_POLL_INTERVAL_SECS_FALLBACK);
     }
@@ -248,7 +251,9 @@ async fn configured_background_command_watchdog_max_lifetime() -> Duration {
     else {
         return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK);
     };
-    let secs = thresholds.execution.background_command_watchdog_max_lifetime_secs;
+    let secs = thresholds
+        .execution
+        .background_command_watchdog_max_lifetime_secs;
     if secs == 0 {
         return Duration::from_secs(BACKGROUND_COMMAND_WATCHDOG_MAX_LIFETIME_SECS_FALLBACK);
     }
@@ -1779,7 +1784,7 @@ impl ConversationCoordinator {
                     config.remote_ssh_host = Some(entry.ssh_host);
                 }
             }
-            return config;
+            config
         }
 
         #[cfg(not(feature = "remote-workspace"))]
@@ -3520,7 +3525,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
         } else {
             match session_manager
-                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Idle,
+                )
                 .await
             {
                 Ok(true) => {}
@@ -3761,7 +3770,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             spawn_background_command_watchdog(session_id.to_string(), turn_id.to_string());
         } else {
             match session_manager
-                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Idle,
+                )
                 .await
             {
                 Ok(true) => {}
@@ -6093,7 +6106,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             Ok(true)
         } else {
             session_manager
-                .update_session_state_for_turn_if_processing(session_id, turn_id, SessionState::Idle)
+                .update_session_state_for_turn_if_processing(
+                    session_id,
+                    turn_id,
+                    SessionState::Idle,
+                )
                 .await
         };
 
@@ -18160,21 +18177,19 @@ mod tests {
         coordinator.session_end_cleanup(session_id).await;
 
         assert!(
-            coordinator
+            !coordinator
                 .subagent_send_input_ledger
                 .read()
                 .await
-                .contains_key(session_id)
-                == false,
+                .contains_key(session_id),
             "send_input ledger must be dropped on session end"
         );
         assert!(
-            coordinator
+            !coordinator
                 .subagent_session_token_ledger
                 .read()
                 .await
-                .contains_key(session_id)
-                == false,
+                .contains_key(session_id),
             "token ledger must be dropped on session end"
         );
         coordinator
@@ -23773,7 +23788,7 @@ mod tests {
                 .expect("system clock should be after unix epoch")
                 .as_nanos()
         );
-        let session_id = format!("rwf25-session-{}", &capture_id);
+        let session_id = format!("rwf25-session-{}", capture_id);
         let capture = background_command_output_capture();
         let _tx = capture
             .start_capture(StartBackgroundCommandOutputCapture {

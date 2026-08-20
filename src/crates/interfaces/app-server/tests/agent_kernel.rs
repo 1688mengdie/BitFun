@@ -126,10 +126,30 @@ fn build_runtime() -> bitfun_agent_runtime::sdk::AgentRuntime {
 
 /// Wrap the test runtime with a fresh `AgentEventSource` backed by an isolated
 /// `EventQueue`, so the app-server's event forwarder has something to drain.
+///
+/// A context-reload port is wired in (as in the production app-server host)
+/// so the negotiated capability surface matches what the real host advertises,
+/// including `session/reloadContext`.
 fn build_app_runtime() -> BitfunAppRuntime {
     let event_queue = Arc::new(EventQueue::new(EventQueueConfig::default()));
     let event_source = AgentEventSource::new(event_queue);
     BitfunAppRuntime::new(build_runtime(), event_source)
+        .with_context_reload(Arc::new(NoopContextReloadProvider))
+}
+
+/// No-op `AgentContextReloadPort` mock for the negotiation test; the test only
+/// asserts the advertised capability surface and never invokes the method.
+#[derive(Debug, Default)]
+struct NoopContextReloadProvider;
+
+#[async_trait]
+impl ports::AgentContextReloadPort for NoopContextReloadProvider {
+    async fn reload_session_context(
+        &self,
+        _request: ports::AgentContextReloadRequest,
+    ) -> PortResult<()> {
+        Ok(())
+    }
 }
 
 /// Like [`build_app_runtime`] but also hands back the backing `EventQueue` so a

@@ -262,6 +262,7 @@ impl InsightsCollector {
 
     /// R-THR-01 批2 2-2：洞察域常量配置化变体——limit 由调用方从
     /// `ai.thresholds.insights.*` 解析（默认镜像旧常量，零行为变化）。
+    #[allow(clippy::too_many_arguments)] // transcript construction context; kept flat
     fn build_transcript_with_limits(
         session_id: &str,
         session: &crate::agentic::core::Session,

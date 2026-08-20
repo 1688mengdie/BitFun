@@ -974,6 +974,7 @@ pub struct AIConfig {
 /// maliciously extreme configured value still cannot exhaust resources.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AiThresholdsConfig {
     /// Subagent scheduling thresholds.
     #[serde(default)]
@@ -1029,31 +1030,6 @@ pub struct AiThresholdsConfig {
     /// Session-control caps (R-THR-01 批2 2-8：会话短名上限).
     #[serde(default)]
     pub session_control: SessionControlThresholds,
-}
-
-impl Default for AiThresholdsConfig {
-    fn default() -> Self {
-        Self {
-            subagent: SubagentThresholds::default(),
-            compression: CompressionThresholds::default(),
-            model_retry: ModelRetryThresholds::default(),
-            tool_output_cap: ToolOutputCapThresholds::default(),
-            tool_timeout: ToolTimeoutThresholds::default(),
-            knowledge_search: KnowledgeSearchThresholds::default(),
-            acp_timeout: AcpTimeoutThresholds::default(),
-            deep_review: DeepReviewThresholds::default(),
-            memories: MemoryThresholds::default(),
-            output_tokens: OutputTokensThresholds::default(),
-            goal: GoalThresholds::default(),
-            execution: ExecutionThresholds::default(),
-            insights: InsightsThresholds::default(),
-            file_read: FileReadThresholds::default(),
-            session_title: SessionTitleThresholds::default(),
-            persistence: PersistenceThresholds::default(),
-            user_questions: UserQuestionsThresholds::default(),
-            session_control: SessionControlThresholds::default(),
-        }
-    }
 }
 
 /// Subagent scheduling thresholds (`ai.thresholds.subagent.*`).

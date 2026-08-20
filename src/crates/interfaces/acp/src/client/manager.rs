@@ -44,9 +44,9 @@ use super::config::{
     AcpClientConfig, AcpClientConfigFile, AcpClientInfo, AcpClientPermissionMode,
     AcpClientRequirementProbe, AcpClientStatus, RemoteAcpClientRequirementSnapshot,
 };
+use super::dsh_profile::{ensure_bundled_profile, ensure_bundled_profile_remote};
 use super::launch_policy::apply_launch_policy;
 use super::probe::{TryConnectResult, TRY_CONNECT_TOTAL_TIMEOUT_SECS};
-use super::dsh_profile::{ensure_bundled_profile, ensure_bundled_profile_remote};
 use super::remote_capability_store::RemoteAcpCapabilityStore;
 use super::remote_session::{preferred_resume_strategies, AcpRemoteSessionStrategy};
 use super::remote_shell::{remote_user_shell_command, render_remote_env_assignments, shell_escape};
@@ -1352,21 +1352,18 @@ impl AcpClientService {
                     }
                 };
 
-                match message {
-                    SessionMessage::SessionMessage(dispatch) => {
-                        let events = acp_dispatch_to_stream_events_with_tracker(
-                            dispatch,
-                            &mut tool_call_tracker,
-                        )
-                        .await?;
-                        update_session_from_events(&mut session, &events);
-                        for event in events {
-                            for event in round_tracker.apply(event) {
-                                on_event(event)?;
-                            }
+                if let SessionMessage::SessionMessage(dispatch) = message {
+                    let events = acp_dispatch_to_stream_events_with_tracker(
+                        dispatch,
+                        &mut tool_call_tracker,
+                    )
+                    .await?;
+                    update_session_from_events(&mut session, &events);
+                    for event in events {
+                        for event in round_tracker.apply(event) {
+                            on_event(event)?;
                         }
                     }
-                    _ => {}
                 }
             };
             drain_pending_turn_updates(

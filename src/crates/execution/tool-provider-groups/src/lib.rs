@@ -111,17 +111,41 @@ pub fn tool_feature_group(tool_name: &str) -> Option<ToolPackFeatureGroup> {
         "CreateCanvas" | "ReadCanvas" | "UpdateCanvas" | "PatchCanvas" => {
             Some(ToolPackFeatureGroup::Canvas)
         }
-        "Task" | "AgentWait" | "LaunchReviewAgent" | "Skill" | "AskUserQuestion" | "TodoWrite"
-        | "get_goal" | "create_goal" | "update_goal" | "CreatePlan" | "PlanList" | "PlanRead"
-        | "PlanUpdate" | "LegionControl" | "acp_control" | "acp_message" | "acp_history"
+        "Task"
+        | "AgentWait"
+        | "LaunchReviewAgent"
+        | "Skill"
+        | "AskUserQuestion"
+        | "TodoWrite"
+        | "get_goal"
+        | "create_goal"
+        | "update_goal"
+        | "CreatePlan"
+        | "PlanList"
+        | "PlanRead"
+        | "PlanUpdate"
+        | "LegionControl"
+        | "acp_control"
+        | "acp_message"
+        | "acp_history"
         | "submit_code_review"
-        | "GetToolSpec" | "CallDeferredTool" | "SessionControl" | "SessionMessage"
-        | "SessionHistory" | "Cron" | "create_group_chat" | "invite_group_member"
-        | "remove_group_member" | "send_group_message" | "get_group_history"
-        | "list_group_chats" | "fork_group_chat" | "group_member_status"
-        | "delete_group_chat" | "update_group_member_tools" | "update_group_wiring" => {
-            Some(ToolPackFeatureGroup::AgentControl)
-        }
+        | "GetToolSpec"
+        | "CallDeferredTool"
+        | "SessionControl"
+        | "SessionMessage"
+        | "SessionHistory"
+        | "Cron"
+        | "create_group_chat"
+        | "invite_group_member"
+        | "remove_group_member"
+        | "send_group_message"
+        | "get_group_history"
+        | "list_group_chats"
+        | "fork_group_chat"
+        | "group_member_status"
+        | "delete_group_chat"
+        | "update_group_member_tools"
+        | "update_group_wiring" => Some(ToolPackFeatureGroup::AgentControl),
         _ => None,
     }
 }

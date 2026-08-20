@@ -295,7 +295,7 @@ fn openapi_base_url() -> &'static str {
 }
 
 fn openapi_base_override() -> Option<&'static str> {
-    openapi_base_override_slot().lock().unwrap().clone()
+    *openapi_base_override_slot().lock().unwrap()
 }
 
 #[cfg_attr(not(test), allow(dead_code))]

@@ -790,7 +790,7 @@ mod tests {
         let result = store
             .wait_for(
                 "parent-session",
-                &[registered.bg_task_id.clone()],
+                std::slice::from_ref(&registered.bg_task_id),
                 BackgroundSubagentWaitMode::All,
                 Duration::from_millis(50),
                 "wait-turn",
@@ -868,7 +868,7 @@ mod tests {
         let result = store
             .wait_for(
                 "parent-session",
-                &[registered.bg_task_id.clone()],
+                std::slice::from_ref(&registered.bg_task_id),
                 BackgroundSubagentWaitMode::All,
                 Duration::from_millis(50),
                 "wait-turn",

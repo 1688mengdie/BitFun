@@ -79,7 +79,7 @@ pub(crate) fn validate_updates(
     let todos = frontmatter
         .get("todos")
         .and_then(Value::as_array)
-        .map(|todos| todos.clone())
+        .cloned()
         .unwrap_or_default();
     let all_ids: std::collections::HashSet<&str> = todos
         .iter()
@@ -157,7 +157,7 @@ fn validate_todo_dependency_graph(frontmatter: &Value, updates: &[TodoUpdate]) -
     let todos = frontmatter
         .get("todos")
         .and_then(Value::as_array)
-        .map(|todos| todos.clone())
+        .cloned()
         .unwrap_or_default();
 
     let mut adjacency: std::collections::HashMap<String, Vec<String>> =

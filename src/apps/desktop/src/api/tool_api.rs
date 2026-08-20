@@ -512,8 +512,10 @@ pub async fn replace_mode_tool_selection(
 
     // Validate against the live registry (same strictness as skill keys).
     let known_tools = bitfun_core::agentic::tools::get_all_tools().await;
-    let known_names: std::collections::HashSet<String> =
-        known_tools.iter().map(|tool| tool.name().to_string()).collect();
+    let known_names: std::collections::HashSet<String> = known_tools
+        .iter()
+        .map(|tool| tool.name().to_string())
+        .collect();
     let unknown_tools: Vec<String> = enabled_tool_names
         .iter()
         .filter(|name| !known_names.contains(*name))

@@ -1704,6 +1704,7 @@ impl RoundExecutor {
 
     /// Same as [`Self::retry_delay_ms_for_error`] but with explicit backoff
     /// parameters (阈值参数配置化：`ai.thresholds.model_retry.*`).
+    #[allow(clippy::too_many_arguments)] // explicit configurable backoff parameters
     fn retry_delay_ms_for_error_with_config(
         attempt_index: usize,
         error_message: &str,

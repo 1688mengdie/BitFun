@@ -1476,13 +1476,9 @@ impl<Tool: ToolRegistryItem + ?Sized> ToolRegistry<Tool> {
     ) {
         let tool = self.tool_decorator.decorate(tool);
         let name = tool.name().to_string();
-        let dynamic_info = tool.dynamic_tool_info().and_then(|info| {
-            if info.provider_id.trim().is_empty() {
-                None
-            } else {
-                Some(info)
-            }
-        });
+        let dynamic_info = tool
+            .dynamic_tool_info()
+            .filter(|info| !info.provider_id.trim().is_empty());
 
         if let Some(info) = dynamic_info {
             self.dynamic_tools

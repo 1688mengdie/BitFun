@@ -723,8 +723,8 @@ mod tests {
         text: &str,
         images: Vec<ImageAttachment>,
     ) -> (usize, bool, usize) {
-        use super::super::command_router::{handle_command, parse_command};
         use super::super::command_router::BotChatState;
+        use super::super::command_router::{handle_command, parse_command};
         let mut state = BotChatState::new(chat_id.to_string());
         state.paired = true;
         let cmd = parse_command(text);
@@ -801,8 +801,7 @@ mod tests {
     async fn empty_text_without_images_does_not_forward() {
         FORWARD_COUNT.store(0, Ordering::SeqCst);
         let bot = test_bot();
-        bot.handle_incoming_message("oc_empty", "   ", vec![])
-            .await;
+        bot.handle_incoming_message("oc_empty", "   ", vec![]).await;
         // Guard intercepts at the handle_incoming_message entry: the turn
         // never reaches the router, so no forward is produced and no state
         // (chat_states entry) is created for this chat.
@@ -822,7 +821,8 @@ mod tests {
         let text = {
             let language = super::super::locale::current_bot_language().await;
             if language.is_chinese() {
-                "\u{7528}\u{6237}\u{53d1}\u{9001}\u{4e86}\u{4e00}\u{5f20}\u{56fe}\u{7247}".to_string()
+                "\u{7528}\u{6237}\u{53d1}\u{9001}\u{4e86}\u{4e00}\u{5f20}\u{56fe}\u{7247}"
+                    .to_string()
             } else {
                 "[User sent an image]".to_string()
             }

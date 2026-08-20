@@ -44,9 +44,11 @@ impl EventSubscriber for BackgroundCommandSettlerSubscriber {
         // Double-check the registry: only settle when no Running command
         // remains for the session (another child could still be alive).
         let response = tool_runtime::background_command_output::background_command_output_capture()
-            .list(tool_runtime::background_command_output::ListBackgroundCommandOutputRequest {
-                agent_session_id: Some(session_id.clone()),
-            })
+            .list(
+                tool_runtime::background_command_output::ListBackgroundCommandOutputRequest {
+                    agent_session_id: Some(session_id.clone()),
+                },
+            )
             .await;
         if response
             .activities
@@ -66,11 +68,7 @@ impl EventSubscriber for BackgroundCommandSettlerSubscriber {
         );
         if let Err(error) = self
             .session_manager
-            .update_session_state_for_turn_if_processing(
-                session_id,
-                &turn_id,
-                SessionState::Idle,
-            )
+            .update_session_state_for_turn_if_processing(session_id, &turn_id, SessionState::Idle)
             .await
         {
             warn!(
@@ -96,12 +94,11 @@ mod tests {
     use uuid::Uuid;
 
     fn test_manager() -> Arc<SessionManager> {
-        let root = std::env::temp_dir().join(format!(
-            "bitfun-settler-test-{}",
-            Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir().join(format!("bitfun-settler-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&root).expect("create test root");
-        let path_manager = Arc::new(PathManager::with_user_root_for_tests(root.join("user-root")));
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(
+            root.join("user-root"),
+        ));
         let persistence_manager =
             Arc::new(PersistenceManager::new(path_manager).expect("persistence manager"));
         Arc::new(SessionManager::new(
@@ -122,8 +119,7 @@ mod tests {
         session_id: &str,
         turn_id: &str,
     ) {
-        let workspace =
-            std::env::temp_dir().join(format!("bitfun-settler-ws-{}", Uuid::new_v4()));
+        let workspace = std::env::temp_dir().join(format!("bitfun-settler-ws-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).expect("create workspace dir");
         manager
             .create_session_with_id(

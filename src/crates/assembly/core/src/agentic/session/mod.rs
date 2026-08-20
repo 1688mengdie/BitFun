@@ -2,8 +2,8 @@
 //!
 //! Provides session lifecycle management and context management.
 
-pub mod compression;
 mod background_command_settler;
+pub mod compression;
 pub mod context_store;
 mod context_usage;
 pub mod evidence_ledger;

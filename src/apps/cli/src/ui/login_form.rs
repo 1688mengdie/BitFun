@@ -912,7 +912,7 @@ fn sync_phase_label(progress: &SettingsSyncProgress) -> String {
         }
         "done" => format!("Sync complete (exported {})", progress.sessions_exported),
         "starting" => "Starting sync...".into(),
-        other if other.is_empty() => "Sync".into(),
+        "" => "Sync".into(),
         other => other.to_string(),
     }
 }

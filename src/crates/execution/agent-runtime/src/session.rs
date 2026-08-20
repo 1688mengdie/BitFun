@@ -697,7 +697,9 @@ mod tests {
 
     #[test]
     fn hung_session_survives_restart_via_persisted_processing_and_stale_progress() {
-        use crate::session_state::{derive_display_state, SessionDisplayState, DEFAULT_HUNG_TIMEOUT};
+        use crate::session_state::{
+            derive_display_state, SessionDisplayState, DEFAULT_HUNG_TIMEOUT,
+        };
         use std::time::{Duration, SystemTime};
 
         let now = SystemTime::now();

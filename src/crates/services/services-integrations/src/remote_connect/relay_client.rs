@@ -315,12 +315,12 @@ impl RelayClient {
                         break 'outer;
                     }
 
-                    info!("Reconnect in {backoff}s (url={})", &ctx.ws_url);
+                    info!("Reconnect in {backoff}s (url={})", ctx.ws_url);
                     tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
 
                     match dial(&ctx.ws_url).await {
                         Ok(new_stream) => {
-                            info!("Reconnected to relay server at {}", &ctx.ws_url);
+                            info!("Reconnected to relay server at {}", ctx.ws_url);
                             *state_arc.write().await = ConnectionState::Connected;
 
                             let (mut new_write, new_read) = new_stream.split();
@@ -347,7 +347,7 @@ impl RelayClient {
                                     public_key: ctx.public_key.clone(),
                                 };
                                 let _ = new_cmd_tx.send(recreate);
-                                info!("Room '{}' recreated after reconnect", &ctx.room_id);
+                                info!("Room '{}' recreated after reconnect", ctx.room_id);
                             }
 
                             // Re-authenticate device routing after reconnect.

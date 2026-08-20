@@ -7,11 +7,11 @@ use super::env_snapshot::{remote_env_snapshot_for, RemoteEnvSnapshot};
 use super::local_shell::{resolve_local_exec_shell, ResolvedLocalExecShell};
 use super::progress::ExecOutputProgressBridge;
 use super::shell_kind::{exec_command_shell_kind, terminal_shell_type};
+use crate::agentic::coordination::get_global_coordinator;
+use crate::agentic::events::AgenticEvent;
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolResult, ToolUseContext, ValidationResult,
 };
-use crate::agentic::coordination::get_global_coordinator;
-use crate::agentic::events::AgenticEvent;
 use crate::infrastructure::events::event_system::{
     get_global_event_system, BackendEvent::BackgroundCommandLifecycle,
 };
@@ -343,8 +343,10 @@ impl ExecCommandTool {
                     .await
                 {
                     let timestamp = Self::now_unix_seconds();
-                    let lifecycle_status_name = exec_command_lifecycle_status_name(status).to_string();
-                    let resolved_session_id = metadata.agent_session_id.or(agent_session_id.clone());
+                    let lifecycle_status_name =
+                        exec_command_lifecycle_status_name(status).to_string();
+                    let resolved_session_id =
+                        metadata.agent_session_id.or(agent_session_id.clone());
                     let _ = event_system
                         .emit(BackgroundCommandLifecycle(BackgroundCommandLifecycleInfo {
                             agent_session_id: resolved_session_id.clone(),
@@ -405,8 +407,10 @@ impl ExecCommandTool {
                     .await
                 {
                     let timestamp = Self::now_unix_seconds();
-                    let lifecycle_status_name = exec_command_lifecycle_status_name(status).to_string();
-                    let resolved_session_id = metadata.agent_session_id.or(agent_session_id.clone());
+                    let lifecycle_status_name =
+                        exec_command_lifecycle_status_name(status).to_string();
+                    let resolved_session_id =
+                        metadata.agent_session_id.or(agent_session_id.clone());
                     let _ = event_system
                         .emit(BackgroundCommandLifecycle(BackgroundCommandLifecycleInfo {
                             agent_session_id: resolved_session_id.clone(),

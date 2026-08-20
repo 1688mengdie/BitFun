@@ -154,7 +154,7 @@ impl ShellDetector {
     pub fn get_default_shell_without_probe() -> DetectedShell {
         #[cfg(windows)]
         {
-            return Self::resolve_shell_type_without_probe(&ShellType::PowerShellCore)
+            Self::resolve_shell_type_without_probe(&ShellType::PowerShellCore)
                 .or_else(|| Self::resolve_shell_type_without_probe(&ShellType::PowerShell))
                 .or_else(|| Self::resolve_shell_type_without_probe(&ShellType::Cmd))
                 .unwrap_or_else(|| {
@@ -163,7 +163,7 @@ impl ShellDetector {
                         PathBuf::from("cmd.exe"),
                         "Command Prompt",
                     )
-                });
+                })
         }
         #[cfg(not(windows))]
         {

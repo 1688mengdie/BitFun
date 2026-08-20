@@ -2541,10 +2541,7 @@ async fn probe_release_throughput(client: &reqwest::Client, url: &str) -> u64 {
         return 0;
     }
     let mut received = 0u64;
-    loop {
-        let Some(remaining) = RELEASE_PROBE_WINDOW.checked_sub(started.elapsed()) else {
-            break;
-        };
+    while let Some(remaining) = RELEASE_PROBE_WINDOW.checked_sub(started.elapsed()) {
         if remaining.is_zero() {
             break;
         }

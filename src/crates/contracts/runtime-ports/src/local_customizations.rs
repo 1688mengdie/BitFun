@@ -86,11 +86,7 @@ impl AgentType {
     pub fn is_known_builtin(&self) -> bool {
         matches!(
             self,
-            Self::Agentic
-                | Self::Plan
-                | Self::Cowork
-                | Self::DeepResearch
-                | Self::Group
+            Self::Agentic | Self::Plan | Self::Cowork | Self::DeepResearch | Self::Group
         )
     }
 }
@@ -167,10 +163,12 @@ pub fn round_injection_push_reminder(
     kind: impl Into<String>,
     text: impl Into<String>,
 ) {
-    injection.prepended_reminders.push(super::AgentDialogPrependedReminder {
-        kind: kind.into(),
-        text: text.into(),
-    });
+    injection
+        .prepended_reminders
+        .push(super::AgentDialogPrependedReminder {
+            kind: kind.into(),
+            text: text.into(),
+        });
 }
 
 #[cfg(test)]
@@ -186,7 +184,10 @@ mod tests {
         assert_eq!(AgentType::from("group"), AgentType::Group);
         assert_eq!(AgentType::from("Group"), AgentType::Group);
         assert_eq!(AgentType::from("GROUP"), AgentType::Group);
-        assert_eq!(AgentType::from("custom-x"), AgentType::Other("custom-x".to_string()));
+        assert_eq!(
+            AgentType::from("custom-x"),
+            AgentType::Other("custom-x".to_string())
+        );
         assert_eq!(AgentType::default_value(), AgentType::Agentic);
         assert!(AgentType::Agentic.is_known_builtin());
         assert!(AgentType::Group.is_known_builtin());
@@ -208,7 +209,10 @@ mod tests {
             ("group", AgentType::Group),
         ] {
             let parsed: AgentType = serde_json::from_str(&format!("\"{raw}\"")).unwrap();
-            assert_eq!(parsed, expected, "from_str({raw:?}) must map to {expected:?}");
+            assert_eq!(
+                parsed, expected,
+                "from_str({raw:?}) must map to {expected:?}"
+            );
             assert!(
                 parsed.is_known_builtin(),
                 "deserialized {raw:?} must be a known builtin"

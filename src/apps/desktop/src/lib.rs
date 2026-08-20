@@ -131,6 +131,9 @@ fn show_fatal_startup_error(message: &str) {
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect::<Vec<_>>();
+    // SAFETY: `message` and `title` are NUL-terminated UTF-16 buffers owned by
+    // this function and alive for the duration of the call; a null parent
+    // handle (no owning window at startup) is valid for MessageBoxW.
     unsafe {
         let _ = MessageBoxW(
             None,

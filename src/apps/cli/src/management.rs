@@ -441,7 +441,7 @@ fn has_unclosed_windows_quote(value: &str) -> bool {
     for character in value.chars() {
         match character {
             '\\' => backslashes += 1,
-            '"' if backslashes % 2 == 0 => {
+            '"' if backslashes.is_multiple_of(2) => {
                 quoted = !quoted;
                 backslashes = 0;
             }

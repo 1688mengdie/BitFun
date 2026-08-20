@@ -927,8 +927,8 @@ mod tests {
             CustomAgentLevel::User,
         )
         .expect("review writable subagent should build");
-        assert_eq!(parsed.definition.readonly, false);
-        assert_eq!(parsed.definition.review, true);
+        assert!(!parsed.definition.readonly);
+        assert!(parsed.definition.review);
         assert_eq!(parsed.definition.tools, ["Read", "Write"]);
 
         let stamp = SystemTime::now()
@@ -942,8 +942,8 @@ mod tests {
             .expect("markdown should reload");
         let _ = std::fs::remove_file(&path);
 
-        assert_eq!(reloaded.definition.readonly, false);
-        assert_eq!(reloaded.definition.review, true);
+        assert!(!reloaded.definition.readonly);
+        assert!(reloaded.definition.review);
         assert_eq!(reloaded.definition.tools, ["Read", "Write"]);
     }
 }

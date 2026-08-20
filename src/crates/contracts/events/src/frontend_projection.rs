@@ -873,6 +873,9 @@ mod tests {
 
         assert_eq!(projected.event_name, "agentic://subagent-turn-completed");
         assert_eq!(projected.payload["sessionId"], "child-session");
-        assert_eq!(projected.payload["outputText"], "FULL_REPLY_MARKER\nline two");
+        assert_eq!(
+            projected.payload["outputText"],
+            "FULL_REPLY_MARKER\nline two"
+        );
     }
 }

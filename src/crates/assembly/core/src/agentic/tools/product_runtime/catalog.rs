@@ -300,12 +300,12 @@ async fn contextual_tool_snapshot(context: &ToolUseContext) -> Vec<ToolRef> {
             context.workspace_root(),
             context.is_remote(),
         );
-        return tools
+        tools
             .into_iter()
             .filter_map(|tool| {
                 crate::external_tools::resolve_external_tool_for_workspace(tool, route_root)
             })
-            .collect();
+            .collect()
     }
     #[cfg(not(feature = "external-sources"))]
     {

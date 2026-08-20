@@ -436,15 +436,16 @@ impl FileReadTool {
         resolved_path: &str,
         error: DocumentConversionError,
     ) -> BitFunError {
-        let ocr_hint = (error.code() == "unsupported"
+        let ocr_hint = if error.code() == "unsupported"
             && Path::new(resolved_path)
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf")))
-        .then_some(
-            " Text PDFs are supported, but scanned or image-only PDFs require an OCR workflow.",
-        )
-        .unwrap_or_default();
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        {
+            " Text PDFs are supported, but scanned or image-only PDFs require an OCR workflow."
+        } else {
+            Default::default()
+        };
         BitFunError::tool(format!(
             "Failed to convert document {} to Markdown ({}): {}.{}",
             logical_path,

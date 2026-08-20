@@ -832,4 +832,3 @@ pub async fn delete_all_archived_sessions(
 
     Ok(deleted_count)
 }
-

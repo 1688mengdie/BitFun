@@ -18,9 +18,9 @@ use crate::agentic::tools::tool_context_runtime;
 use crate::agentic::tools::tool_context_runtime::ToolUseContext;
 use crate::agentic::tools::tool_result_storage;
 use crate::native_hooks::{self, NativeHookSessionFacts};
+use crate::service::config::types::ExecutionThresholds;
 use crate::util::elapsed_ms_u64;
 use crate::util::errors::{BitFunError, BitFunResult};
-use crate::service::config::types::ExecutionThresholds;
 use bitfun_agent_runtime::permission::{
     plan_permission_intents, PendingPermissionReceiver, PermissionIntentPlan,
     PermissionRequestManager, PermissionWaitOutcome,
@@ -64,10 +64,10 @@ fn resolve_contextual_tool(
 ) -> Option<Arc<dyn crate::agentic::tools::framework::Tool>> {
     #[cfg(feature = "external-sources")]
     {
-        return crate::external_tools::resolve_external_tool_for_workspace(
+        crate::external_tools::resolve_external_tool_for_workspace(
             tool,
             crate::external_tools::external_tool_route_root(workspace_root, remote),
-        );
+        )
     }
     #[cfg(not(feature = "external-sources"))]
     {
@@ -96,7 +96,10 @@ const REPEATED_READ_TOOL_NAMES: &[&str] = &["Read", "Grep", "Glob", "LS", "WebSe
 /// - LS：path（未提供归一为 "."）
 ///
 /// 非读取/搜索类工具返回 None。
-fn repeated_read_target_fingerprint(tool_name: &str, arguments: &serde_json::Value) -> Option<String> {
+fn repeated_read_target_fingerprint(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+) -> Option<String> {
     if !REPEATED_READ_TOOL_NAMES.contains(&tool_name) {
         return None;
     }
@@ -156,14 +159,21 @@ fn repeated_read_small_file_hint_impl(
     if tool_name != "Read" {
         return None;
     }
-    let file_path = arguments.get("file_path").and_then(serde_json::Value::as_str)?;
+    let file_path = arguments
+        .get("file_path")
+        .and_then(serde_json::Value::as_str)?;
     if file_path.is_empty() || arguments.get("offset").is_none() {
         return None;
     }
     let small = std::fs::read_to_string(file_path)
         .map(|content| content.lines().count() < small_file_line_threshold)
         .unwrap_or(false);
-    small.then(|| format!("文件较小（<{} 行），建议一次读全文", small_file_line_threshold))
+    small.then(|| {
+        format!(
+            "文件较小（<{} 行），建议一次读全文",
+            small_file_line_threshold
+        )
+    })
 }
 
 /// R-MR-11 纯判定：给定会话级连续状态，返回是否拦截（及提示）。
@@ -832,7 +842,7 @@ pub struct ToolPipeline {
 }
 
 /// R-MR-11 会话级重复读取拦截的连续计数状态。
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct RepeatedReadSessionState {
     /// 当前连续同目标指纹（None = 无连续目标，下个读取类调用直接建立）。
     current_target: Option<String>,
@@ -840,16 +850,6 @@ struct RepeatedReadSessionState {
     consecutive_count: usize,
     /// 最近一次被拦截提示的摘要（用于避免连续重复刷屏）。
     last_intercepted_message: Option<String>,
-}
-
-impl Default for RepeatedReadSessionState {
-    fn default() -> Self {
-        Self {
-            current_target: None,
-            consecutive_count: 0,
-            last_intercepted_message: None,
-        }
-    }
 }
 
 impl ToolPipeline {
@@ -2078,13 +2078,7 @@ impl ToolPipeline {
             .entry(session_id.to_string())
             .or_insert_with(RepeatedReadSessionState::default);
 
-        repeated_read_decide(
-            &thresholds,
-            tool_name,
-            &target,
-            arguments,
-            state,
-        )
+        repeated_read_decide(&thresholds, tool_name, &target, arguments, state)
     }
 
     async fn reset_repeated_read_state(&self, session_id: &str) {
@@ -2246,10 +2240,7 @@ impl ToolPipeline {
                 result: ModelToolResult {
                     tool_id,
                     tool_name: wire_tool_name.clone(),
-                    effective_tool_name: persisted_effective_tool_name(
-                        &wire_tool_name,
-                        &tool_name,
-                    ),
+                    effective_tool_name: persisted_effective_tool_name(&wire_tool_name, &tool_name),
                     result: serde_json::json!({
                         "category": "repeated_read_blocked",
                         "status": "skipped",
@@ -5986,7 +5977,8 @@ mod tests {
             if index < 2 {
                 // 前 2 次：正常执行（工具返回 ok）。
                 assert_eq!(
-                    result.result.result["ok"], json!(true),
+                    result.result.result["ok"],
+                    json!(true),
                     "call {index} must execute normally"
                 );
             } else {
@@ -6218,7 +6210,8 @@ mod tests {
         let mut block_message = None;
         for (index, offset) in [0u64, 10u64, 20u64].into_iter().enumerate() {
             let arguments = json!({ "file_path": small_path, "offset": offset, "limit": 10 });
-            let block = repeated_read_decide(&thresholds, "Read", &small_path, &arguments, &mut state);
+            let block =
+                repeated_read_decide(&thresholds, "Read", &small_path, &arguments, &mut state);
             if index == 2 {
                 block_message = block;
             }
@@ -6247,7 +6240,8 @@ mod tests {
         let mut big_block_message = None;
         for (index, offset) in [0u64, 10u64, 20u64].into_iter().enumerate() {
             let arguments = json!({ "file_path": big_path, "offset": offset, "limit": 10 });
-            let block = repeated_read_decide(&thresholds, "Read", &big_path, &arguments, &mut state);
+            let block =
+                repeated_read_decide(&thresholds, "Read", &big_path, &arguments, &mut state);
             if index == 2 {
                 big_block_message = block;
             }
@@ -6294,11 +6288,8 @@ mod tests {
             Some("rust async")
         );
         assert_eq!(
-            repeated_read_target_fingerprint(
-                "WebFetch",
-                &json!({ "url": "https://example.com" }),
-            )
-            .as_deref(),
+            repeated_read_target_fingerprint("WebFetch", &json!({ "url": "https://example.com" }),)
+                .as_deref(),
             Some("https://example.com")
         );
         assert_eq!(

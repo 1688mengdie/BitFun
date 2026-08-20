@@ -860,8 +860,8 @@ impl ExecutionEngine {
         else {
             return true;
         };
-        let enabled = thresholds.execution.duplicate_message_enabled;
-        enabled
+
+        thresholds.execution.duplicate_message_enabled
     }
 
     /// 消息序列重复闸门窗口 N（`ai.thresholds.execution.duplicate_message_window`）。
@@ -1088,7 +1088,7 @@ impl ExecutionEngine {
         // ENGINE-03：把输出预留钳制到窗口的 ratio_percent（默认 40%）以内（与
         // `is_valid_configured_max_output_tokens` 强制执行的同一比例）。否则配置了
         // 超过窗口的 max_tokens 会把 input_limit 压到 0，导致每一轮都无条件触发自动压缩。
-        let ratio_percent = ratio_percent.max(1).min(100);
+        let ratio_percent = ratio_percent.clamp(1, 100);
         let max_output_reserve = (context_window as f64 * ratio_percent as f64 / 100.0) as usize;
         let output_reserve_tokens = output_reserve_tokens.min(max_output_reserve);
         let safety_reserve_tokens = safety_reserve_tokens.max(1);
@@ -1457,6 +1457,7 @@ impl ExecutionEngine {
     ///   `user(render_system_reminder(...))` 也放行，语义标记权威）；
     /// - user 消息无语义标记但文本非 system_reminder-only 且非空 → 真实内容；
     /// - internal_reminder / system_reminder-only / 空文本 / 无文本 → 注入，不计。
+    ///
     /// 全部 user 消息均为注入 → 无真实内容 → 守卫命中。
     ///
     /// A'-1 职责 = 字符串泄露检测：user 通道出现 `<XXX>` 壳 = 异常信号。
@@ -2283,19 +2284,17 @@ async fn workspace_instruction_digest(
     // AGENTS.md, Codex AGENTS.md, rules/) — only when the master switch is on,
     // mirroring the render path in service::instruction_context.
     if external_sources {
-        match crate::instruction_sources::load_local_user_instruction_files(workspace_root).await {
-            loaded => {
-                let mut names: BTreeMap<String, String> = BTreeMap::new();
-                for file in loaded.files {
-                    names.insert(file.name.clone(), file.content.clone());
-                }
-                for (name, content) in names {
-                    digest_input.push_str(&name);
-                    digest_input.push('\0');
-                    digest_input.push_str(&content);
-                    digest_input.push('\0');
-                }
-            }
+        let loaded =
+            crate::instruction_sources::load_local_user_instruction_files(workspace_root).await;
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        for file in loaded.files {
+            names.insert(file.name.clone(), file.content.clone());
+        }
+        for (name, content) in names {
+            digest_input.push_str(&name);
+            digest_input.push('\0');
+            digest_input.push_str(&content);
+            digest_input.push('\0');
         }
     }
 
@@ -2527,6 +2526,7 @@ impl ExecutionEngine {
         dynamic
     }
 
+    #[allow(clippy::too_many_arguments)] // model resolution context; kept flat for explicit call sites
     pub(crate) async fn resolve_model_id_for_turn(
         &self,
         session: &Session,
@@ -2782,6 +2782,7 @@ impl ExecutionEngine {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)] // full send-context; kept flat for the single call site
     async fn build_ai_messages_for_send(
         messages: &[Message],
         provider: &str,
@@ -5273,7 +5274,7 @@ impl ExecutionEngine {
                             context.session_id,
                             context.dialog_turn_id,
                             round_index,
-                            &current_fingerprint,
+                            current_fingerprint,
                             recent_message_fingerprints.len()
                         );
                         finalization_reason = Some("duplicate_messages");
@@ -9304,9 +9305,7 @@ mod tests {
         assert_ne!(fingerprint_1, fingerprint_2);
         assert_eq!(fingerprint_1, fingerprint_3, "第 3 轮重复第 1 轮");
 
-        let mut window: Vec<String> = Vec::new();
-        window.push(fingerprint_1.clone());
-        window.push(fingerprint_2.clone());
+        let window: Vec<String> = vec![fingerprint_1.clone(), fingerprint_2.clone()];
         // 窗口内（含第 1 轮）出现相同指纹 → 拦
         assert!(
             ExecutionEngine::is_duplicate_message_fingerprint(&fingerprint_3, &window, 3),
@@ -9392,7 +9391,8 @@ mod tests {
         let fp_with_tools = ExecutionEngine::messages_sequence_fingerprint(&[assistant_with_tools]);
         assert_ne!(fp_no_tools, fp_with_tools, "工具调用参与指纹");
 
-        let fp_result_a = ExecutionEngine::messages_sequence_fingerprint(&[result_a.clone()]);
+        let fp_result_a =
+            ExecutionEngine::messages_sequence_fingerprint(std::slice::from_ref(&result_a));
         let fp_result_b = ExecutionEngine::messages_sequence_fingerprint(&[result_b]);
         assert_ne!(fp_result_a, fp_result_b, "工具结果参与指纹");
 

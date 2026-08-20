@@ -37,6 +37,7 @@ pub struct DesktopRuntimeContext {
 }
 
 impl DesktopRuntimeContext {
+    #[allow(clippy::too_many_arguments)] // full desktop delivery profile wiring; kept flat at the single call site
     pub(crate) fn build(
         coordinator: Arc<ConversationCoordinator>,
         scheduler: Arc<DialogScheduler>,

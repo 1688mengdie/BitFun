@@ -678,6 +678,7 @@ impl DialogScheduler {
     /// - Session is not currently `Processing` the requested `turn_id` (the targeted turn
     ///   already finished or never existed). Callers must preserve the user's input so it
     ///   can be submitted explicitly after authoritative state is observed.
+    #[allow(clippy::too_many_arguments)] // steering payload fields passed explicitly
     async fn buffer_steering(
         &self,
         session_id: String,
@@ -3221,10 +3222,10 @@ impl DialogScheduler {
             // next turn starting). Targeting by turn_id keeps those alive.
             if lifecycle_plan.drain_finished_turn_injections {
                 self.round_injection_buffer
-                    .drain_for_turn(&session_id, outcome.turn_id());
+                    .drain_for_turn(session_id, outcome.turn_id());
             } else if status == TurnOutcomeStatus::Interrupted {
                 self.round_injection_buffer
-                    .discard_current_running(&session_id);
+                    .discard_current_running(session_id);
             }
             (active_turn, active_internal_turn, lifecycle_plan)
         };
@@ -3496,7 +3497,7 @@ impl DialogScheduler {
             TurnOutcomeQueueAction::HoldQueue => {
                 match self
                     .session_manager
-                    .latest_dialog_turn_holds_dispatch(&session_id)
+                    .latest_dialog_turn_holds_dispatch(session_id)
                     .await
                 {
                     Ok(true) => debug!(
@@ -3507,7 +3508,7 @@ impl DialogScheduler {
                         // An explicit user submission can abandon recovery
                         // after the coordinator has settled Idle but before
                         // this outcome retires the previous active entry.
-                        if let Err(error) = self.dispatch_next_if_idle(&session_id).await {
+                        if let Err(error) = self.dispatch_next_if_idle(session_id).await {
                             warn!(
                                 "Failed to dispatch queue after interrupted hold was released: session_id={}, error={}",
                                 session_id, error
@@ -6936,7 +6937,7 @@ mod tests {
         let marker_notice = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-2",
             "agentic",
-            Some(&bash_full.to_string()),
+            Some(bash_full),
         );
         assert!(marker_notice.contains("flow-session-2"));
         assert!(marker_notice.contains("agentic"));
@@ -6954,12 +6955,12 @@ mod tests {
         let first = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-3",
             "agentic",
-            Some(&"deterministic full reply".to_string()),
+            Some("deterministic full reply"),
         );
         let second = crate::agentic::coordination::background_subagent_follow_up_message(
             "flow-session-3",
             "agentic",
-            Some(&"deterministic full reply".to_string()),
+            Some("deterministic full reply"),
         );
         assert_eq!(first, second);
     }
@@ -7035,7 +7036,7 @@ mod tests {
         // 运行中 turn 注入路径（Processing）：同 session、同 agent_type、正文
         // 不同的两条后台完成通知（模拟两份独立全文组装）——两条全部注入 round
         // buffer（待 round 边界逐条注入），不再被 5s 窗口/键去重。
-        let _ = TEST_MODEL_RESOLUTION_AI_CONFIG
+        TEST_MODEL_RESOLUTION_AI_CONFIG
             .scope(
                 test_model_resolution_config(),
                 scheduler.deliver_background_result(
@@ -7051,7 +7052,7 @@ mod tests {
             )
             .await
             .expect("first follow-up accepted");
-        let _ = TEST_MODEL_RESOLUTION_AI_CONFIG
+        TEST_MODEL_RESOLUTION_AI_CONFIG
             .scope(
                 test_model_resolution_config(),
                 scheduler.deliver_background_result(

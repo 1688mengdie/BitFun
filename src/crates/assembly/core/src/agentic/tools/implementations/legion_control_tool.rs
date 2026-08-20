@@ -1823,7 +1823,10 @@ mod tests {
         };
         let json_value = serde_json::to_value(&node).expect("serialize node");
         assert_eq!(
-            json_value.get("tools").and_then(Value::as_array).map(|a| a.len()),
+            json_value
+                .get("tools")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
             Some(3),
             "node.tools must be serialized"
         );
@@ -2262,12 +2265,12 @@ mod tests {
         );
 
         release_a_tx.send(()).expect("release A");
-        let _ = task_a.await.expect("task A");
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), entered_b_rx)
+        task_a.await.expect("task A");
+        tokio::time::timeout(std::time::Duration::from_secs(5), entered_b_rx)
             .await
             .expect("task B must acquire the lock after A releases")
             .expect("B entered");
-        let _ = task_b.await.expect("task B");
+        task_b.await.expect("task B");
     }
 
     #[tokio::test]
@@ -2308,21 +2311,18 @@ mod tests {
         let expected = path_manager
             .assistant_workspace_base_dir(None)
             .join("workspace-node-42");
-        assert_eq!(member_dir, expected, "member workspace must be workspace-<nodeId>");
+        assert_eq!(
+            member_dir, expected,
+            "member workspace must be workspace-<nodeId>"
+        );
     }
 
     #[test]
     fn resolved_node_superior_is_parent_role_or_creator_for_root() {
         // Plan 原子步 4：USER 写直属上级——非根节点 = 拓扑父节点的 role；
         // 根节点（无父） = 直属上级缺省为 creator（建群者）。
-        let nodes = vec![
-            node("commander"),
-            node("executor"),
-            node("writer"),
-        ];
-        let mut edges = Vec::new();
-        edges.push(edge("commander", "executor"));
-        edges.push(edge("executor", "writer"));
+        let nodes = vec![node("commander"), node("executor"), node("writer")];
+        let edges = vec![edge("commander", "executor"), edge("executor", "writer")];
         let resolved = LegionControlTool::resolve_legion_topology(nodes, edges, MAX_LEGION_NODES)
             .expect("topology should resolve");
 

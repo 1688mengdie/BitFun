@@ -19,7 +19,7 @@ pub(in crate::agentic::tools) type ProductToolDecoratorRef = ToolDecoratorRef<dy
 fn route_external_tool_registration(tool: ToolRef) -> ToolRef {
     #[cfg(feature = "external-sources")]
     {
-        return crate::external_tools::intercept_external_tool_registry_registration(tool);
+        crate::external_tools::intercept_external_tool_registry_registration(tool)
     }
     #[cfg(not(feature = "external-sources"))]
     {
@@ -30,7 +30,7 @@ fn route_external_tool_registration(tool: ToolRef) -> ToolRef {
 fn detach_external_mcp_routes(server_id: &str) -> Vec<ToolRef> {
     #[cfg(feature = "external-sources")]
     {
-        return crate::external_tools::detach_external_tool_mcp_server(server_id);
+        crate::external_tools::detach_external_tool_mcp_server(server_id)
     }
     #[cfg(not(feature = "external-sources"))]
     {
@@ -42,7 +42,7 @@ fn detach_external_mcp_routes(server_id: &str) -> Vec<ToolRef> {
 fn retain_external_tool_muxes(prefix: &str) -> Vec<ToolRef> {
     #[cfg(feature = "external-sources")]
     {
-        return crate::external_tools::retain_external_tool_muxes_for_prefix(prefix);
+        crate::external_tools::retain_external_tool_muxes_for_prefix(prefix)
     }
     #[cfg(not(feature = "external-sources"))]
     {

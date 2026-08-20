@@ -262,10 +262,7 @@ pub(crate) async fn list_external_clients() -> Result<()> {
     }
 
     for info in configured.values() {
-        if !matches!(
-            info.id.as_str(),
-            "opencode" | "claude-code" | "codex"
-        ) {
+        if !matches!(info.id.as_str(), "opencode" | "claude-code" | "codex") {
             print_client_info(info);
         }
     }

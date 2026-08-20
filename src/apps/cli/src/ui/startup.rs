@@ -1433,7 +1433,6 @@ impl StartupPage {
         }) else {
             return;
         };
-        let progress = progress;
         // Refresh devices occasionally while syncing / after done.
         let devices = if matches!(
             progress.status,

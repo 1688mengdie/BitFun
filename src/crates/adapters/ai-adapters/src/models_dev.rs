@@ -1182,6 +1182,9 @@ fn toggle_descriptors(
     ]
 }
 
+// Budget descriptor builder mirrors the four source fields plus limits;
+// kept flat for call-site readability.
+#[allow(clippy::too_many_arguments)]
 fn budget_descriptors(
     min: Option<u32>,
     max: Option<u32>,

@@ -123,7 +123,8 @@ impl Tool for GroupRoomAliasTool {
             "Group chat {}: {}.",
             group_room_action_alias_name(self.action),
             match self.action {
-                GroupRoomAction::Create => "create a group room with a name, members, and a dedicated workspace",
+                GroupRoomAction::Create =>
+                    "create a group room with a name, members, and a dedicated workspace",
                 GroupRoomAction::Invite => "invite a member session into a group",
                 GroupRoomAction::Remove => "remove a member session from a group",
                 GroupRoomAction::Send => "send a group message",
@@ -132,8 +133,10 @@ impl Tool for GroupRoomAliasTool {
                 GroupRoomAction::Fork => "fork a child group from a turn",
                 GroupRoomAction::MemberStatus => "query a member session's state",
                 GroupRoomAction::Delete => "delete a group chat",
-                GroupRoomAction::UpdateMemberTools => "update a member session's tool set in a group (orchestration control)",
-                GroupRoomAction::UpdateWiring => "update the group wiring definition (orchestration control)",
+                GroupRoomAction::UpdateMemberTools =>
+                    "update a member session's tool set in a group (orchestration control)",
+                GroupRoomAction::UpdateWiring =>
+                    "update the group wiring definition (orchestration control)",
             }
         )
     }
@@ -211,7 +214,7 @@ impl Tool for GroupRoomAliasTool {
 #[cfg(test)]
 mod tests {
     use super::{
-        group_room_action_alias_name, group_room_alias_action, group_room_action_is_readonly,
+        group_room_action_alias_name, group_room_action_is_readonly, group_room_alias_action,
         GroupRoomAction,
     };
 
@@ -227,7 +230,10 @@ mod tests {
             ("fork_group_chat", GroupRoomAction::Fork),
             ("group_member_status", GroupRoomAction::MemberStatus),
             ("delete_group_chat", GroupRoomAction::Delete),
-            ("update_group_member_tools", GroupRoomAction::UpdateMemberTools),
+            (
+                "update_group_member_tools",
+                GroupRoomAction::UpdateMemberTools,
+            ),
             ("update_group_wiring", GroupRoomAction::UpdateWiring),
         ] {
             assert_eq!(group_room_alias_action(tool_name), Some(action));

@@ -302,11 +302,10 @@ fn prompt_command_shell_path_bytes(path: &Path) -> Vec<u8> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        return path
-            .as_os_str()
+        path.as_os_str()
             .encode_wide()
             .flat_map(u16::to_le_bytes)
-            .collect();
+            .collect()
     }
     #[cfg(not(any(unix, windows)))]
     path.to_string_lossy().as_bytes().to_vec()

@@ -197,6 +197,8 @@ struct ScanStats {
 /// subdirectory levels below the entry, 17 levels including it; d6-P2-1).
 /// `fs::symlink_metadata` is used so symlinks are never followed — a link
 /// pointing outside the knowledge base root can never escape the scan scope.
+// Recursive scan carries depth/budget state explicitly per call site.
+#[allow(clippy::too_many_arguments)]
 fn search_dir(
     dir: &Path,
     keyword_lower: &str,
@@ -783,7 +785,7 @@ mod tests {
             MAX_SCAN_DEPTH,
             MAX_SCAN_FILE_SIZE,
         );
-        assert_eq!(stats.file_cap_reached, true);
+        assert!(stats.file_cap_reached);
         assert!(
             results
                 .iter()

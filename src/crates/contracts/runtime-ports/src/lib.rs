@@ -13,6 +13,8 @@ pub use bitfun_core_types::{
     WorktreeSummary,
 };
 
+#[cfg(feature = "acp-client")]
+mod acp_client_port;
 #[cfg(feature = "workspace-ports")]
 mod local_workspace_snapshot;
 #[cfg(feature = "permission")]
@@ -21,8 +23,6 @@ mod permission;
 mod plugin;
 #[cfg(feature = "script-tool-runtime")]
 mod script_tool;
-#[cfg(feature = "acp-client")]
-mod acp_client_port;
 #[cfg(feature = "acp-client")]
 pub use acp_client_port::{
     acp_backend_error, acp_flow_client_id_from_session_id, looks_like_uuid,
@@ -176,9 +176,9 @@ pub trait RuntimeServicePort: Send + Sync {
 
 #[cfg(feature = "agent-api")]
 mod agent_api;
-mod local_customizations;
 #[cfg(feature = "git-port")]
 mod git_port;
+mod local_customizations;
 #[cfg(feature = "remote-exec-port")]
 mod remote_exec_port;
 #[cfg(feature = "remote-workspace-ports")]
@@ -195,9 +195,10 @@ mod workspace_ports;
 
 #[cfg(feature = "agent-api")]
 pub use agent_api::*;
-pub use local_customizations::*;
 #[cfg(feature = "git-port")]
-pub use git_port::*;#[cfg(feature = "remote-exec-port")]
+pub use git_port::*;
+pub use local_customizations::*;
+#[cfg(feature = "remote-exec-port")]
 pub use remote_exec_port::*;
 #[cfg(feature = "remote-workspace-ports")]
 pub use remote_workspace_ports::*;

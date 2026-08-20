@@ -31,9 +31,7 @@
 //!   （custom_metadata.groupChats）再 get_session 查 state。
 
 use crate::agentic::agents::get_agent_registry;
-use crate::agentic::coordination::{
-    get_global_coordinator, ConversationCoordinator,
-};
+use crate::agentic::coordination::{get_global_coordinator, ConversationCoordinator};
 use crate::agentic::core::SessionConfig;
 use crate::agentic::tools::framework::{
     PermissionIntent, Tool, ToolExposure, ToolResult, ToolUseContext,
@@ -309,7 +307,9 @@ impl GroupRoomTool {
         let depth = coordinator.session_tree().get_depth(session_id);
         let manager = coordinator.get_session_manager();
         // 会话 agent_type（智能体类型，R-WF-03 发言方标识的「类型」位）。
-        let agent_type = manager.get_session(session_id).map(|session| session.agent_type.clone());
+        let agent_type = manager
+            .get_session(session_id)
+            .map(|session| session.agent_type.clone());
         // 内存会话名（次优先级，SOUL.name 之下）。
         let session_name = manager.get_session(session_id).and_then(|session| {
             let name = session.session_name.trim().to_string();
@@ -422,10 +422,7 @@ impl GroupRoomTool {
         {
             return Ok(workspace);
         }
-        if let Some(binding) = manager
-            .resolve_session_workspace_binding(group_id)
-            .await
-        {
+        if let Some(binding) = manager.resolve_session_workspace_binding(group_id).await {
             let workspace = binding.project_root_path.to_string_lossy().to_string();
             if !workspace.trim().is_empty() {
                 return Ok(workspace);
@@ -706,17 +703,18 @@ impl GroupRoomTool {
         // 成员侧反标清理（P1-A）：成员会话 groupChats 过滤掉本群 ID。存储域 =
         // 成员会话真实 workspace（与 add_group_member 写反标同域）。解析失败
         // → warn 继续（不阻断移除）；写入失败 → warn 继续（尽力而为）。
-        let member_workspace =
-            match Self::resolve_member_workspace(manager, member_session_id).await {
-                Some(workspace) => workspace,
-                None => {
-                    warn!(
+        let member_workspace = match Self::resolve_member_workspace(manager, member_session_id)
+            .await
+        {
+            Some(workspace) => workspace,
+            None => {
+                warn!(
                         "Failed to resolve member workspace to clear back-mark during remove: member={}, group={}",
                         member_session_id, group_id
                     );
-                    return Ok(());
-                }
-            };
+                return Ok(());
+            }
+        };
         if let Err(error) = manager
             .update_session_metadata(
                 &PathBuf::from(&member_workspace),
@@ -770,8 +768,8 @@ impl GroupRoomTool {
         // 群不存在 → 明确错误，禁静默跳过（R-3）。不做成员 ∈ groupChats
         // 校验 = 开放投递（非成员可发）。
         let group_workspace = Self::group_workspace(coordinator, group_id).await?;
-        let sender = Self::resolve_sender_identity(coordinator, sender_session_id, &group_workspace)
-            .await;
+        let sender =
+            Self::resolve_sender_identity(coordinator, sender_session_id, &group_workspace).await;
 
         // 消息 metadata：五字段 + senderType（契约 §三 + R-WF-03 发言方标识
         // = SOUL.name + 类型）：
@@ -902,14 +900,8 @@ impl GroupRoomTool {
                 .filter(|value| !value.trim().is_empty())
                 .unwrap_or(sender.session_id.as_str())),
         );
-        Self::write_group_turn_with_metadata(
-            coordinator,
-            workspace,
-            group_id,
-            content,
-            metadata,
-        )
-        .await
+        Self::write_group_turn_with_metadata(coordinator, workspace, group_id, content, metadata)
+            .await
     }
 
     /// 落盘一条群会话 turn（宿主 turn 形态）：
@@ -934,7 +926,11 @@ impl GroupRoomTool {
             .load_session_turns(&PathBuf::from(workspace), group_id)
             .await
         {
-            next_turn_index = turns.iter().map(|turn| turn.turn_index).max().map_or(0, |max| max + 1);
+            next_turn_index = turns
+                .iter()
+                .map(|turn| turn.turn_index)
+                .max()
+                .map_or(0, |max| max + 1);
         }
         let message_id = uuid::Uuid::new_v4().to_string();
         let now_ms = Self::now_ms();
@@ -1037,8 +1033,8 @@ impl GroupRoomTool {
                         name: None,
                         agent_type: None,
                     });
-                let group_author = (sender.session_id != "unknown")
-                    .then(|| sender.session_id.clone());
+                let group_author =
+                    (sender.session_id != "unknown").then(|| sender.session_id.clone());
                 GroupMessage {
                     message_id: message.id,
                     group_session_id: group_session_id.clone(),
@@ -1144,7 +1140,7 @@ impl GroupRoomTool {
     /// R-WF-05：单群复刻落盘（replicate_member_turn_to_groups 的单个群执行体）。
     /// 群存在性门（group_workspace）+ 五字段 metadata + senderType（契约 §三
     /// + R-WF-03 发言方标识），内容 = 成员最终回复全文。落盘失败 → Err
-    /// （调用方 warn 继续）。
+    ///   （调用方 warn 继续）。
     async fn replicate_member_turn_to_group(
         coordinator: &ConversationCoordinator,
         member_workspace: &str,
@@ -1153,8 +1149,8 @@ impl GroupRoomTool {
         final_response: &str,
     ) -> BitFunResult<String> {
         let group_workspace = Self::group_workspace(coordinator, group_id).await?;
-        let sender = Self::resolve_sender_identity(coordinator, member_session_id, member_workspace)
-            .await;
+        let sender =
+            Self::resolve_sender_identity(coordinator, member_session_id, member_workspace).await;
         let mut metadata = serde_json::Map::new();
         metadata.insert("groupId".to_string(), json!(group_id));
         metadata.insert("senderSessionId".to_string(), json!(sender.session_id));
@@ -1246,10 +1242,13 @@ impl GroupRoomTool {
     /// 从持久化 turn 的 user_message.metadata（JSON）解析 SenderIdentity
     /// （契约 §三 + R-WF-03：senderSessionId/senderRole/senderDepth/senderName/
     /// senderType）。
-    fn parse_sender_identity_from_json(
-        metadata: &Value,
-    ) -> SenderIdentity {
-        let get = |key: &str| metadata.get(key).and_then(|v| v.as_str()).map(ToOwned::to_owned);
+    fn parse_sender_identity_from_json(metadata: &Value) -> SenderIdentity {
+        let get = |key: &str| {
+            metadata
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned)
+        };
         SenderIdentity {
             session_id: get("senderSessionId").unwrap_or_else(|| "unknown".to_string()),
             role: get("senderRole"),
@@ -1478,19 +1477,21 @@ impl GroupRoomTool {
                         &PathBuf::from(&member_workspace),
                         member_session_id,
                         |metadata| {
-                        let custom = metadata
-                            .custom_metadata
-                            .get_or_insert_with(|| json!({}))
-                            .as_object_mut()
-                            .expect("custom_metadata is always an object");
-                        if let Some(members) = custom.get_mut("groupChats").and_then(|v| v.as_array_mut())
-                        {
-                            members.retain(|v| v.as_str() != Some(group_id));
-                            if members.is_empty() {
-                                custom.remove("groupChats");
+                            let custom = metadata
+                                .custom_metadata
+                                .get_or_insert_with(|| json!({}))
+                                .as_object_mut()
+                                .expect("custom_metadata is always an object");
+                            if let Some(members) =
+                                custom.get_mut("groupChats").and_then(|v| v.as_array_mut())
+                            {
+                                members.retain(|v| v.as_str() != Some(group_id));
+                                if members.is_empty() {
+                                    custom.remove("groupChats");
+                                }
                             }
-                        }
-                    })
+                        },
+                    )
                     .await
                 {
                     warn!(
@@ -1599,7 +1600,10 @@ impl GroupRoomTool {
                     .and_then(|v| v.as_array())
                     .cloned()
                     .unwrap_or_default();
-                if !members.iter().any(|v| v.as_str() == Some(member_session_id)) {
+                if !members
+                    .iter()
+                    .any(|v| v.as_str() == Some(member_session_id))
+                {
                     members.push(json!(member_session_id));
                 }
                 let custom = metadata
@@ -1824,9 +1828,10 @@ Arguments:
 
         let output = match action {
             GroupRoomAction::Create => {
-                let name = parsed.name.as_deref().ok_or_else(|| {
-                    BitFunError::tool("name is required for create".to_string())
-                })?;
+                let name = parsed
+                    .name
+                    .as_deref()
+                    .ok_or_else(|| BitFunError::tool("name is required for create".to_string()))?;
                 // R-GC-26：建群 = 新建 Claw 默认对话（默认工作区，禁
                 // currentWorkspace）。入参 workspace（调用方显式指定群专属
                 // 工作区）→ Claw 默认工作区兜底；任一为空都不炸、
@@ -1836,13 +1841,10 @@ Arguments:
                 // node.agent 自动实例化成员会话再建群（一个工作流建 N 群，
                 // 成员类型不限定 Claw）。
                 let group_id = match parsed.preset_id.as_deref() {
-                    Some(preset_id) => Self::create_group_from_preset(
-                        &coordinator,
-                        name,
-                        &workspace,
-                        preset_id,
-                    )
-                    .await?,
+                    Some(preset_id) => {
+                        Self::create_group_from_preset(&coordinator, name, &workspace, preset_id)
+                            .await?
+                    }
                     None => {
                         Self::create_group(&coordinator, name, &parsed.members, &workspace).await?
                     }
@@ -1876,9 +1878,10 @@ Arguments:
                 let group_id = parsed.group_id.as_deref().ok_or_else(|| {
                     BitFunError::tool("group_id is required for send".to_string())
                 })?;
-                let content = parsed.content.as_deref().ok_or_else(|| {
-                    BitFunError::tool("content is required for send".to_string())
-                })?;
+                let content = parsed
+                    .content
+                    .as_deref()
+                    .ok_or_else(|| BitFunError::tool("content is required for send".to_string()))?;
                 let sender = parsed
                     .sender_session_id
                     .as_deref()
@@ -1886,7 +1889,8 @@ Arguments:
                     .ok_or_else(|| {
                         BitFunError::tool("sender_session_id is required for send".to_string())
                     })?;
-                let message_id = Self::send_message(&coordinator, group_id, content, sender).await?;
+                let message_id =
+                    Self::send_message(&coordinator, group_id, content, sender).await?;
                 json!({
                     "groupId": group_id,
                     "messageId": message_id,
@@ -2035,7 +2039,10 @@ mod tests {
         }))
     }
 
-    fn turn_with_sender(turn_id: &str, sender_json: Value) -> bitfun_services_core::session::DialogTurnData {
+    fn turn_with_sender(
+        turn_id: &str,
+        sender_json: Value,
+    ) -> bitfun_services_core::session::DialogTurnData {
         bitfun_services_core::session::DialogTurnData {
             turn_id: turn_id.to_string(),
             turn_index: 0,
@@ -2120,7 +2127,8 @@ mod tests {
             let input = json!({ "action": action, "group_id": "g-1" });
             assert!(!tool.is_concurrency_safe(Some(&input)), "action={action}");
             assert!(
-                !tool.permission_intents(&input, &empty_context())
+                !tool
+                    .permission_intents(&input, &empty_context())
                     .expect("permission intents")
                     .is_empty(),
                 "action={action}"
@@ -2169,10 +2177,8 @@ mod tests {
     #[tokio::test]
     async fn orchestration_guard_accepts_main_session_rejects_child() {
         let coordinator = new_isolated_test_coordinator().await;
-        let workspace = std::env::temp_dir().join(format!(
-            "bitfun-rwf09-guard-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workspace =
+            std::env::temp_dir().join(format!("bitfun-rwf09-guard-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).expect("workspace dir");
         let workspace_str = workspace.to_string_lossy().to_string();
 
@@ -2232,16 +2238,12 @@ mod tests {
 
         // 调用会话缺失 → 拒绝（fail-closed）。
         let no_session_context = empty_context();
-        let error = GroupRoomTool::ensure_orchestration_main_session(
-            &coordinator,
-            &no_session_context,
-        )
-        .await
-        .expect_err("missing caller session must be rejected");
+        let error =
+            GroupRoomTool::ensure_orchestration_main_session(&coordinator, &no_session_context)
+                .await
+                .expect_err("missing caller session must be rejected");
         assert!(
-            error
-                .to_string()
-                .contains("caller session context"),
+            error.to_string().contains("caller session context"),
             "missing-session rejection must be explicit, got: {error}"
         );
     }
@@ -2263,10 +2265,8 @@ mod tests {
                 get_global_coordinator().expect("global coordinator must be set")
             }
         };
-        let workspace = std::env::temp_dir().join(format!(
-            "bitfun-rwf09-orch-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workspace =
+            std::env::temp_dir().join(format!("bitfun-rwf09-orch-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).expect("workspace dir");
         let workspace_str = workspace.to_string_lossy().to_string();
 
@@ -2389,7 +2389,10 @@ mod tests {
     fn default_group_agent_type_is_group() {
         let actual = GroupRoomTool::default_group_agent_type();
         assert_eq!(actual, "group", "default group agent type must be group");
-        assert!(!actual.trim().is_empty(), "default agent type must be non-empty");
+        assert!(
+            !actual.trim().is_empty(),
+            "default agent type must be non-empty"
+        );
     }
 
     // ── R-GC-28/28b 零硬编码（主人定标 2026-08-14）：群主默认名称 =
@@ -2438,7 +2441,10 @@ mod tests {
         for key in keys {
             assert!(metadata.get(key).is_some(), "missing key {key}");
         }
-        assert_eq!(metadata.get("groupId").and_then(Value::as_str), Some("group-1"));
+        assert_eq!(
+            metadata.get("groupId").and_then(Value::as_str),
+            Some("group-1")
+        );
         assert_eq!(
             metadata.get("senderSessionId").and_then(Value::as_str),
             Some("sender-1")
@@ -2506,7 +2512,11 @@ mod tests {
         let content = std::fs::read_to_string(&soul_path).unwrap_or_default();
         let soul_name = async {
             let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
-            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            let name = metadata
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .trim()
+                .to_string();
             (!name.is_empty()).then_some(name)
         }
         .await;
@@ -2521,7 +2531,11 @@ mod tests {
         let content = std::fs::read_to_string(&soul_path).expect("read SOUL.md");
         let soul_name = async {
             let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
-            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            let name = metadata
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .trim()
+                .to_string();
             (!name.is_empty()).then_some(name)
         }
         .await;
@@ -2535,11 +2549,18 @@ mod tests {
         let content = std::fs::read_to_string(&soul_path).expect("read SOUL.md");
         let soul_name = async {
             let (metadata, _) = crate::util::FrontMatterMarkdown::load_str(&content).ok()?;
-            let name = metadata.get("name").and_then(|v| v.as_str())?.trim().to_string();
+            let name = metadata
+                .get("name")
+                .and_then(|v| v.as_str())?
+                .trim()
+                .to_string();
             (!name.is_empty()).then_some(name)
         }
         .await;
-        assert_eq!(soul_name, None, "empty frontmatter name must degrade to None");
+        assert_eq!(
+            soul_name, None,
+            "empty frontmatter name must degrade to None"
+        );
     }
 
     // ── R-GC-34（主人身份错位 P0 修复，方案 B）：__master__ 特判 ──
@@ -2745,23 +2766,28 @@ mod tests {
         };
         let json_value = serde_json::to_value(&message).expect("serialize");
         assert_eq!(
-            json_value.pointer("/author/sessionId").and_then(Value::as_str),
+            json_value
+                .pointer("/author/sessionId")
+                .and_then(Value::as_str),
             Some("sender-1")
         );
         assert_eq!(
-            json_value
-                .pointer("/author/role")
-                .and_then(Value::as_str),
+            json_value.pointer("/author/role").and_then(Value::as_str),
             Some("Commander")
         );
-        assert_eq!(json_value.pointer("/author/depth").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            json_value.pointer("/author/depth").and_then(Value::as_u64),
+            Some(0)
+        );
         assert_eq!(
             json_value.pointer("/author/name").and_then(Value::as_str),
             Some("群主")
         );
         // R-WF-03：author.agentType（智能体类型）随序列化暴露。
         assert_eq!(
-            json_value.pointer("/author/agentType").and_then(Value::as_str),
+            json_value
+                .pointer("/author/agentType")
+                .and_then(Value::as_str),
             Some("group")
         );
         assert_eq!(
@@ -2791,11 +2817,7 @@ mod tests {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let is_member = |target: &str| {
-            group_members
-                .iter()
-                .any(|v| v.as_str() == Some(target))
-        };
+        let is_member = |target: &str| group_members.iter().any(|v| v.as_str() == Some(target));
         assert!(is_member("member-a"));
         assert!(!is_member("stranger"));
     }
@@ -2908,10 +2930,23 @@ mod tests {
             .and_then(Value::as_array)
             .expect("action enum array");
         let expected = [
-            "create", "invite", "remove", "send", "history", "list", "fork", "member_status",
-            "delete", "update_member_tools", "update_wiring",
+            "create",
+            "invite",
+            "remove",
+            "send",
+            "history",
+            "list",
+            "fork",
+            "member_status",
+            "delete",
+            "update_member_tools",
+            "update_wiring",
         ];
-        assert_eq!(enums.len(), 11, "exactly 11 enum values (9 + 2 orchestration)");
+        assert_eq!(
+            enums.len(),
+            11,
+            "exactly 11 enum values (9 + 2 orchestration)"
+        );
         for name in expected {
             assert!(
                 enums.iter().any(|v| v.as_str() == Some(name)),
@@ -2937,21 +2972,27 @@ mod tests {
     /// None + call_impl（内部再读 get_global）」整体放在锁内原子执行——锁定期间
     /// set_global 无法写入，两次读取一致，TOCTOU 窗口消除。若 lock 时全局已被
     /// 其它测试设置，直接跳过断言。
+    /// 锁须跨 await 保持（call_impl 内部再读 get_global），此为有意设计。
+    #[allow(clippy::await_holding_lock)]
     #[tokio::test]
     async fn missing_coordinator_yields_clear_error() {
-        let _guard =
-            crate::agentic::coordination::coordinator::test_coordinator_access_lock_sync();
+        let _guard = crate::agentic::coordination::coordinator::test_coordinator_access_lock_sync();
         if get_global_coordinator().is_some() {
             return;
         }
         let tool = GroupRoomTool::new();
         let context = empty_context();
         let error = tool
-            .call_impl(&json!({ "action": "create", "name": "g", "workspace": "/tmp" }), &context)
+            .call_impl(
+                &json!({ "action": "create", "name": "g", "workspace": "/tmp" }),
+                &context,
+            )
             .await
             .expect_err("must fail without coordinator");
         assert!(
-            error.to_string().contains("require an initialized coordinator"),
+            error
+                .to_string()
+                .contains("require an initialized coordinator"),
             "error: {error}"
         );
         let error = tool
@@ -2959,7 +3000,9 @@ mod tests {
             .await
             .expect_err("must fail without coordinator");
         assert!(
-            error.to_string().contains("require an initialized coordinator"),
+            error
+                .to_string()
+                .contains("require an initialized coordinator"),
             "error: {error}"
         );
     }
@@ -3016,10 +3059,8 @@ mod tests {
         use crate::agentic::agents::team_presets::create_preset;
         let coordinator = new_isolated_test_coordinator().await;
 
-        let workspace = std::env::temp_dir().join(format!(
-            "bitfun-rwf06-wf-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let workspace =
+            std::env::temp_dir().join(format!("bitfun-rwf06-wf-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&workspace).expect("workspace dir");
         let workspace_str = workspace.to_string_lossy().to_string();
 
@@ -3068,7 +3109,10 @@ mod tests {
         )
         .await
         .expect("create group B from preset");
-        assert_ne!(group_a, group_b, "N groups from one workflow must be distinct");
+        assert_ne!(
+            group_a, group_b,
+            "N groups from one workflow must be distinct"
+        );
 
         // 群 A 成员类型按 node.agent：writer=agentic、planner=Plan。
         let manager = coordinator.get_session_manager();
@@ -3084,7 +3128,11 @@ mod tests {
             .and_then(|v| v.as_array())
             .cloned()
             .unwrap_or_default();
-        assert_eq!(members_a.len(), 2, "group A must auto-instantiate 2 members");
+        assert_eq!(
+            members_a.len(),
+            2,
+            "group A must auto-instantiate 2 members"
+        );
         let mut member_types: Vec<String> = Vec::new();
         for member in &members_a {
             let id = member.as_str().expect("member id");
@@ -3187,10 +3235,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -3205,10 +3253,8 @@ mod tests {
         // workspace_binding 扫 projects_root）找不到 → get_history 空 →
         // 「history must contain the group welcome turn after restart」失败
         // （CI macos/windows 偶发，R-GC-38 flake 根因）。
-        let user_root = std::env::temp_dir().join(format!(
-            "bitfun-grouproom-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let user_root =
+            std::env::temp_dir().join(format!("bitfun-grouproom-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&user_root).expect("user root");
         let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
         let persistence =
@@ -3381,10 +3427,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -3392,10 +3438,8 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
-        let user_root = std::env::temp_dir().join(format!(
-            "bitfun-rwf06-isolated-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let user_root =
+            std::env::temp_dir().join(format!("bitfun-rwf06-isolated-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&user_root).expect("user root");
         let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
         let persistence =
@@ -3525,15 +3569,21 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(members.len(), 2, "groupChats must contain 2 members");
         assert!(
-            members.iter().any(|v| v.as_str() == Some(member_a.as_str())),
+            members
+                .iter()
+                .any(|v| v.as_str() == Some(member_a.as_str())),
             "groupChats must contain real session A"
         );
         assert!(
-            members.iter().any(|v| v.as_str() == Some(member_b.as_str())),
+            members
+                .iter()
+                .any(|v| v.as_str() == Some(member_b.as_str())),
             "groupChats must contain real session B"
         );
         assert!(
-            members.iter().all(|v| v.as_str() != Some("member-a") && v.as_str() != Some("member-b")),
+            members
+                .iter()
+                .all(|v| v.as_str() != Some("member-a") && v.as_str() != Some("member-b")),
             "R-GC-28 回退: members must be the real caller-provided ids, never fresh placeholders"
         );
 
@@ -3547,25 +3597,18 @@ mod tests {
         .await
         .expect_err("create with a non-existent member must fail");
         assert!(
-            missing_err
-                .to_string()
-                .contains("member session not found"),
+            missing_err.to_string().contains("member session not found"),
             "non-existent member must yield a clear error, got: {missing_err}"
         );
 
         // 契约 §三.2：invite = 登记调用方传入的真实会话 ID（校验存在）；
         // 传不存在 ID → Err（禁静默跳过）。
-        let invite_err = GroupRoomTool::invite_member(
-            coordinator,
-            &group_id,
-            "no-such-invite-session",
-        )
-        .await
-        .expect_err("invite with a non-existent member must fail");
+        let invite_err =
+            GroupRoomTool::invite_member(coordinator, &group_id, "no-such-invite-session")
+                .await
+                .expect_err("invite with a non-existent member must fail");
         assert!(
-            invite_err
-                .to_string()
-                .contains("member session not found"),
+            invite_err.to_string().contains("member session not found"),
             "non-existent invite member must yield a clear error, got: {invite_err}"
         );
         let invite_member = create_member_session_for_test(coordinator, &workspace_str).await;
@@ -3624,7 +3667,12 @@ mod tests {
             "R-GC-25: welcome turn is a final response"
         );
         assert_eq!(
-            welcome.user_message.metadata.as_ref().and_then(|m| m.get("senderSessionId")).and_then(Value::as_str),
+            welcome
+                .user_message
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("senderSessionId"))
+                .and_then(Value::as_str),
             Some(group_id.as_str()),
             "R-GC-25: welcome turn sender = 群主会话（群聊 ID = 群主会话 ID）"
         );
@@ -3667,9 +3715,10 @@ mod tests {
         // R-WF-04：send 纯落盘（write_group_turn_with_metadata），不触发群主
         // agent 执行 → 无需 TEST_MODEL_RESOLUTION_AI_CONFIG scope（config 只在
         // start_dialog_turn 模型解析路径需要）。
-        let message_id = GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a)
-            .await
-            .expect("send message");
+        let message_id =
+            GroupRoomTool::send_message(coordinator, &group_id, "第一条群消息", &member_a)
+                .await
+                .expect("send message");
         assert!(!message_id.is_empty());
 
         // ── R-WF-04：send 的消息 turn 为「正常完成宿主 turn」——纯落盘、
@@ -3756,7 +3805,10 @@ mod tests {
             .iter()
             .find_map(Value::as_str)
             .expect("first member id from groupChats");
-        assert_eq!(member_id, member_a, "first member must be the real session A");
+        assert_eq!(
+            member_id, member_a,
+            "first member must be the real session A"
+        );
         let member_session = manager
             .get_session(member_id)
             .expect("member session in memory");
@@ -3813,7 +3865,7 @@ mod tests {
             &group_id,
             "测试子群",
             Some(&message_id),
-            &[member_c.clone()],
+            std::slice::from_ref(&member_c),
         )
         .await
         .expect("fork group");
@@ -3892,9 +3944,7 @@ mod tests {
             "fork child must register the real fork member C"
         );
         assert!(
-            child_members
-                .iter()
-                .all(|v| v.as_str() != Some("member-c")),
+            child_members.iter().all(|v| v.as_str() != Some("member-c")),
             "R-GC-28 回退: fork member must be the real caller-provided id, never a placeholder"
         );
         assert!(
@@ -3920,15 +3970,10 @@ mod tests {
         // （群主=子群自身）。branch_session 继承主群 groupChats（3 成员），
         // 空成员 fork 再登记子群自身 → 成员表非空且含子群自身；
         // list_group_chats 过滤 groupChats 标记 → 子群可被识别。
-        let empty_member_child_id = GroupRoomTool::fork_group(
-            coordinator,
-            &group_id,
-            "空成员子群",
-            Some(&message_id),
-            &[],
-        )
-        .await
-        .expect("fork with empty members must succeed (R-GC-38 default self-registration)");
+        let empty_member_child_id =
+            GroupRoomTool::fork_group(coordinator, &group_id, "空成员子群", Some(&message_id), &[])
+                .await
+                .expect("fork with empty members must succeed (R-GC-38 default self-registration)");
         assert!(
             !empty_member_child_id.is_empty(),
             "empty-member child id must be non-empty"
@@ -3962,7 +4007,8 @@ mod tests {
         assert!(
             groups_after_empty_fork
                 .iter()
-                .any(|g| g.get("groupId").and_then(Value::as_str) == Some(empty_member_child_id.as_str())),
+                .any(|g| g.get("groupId").and_then(Value::as_str)
+                    == Some(empty_member_child_id.as_str())),
             "R-GC-38: empty-member fork child must be recognized by list_group_chats"
         );
 
@@ -3970,11 +4016,7 @@ mod tests {
         // custom_metadata）──
         // update_member_tools：成员存在性校验（validate_session_exists 复用）
         // → groupMemberTools 写入 { memberId: [tool,...] }；重复设置幂等覆盖。
-        let member_tools = vec![
-            "Read".to_string(),
-            "Grep".to_string(),
-            "Write".to_string(),
-        ];
+        let member_tools = vec!["Read".to_string(), "Grep".to_string(), "Write".to_string()];
         GroupRoomTool::update_member_tools(coordinator, &group_id, &member_a, &member_tools)
             .await
             .expect("update member tools");
@@ -3991,9 +4033,7 @@ mod tests {
         let member_tools_stored = member_tool_map
             .get(&member_a)
             .and_then(|v| v.as_array())
-            .and_then(|a| {
-                a.iter().map(Value::as_str).collect::<Option<Vec<_>>>()
-            })
+            .and_then(|a| a.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
             .expect("member A tool set stored");
         assert_eq!(
             member_tools_stored,
@@ -4036,7 +4076,10 @@ mod tests {
             .and_then(|m| m.get("groupWiring"))
             .expect("groupWiring must exist after update_wiring");
         assert_eq!(
-            stored_wiring.get("nodes").and_then(Value::as_array).map(|a| a.len()),
+            stored_wiring
+                .get("nodes")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
             Some(2),
             "update_wiring must persist the wiring definition"
         );
@@ -4096,7 +4139,7 @@ mod tests {
         let open_group_id = GroupRoomTool::create_group(
             coordinator,
             "R-WF-04 开放投递验收群",
-            &[member_a.clone()],
+            std::slice::from_ref(&member_a),
             &workspace_str,
         )
         .await
@@ -4104,13 +4147,18 @@ mod tests {
         // 1) 开放投递：非成员（member_b 未加入 open_group）经 send_group_message
         //    工具入口发送成功（Plan:120「非成员发送成功」）——send 只查群会话
         //    存在（get_session + 磁盘回退），不再校验发送者 ∈ groupChats。
-        let open_message_id = call_send_impl(coordinator, &open_group_id, "非成员开放投递", Some(&member_b))
-            .await
-            .expect("R-WF-04: non-member send must succeed (open delivery)")
-            .get("messageId")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-            .expect("messageId present");
+        let open_message_id = call_send_impl(
+            coordinator,
+            &open_group_id,
+            "非成员开放投递",
+            Some(&member_b),
+        )
+        .await
+        .expect("R-WF-04: non-member send must succeed (open delivery)")
+        .get("messageId")
+        .and_then(Value::as_str)
+        .map(|s| s.to_string())
+        .expect("messageId present");
         assert!(!open_message_id.is_empty());
         // 2) 群聊消息只落盘：turn 以完成态落盘（finish_reason="complete" +
         //    has_final_response=true + status=Completed），前端正常渲染。
@@ -4141,7 +4189,9 @@ mod tests {
         // 3) 群聊会话无大模型响应：send 纯落盘（write_group_turn_with_metadata），
         //    不触发群主会话大模型执行 → 会话保持 Idle（Processing 即表示模型
         //    运行中）。已持久化 turn 数量 = 欢迎 + 本条（无额外模型轮次 turn）。
-        let group_session = manager.get_session(&open_group_id).expect("open group in memory");
+        let group_session = manager
+            .get_session(&open_group_id)
+            .expect("open group in memory");
         assert_eq!(
             group_session.state,
             crate::agentic::core::SessionState::Idle,
@@ -4208,13 +4258,9 @@ mod tests {
         // 2) 桥接函数（原子步 1）：成员最终回复复刻进所属群（异步落盘 →
         //    群 turns 出现最终回复；成员主动发已由 R-WF-04 覆盖）。
         let replicate_reply = "成员的最终回复（R-WF-05 复刻验收）";
-        GroupRoomTool::replicate_member_turn_to_groups(
-            coordinator,
-            &member_a,
-            replicate_reply,
-        )
-        .await
-        .expect("R-WF-05: replicate member turn to group log must succeed");
+        GroupRoomTool::replicate_member_turn_to_groups(coordinator, &member_a, replicate_reply)
+            .await
+            .expect("R-WF-05: replicate member turn to group log must succeed");
         let replicated_turns = manager
             .persistence_manager()
             .load_session_turns(workspace, &open_group_id)
@@ -4246,7 +4292,9 @@ mod tests {
             .as_ref()
             .expect("replicated turn metadata");
         assert_eq!(
-            replicated_meta.get("senderSessionId").and_then(Value::as_str),
+            replicated_meta
+                .get("senderSessionId")
+                .and_then(Value::as_str),
             Some(member_a.as_str()),
             "R-WF-05: replicated turn sender must be the member session"
         );
@@ -4273,10 +4321,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -4284,10 +4332,8 @@ mod tests {
         use std::sync::Arc;
         use std::time::Duration;
 
-        let user_root = std::env::temp_dir().join(format!(
-            "bitfun-grouproom-rwf05-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let user_root =
+            std::env::temp_dir().join(format!("bitfun-grouproom-rwf05-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&user_root).expect("user root");
         let path_manager = PathManager::with_user_root_for_tests(user_root.clone());
         let persistence =
@@ -4353,7 +4399,7 @@ mod tests {
         let group_1 = GroupRoomTool::create_group(
             &coordinator,
             "R-WF-05 群一",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &workspace_str,
         )
         .await
@@ -4361,7 +4407,7 @@ mod tests {
         let group_2 = GroupRoomTool::create_group(
             &coordinator,
             "R-WF-05 群二",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &workspace_str,
         )
         .await
@@ -4462,10 +4508,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -4554,7 +4600,7 @@ mod tests {
         let group_id = GroupRoomTool::create_group(
             &coordinator,
             "跨域反标群",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &group_workspace_str,
         )
         .await
@@ -4627,10 +4673,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -4719,7 +4765,7 @@ mod tests {
         let group_id = GroupRoomTool::create_group(
             &coordinator,
             "remove 反标清理群",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &group_workspace_str,
         )
         .await
@@ -4786,7 +4832,9 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert!(
-            !group_members.iter().any(|v| v.as_str() == Some(member.as_str())),
+            !group_members
+                .iter()
+                .any(|v| v.as_str() == Some(member.as_str())),
             "remove must also clear the group-side member table"
         );
 
@@ -4824,10 +4872,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -4903,7 +4951,7 @@ mod tests {
         let group_id = GroupRoomTool::create_group(
             &coordinator,
             "异步不阻塞群",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &workspace_str,
         )
         .await
@@ -4976,10 +5024,10 @@ mod tests {
             ExecutionEngine, ExecutionEngineConfig, RoundExecutor, StreamProcessor,
         };
         use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::session::{
             PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
         };
-        use crate::agentic::session::compression::{CompressionConfig, ContextCompressor};
         use crate::agentic::tools::pipeline::{ToolPipeline, ToolStateManager};
         use crate::agentic::tools::registry::ToolRegistry;
         use crate::infrastructure::PathManager;
@@ -5055,7 +5103,7 @@ mod tests {
         let group_ok = GroupRoomTool::create_group(
             &coordinator,
             "单群失败-好群",
-            &[member.clone()],
+            std::slice::from_ref(&member),
             &workspace_str,
         )
         .await
@@ -5099,4 +5147,3 @@ mod tests {
         );
     }
 }
-

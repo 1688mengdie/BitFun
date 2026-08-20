@@ -259,6 +259,7 @@ fn acp_send_input_notice(full_text: Option<&str>, session_id: &str) -> String {
 /// 参照 session_message_tool::persist_acp_direct_delivery_turn 同构：落盘存
 /// 全文（SessionHistory 可检索），查重防重复（同 turn id 跳过、索引冲突跳过），
 /// 失败仅 warn 绝不阻塞主流程通知式注入（03 文档铁则）。
+#[allow(clippy::too_many_arguments)] // persistence context passed explicitly for the shared helper
 async fn persist_background_acp_turn(
     persistence: &PersistenceManager,
     storage_path: &Path,

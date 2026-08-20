@@ -1673,7 +1673,7 @@ mod tests {
         // (distinguishable via delivered_at_ms) instead of silently dropping
         // it (COORD-09).
         let candidates = store
-            .wait_candidates("parent", &[delivered.bg_task_id.clone()])
+            .wait_candidates("parent", std::slice::from_ref(&delivered.bg_task_id))
             .await
             .expect("load explicit candidates");
         assert_eq!(candidates.len(), 1);

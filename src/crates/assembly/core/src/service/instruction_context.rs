@@ -23,7 +23,7 @@ async fn load_user_instruction_files(workspace_root: &Path) -> (Vec<LocalInstruc
         }
         let files =
             crate::instruction_sources::load_local_user_instruction_files(workspace_root).await;
-        return (files.files, files.cacheable);
+        (files.files, files.cacheable)
     }
     #[cfg(not(feature = "external-sources"))]
     {

@@ -1300,7 +1300,6 @@ impl ChatState {
                 ToolEventData::Completed {
                     identity,
                     result_for_assistant,
-                    result: _,
                     ..
                 } => {
                     let tool_name = identity.effective_name();

@@ -1938,6 +1938,9 @@ mod knowledge_base_injection_tests {
     #[test]
     fn configured_knowledge_base_root_is_injected_when_env_absent() {
         let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: ENV_LOCK serializes this env mutation against the other
+        // env-mutating tests in this binary; no other test reads the variable
+        // concurrently while it is changed.
         unsafe {
             std::env::remove_var("BITFUN_KNOWLEDGE_BASE_ROOT");
         }
@@ -1957,6 +1960,8 @@ mod knowledge_base_injection_tests {
     #[test]
     fn existing_env_knowledge_base_root_wins_over_config() {
         let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: ENV_LOCK serializes this env mutation against the other
+        // env-mutating tests in this binary; the value is a static string.
         unsafe {
             std::env::set_var("BITFUN_KNOWLEDGE_BASE_ROOT", "/fake/from/env");
         }
@@ -1976,6 +1981,9 @@ mod knowledge_base_injection_tests {
     #[test]
     fn unconfigured_knowledge_base_root_leaves_env_absent() {
         let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: ENV_LOCK serializes this env mutation against the other
+        // env-mutating tests in this binary; no other test reads the variable
+        // concurrently while it is changed.
         unsafe {
             std::env::remove_var("BITFUN_KNOWLEDGE_BASE_ROOT");
         }
@@ -1991,6 +1999,9 @@ mod knowledge_base_injection_tests {
     #[test]
     fn empty_configured_root_leaves_env_absent() {
         let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: ENV_LOCK serializes this env mutation against the other
+        // env-mutating tests in this binary; no other test reads the variable
+        // concurrently while it is changed.
         unsafe {
             std::env::remove_var("BITFUN_KNOWLEDGE_BASE_ROOT");
         }

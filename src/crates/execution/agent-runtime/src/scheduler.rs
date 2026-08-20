@@ -423,6 +423,9 @@ pub enum AgentSessionReplyAction {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+// Buffer carries a full RoundInjection; kept unboxed for direct field access
+// at every match site.
+#[allow(clippy::large_enum_variant)]
 pub enum DialogSteeringAction {
     Reject {
         error: String,
@@ -1283,6 +1286,9 @@ pub fn resolve_agent_session_reply_action(
     })
 }
 
+// Public steering-resolution helper; the parameter set mirrors the dialog
+// turn wire fields and is intentionally kept flat.
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_dialog_steering_action(
     active_turn_id: Option<&str>,
     session_id: &str,

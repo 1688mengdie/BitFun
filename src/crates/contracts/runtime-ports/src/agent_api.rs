@@ -583,18 +583,14 @@ pub struct AgentSubmissionRequest {
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
+#[derive(Default)]
 pub enum AgentDialogTurnExecution {
+    #[default]
     Standard,
     FreshExternalSubagent {
         ecosystem_id: String,
         logical_id: String,
     },
-}
-
-impl Default for AgentDialogTurnExecution {
-    fn default() -> Self {
-        Self::Standard
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

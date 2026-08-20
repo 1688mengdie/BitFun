@@ -637,11 +637,7 @@ pub const DEVICE_KIND_DESKTOP: &str = "desktop";
 pub const DEVICE_KIND_MOBILE: &str = "mobile";
 pub const DEVICE_KIND_WATCH: &str = "watch";
 
-pub const DEVICE_KINDS: [&str; 3] = [
-    DEVICE_KIND_DESKTOP,
-    DEVICE_KIND_MOBILE,
-    DEVICE_KIND_WATCH,
-];
+pub const DEVICE_KINDS: [&str; 3] = [DEVICE_KIND_DESKTOP, DEVICE_KIND_MOBILE, DEVICE_KIND_WATCH];
 
 pub fn is_valid_device_kind(kind: &str) -> bool {
     DEVICE_KINDS.contains(&kind)
@@ -2703,9 +2699,16 @@ mod tests {
             .await
             .unwrap()
             .is_none());
-        DeviceRow::upsert(&migrated, "shared-install", "u1", "Alice laptop", None, None)
-            .await
-            .unwrap();
+        DeviceRow::upsert(
+            &migrated,
+            "shared-install",
+            "u1",
+            "Alice laptop",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             DeviceRow::list_by_user(&migrated, "u1")
                 .await
@@ -2737,9 +2740,16 @@ mod tests {
         UserRow::create(&first, "u1", "alice", "s", "ks", "{}", "hash", "wmk")
             .await
             .unwrap();
-        DeviceRow::upsert(&first, "phone", "u1", "Phone", Some(DEVICE_KIND_MOBILE), None)
-            .await
-            .unwrap();
+        DeviceRow::upsert(
+            &first,
+            "phone",
+            "u1",
+            "Phone",
+            Some(DEVICE_KIND_MOBILE),
+            None,
+        )
+        .await
+        .unwrap();
         first.close().await;
 
         // The ALTER runs on every startup and must tolerate the column already

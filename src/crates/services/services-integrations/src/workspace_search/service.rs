@@ -254,7 +254,7 @@ impl WorkspaceSearchService {
         );
         Ok(IndexTaskHandle {
             task: task.into(),
-            repo_status: repo_status.into(),
+            repo_status,
         })
     }
 
@@ -311,7 +311,7 @@ impl WorkspaceSearchService {
         );
         Ok(IndexTaskHandle {
             task: task.into(),
-            repo_status: repo_status.into(),
+            repo_status,
         })
     }
 
@@ -1036,7 +1036,7 @@ impl WorkspaceSearchService {
     {
         let repo_status = tokio::time::timeout(SESSION_STATUS_TIMEOUT, session.status())
             .await
-            .map_err(|_| format!("workspace search timed out fetching repository status"))?
+            .map_err(|_| "workspace search timed out fetching repository status".to_string())?
             .map_err(map_flashgrep_error("Failed to fetch repository status"))?;
         let active_task = match repo_status.active_task_id.clone() {
             Some(task_id) => {

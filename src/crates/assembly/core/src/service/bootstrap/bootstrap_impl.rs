@@ -182,11 +182,9 @@ pub(crate) async fn initialize_member_persona_files(
         "# USER.md - About Your Human\n\nYour direct superior in the group is `{superior}`.\n\n## Context\n\nYou are a member of a group workflow. Follow the direct superior above and collaborate with your peers.\n"
     );
 
-    let identity_created = ensure_markdown_placeholder(
-        &workspace_root.join(IDENTITY_FILE_NAME),
-        &identity_content,
-    )
-    .await?;
+    let identity_created =
+        ensure_markdown_placeholder(&workspace_root.join(IDENTITY_FILE_NAME), &identity_content)
+            .await?;
     let soul_created =
         ensure_markdown_placeholder(&workspace_root.join(SOUL_FILE_NAME), &soul_content).await?;
     let user_created =
@@ -544,9 +542,15 @@ mod tests {
             .await
             .expect("Failed to create temp member workspace");
 
-        super::initialize_member_persona_files(&workspace_root, "executor", "write code", true, "commander")
-            .await
-            .expect("Failed to initialize member persona files");
+        super::initialize_member_persona_files(
+            &workspace_root,
+            "executor",
+            "write code",
+            true,
+            "commander",
+        )
+        .await
+        .expect("Failed to initialize member persona files");
 
         for file_name in [SOUL_FILE_NAME, USER_FILE_NAME, IDENTITY_FILE_NAME] {
             assert!(
@@ -574,9 +578,15 @@ mod tests {
             .await
             .expect("Failed to create temp member workspace");
 
-        super::initialize_member_persona_files(&workspace_root, "executor", "write code", true, "commander")
-            .await
-            .expect("Failed to initialize member persona files");
+        super::initialize_member_persona_files(
+            &workspace_root,
+            "executor",
+            "write code",
+            true,
+            "commander",
+        )
+        .await
+        .expect("Failed to initialize member persona files");
 
         let identity = fs::read_to_string(workspace_root.join(IDENTITY_FILE_NAME))
             .await

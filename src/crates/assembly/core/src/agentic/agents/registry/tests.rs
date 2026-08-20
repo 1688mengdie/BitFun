@@ -390,8 +390,12 @@ async fn group_is_a_first_class_builtin_mode_and_available_in_modes_info() {
         "get_available_modes must include group"
     );
     let group_info = modes.iter().find(|info| info.id == "group").unwrap();
-    assert!(group_info.default_tools.contains(&"send_group_message".to_string()));
-    assert!(group_info.default_tools.contains(&"create_group_chat".to_string()));
+    assert!(group_info
+        .default_tools
+        .contains(&"send_group_message".to_string()));
+    assert!(group_info
+        .default_tools
+        .contains(&"create_group_chat".to_string()));
 }
 
 #[test]

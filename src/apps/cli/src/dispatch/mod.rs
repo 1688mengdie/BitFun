@@ -762,9 +762,11 @@ fn inspect_workspace(workspace_path: &str) -> Result<DispatchWorkspaceProbe> {
     let RepositoryProbe {
         is_git_repository,
         trust_required,
-    } = is_directory
-        .then(|| classify_repository_probe(git_probe(&canonical, REV_PARSE_INSIDE_WORK_TREE)))
-        .unwrap_or_default();
+    } = if is_directory {
+        classify_repository_probe(git_probe(&canonical, REV_PARSE_INSIDE_WORK_TREE))
+    } else {
+        Default::default()
+    };
     let branch = is_git_repository
         .then(|| git_output(&canonical, &["branch", "--show-current"]))
         .flatten()

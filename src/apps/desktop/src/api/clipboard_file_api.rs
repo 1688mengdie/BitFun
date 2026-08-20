@@ -66,15 +66,14 @@ fn decode_file_uri(uri: &str) -> Option<String> {
     let rest = trimmed.strip_prefix("file://")?;
     let path_part = if rest.starts_with('/') {
         rest.to_string()
-    } else if let Some(slash_idx) = rest.find('/') {
+    } else {
+        let slash_idx = rest.find('/')?;
         let host = &rest[..slash_idx];
         if host.eq_ignore_ascii_case("localhost") {
             rest[slash_idx..].to_string()
         } else {
             return None;
         }
-    } else {
-        return None;
     };
 
     let decoded = urlencoding::decode(&path_part)

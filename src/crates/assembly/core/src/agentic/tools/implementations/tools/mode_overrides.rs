@@ -101,8 +101,7 @@ pub fn filter_globally_disabled_tools(
 /// Symmetric to the skills-side reset: clears `added_tools`/`removed_tools`
 /// through the shared canonicalizer while preserving skill/subagent overrides.
 pub async fn clear_user_mode_tool_overrides(mode_id: &str) -> BitFunResult<()> {
-    crate::service::config::mode_config_canonicalizer::reset_agent_profile_to_default(mode_id)
-        .await
+    crate::service::config::mode_config_canonicalizer::reset_agent_profile_to_default(mode_id).await
 }
 
 #[cfg(test)]
@@ -138,10 +137,9 @@ mod tests {
 
     #[test]
     fn filter_globally_disabled_tools_removes_disabled_and_keeps_others() {
-        let disabled: HashSet<String> =
-            ["Read".to_string(), "mcp__github__search".to_string()]
-                .into_iter()
-                .collect();
+        let disabled: HashSet<String> = ["Read".to_string(), "mcp__github__search".to_string()]
+            .into_iter()
+            .collect();
         assert_eq!(
             filter_globally_disabled_tools(
                 vec![
@@ -160,6 +158,9 @@ mod tests {
     fn filter_globally_disabled_tools_empty_disabled_is_noop() {
         let disabled = HashSet::new();
         let tools = vec!["Read".to_string(), "Write".to_string()];
-        assert_eq!(filter_globally_disabled_tools(tools.clone(), &disabled), tools);
+        assert_eq!(
+            filter_globally_disabled_tools(tools.clone(), &disabled),
+            tools
+        );
     }
 }

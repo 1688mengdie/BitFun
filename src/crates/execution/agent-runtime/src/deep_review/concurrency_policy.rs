@@ -215,14 +215,14 @@ impl DeepReviewExecutionPolicy {
     pub fn configured_concurrency_policy_default(&self) -> DeepReviewConcurrencyPolicy {
         let mut policy = DeepReviewConcurrencyPolicy::default();
         if let Some(parallel_instances) = self.configured_max_parallel_instances {
-            policy.max_parallel_instances = parallel_instances.max(1).min(16);
+            policy.max_parallel_instances = parallel_instances.clamp(1, 16);
         }
         if let Some(queue_wait) = self.configured_queue_wait_seconds {
-            policy.max_queue_wait_seconds = queue_wait.min(MAX_QUEUE_WAIT_SECONDS).max(1);
+            policy.max_queue_wait_seconds = queue_wait.clamp(1, MAX_QUEUE_WAIT_SECONDS);
         }
         if let Some(guard) = self.configured_auto_retry_elapsed_guard_seconds {
             policy.auto_retry_elapsed_guard_seconds =
-                guard.min(MAX_AUTO_RETRY_ELAPSED_GUARD_SECONDS).max(1);
+                guard.clamp(1, MAX_AUTO_RETRY_ELAPSED_GUARD_SECONDS);
         }
         policy
     }

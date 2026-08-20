@@ -146,18 +146,10 @@ fn acp_now_unix_ms() -> u64 {
 /// authoritative writer while it is online; this accumulator is the backend
 /// safety-net copy so a turn is still persisted when the frontend is closed,
 /// the session is not open, or the event stream is interrupted.
+#[derive(Default)]
 struct AcpDialogTurnAccumulator {
     current_round: Option<AcpAccumulatedRound>,
     rounds: Vec<AcpAccumulatedRound>,
-}
-
-impl Default for AcpDialogTurnAccumulator {
-    fn default() -> Self {
-        Self {
-            current_round: None,
-            rounds: Vec::new(),
-        }
-    }
 }
 
 impl AcpDialogTurnAccumulator {
@@ -393,6 +385,7 @@ impl AcpAccumulatedRound {
 }
 
 /// Build the persisted `DialogTurnData` for one completed ACP dialog turn.
+#[allow(clippy::too_many_arguments)] // turn persistence context; kept flat for the shared builder
 fn build_acp_dialog_turn_data(
     turn_id: &str,
     turn_index: usize,
@@ -441,6 +434,7 @@ fn build_acp_dialog_turn_data(
 /// is skipped with a warning instead of overwriting foreign data. Failures are
 /// logged, never propagated, so persistence can never break the streaming
 /// path.
+#[allow(clippy::too_many_arguments)] // turn persistence context; kept flat for the shared helper
 async fn persist_acp_dialog_turn_backend(
     persistence: &PersistenceManager,
     session_storage_path: &Path,
@@ -518,6 +512,7 @@ async fn persist_acp_dialog_turn_backend(
 ///
 /// Runs off the event-stream path: a missing workspace storage path or a
 /// persistence setup failure only logs a warning, never breaks streaming.
+#[allow(clippy::too_many_arguments)] // turn persistence context passed through to the helper
 fn spawn_acp_turn_backend_persist(
     session_storage_path: Option<PathBuf>,
     session_id: String,

@@ -2291,9 +2291,9 @@ impl SessionMessageTool {
                 // W9: remote 互斥拒绝（SessionMessage create 与
                 // SessionControl create 同一语义）。
                 let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
-                if params.worktree.is_some() {
+                if let Some(worktree) = &params.worktree {
                     super::session_control_tool::ensure_worktree_not_remote(context)?;
-                    let worktree_options = params.worktree.as_ref().expect("checked above");
+                    let worktree_options = worktree;
                     let request_id = context
                         .tool_call_id
                         .as_deref()
@@ -3725,7 +3725,6 @@ mod tests {
         assert!(!reminders[0].text.contains("From agent:"));
     }
 
-
     #[test]
     fn session_message_input_parses_batch_items() {
         let input: SessionMessageInput = serde_json::from_value(json!({
@@ -4938,7 +4937,6 @@ mod tests {
         ))
     }
 
-
     #[tokio::test]
     async fn delivery_authz_rejects_unrelated_caller_without_metadata() {
         // Not owner, target has no created_by, no ancestor relationship
@@ -5029,5 +5027,4 @@ mod tests {
         .await
         .expect("ancestor should be authorized to deliver");
     }
-
 }

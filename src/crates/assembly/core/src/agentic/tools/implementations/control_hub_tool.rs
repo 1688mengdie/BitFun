@@ -898,12 +898,11 @@ Branch on `ok` and `error.code`, not on English messages.
                 }?;
 
                 let user_data_dir = params.get("user_data_dir").and_then(|v| v.as_str());
-                let launch_result = if mode == "headless" {
-                    LaunchResult::AlreadyConnected
-                } else if user_data_dir.is_none()
-                    && CdpClient::browser_connection_for_kind(port, &kind)
-                        .await
-                        .is_some()
+                let launch_result = if mode == "headless"
+                    || (user_data_dir.is_none()
+                        && CdpClient::browser_connection_for_kind(port, &kind)
+                            .await
+                            .is_some())
                 {
                     LaunchResult::AlreadyConnected
                 } else {

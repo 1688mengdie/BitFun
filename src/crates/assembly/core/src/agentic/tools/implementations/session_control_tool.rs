@@ -653,7 +653,7 @@ fn orphan_session_delete_authorized(
 ) -> bool {
     caller_is_owner
         && !acp_flow_session
-        && target_metadata.map_or(true, |metadata| {
+        && target_metadata.is_none_or(|metadata| {
             metadata.created_by.as_deref().is_none()
                 && metadata
                     .relationship
@@ -883,6 +883,7 @@ impl SessionHistoryAuthOptions {
 ///    不能被利用来绕过授权）。
 ///
 /// `Ok(())` = 已授权；`Err` 为拒绝原因（tool error）。
+#[allow(clippy::too_many_arguments)] // full authorization context; kept flat for call-site clarity
 pub(crate) async fn resolve_session_read_authorization(
     session_manager: &crate::agentic::session::session_manager::SessionManager,
     tree: &SessionTreeManager,
@@ -1166,9 +1167,9 @@ pub(crate) fn build_session_tree_json_impl(
             if known_ids.contains(current.as_str()) {
                 return Some(current);
             }
-            match tree.and_then(|tree| tree.get_parent(&current)) {
-                Some(parent) => current = parent,
-                None => return None,
+            {
+                let parent = tree.and_then(|tree| tree.get_parent(&current))?;
+                current = parent
             }
         }
     };
@@ -1303,9 +1304,9 @@ fn build_compact_tree_lines(
             if known_ids.contains(current.as_str()) {
                 return Some(current);
             }
-            match tree.and_then(|tree| tree.get_parent(&current)) {
-                Some(parent) => current = parent,
-                None => return None,
+            {
+                let parent = tree.and_then(|tree| tree.get_parent(&current))?;
+                current = parent
             }
         }
     };
