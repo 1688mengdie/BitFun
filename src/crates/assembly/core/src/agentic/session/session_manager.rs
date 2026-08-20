@@ -3135,6 +3135,15 @@ impl SessionManager {
                 BitFunError::Validation("Session workspace_path is required".to_string())
             })?;
 
+        #[cfg(test)]
+        eprintln!(
+            "[ci-probe] create internal: workspace_path={:?}, effective_storage_path={}, is_resolved={}, projects_root={}",
+            config.workspace_path,
+            session_storage_path.display(),
+            self.persistence_manager.is_resolved_sessions_dir(&session_storage_path),
+            self.persistence_manager.path_manager().projects_root().display(),
+        );
+
         let mut session = if let Some(id) = session_id {
             Session::new_with_id(id, session_name, agent_type.clone(), config)
         } else {
@@ -7928,6 +7937,13 @@ impl SessionManager {
         }
 
         let workspace_path = self.metadata_workspace_path_for_update(session_id).await?;
+        #[cfg(test)]
+        eprintln!(
+            "[ci-probe] update_persisted: session_id={}, workspace_path={}, is_resolved={}",
+            session_id,
+            workspace_path.display(),
+            self.persistence_manager.is_resolved_sessions_dir(&workspace_path),
+        );
         self.update_session_metadata_at_workspace(&workspace_path, session_id, update)
             .await
     }

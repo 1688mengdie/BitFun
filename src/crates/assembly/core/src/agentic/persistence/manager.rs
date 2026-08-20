@@ -559,7 +559,17 @@ impl PersistenceManager {
     /// `~/.bitfun/projects/`; already-resolved local/remote sessions
     /// directories are used as-is.
     fn project_sessions_dir(&self, workspace_path: &Path) -> PathBuf {
-        if self.is_resolved_sessions_dir(workspace_path) {
+        let resolved = self.is_resolved_sessions_dir(workspace_path);
+        #[cfg(test)]
+        eprintln!(
+            "[ci-probe] project_sessions_dir: resolved={}, workspace_path={}, derived={}, workspace_exists={}, parent_exists={}",
+            resolved,
+            workspace_path.display(),
+            self.path_manager.project_sessions_dir(workspace_path).display(),
+            workspace_path.exists(),
+            workspace_path.parent().map(|p| p.exists()).unwrap_or(false),
+        );
+        if resolved {
             return workspace_path.to_path_buf();
         }
         self.path_manager.project_sessions_dir(workspace_path)
@@ -2111,6 +2121,13 @@ impl PersistenceManager {
         self.ensure_runtime_for_write(workspace_path).await?;
 
         let sessions_dir = self.project_sessions_dir(workspace_path);
+        #[cfg(test)]
+        eprintln!(
+            "[ci-probe] create_session_if_absent: workspace_path={}, sessions_dir={}, lock_root_exists={}",
+            workspace_path.display(),
+            sessions_dir.display(),
+            sessions_dir.parent().map(|p| p.join(".session-write-locks")).map(|p| p.exists()).unwrap_or(false),
+        );
         fs::create_dir_all(&sessions_dir).await.map_err(|error| {
             BitFunError::io(format!(
                 "Failed to create sessions directory {}: {}",
@@ -2118,6 +2135,15 @@ impl PersistenceManager {
                 error
             ))
         })?;
+        #[cfg(test)]
+        eprintln!(
+            "[ci-probe] create_session_if_absent AFTER create_dir_all: sessions_dir={}, exists={}, projects_root_tree={:?}",
+            sessions_dir.display(),
+            sessions_dir.exists(),
+            std::fs::read_dir(self.path_manager.projects_root()).map(|entries| {
+                entries.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()
+            }).unwrap_or_default(),
+        );
         let persistence_lock = self
             .get_session_persistence_lock(workspace_path, &session.session_id)
             .await;

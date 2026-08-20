@@ -167,7 +167,20 @@ impl CoreSessionStorePort {
                 };
                 let confined_root: &Path =
                     canonical_root.as_deref().unwrap_or(projects_root.as_path());
-                let confined_path: &Path = canonical_candidate.as_deref().unwrap_or(candidate);
+                let confined_path: &Path = canonical_candidate
+                    .as_deref()
+                    .unwrap_or(candidate);
+                #[cfg(test)]
+                eprintln!(
+                    "[ci-probe] resolved_sessions_dir_kind: path={}, projects_root={}, canonical_root={:?}, candidate={}, canonical_candidate={:?}, shape_matches={}, confined={}",
+                    path.display(),
+                    projects_root.display(),
+                    canonical_root.as_ref().map(|p| p.display().to_string()),
+                    candidate.display(),
+                    canonical_candidate.as_ref().map(|p| p.display().to_string()),
+                    shape_matches,
+                    Self::is_confined_to_managed_root(confined_root, confined_path),
+                );
                 shape_matches && Self::is_confined_to_managed_root(confined_root, confined_path)
             });
         has_local_shape.then_some(SessionStorageKind::Local)
