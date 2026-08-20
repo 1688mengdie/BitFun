@@ -150,11 +150,13 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
         return Ok(static_codebuddy_models());
     }
 
-    // Qoder's inference gateway (`api2-v2.qoder.sh`) exposes no public
-    // OpenAI `/models` endpoint. Serve the static catalog validated against
-    // the live endpoint (pi-free's models.ts excludes invalid ids such as
-    // `dfmodel`/`gm51model`/`qmodel_latest`) so imports can pick a real model.
-    if url.contains("api2-v2.qoder.sh") {
+    // Qoder's inference gateway exposes no public OpenAI `/models` endpoint.
+    // Serve the static catalog validated against the live endpoint (pi-free's
+    // models.ts excludes invalid ids such as `dfmodel`/`gm51model`/`qmodel_latest`)
+    // so imports can pick a real model. Both the international gateway
+    // (`api2-v2.qoder.sh`) and the China-region gateway
+    // (`gateway.qoder.com.cn`) are matched.
+    if url.contains("api2-v2.qoder.sh") || url.contains("gateway.qoder.com.cn") {
         return Ok(static_qoder_models());
     }
 
