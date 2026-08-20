@@ -18847,6 +18847,7 @@ mod tests {
                 new_messages: vec![message],
                 finish_reason: FinishReason::Complete,
                 total_tools: 0,
+                total_tokens: 0,
                 duration_ms: 1,
                 partial_recovery_reason: None,
                 effective_finish_reason: "complete".to_string(),
