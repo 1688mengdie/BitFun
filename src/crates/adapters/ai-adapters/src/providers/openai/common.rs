@@ -143,6 +143,21 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
         return list_codex_chatgpt_models(client, &url).await;
     }
 
+    // CodeBuddy's Tencent backend (`copilot.tencent.com`) exposes no public
+    // OpenAI `/models` endpoint. Serve a static catalog mirroring the official
+    // client's model list so subscription imports can pick a real model id.
+    if url.contains("copilot.tencent.com") {
+        return Ok(static_codebuddy_models());
+    }
+
+    // Qoder's inference gateway (`api2-v2.qoder.sh`) exposes no public
+    // OpenAI `/models` endpoint. Serve the static catalog validated against
+    // the live endpoint (pi-free's models.ts excludes invalid ids such as
+    // `dfmodel`/`gm51model`/`qmodel_latest`) so imports can pick a real model.
+    if url.contains("api2-v2.qoder.sh") {
+        return Ok(static_qoder_models());
+    }
+
     let response = apply_headers(client, client.client.get(&url))
         .send()
         .await?
@@ -198,6 +213,61 @@ const DEFAULT_CODEX_MODELS: &[&str] = &[
 pub(crate) fn is_known_codex_reasoning_model(model_id: &str) -> bool {
     let model_id = model_id.trim().to_ascii_lowercase();
     model_id == "gpt-5-codex" || DEFAULT_CODEX_MODELS.contains(&model_id.as_str())
+}
+
+/// CodeBuddy backend model catalog (mirrors the official client's model list).
+/// The Tencent gateway accepts these real model ids only; arbitrary ids are
+/// rejected, so the discovery surface must not invent names.
+const CODEBUDDY_MODELS: &[&str] = &[
+    "glm-5.2",
+    "glm-5.1",
+    "glm-5v-turbo",
+    "kimi-k2.7",
+    "kimi-k2.6",
+    "kimi-k2.5",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+    "minimax-m3-pay",
+    "hy3-preview-agent",
+    "auto",
+];
+
+fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
+    CODEBUDDY_MODELS
+        .iter()
+        .map(|id| RemoteModelInfo {
+            id: (*id).to_string(),
+            display_name: None,
+        })
+        .collect()
+}
+
+/// Qoder backend model catalog. Mirrors the Qoder CN CLI (`qoderclicn`) model
+/// list for China-region accounts (see `qoder-cn-proxy` README): the CN
+/// surface exposes these ids and rejects names from the international catalog
+/// (e.g. `ultimate`/`performance` are not valid CN router ids).
+const QODER_MODELS: &[&str] = &[
+    "qoder-cn",
+    "auto",
+    "qwen3.8-max-preview",
+    "qwen3.7-max",
+    "qwen3.7-plus",
+    "glm-5.2",
+    "kimi-k2.7-code",
+    "minimax-m2.7",
+    "qwen3.6-flash",
+    "deepseek-v4-pro",
+    "deepseek-v4-flash",
+];
+
+fn static_qoder_models() -> Vec<RemoteModelInfo> {
+    QODER_MODELS
+        .iter()
+        .map(|id| RemoteModelInfo {
+            id: (*id).to_string(),
+            display_name: None,
+        })
+        .collect()
 }
 
 const FORWARD_COMPAT_CODEX_MODELS: &[(&str, &[&str])] = &[

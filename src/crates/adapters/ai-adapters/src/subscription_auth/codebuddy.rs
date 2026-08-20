@@ -16,6 +16,10 @@ use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;
 
 const API_BASE_URL: &str = "https://copilot.tencent.com";
+/// OpenAI-compatible inference endpoint. The official CodeBuddy desktop client
+/// appends `/v2` to its product endpoint, so the chat-completions route lives
+/// under `/v2/chat/completions` (not `/chat/completions`).
+const MODEL_REQUEST_URL: &str = "https://copilot.tencent.com/v2/chat/completions";
 const PLATFORM: &str = "CodeBuddyIDE";
 const DOMAIN: &str = "copilot.tencent.com";
 const STORE_KEY: &str = "codebuddy";
@@ -430,16 +434,20 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
     Ok(ResolvedCredential {
         api_key: access,
         base_url: Some(API_BASE_URL.to_string()),
-        request_url: None,
-        format: None,
+        request_url: Some(MODEL_REQUEST_URL.to_string()),
+        format: Some("openai".to_string()),
         extra_headers: headers,
         expires_at: Some(expires / 1000),
     })
 }
 
 /// Provider metadata used to seed a new model entry.
+///
+/// The model id must be a real CodeBuddy backend model name (the gateway does
+/// not map arbitrary ids); `glm-5.2` is the default in the official client's
+/// model list.
 pub(crate) fn suggested() -> (&'static str, &'static str, &'static str) {
-    ("openai", API_BASE_URL, "codebuddy")
+    ("openai", API_BASE_URL, "glm-5.2")
 }
 
 #[cfg(test)]
@@ -451,7 +459,7 @@ mod tests {
         let (format, base_url, model) = suggested();
         assert_eq!(format, "openai");
         assert_eq!(base_url, API_BASE_URL);
-        assert!(!model.is_empty());
+        assert_eq!(model, "glm-5.2");
     }
 
     #[test]
@@ -505,6 +513,11 @@ mod tests {
             assert_eq!(resolved.extra_headers["X-Tenant-Id"], "ent-9");
             assert_eq!(resolved.extra_headers["X-Domain"], DOMAIN);
             assert_eq!(resolved.extra_headers["X-Department-Info"], "R&D");
+            assert_eq!(
+                resolved.request_url.as_deref(),
+                Some("https://copilot.tencent.com/v2/chat/completions")
+            );
+            assert_eq!(resolved.format.as_deref(), Some("openai"));
         });
     }
 
