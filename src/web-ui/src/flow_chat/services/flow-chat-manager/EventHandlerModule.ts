@@ -227,8 +227,9 @@ function eventOwnsLatestSessionTurn(
 ): boolean {
   const machine = stateMachineManager.get(sessionId);
   const currentTurnId = machine?.getContext().currentDialogTurnId;
-  // 优先以状态机 currentDialogTurnId 匹配（乐观创建的 follow-up turn 使
-  // dialogTurns.at(-1) 非本 turn 时，完成事件不应被丢弃 → busy 卡死根因断点 A）。
+  // Match against the state machine's currentDialogTurnId first: when an
+  // optimistically created follow-up turn makes dialogTurns.at(-1) differ from
+  // this turn, the completion event must not be dropped (busy deadlock root A).
   if (currentTurnId && currentTurnId === turnId) return true;
   if (session.dialogTurns.at(-1)?.id !== turnId) return false;
   return !currentTurnId || currentTurnId === turnId;
@@ -3122,16 +3123,20 @@ export function handleDialogTurnComplete(
   reconcileBackgroundSubagentSession(sessionId);
 
   const currentState = stateMachineManager.getCurrentState(sessionId);
-  // busy 卡死根治（R-BUSY-V6）：DialogTurnCompleted 到达 = 该会话某 turn 正常
-  // 完成 → 状态机在 PROCESSING 即无条件结算（与官方一致——官方无状态机，
-  // 完成事件到达即释放）。不再用 ownsSessionSettlement 拦截（eventOwnsLatestSessionTurn
-  // 的 :207 fallback `dialogTurns.at(-1)?.id !== turnId` 会误拦截：前端乐观
-  // turn id 与后端完成事件 turn id 不一致时 currentTurnId 不匹配 + dialogTurns
-  // 最新一条也不是该 turn → 返回 false → BACKEND_STREAM_COMPLETED + beginTurnCompletion
-  // 全被跳过 → FINISHING_SETTLED 永不发 → 状态机永留 PROCESSING → busy 卡死。
-  // 后端 Completed 事件只发一次且在该 turn 结束后立即发（新 turn 未开始），
-  // 不存在「旧 turn Completed 晚到破坏新 turn」的场景（Cancelled 才有晚到，
-  // 走独立 handler）。完成 = 完成，必须结算。
+  // Busy deadlock root fix (R-BUSY-V6): a DialogTurnCompleted arrival means
+  // some turn of this session finished normally, so the state machine settles
+  // unconditionally while PROCESSING (matching upstream, which has no state
+  // machine and releases on arrival). ownsSessionSettlement no longer gates
+  // settlement: the :207 fallback `dialogTurns.at(-1)?.id !== turnId` in
+  // eventOwnsLatestSessionTurn mis-blocks when the frontend-optimistic turn id
+  // differs from the backend completion turn id (currentTurnId mismatch and the
+  // latest dialogTurns entry is not this turn) -> false -> both
+  // BACKEND_STREAM_COMPLETED and beginTurnCompletion are skipped ->
+  // FINISHING_SETTLED never fires -> the machine stays in PROCESSING forever
+  // (busy deadlock). The backend emits Completed exactly once, immediately
+  // after that turn ends (before any new turn starts), so a late old-turn
+  // Completed cannot corrupt a new turn (only Cancelled can arrive late and it
+  // has its own handler). Completed means completed: settle.
   if (currentState === SessionExecutionState.PROCESSING) {
     void stateMachineManager
       .transition(sessionId, SessionExecutionEvent.BACKEND_STREAM_COMPLETED)
@@ -3142,10 +3147,12 @@ export function handleDialogTurnComplete(
     log.debug('Skipping BACKEND_STREAM_COMPLETED transition', { currentState, sessionId, turnId });
   }
 
-  // 无条件 beginTurnCompletion（完成事件到达即结算，与官方一致）：
-  // recovered/非 settlement 场景状态机可能非 PROCESSING，但完成事件仍必须
-  // 走结算（finalize 内部对状态机做幂等 FINISHING_SETTLED，UI turn 更新
-  // 已在上方完成）。禁以状态机状态/ownsSessionSettlement 拦截完成结算。
+  // Unconditional beginTurnCompletion (settle on completion arrival, matching
+  // upstream): in recovered/non-settlement scenarios the machine may not be
+  // PROCESSING, but the completion event must still settle (finalize performs
+  // an idempotent FINISHING_SETTLED on the machine; the UI turn update already
+  // happened above). Never gate completion settlement on machine state or
+  // ownsSessionSettlement.
   beginTurnCompletion(context, sessionId, turnId, partialRecoveryReason);
 }
 
@@ -3239,9 +3246,10 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
   
   const currentState = stateMachineManager.getCurrentState(sessionId);
   if (ownsSessionSettlement && isStreamingExecutionState(currentState)) {
-    // busy 卡死修复（断点 A 关联）：失败路径统一走 FINISHING_SETTLED 单跳复位，
-    // 不再用 ERROR_OCCURRED→RESET 两连跳（RESET 清空 context.currentDialogTurnId，
-    // 导致后续完成事件判定失真 → 状态机永留 PROCESSING → busy 必现）。
+    // Busy deadlock fix (root A related): failure paths reset via a single
+    // FINISHING_SETTLED hop instead of ERROR_OCCURRED -> RESET (RESET clears
+    // context.currentDialogTurnId, which distorts later completion-event
+    // judgement -> the machine stays in PROCESSING forever -> busy always).
     stateMachineManager.transition(sessionId, SessionExecutionEvent.FINISHING_SETTLED, {
       error: error || 'Execution failed'
     }).catch(err => {
