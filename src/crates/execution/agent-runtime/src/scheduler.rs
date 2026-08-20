@@ -230,6 +230,42 @@ impl DialogReplySuppressionSet {
     }
 }
 
+/// Suppression marks for urgent-steered turns (R-ASYNC-01 项2, fixed by
+/// urgent-reply-01 方案 B). Unlike the generic [`DialogReplySuppressionSet`],
+/// each entry records the *injector* session id that steered the message into
+/// the running turn. At turn completion the consumer compares this injector
+/// against the turn's `reply_route`: when the route points back at the
+/// injector, the auto-reply is the *only* delivery channel the injector waits
+/// on (the UserSteering channel has no reply capability), so the mark must NOT
+/// suppress it. The mark only suppresses when the turn's reply route belongs
+/// to someone else (a duplicate auto-reply scenario).
+#[derive(Debug, Default)]
+pub struct InjectedTurnReplySuppressionSet {
+    inner: dashmap::DashMap<(String, String), String>,
+}
+
+impl InjectedTurnReplySuppressionSet {
+    pub fn mark(&self, session_id: &str, turn_id: &str, injector_session_id: &str) {
+        self.inner.insert(
+            (session_id.to_string(), turn_id.to_string()),
+            injector_session_id.to_string(),
+        );
+    }
+
+    /// Remove and return the recorded injector session id, if any.
+    pub fn take(&self, session_id: &str, turn_id: &str) -> Option<String> {
+        self.inner
+            .remove(&(session_id.to_string(), turn_id.to_string()))
+            .map(|(_, injector)| injector)
+    }
+
+    /// Remove every entry belonging to `session_id`, regardless of turn id.
+    pub fn clear_session(&self, session_id: &str) {
+        self.inner
+            .retain(|(entry_session_id, _), _| entry_session_id != session_id);
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SessionAbortFlags {
     inner: dashmap::DashMap<String, ()>,

@@ -2636,12 +2636,19 @@ impl SessionMessageTool {
                     {
                         Ok(_outcome) => {
                             steering_turn_id = Some(turn_id.clone());
-                            // R-ASYNC-01（项2）：urgent 引导注入成功后标记目标
-                            // turn——完成时抑制自动回传（双回复根除）。注入消息的
-                            // 回复由注入通道交付，注入 turn 再自动回传即产生双回复
-                            // （该 turn 的 reply_route 是发起方等待回传时设定的）。
-                            scheduler
-                                .mark_injected_turn_reply_suppressed(&target_session_id, &turn_id);
+                            // R-ASYNC-01（项2）+ urgent-reply-01（方案 B）：
+                            // urgent 引导注入成功后标记目标 turn 及注入方
+                            // source_session_id——完成时抑制自动回传（双回复
+                            // 根除）。注入消息的回复由注入通道交付，注入 turn
+                            // 再自动回传即产生双回复（该 turn 的 reply_route 是
+                            // 发起方等待回传时设定的）。但当 reply_route 指向
+                            // 注入方时（注入通道无回传能力，自动回传是唯一
+                            // 通道）不抑制——见 scheduler 消费点匹配。
+                            scheduler.mark_injected_turn_reply_suppressed(
+                                &target_session_id,
+                                &turn_id,
+                                source_session_id,
+                            );
                             info!(
                                 "Urgent SessionMessage steered into running turn: source_session_id={}, target_session_id={}, turn_id={}",
                                 source_session_id, target_session_id, turn_id

@@ -63,8 +63,8 @@ use bitfun_agent_runtime::scheduler::{
     AgentSessionReplyAction, AgentSessionReplyPlan, BackgroundDeliveryAction,
     BackgroundDeliveryFacts, BackgroundInjectionKind, DialogReplySuppressionSet, DialogStartRoute,
     DialogStartRouteFacts, DialogSteeringAction, DialogTurnQueue, GoalContinuationAfterTurnAction,
-    SessionAbortFlags, ThreadGoalDeliveryReminder, ThreadGoalDeliveryReminderKind,
-    TurnOutcomeQueueAction, TurnOutcomeStatus,
+    InjectedTurnReplySuppressionSet, SessionAbortFlags, ThreadGoalDeliveryReminder,
+    ThreadGoalDeliveryReminderKind, TurnOutcomeQueueAction, TurnOutcomeStatus,
 };
 use bitfun_runtime_ports::{
     resolve_dialog_submit_queue_action, AgentBackgroundResultRequest, AgentDialogPrependedReminder,
@@ -427,7 +427,10 @@ pub struct DialogScheduler {
     /// 完成时抑制自动回传（双回复根除）。注入消息的回复由注入通道交付，
     /// 若该 turn 再自动回传（reply_route 仍在）即产生双回复。steer 成功后
     /// mark，turn 完成时 take 判定。复用 DialogReplySuppressionSet 机制。
-    suppressed_injected_turn_replies: Arc<DialogReplySuppressionSet>,
+    /// urgent-reply-01（方案 B）：mark 记录注入方 session id；turn 完成时若
+    /// reply_route 指向注入方（注入通道无回传能力，自动回传是唯一通道）则
+    /// 不抑制，正常回传。
+    suppressed_injected_turn_replies: Arc<InjectedTurnReplySuppressionSet>,
     /// Exact outcomes retired by destructive session maintenance. The outcome
     /// channel may receive them only after the maintenance permit releases its
     /// per-session operation lock; tombstoning prevents them from mutating a
@@ -574,7 +577,7 @@ impl DialogScheduler {
             active_turns: Arc::new(ActiveDialogTurnStore::default()),
             active_internal_turns: Arc::new(dashmap::DashMap::new()),
             suppressed_cancelled_replies: Arc::new(DialogReplySuppressionSet::default()),
-            suppressed_injected_turn_replies: Arc::new(DialogReplySuppressionSet::default()),
+            suppressed_injected_turn_replies: Arc::new(InjectedTurnReplySuppressionSet::default()),
             retired_maintenance_outcomes: Arc::new(DialogReplySuppressionSet::default()),
             goal_continuation_abort: Arc::new(SessionAbortFlags::default()),
             active_turn_retired: Arc::new(Notify::new()),
@@ -3103,15 +3106,26 @@ impl DialogScheduler {
         self.suppressed_cancelled_replies.take(session_id, turn_id)
     }
 
-    /// R-ASYNC-01（项2）：urgent 引导注入成功后 mark 目标 turn——完成时抑制
-    /// 自动回传（双回复根除）。turn 完成时 `take_suppressed_injected_turn_reply`
-    /// 消费标记（一次性，防 session 回收残留）。
-    pub fn mark_injected_turn_reply_suppressed(&self, session_id: &str, turn_id: &str) {
+    /// R-ASYNC-01（项2）+ urgent-reply-01（方案 B）：urgent 引导注入成功后
+    /// mark 目标 turn 及注入方 session id——完成时抑制自动回传（双回复根除），
+    /// 但 reply_route 指向注入方时（注入通道无回传能力）不抑制。turn 完成时
+    /// `take_suppressed_injected_turn_reply` 消费标记（一次性，防 session
+    /// 回收残留）。
+    pub fn mark_injected_turn_reply_suppressed(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        injector_session_id: &str,
+    ) {
         self.suppressed_injected_turn_replies
-            .mark(session_id, turn_id);
+            .mark(session_id, turn_id, injector_session_id);
     }
 
-    fn take_suppressed_injected_turn_reply(&self, session_id: &str, turn_id: &str) -> bool {
+    fn take_suppressed_injected_turn_reply(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> Option<String> {
         self.suppressed_injected_turn_replies
             .take(session_id, turn_id)
     }
@@ -3291,8 +3305,18 @@ impl DialogScheduler {
             self.take_suppressed_cancelled_reply(session_id, outcome.turn_id());
         // R-ASYNC-01（项2）：urgent 引导注入目标 turn 完成时抑制自动回传。
         // take = 一次性消费（防 session 回收后残留误吞新 turn）。
-        let suppressed_injected_turn_reply =
-            self.take_suppressed_injected_turn_reply(session_id, outcome.turn_id());
+        // urgent-reply-01（方案 B）：take 返回注入方 session id；若该 turn 的
+        // reply_route 指向注入方（UserSteering 注入通道无回传能力，自动回传
+        // 是注入方等待的唯一通道）→ 不抑制，正常 Forward；仅当 reply_route
+        // 属于他人（重复自动回传场景）→ 抑制。
+        let suppressed_injected_turn_reply = self
+            .take_suppressed_injected_turn_reply(session_id, outcome.turn_id())
+            .is_some_and(|injector_session_id| {
+                active_turn
+                    .as_ref()
+                    .and_then(|turn| turn.reply_route())
+                    .is_some_and(|route| route.source_session_id != injector_session_id)
+            });
         let is_internal_turn = active_internal_turn.is_some();
         if !is_internal_turn {
             if let Some(active_turn) = active_turn.as_ref() {
@@ -6317,6 +6341,97 @@ mod tests {
             ),
             AgentSessionReplyAction::Forward(_)
         ));
+    }
+
+    // urgent-reply-01（方案 B）消费点行为：mark 记录注入方；turn 完成时
+    // reply_route 指向注入方（UserSteering 注入通道无回传能力，自动回传是
+    // 注入方等待的唯一通道）→ 不抑制，正常 Forward（archive 文件生成）。
+    #[tokio::test]
+    async fn injected_turn_reply_not_suppressed_when_reply_route_points_to_injector() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "injector-reply-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (_, plan_file) = write_bound_plan_file(&root, "injector_reply_plan.plan.md");
+        let turn_id = "injector-reply-turn";
+        let injector = "commander-session";
+        // The turn's reply_route points back at the injector (the commander
+        // dispatched this turn and is waiting for the auto-reply).
+        let mut route = sample_reply_route();
+        route.source_session_id = injector.to_string();
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(turn_id, &workspace_path, &plan_file, Some(route)),
+        );
+        scheduler.mark_injected_turn_reply_suppressed(session_id, turn_id, injector);
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "urgent task done".to_string(),
+                },
+            ))
+            .expect("send completed outcome");
+
+        let archive_root = root.path().join("agent-replies");
+        for _ in 0..100 {
+            if !reply_archive_files(&archive_root).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let files = reply_archive_files(&archive_root);
+        assert_eq!(
+            files.len(),
+            1,
+            "reply_route points at the injector: auto-reply must NOT be suppressed"
+        );
+        let content = std::fs::read_to_string(&files[0]).expect("read reply archive");
+        assert!(content.contains("target_session: commander-session"));
+        assert!(content.contains("urgent task done"));
+    }
+
+    // urgent-reply-01（方案 B）：mark 注入方与 reply_route 不匹配（turn 的
+    // 回传目标另有其人）→ 抑制仍生效，防双回复（无 archive 文件）。
+    #[tokio::test]
+    async fn injected_turn_reply_suppressed_when_reply_route_belongs_to_other() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "injector-other-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (_, plan_file) = write_bound_plan_file(&root, "injector_other_plan.plan.md");
+        let turn_id = "injector-other-turn";
+        // The turn's reply_route points at a different requester (not the
+        // injector): suppressing prevents a duplicate auto-reply.
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(
+                turn_id,
+                &workspace_path,
+                &plan_file,
+                Some(sample_reply_route()),
+            ),
+        );
+        scheduler.mark_injected_turn_reply_suppressed(session_id, turn_id, "injector-session");
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "done".to_string(),
+                },
+            ))
+            .expect("send completed outcome");
+
+        wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
+        let archive_root = root.path().join("agent-replies");
+        assert!(
+            reply_archive_files(&archive_root).is_empty(),
+            "reply_route belongs to another requester: auto-reply must be suppressed"
+        );
     }
 
     #[test]
