@@ -912,9 +912,22 @@ pub(crate) async fn list_models(
     let _ = refresh_token;
     Ok(entries
         .into_iter()
-        .map(|entry| crate::types::RemoteModelInfo {
-            id: entry.key,
-            display_name: entry.display_name,
+        .map(|entry| {
+            // The gateway accepts BOTH the internal routing alias (`key`, e.g.
+            // `qmodel`/`kmodel`) and the human display name (e.g.
+            // `Qwen3.7-Plus`/`Kimi-K2.7-Code`) as the inference `model` value
+            // (live-verified 2026-08-21: both return 200). Store the display
+            // name so the UI shows and persists the real model name, never the
+            // internal alias. `auto` keeps its lowercase key form (the CLI's
+            // default model value).
+            let id = match &entry.display_name {
+                Some(display) if entry.key != "auto" => display.clone(),
+                _ => entry.key.clone(),
+            };
+            crate::types::RemoteModelInfo {
+                id,
+                display_name: entry.display_name,
+            }
         })
         .collect())
 }
@@ -922,6 +935,93 @@ pub(crate) async fn list_models(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real gateway catalog snapshot (fetched 2026-08-21 with the wasm-signed
+    /// request, `chat` scene). The `key` field is the internal routing alias
+    /// (e.g. `qmodel`/`kmodel`); the stored model id must be the human
+    /// display name (e.g. `Qwen3.7-Plus`/`Kimi-K2.7-Code`). Live-verified:
+    /// both alias and display name return 200 on the inference endpoint, but
+    /// the UI must store the display name so users see real model names.
+    const GATEWAY_CHAT_SNAPSHOT: &[(&str, &str)] = &[
+        ("auto", "Auto"),
+        ("qmodel_38max", "Qwen3.8-Max"),
+        ("qmodel_latest", "Qwen3.7-Max"),
+        ("qmodel", "Qwen3.7-Plus"),
+        ("q37fmodel", "Qwen3.7-Flash"),
+        ("dmodel", "DeepSeek-V4-Pro"),
+        ("dfmodel", "DeepSeek-V4-Flash"),
+        ("gmodel", "GLM-5.3"),
+        ("gm51model", "GLM-5.2"),
+        ("kmodel", "Kimi-K2.7-Code"),
+        ("mmodel", "MiniMax-M2.7"),
+    ];
+
+    #[test]
+    fn gateway_catalog_maps_alias_to_human_model_name() {
+        // Contract lock: every gateway entry has a routing alias (`key`) and a
+        // human name (`display_name`) that differ for non-auto entries; the
+        // stored model id is the display name, never the alias.
+        assert_eq!(GATEWAY_CHAT_SNAPSHOT.len(), 11);
+        let mut aliases = std::collections::HashSet::new();
+        for (key, display) in GATEWAY_CHAT_SNAPSHOT {
+            assert!(!key.is_empty(), "key must not be empty");
+            assert!(!display.is_empty(), "display_name must not be empty");
+            assert!(
+                aliases.insert(*key),
+                "duplicate key {key}; keys are the unique gateway routing aliases"
+            );
+            if *key != "auto" {
+                assert_ne!(
+                    key.to_lowercase(),
+                    display.to_lowercase(),
+                    "alias {key} and human name {display} must differ for non-auto entries"
+                );
+            }
+        }
+        assert!(aliases.contains("auto"), "auto default is always present");
+    }
+
+    #[test]
+    fn list_models_stores_display_name_not_routing_alias() {
+        // Feed the real gateway wire shape and assert the mapping: id =
+        // display_name (Qwen3.7-Plus / Kimi-K2.7-Code), never the alias
+        // (qmodel / kmodel); auto keeps its key form (the CLI default).
+        let payload = serde_json::json!({
+            "chat": [
+                {"key": "auto", "display_name": "Auto", "format": "openai", "source": "system", "enable": true},
+                {"key": "qmodel", "display_name": "Qwen3.7-Plus", "format": "openai", "source": "system", "enable": true},
+                {"key": "kmodel", "display_name": "Kimi-K2.7-Code", "format": "openai", "source": "system", "enable": true},
+            ]
+        });
+        let scene = payload
+            .get("chat")
+            .and_then(|v| v.as_array())
+            .expect("chat array");
+        let entries: Vec<GatewayModelEntry> = scene
+            .iter()
+            .filter_map(|item| serde_json::from_value(item.clone()).ok())
+            .collect();
+        assert_eq!(entries.len(), 3);
+        let models: Vec<crate::types::RemoteModelInfo> = entries
+            .into_iter()
+            .map(|entry| {
+                let id = match &entry.display_name {
+                    Some(display) if entry.key != "auto" => display.clone(),
+                    _ => entry.key.clone(),
+                };
+                crate::types::RemoteModelInfo {
+                    id,
+                    display_name: entry.display_name,
+                }
+            })
+            .collect();
+        assert_eq!(models[0].id, "auto");
+        assert_eq!(models[0].display_name.as_deref(), Some("Auto"));
+        assert_eq!(models[1].id, "Qwen3.7-Plus");
+        assert_eq!(models[1].display_name.as_deref(), Some("Qwen3.7-Plus"));
+        assert_eq!(models[2].id, "Kimi-K2.7-Code");
+        assert_eq!(models[2].display_name.as_deref(), Some("Kimi-K2.7-Code"));
+    }
 
     #[test]
     fn signature_materials_roundtrip_through_metadata() {
