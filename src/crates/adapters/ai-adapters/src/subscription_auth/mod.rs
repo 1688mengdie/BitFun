@@ -16,11 +16,12 @@ mod oauth_server;
 mod opencode;
 mod pkce;
 mod qoder;
+pub(crate) mod qoder_wasm;
 pub mod store;
 
 pub use store::{set_store_path_for_test, StoredCredential};
 
-use crate::types::ProxyConfig;
+use crate::types::{ProxyConfig, RemoteModelInfo};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -884,6 +885,41 @@ pub async fn resolve_opencode_with_options(
 /// Forces a resolve (which refreshes and saves), then returns the account entry.
 pub async fn refresh_account(provider: SubscriptionProvider) -> Result<SubscriptionAccount> {
     refresh_account_with_options(provider, &SubscriptionHttpOptions::default()).await
+}
+
+/// Fetches the live Qoder model catalog through the wasm-signed gateway
+/// request. Falls back to the static catalog when no signature materials are
+/// available (legacy device-flow credential) or when the gateway rejects the
+/// request — the static list keeps model discovery usable offline.
+pub async fn list_qoder_models(options: &SubscriptionHttpOptions) -> Vec<RemoteModelInfo> {
+    match qoder::list_models(options).await {
+        Ok(models) if !models.is_empty() => models,
+        Ok(_) => static_qoder_models_fallback(),
+        Err(error) => {
+            log::warn!("qoder dynamic model list failed, using static catalog: {error:#}");
+            static_qoder_models_fallback()
+        }
+    }
+}
+
+/// Static Qoder model catalog, used only as a fallback when the dynamic
+/// wasm-signed fetch is unavailable or fails. The dynamic gateway response is
+/// the source of truth; this mirrors the CLI catalog for offline discovery.
+pub(crate) fn static_qoder_models_fallback() -> Vec<RemoteModelInfo> {
+    const FALLBACK: &[&str] = &[
+        "auto",
+        "qwen3.8-max-preview",
+        "qwen3.7-max",
+        "qwen3.7-plus",
+        "glm-5.2",
+    ];
+    FALLBACK
+        .iter()
+        .map(|id| RemoteModelInfo {
+            id: (*id).to_string(),
+            display_name: None,
+        })
+        .collect()
 }
 
 /// Refreshes a subscription account with an explicit transport policy.

@@ -151,13 +151,22 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
     }
 
     // Qoder's inference gateway exposes no public OpenAI `/models` endpoint.
-    // Serve the static catalog validated against the live endpoint (pi-free's
-    // models.ts excludes invalid ids such as `dfmodel`/`gm51model`/`qmodel_latest`)
-    // so imports can pick a real model. Both the international gateway
-    // (`api2-v2.qoder.sh`) and the China-region gateway
+    // Fetch the live catalog with a wasm-signed gateway request (mirroring the
+    // Qoder CN CLI `listModelsFromRemote`); the static catalog is only a
+    // fallback when the dynamic fetch is unavailable. Both the international
+    // gateway (`api2-v2.qoder.sh`) and the China-region gateway
     // (`gateway.qoder.com.cn`) are matched.
     if url.contains("api2-v2.qoder.sh") || url.contains("gateway.qoder.com.cn") {
-        return Ok(static_qoder_models());
+        #[cfg(feature = "subscription-auth")]
+        {
+            let options = crate::subscription_auth::SubscriptionHttpOptions::default();
+            let models = crate::subscription_auth::list_qoder_models(&options).await;
+            return Ok(models);
+        }
+        #[cfg(not(feature = "subscription-auth"))]
+        {
+            return Ok(static_qoder_models());
+        }
     }
 
     let response = apply_headers(client, client.client.get(&url))
@@ -248,6 +257,10 @@ fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
 /// list for China-region accounts (see `qoder-cn-proxy` README): the CN
 /// surface exposes these ids and rejects names from the international catalog
 /// (e.g. `ultimate`/`performance` are not valid CN router ids).
+///
+/// Used only when the `subscription-auth` feature is disabled; with it enabled
+/// the live gateway catalog is fetched through the wasm-signed request.
+#[cfg(not(feature = "subscription-auth"))]
 const QODER_MODELS: &[&str] = &[
     "qoder-cn",
     "auto",
@@ -262,6 +275,7 @@ const QODER_MODELS: &[&str] = &[
     "deepseek-v4-flash",
 ];
 
+#[cfg(not(feature = "subscription-auth"))]
 fn static_qoder_models() -> Vec<RemoteModelInfo> {
     QODER_MODELS
         .iter()

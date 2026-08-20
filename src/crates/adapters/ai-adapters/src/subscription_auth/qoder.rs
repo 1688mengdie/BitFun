@@ -421,6 +421,12 @@ async fn exchange_pat(pat: &str, options: &SubscriptionHttpOptions) -> Result<Jo
 /// Logs in with a Qoder Personal Access Token: exchanges it for a job token
 /// and persists the credential. The PAT itself is kept in the `refresh`
 /// field (prefixed with `PAT_REFRESH_PREFIX`) so expiry can re-exchange it.
+///
+/// The credential metadata also carries the wasm signature materials derived
+/// at login time: `qoder_signature` = `{ uid, encrypt_user_info, key }`
+/// (produced by `generate_runtime_auth_fields`). These are the non-secret
+/// inputs the embedded wasm needs to build a valid gateway `prepareRequest`
+/// signature; the PAT and job token stay in the OS vault.
 pub(crate) async fn pat_login(
     pat: &str,
     expected_revision: u64,
@@ -434,7 +440,14 @@ pub(crate) async fn pat_login(
     let access = exchanged
         .access()
         .ok_or_else(|| anyhow!("qoder job token exchange response missing token"))?;
-    let refresh = format!("{PAT_REFRESH_PREFIX}|{pat}");
+    // Resolve the uid via the userinfo endpoint, then derive the wasm
+    // signature materials (encrypt_user_info + key) exactly like the CLI's
+    // `regenerateRuntimeFields`.
+    let signature_materials = signature_materials_for_pat(pat, &access, options).await?;
+    // `pat|{pat}|{job_token}` — the job token is appended so `pat_parts`
+    // (which splits on the second `|`) can recognise PAT-based credentials on
+    // refresh, while the PAT itself is retained for re-exchange.
+    let refresh = format!("{PAT_REFRESH_PREFIX}|{pat}|{access}");
     let expires = exchanged.expires_ms();
     let outcome = store::upsert_if_revision(
         STORE_KEY,
@@ -443,14 +456,114 @@ pub(crate) async fn pat_login(
             refresh,
             access,
             expires,
-            account_id: None,
-            metadata: None,
+            account_id: signature_materials.as_ref().map(|m| m.uid.clone()),
+            metadata: signature_materials.map(|m| m.to_metadata_value()),
         },
     )
     .await?;
     super::require_current_store_revision(super::SubscriptionProvider::Qoder, outcome)?;
     log::info!("qoder PAT login saved (job token exchanged)");
     Ok(())
+}
+
+/// Signature materials for the embedded wasm, mirroring the CLI's
+/// `regenerateRuntimeFields` + `getUserInfoForAuth` chain.
+struct QoderSignatureMaterials {
+    uid: String,
+    encrypt_user_info: String,
+    key: String,
+}
+
+impl QoderSignatureMaterials {
+    fn to_metadata_value(&self) -> serde_json::Value {
+        serde_json::json!({
+            "qoder_signature": {
+                "uid": self.uid,
+                "encrypt_user_info": self.encrypt_user_info,
+                "key": self.key,
+            }
+        })
+    }
+}
+
+/// Extracts `{uid, encrypt_user_info, key}` from the credential metadata, or
+/// `None` when the login predates wasm signature support (device flow).
+fn signature_materials_from_metadata(
+    metadata: Option<&serde_json::Value>,
+) -> Option<QoderSignatureMaterials> {
+    let value = metadata?;
+    let signature = value.get("qoder_signature")?;
+    let uid = signature.get("uid")?.as_str()?.to_string();
+    let encrypt_user_info = signature.get("encrypt_user_info")?.as_str()?.to_string();
+    let key = signature.get("key")?.as_str()?.to_string();
+    Some(QoderSignatureMaterials {
+        uid,
+        encrypt_user_info,
+        key,
+    })
+}
+
+/// Runs the userinfo fetch plus `generate_runtime_auth_fields` derivation for
+/// a PAT login. Uses the freshly exchanged job token to call `/userinfo`.
+async fn signature_materials_for_pat(
+    pat: &str,
+    job_token: &str,
+    options: &SubscriptionHttpOptions,
+) -> Result<Option<QoderSignatureMaterials>> {
+    let client = http_client(options)?;
+    let userinfo: serde_json::Value = client
+        .get(format!("{}/api/v1/userinfo", openapi_base_url()))
+        .bearer_auth(job_token)
+        .send()
+        .await
+        .context("call qoder userinfo endpoint")?
+        .error_for_status()
+        .context("qoder userinfo request failed")?
+        .json()
+        .await
+        .context("parse qoder userinfo response")?;
+    let uid = userinfo
+        .get("id")
+        .or_else(|| userinfo.get("user_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("qoder userinfo response missing uid"))?
+        .to_string();
+    // Wasm derivation of encrypt_user_info + key. Fall back to empty strings
+    // if the embedded wasm is unavailable (feature not enabled) — the gateway
+    // still accepts plain Bearer for some endpoints, and resolve() keeps
+    // working for device-flow credentials.
+    let auth_fields_json = {
+        let mut runtime = crate::subscription_auth::qoder_wasm::QoderWasm::instantiate()
+            .map_err(|error| anyhow!("instantiate qoder wasm: {error:#}"))?;
+        let user_json = serde_json::json!({
+            "uid": uid,
+            "organization_id": userinfo.get("organization_id").cloned().unwrap_or(serde_json::Value::Null),
+            "organization_tags": userinfo.get("organization_tags").cloned().unwrap_or(serde_json::Value::Null),
+            "data_policy_agreed": userinfo.get("data_policy_agreed").cloned().unwrap_or(serde_json::Value::Null),
+        })
+        .to_string();
+        runtime
+            .generate_runtime_auth_fields(&user_json)
+            .map_err(|error| anyhow!("generate qoder runtime auth fields: {error:#}"))?
+    };
+    let auth_fields: serde_json::Value = serde_json::from_str(&auth_fields_json)
+        .map_err(|error| anyhow!("parse qoder runtime auth fields: {error}"))?;
+    let encrypt_user_info = auth_fields
+        .get("encrypt_user_info")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("qoder runtime auth fields missing encrypt_user_info"))?
+        .to_string();
+    let key = auth_fields
+        .get("key")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("qoder runtime auth fields missing key"))?
+        .to_string();
+    let _ = pat; // PAT is retained in the refresh field, not in metadata.
+    Ok(Some(QoderSignatureMaterials {
+        uid,
+        encrypt_user_info,
+        key,
+    }))
 }
 
 /// Returns `(pat, job_token)` when the stored credential is PAT-based, or
@@ -595,6 +708,11 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions, force: bool) -> Result<
 /// required on this endpoint.
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
     let (access, expires) = ensure_fresh(options, false).await?;
+    // Inference uses the standard OpenAI-compatible path
+    // (`/model/v1/chat/completions`) with a plain Bearer job token, exactly
+    // like the Qoder CN CLI `F4e`: `security_oauth_token ?? access_token`.
+    // The wasm COSY signature is only required for the gateway catalog and
+    // agent endpoints (`/algo/api/v2/...`), not for `/model/v1/...`.
     let mut headers = HashMap::new();
     headers.insert("X-Request-ID".to_string(), Uuid::new_v4().to_string());
     headers.insert("X-Session-ID".to_string(), Uuid::new_v4().to_string());
@@ -627,9 +745,160 @@ pub(crate) fn suggested() -> (&'static str, &'static str, &'static str) {
     ("openai", MODEL_BASE_URL, DEFAULT_MODEL)
 }
 
+/// Model list entry from the Qoder gateway (`chat` scene).
+#[derive(Debug, Deserialize)]
+struct GatewayModelEntry {
+    #[serde(rename = "key")]
+    key: String,
+    #[serde(rename = "display_name", default)]
+    display_name: Option<String>,
+}
+
+/// Fetches the live Qoder model catalog from the gateway with a wasm-signed
+/// request (mirroring the CLI's `listModelsFromRemote`), decrypting the
+/// response when it is encrypted and falling back to the plaintext body
+/// otherwise (the CLI's `NsA` fallback semantics).
+///
+/// Returns `(model_id, display_name)` pairs from the `chat` scene. When the
+/// embedded wasm is unavailable (device-flow credential without signature
+/// materials) this falls back to the static catalog so model discovery keeps
+/// working.
+pub(crate) async fn list_models(
+    options: &SubscriptionHttpOptions,
+) -> Result<Vec<crate::types::RemoteModelInfo>> {
+    // Build the wasm context from the stored credential's signature materials.
+    let snapshot = store::load_entry_with_revision(STORE_KEY).await?;
+    let entry = snapshot
+        .credential
+        .ok_or_else(|| anyhow!("Qoder is not connected; sign in first"))?;
+    let StoredCredential::Oauth {
+        refresh: refresh_token,
+        access,
+        metadata,
+        ..
+    } = entry
+    else {
+        return Err(anyhow!("Qoder credential is not an OAuth login"));
+    };
+    let materials = signature_materials_from_metadata(metadata.as_ref());
+    let Some(materials) = materials else {
+        // No signature materials: fall back to the static catalog (legacy
+        // device-flow credential). The gateway still serves the model list to
+        // plain Bearer requests for some scenes; keep discovery working.
+        log::warn!("qoder list_models: no wasm signature materials; using static catalog");
+        return Ok(super::static_qoder_models_fallback());
+    };
+
+    // The wasm signature derives its own Authorization from the context's
+    // uid/encrypt_user_info/key, not from the stored access token directly.
+    // The job token is needed for the userinfo uid only when materials are
+    // missing; here they are present, so build the context directly.
+    let mut runtime = crate::subscription_auth::qoder_wasm::QoderWasm::instantiate()
+        .map_err(|error| anyhow!("instantiate qoder wasm: {error:#}"))?;
+    let user_info = serde_json::json!({
+        "uid": materials.uid,
+        "encrypt_user_info": materials.encrypt_user_info,
+        "key": materials.key,
+    })
+    .to_string();
+    let machine_id = recover_machine_id();
+    let ctx = runtime
+        .context_new(&machine_id, "1.1.23", &user_info, r#"{"client_type":5}"#)
+        .map_err(|error| anyhow!("qoder wasm context_new: {error:#}"))?;
+    let prepared = runtime
+        .prepare_request(
+            ctx,
+            MODEL_BASE_URL,
+            "/api/v2/model/list?Encode=1",
+            "GET",
+            "auth",
+            None,
+            None,
+        )
+        .map_err(|error| anyhow!("qoder wasm prepareRequest: {error:#}"))?;
+    let headers = prepared.headers()?;
+
+    let client = http_client(options)?;
+    let mut request = client.get(&prepared.url);
+    for (name, value) in &headers {
+        request = request.header(name, value);
+    }
+    let resp = request
+        .send()
+        .await
+        .context("call qoder model list endpoint")?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(anyhow!(
+            "qoder model list failed: HTTP {status}: {}",
+            body.chars().take(400).collect::<String>()
+        ));
+    }
+    // CLI `NsA`: decrypt_server_response with plaintext fallback.
+    let decrypted = match runtime.decrypt_server_response(&body) {
+        Ok(text) => text,
+        Err(_) => body.clone(),
+    };
+    let payload: serde_json::Value = serde_json::from_str(&decrypted)
+        .map_err(|error| anyhow!("parse qoder model list response: {error}"))?;
+    let scene = payload
+        .get("chat")
+        .or_else(|| payload.get("models"))
+        .or_else(|| payload.as_array().map(|_| &payload));
+    let entries: Vec<GatewayModelEntry> = match scene {
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .filter_map(|item| serde_json::from_value(item.clone()).ok())
+            .collect(),
+        _ => Vec::new(),
+    };
+    if entries.is_empty() {
+        return Err(anyhow!("qoder model list response has no chat models"));
+    }
+    let _ = access;
+    let _ = refresh_token;
+    Ok(entries
+        .into_iter()
+        .map(|entry| crate::types::RemoteModelInfo {
+            id: entry.key,
+            display_name: entry.display_name,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_materials_roundtrip_through_metadata() {
+        let materials = QoderSignatureMaterials {
+            uid: "u-42".to_string(),
+            encrypt_user_info: "encrypted-blob".to_string(),
+            key: "sig-key".to_string(),
+        };
+        let metadata = materials.to_metadata_value();
+        let restored = signature_materials_from_metadata(Some(&metadata))
+            .expect("materials recoverable from metadata");
+        assert_eq!(restored.uid, "u-42");
+        assert_eq!(restored.encrypt_user_info, "encrypted-blob");
+        assert_eq!(restored.key, "sig-key");
+        // Legacy device-flow metadata has no signature block.
+        assert!(signature_materials_from_metadata(Some(&serde_json::json!({ "email": "x@y.z" })))
+            .is_none());
+        assert!(signature_materials_from_metadata(None).is_none());
+    }
+
+    #[test]
+    fn pat_refresh_prefix_encoding_keeps_pat_and_job_token() {
+        let refresh = format!("{PAT_REFRESH_PREFIX}|pt-secret|job-token-1");
+        let (pat, job_token) = pat_parts(&refresh).expect("pat parts");
+        assert_eq!(pat, "pt-secret");
+        assert_eq!(job_token, "job-token-1");
+        // Device-flow credentials carry no PAT prefix.
+        assert!(pat_parts("device-refresh-token").is_none());
+    }
 
     #[test]
     fn suggested_defaults_to_auto_model() {
