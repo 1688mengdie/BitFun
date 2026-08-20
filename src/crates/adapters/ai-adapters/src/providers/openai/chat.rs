@@ -1,13 +1,20 @@
 use super::{common, OpenAIMessageConverter};
 use crate::client::quirks::should_append_tool_stream;
 use crate::client::sse::execute_sse_request;
+#[cfg(feature = "subscription-auth")]
+use crate::client::sse::execute_sse_request_with_raw_body;
 use crate::client::{AIClient, StreamResponse};
 use crate::providers::shared;
 use crate::stream::handle_openai_stream;
+#[cfg(feature = "subscription-auth")]
+use crate::stream::handle_qoder_stream;
 use crate::trace::ModelExchangeTraceConfig;
 use crate::types::{Message, ToolDefinition};
+#[cfg(not(feature = "subscription-auth"))]
+use anyhow::anyhow;
 use anyhow::Result;
 use log::{debug, warn};
+use std::time::Duration;
 
 pub(crate) fn try_build_request_body(
     client: &AIClient,
@@ -158,6 +165,25 @@ pub(crate) async fn send_stream(
     let idle_timeout = client.stream_options.idle_timeout;
     let ttft_timeout = client.stream_options.ttft_timeout;
 
+    // Qoder's CN gateway rejects plain-Bearer requests (ALB 503); every
+    // inference request must be signed by the embedded wasm
+    // (`prepareInferRequest`), which returns a rewritten URL, COSY signature
+    // headers, and an encrypted body. The response is a gateway envelope
+    // (`data:{"body":"<OpenAI chunk>"}`) that `handle_qoder_stream` unwraps.
+    if is_qoder_gateway(&url) {
+        return send_qoder_signed_stream(
+            client,
+            url,
+            request_body,
+            max_tries,
+            ttft_timeout,
+            trace,
+            inline_think_in_text,
+            idle_timeout,
+        )
+        .await;
+    }
+
     execute_sse_request(
         "OpenAI Streaming API",
         &url,
@@ -178,4 +204,77 @@ pub(crate) async fn send_stream(
         },
     )
     .await
+}
+
+/// True when the request URL targets the Qoder CN or international gateway,
+/// which requires wasm-signed inference requests.
+fn is_qoder_gateway(url: &str) -> bool {
+    url.contains("gateway.qoder.com.cn") || url.contains("api2-v2.qoder.sh")
+}
+
+/// Sends a Qoder inference request through the wasm-signed channel.
+#[cfg(feature = "subscription-auth")]
+#[allow(clippy::too_many_arguments)]
+async fn send_qoder_signed_stream(
+    client: &AIClient,
+    _url: String,
+    request_body: serde_json::Value,
+    max_tries: usize,
+    ttft_timeout: Option<Duration>,
+    trace: Option<ModelExchangeTraceConfig>,
+    inline_think_in_text: bool,
+    idle_timeout: Option<Duration>,
+) -> Result<StreamResponse> {
+    let options = crate::subscription_auth::SubscriptionHttpOptions::default();
+    let model_key = &client.config.model;
+    let (signed_url, signed_headers, signed_body) =
+        crate::subscription_auth::sign_qoder_infer_request(&options, &request_body, model_key)
+            .await?;
+    debug!("Qoder signed infer url: {}", signed_url);
+
+    let url = signed_url;
+    let trace_url = url.clone();
+    execute_sse_request_with_raw_body(
+        "Qoder Streaming API",
+        &trace_url,
+        &request_body,
+        Some(signed_body),
+        max_tries,
+        ttft_timeout,
+        trace,
+        move || {
+            let mut builder = client.client.post(&url);
+            for (name, value) in &signed_headers {
+                builder = builder.header(name, value);
+            }
+            builder
+        },
+        move |response, tx, tx_raw, remaining_ttft_timeout| {
+            handle_qoder_stream(
+                response,
+                tx,
+                tx_raw,
+                inline_think_in_text,
+                remaining_ttft_timeout,
+                idle_timeout,
+            )
+        },
+    )
+    .await
+}
+
+#[cfg(not(feature = "subscription-auth"))]
+async fn send_qoder_signed_stream(
+    _client: &AIClient,
+    _url: String,
+    _request_body: serde_json::Value,
+    _max_tries: usize,
+    _ttft_timeout: Option<Duration>,
+    _trace: Option<ModelExchangeTraceConfig>,
+    _inline_think_in_text: bool,
+    _idle_timeout: Option<Duration>,
+) -> Result<StreamResponse> {
+    Err(anyhow!(
+        "Qoder inference requires the subscription-auth feature"
+    ))
 }

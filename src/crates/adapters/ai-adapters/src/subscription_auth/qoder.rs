@@ -700,22 +700,17 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions, force: bool) -> Result<
     }
 }
 
-/// Resolves the runtime credential, injecting the Qoder inference headers.
+/// Resolves the runtime credential.
 ///
-/// The `gateway.qoder.com.cn` inference gateway is standard OpenAI-compatible
-/// and authenticates with a plain `Authorization: Bearer {job token}` (the
-/// Qoder CN CLI `openResponse`). No `Cosy-*` client-attribution headers are
-/// required on this endpoint.
+/// The `gateway.qoder.com.cn` inference gateway rejects plain-Bearer requests
+/// (ALB 503) — verified against the live gateway on 2026-08-21. Every
+/// inference request must be signed with the embedded wasm
+/// (`prepareInferRequest`), which produces the COSY signature headers and an
+/// encrypted body. This resolve only supplies the fresh job token as the
+/// bearer seed; `sign_infer_request` performs the per-request signing.
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
     let (access, expires) = ensure_fresh(options, false).await?;
-    // Inference uses the standard OpenAI-compatible path
-    // (`/model/v1/chat/completions`) with a plain Bearer job token, exactly
-    // like the Qoder CN CLI `F4e`: `security_oauth_token ?? access_token`.
-    // The wasm COSY signature is only required for the gateway catalog and
-    // agent endpoints (`/algo/api/v2/...`), not for `/model/v1/...`.
     let mut headers = HashMap::new();
-    headers.insert("X-Request-ID".to_string(), Uuid::new_v4().to_string());
-    headers.insert("X-Session-ID".to_string(), Uuid::new_v4().to_string());
     headers.insert("Accept".to_string(), "text/event-stream".to_string());
     headers.insert("Content-Type".to_string(), "application/json".to_string());
 
@@ -727,6 +722,65 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
         extra_headers: headers,
         expires_at: Some(expires / 1000),
     })
+}
+
+/// Signs an inference request body with the embedded wasm
+/// (`prepareInferRequest(endpoint, body, model_key, source)`), exactly like
+/// the CLI's `yar` -> `vVi` chain. Returns the signed URL, the COSY signature
+/// headers, and the encrypted request body. The caller must POST the returned
+/// body to the returned URL with the returned headers.
+///
+/// `model_key` is the gateway catalog `key` (e.g. `qmodel_38max`, `auto`),
+/// never the display name.
+pub(crate) async fn sign_infer_request(
+    options: &SubscriptionHttpOptions,
+    body_json: &serde_json::Value,
+    model_key: &str,
+) -> Result<(String, HashMap<String, String>, Vec<u8>)> {
+    // Ensure the credential is fresh first (PAT re-exchange if needed).
+    let _ = ensure_fresh(options, false).await?;
+    let snapshot = store::load_entry_with_revision(STORE_KEY).await?;
+    let entry = snapshot
+        .credential
+        .ok_or_else(|| anyhow!("Qoder is not connected; sign in first"))?;
+    let StoredCredential::Oauth { metadata, .. } = entry else {
+        return Err(anyhow!("Qoder credential is not an OAuth login"));
+    };
+    let materials = signature_materials_from_metadata(metadata.as_ref()).ok_or_else(|| {
+        anyhow!(
+            "Qoder credential has no wasm signature materials; sign in again with a Personal Access Token"
+        )
+    })?;
+    let mut runtime = crate::subscription_auth::qoder_wasm::QoderWasm::instantiate()
+        .map_err(|error| anyhow!("instantiate qoder wasm: {error:#}"))?;
+    let user_info = serde_json::json!({
+        "uid": materials.uid,
+        "encrypt_user_info": materials.encrypt_user_info,
+        "key": materials.key,
+    })
+    .to_string();
+    let machine_id = recover_machine_id();
+    let ctx = runtime
+        .context_new(&machine_id, "1.1.23", &user_info, r#"{"client_type":5}"#)
+        .map_err(|error| anyhow!("qoder wasm context_new: {error:#}"))?;
+    let body_text = body_json.to_string();
+    // CLI `vVi`: prepareInferRequest(endpoint, body, model_key, source) ->
+    // wasm (endpoint, path_or_body=body, body=model_key, headers=source).
+    let prepared = runtime
+        .prepare_infer_request(
+            ctx,
+            MODEL_BASE_URL,
+            &body_text,
+            Some(model_key),
+            Some("system"),
+        )
+        .map_err(|error| anyhow!("qoder wasm prepareInferRequest: {error:#}"))?;
+    let headers = prepared
+        .headers()?
+        .into_iter()
+        .collect::<HashMap<String, String>>();
+    let body = prepared.body.unwrap_or_else(|| body_text.into_bytes());
+    Ok((prepared.url, headers, body))
 }
 
 /// Forces a token refresh (equivalent to the CLI's `forceRefreshToken`) and
@@ -759,10 +813,10 @@ struct GatewayModelEntry {
 /// response when it is encrypted and falling back to the plaintext body
 /// otherwise (the CLI's `NsA` fallback semantics).
 ///
-/// Returns `(model_id, display_name)` pairs from the `chat` scene. When the
-/// embedded wasm is unavailable (device-flow credential without signature
-/// materials) this falls back to the static catalog so model discovery keeps
-/// working.
+/// Returns `(model_id, display_name)` pairs from the `chat` scene. Qoder only
+/// supports PAT logins, which always carry wasm signature materials; a
+/// credential without them (legacy device flow) is rejected so the UI never
+/// shows the stale static catalog.
 pub(crate) async fn list_models(
     options: &SubscriptionHttpOptions,
 ) -> Result<Vec<crate::types::RemoteModelInfo>> {
@@ -780,14 +834,12 @@ pub(crate) async fn list_models(
     else {
         return Err(anyhow!("Qoder credential is not an OAuth login"));
     };
-    let materials = signature_materials_from_metadata(metadata.as_ref());
-    let Some(materials) = materials else {
-        // No signature materials: fall back to the static catalog (legacy
-        // device-flow credential). The gateway still serves the model list to
-        // plain Bearer requests for some scenes; keep discovery working.
-        log::warn!("qoder list_models: no wasm signature materials; using static catalog");
-        return Ok(super::static_qoder_models_fallback());
-    };
+    let materials = signature_materials_from_metadata(metadata.as_ref()).ok_or_else(|| {
+        anyhow!(
+            "Qoder credential has no wasm signature materials; the no-token login entry was removed, \
+             sign in again with a Personal Access Token"
+        )
+    })?;
 
     // The wasm signature derives its own Authorization from the context's
     // uid/encrypt_user_info/key, not from the stored access token directly.
@@ -1110,8 +1162,12 @@ mod tests {
             assert_eq!(resolved.api_key, "a");
             assert_eq!(resolved.extra_headers["Accept"], "text/event-stream");
             assert_eq!(resolved.extra_headers["Content-Type"], "application/json");
-            assert!(resolved.extra_headers.contains_key("X-Request-ID"));
-            assert!(resolved.extra_headers.contains_key("X-Session-ID"));
+            // The gateway rejects plain Bearer requests (ALB 503, verified
+            // 2026-08-21); COSY signature headers are generated per request by
+            // `sign_infer_request`, so resolve() intentionally does not inject
+            // them (X-Request-ID/X-Session-ID included).
+            assert!(!resolved.extra_headers.contains_key("X-Request-ID"));
+            assert!(!resolved.extra_headers.contains_key("X-Session-ID"));
             assert!(!resolved.extra_headers.contains_key("Cosy-ClientType"));
             assert!(!resolved.extra_headers.contains_key("Cosy-Version"));
             assert!(!resolved.extra_headers.contains_key("Cosy-MachineOS"));

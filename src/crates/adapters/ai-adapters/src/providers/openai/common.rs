@@ -152,15 +152,15 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
 
     // Qoder's inference gateway exposes no public OpenAI `/models` endpoint.
     // Fetch the live catalog with a wasm-signed gateway request (mirroring the
-    // Qoder CN CLI `listModelsFromRemote`); the static catalog is only a
-    // fallback when the dynamic fetch is unavailable. Both the international
-    // gateway (`api2-v2.qoder.sh`) and the China-region gateway
-    // (`gateway.qoder.com.cn`) are matched.
+    // Qoder CN CLI `listModelsFromRemote`). Qoder has no no-token login entry,
+    // so failures propagate to the caller instead of a stale static list. Both
+    // the international gateway (`api2-v2.qoder.sh`) and the China-region
+    // gateway (`gateway.qoder.com.cn`) are matched.
     if url.contains("api2-v2.qoder.sh") || url.contains("gateway.qoder.com.cn") {
         #[cfg(feature = "subscription-auth")]
         {
             let options = crate::subscription_auth::SubscriptionHttpOptions::default();
-            let models = crate::subscription_auth::list_qoder_models(&options).await;
+            let models = crate::subscription_auth::list_qoder_models(&options).await?;
             return Ok(models);
         }
         #[cfg(not(feature = "subscription-auth"))]

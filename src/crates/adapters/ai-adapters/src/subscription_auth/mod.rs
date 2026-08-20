@@ -888,38 +888,24 @@ pub async fn refresh_account(provider: SubscriptionProvider) -> Result<Subscript
 }
 
 /// Fetches the live Qoder model catalog through the wasm-signed gateway
-/// request. Falls back to the static catalog when no signature materials are
-/// available (legacy device-flow credential) or when the gateway rejects the
-/// request — the static list keeps model discovery usable offline.
-pub async fn list_qoder_models(options: &SubscriptionHttpOptions) -> Vec<RemoteModelInfo> {
-    match qoder::list_models(options).await {
-        Ok(models) if !models.is_empty() => models,
-        Ok(_) => static_qoder_models_fallback(),
-        Err(error) => {
-            log::warn!("qoder dynamic model list failed, using static catalog: {error:#}");
-            static_qoder_models_fallback()
-        }
-    }
+/// request. Qoder has no no-token login entry: the catalog is always fetched
+/// dynamically from the gateway, and a failure is surfaced to the caller
+/// (the UI shows the error) instead of substituting a stale static list.
+pub async fn list_qoder_models(options: &SubscriptionHttpOptions) -> Result<Vec<RemoteModelInfo>> {
+    qoder::list_models(options).await
 }
 
-/// Static Qoder model catalog, used only as a fallback when the dynamic
-/// wasm-signed fetch is unavailable or fails. The dynamic gateway response is
-/// the source of truth; this mirrors the CLI catalog for offline discovery.
-pub(crate) fn static_qoder_models_fallback() -> Vec<RemoteModelInfo> {
-    const FALLBACK: &[&str] = &[
-        "auto",
-        "qwen3.8-max-preview",
-        "qwen3.7-max",
-        "qwen3.7-plus",
-        "glm-5.2",
-    ];
-    FALLBACK
-        .iter()
-        .map(|id| RemoteModelInfo {
-            id: (*id).to_string(),
-            display_name: None,
-        })
-        .collect()
+/// Signs a Qoder inference request body with the embedded wasm
+/// (`prepareInferRequest`), returning the signed URL, the COSY signature
+/// headers, and the encrypted body. Called by the OpenAI chat provider for
+/// Qoder-gateway requests; the caller POSTs the returned body to the URL with
+/// the returned headers.
+pub async fn sign_qoder_infer_request(
+    options: &SubscriptionHttpOptions,
+    body_json: &serde_json::Value,
+    model_key: &str,
+) -> Result<(String, HashMap<String, String>, Vec<u8>)> {
+    qoder::sign_infer_request(options, body_json, model_key).await
 }
 
 /// Refreshes a subscription account with an explicit transport policy.

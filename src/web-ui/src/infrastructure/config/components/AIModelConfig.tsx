@@ -3297,15 +3297,17 @@ const AIModelConfig: React.FC = () => {
                         </Button>
                       ) : (
                         <>
-                          <Button
-                            size="small"
-                            variant="primary"
-                            isLoading={isLoggingIn}
-                            disabled={anyLoginInProgress}
-                            onClick={() => void handleSubscriptionLogin(account.provider)}
-                          >
-                            {t('subscriptionAuth.login')}
-                          </Button>
+                          {account.provider !== 'qoder' && (
+                            <Button
+                              size="small"
+                              variant="primary"
+                              isLoading={isLoggingIn}
+                              disabled={anyLoginInProgress}
+                              onClick={() => void handleSubscriptionLogin(account.provider)}
+                            >
+                              {t('subscriptionAuth.login')}
+                            </Button>
+                          )}
                           {account.provider === 'qoder' && (
                             <>
                               <Input
@@ -3322,7 +3324,7 @@ const AIModelConfig: React.FC = () => {
                               />
                               <Button
                                 size="small"
-                                variant="secondary"
+                                variant="primary"
                                 isLoading={patLoggingIn === account.provider}
                                 disabled={anyLoginInProgress}
                                 onClick={() => void handlePatLogin(account.provider)}
