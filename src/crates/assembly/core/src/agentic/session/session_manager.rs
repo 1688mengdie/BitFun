@@ -7942,7 +7942,8 @@ impl SessionManager {
             "[ci-probe] update_persisted: session_id={}, workspace_path={}, is_resolved={}",
             session_id,
             workspace_path.display(),
-            self.persistence_manager.is_resolved_sessions_dir(&workspace_path),
+            self.persistence_manager
+                .is_resolved_sessions_dir(&workspace_path),
         );
         self.update_session_metadata_at_workspace(&workspace_path, session_id, update)
             .await
@@ -11117,10 +11118,18 @@ mod tests {
                 depth
             });
             if depth == 0 {
+                // `into_inner` instead of `expect`: when one persisted-session
+                // test panics while holding the guard, the std Mutex becomes
+                // poisoned and every sibling test would otherwise cascade-fail
+                // with "persisted session tests lock poisoned" (61 failures
+                // instead of the single root cause, RAD08). Tolerating the
+                // poison keeps sibling tests runnable so the real flaky root
+                // cause stays visible instead of being masked by 60 identical
+                // lock-poison panics.
                 Self(Some(
                     PERSISTED_SESSION_TESTS_LOCK
                         .lock()
-                        .expect("persisted session tests lock poisoned"),
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()),
                 ))
             } else {
                 Self(None)
