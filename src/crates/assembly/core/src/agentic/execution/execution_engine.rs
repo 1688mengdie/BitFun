@@ -572,9 +572,13 @@ impl ExecutionEngine {
     const FINALIZE_USER_FOLLOWUP: &'static str =
         "Provide a final answer. You MUST not call any tools.";
 
-    fn model_request_context(prompt_cache_lineage_id: &str) -> ModelRequestContext {
+    fn model_request_context(
+        prompt_cache_lineage_id: &str,
+        session_id: &str,
+    ) -> ModelRequestContext {
         ModelRequestContext {
             prompt_cache_route_key: Some(prompt_cache_lineage_id.to_string()),
+            session_id: Some(session_id.to_string()),
         }
     }
 
@@ -3392,8 +3396,10 @@ impl ExecutionEngine {
         };
         Self::validate_frozen_model_contract(context).await?;
         Self::validate_frozen_reasoning_contract(context, ai_client.as_ref())?;
-        let model_request_context =
-            Self::model_request_context(session.effective_prompt_cache_lineage_id());
+        let model_request_context = Self::model_request_context(
+            session.effective_prompt_cache_lineage_id(),
+            &session.session_id,
+        );
 
         let primary_model_facts = Self::resolve_primary_model_context(
             &model_id,
@@ -4530,8 +4536,10 @@ impl ExecutionEngine {
         };
         Self::validate_frozen_model_contract(&context).await?;
         Self::validate_frozen_reasoning_contract(&context, ai_client.as_ref())?;
-        let model_request_context =
-            Self::model_request_context(session.effective_prompt_cache_lineage_id());
+        let model_request_context = Self::model_request_context(
+            session.effective_prompt_cache_lineage_id(),
+            &session.session_id,
+        );
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).
         let primary_model_facts = Self::resolve_primary_model_context(
@@ -8899,11 +8907,12 @@ mod tests {
 
     #[test]
     fn provider_prompt_cache_route_key_depends_only_on_lineage() {
-        let first = ExecutionEngine::model_request_context("session-1");
-        let same_lineage = ExecutionEngine::model_request_context("session-1");
-        let changed_lineage = ExecutionEngine::model_request_context("session-2");
+        let first = ExecutionEngine::model_request_context("session-1", "sid-a");
+        let same_lineage = ExecutionEngine::model_request_context("session-1", "sid-a");
+        let changed_lineage = ExecutionEngine::model_request_context("session-2", "sid-b");
 
         assert_eq!(first.prompt_cache_route_key.as_deref(), Some("session-1"));
+        assert_eq!(first.session_id.as_deref(), Some("sid-a"));
         assert_eq!(
             first.prompt_cache_route_key,
             same_lineage.prompt_cache_route_key

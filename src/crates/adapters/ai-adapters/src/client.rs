@@ -439,7 +439,16 @@ impl AIClient {
     ) -> Result<StreamResponse> {
         match ApiFormat::parse(&self.config.format)? {
             ApiFormat::OpenAIChat => {
-                openai::chat::send_stream(self, messages, tools, extra_body, max_tries, trace).await
+                openai::chat::send_stream(
+                    self,
+                    messages,
+                    tools,
+                    extra_body,
+                    max_tries,
+                    trace,
+                    request_context,
+                )
+                .await
             }
             ApiFormat::OpenAIResponses => {
                 openai::responses::send_stream(

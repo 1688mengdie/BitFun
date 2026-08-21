@@ -653,6 +653,9 @@ pub struct AIConfig {
 pub struct ModelRequestContext {
     /// Stable, opaque routing identity for provider-side prompt-prefix caches.
     pub prompt_cache_route_key: Option<String>,
+    /// Session-level stable ID for provider request header injection
+    /// (e.g. CodeBuddy `X-Conversation-ID`).
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -852,4 +855,37 @@ pub struct RemoteModelInfo {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+}
+
+#[cfg(test)]
+mod model_request_context_tests {
+    use super::ModelRequestContext;
+
+    #[test]
+    fn default_has_no_session_id() {
+        let ctx = ModelRequestContext::default();
+        assert_eq!(ctx.session_id, None);
+        assert_eq!(ctx.prompt_cache_route_key, None);
+    }
+
+    #[test]
+    fn session_id_round_trips() {
+        let ctx = ModelRequestContext {
+            prompt_cache_route_key: Some("route-1".to_string()),
+            session_id: Some("sess-abc-123".to_string()),
+        };
+        assert_eq!(ctx.session_id.as_deref(), Some("sess-abc-123"));
+        assert_eq!(ctx.prompt_cache_route_key.as_deref(), Some("route-1"));
+    }
+
+    #[test]
+    fn clone_preserves_session_id() {
+        let ctx = ModelRequestContext {
+            prompt_cache_route_key: None,
+            session_id: Some("session-42".to_string()),
+        };
+        let cloned = ctx.clone();
+        assert_eq!(cloned.session_id, ctx.session_id);
+        assert_eq!(cloned, ctx);
+    }
 }

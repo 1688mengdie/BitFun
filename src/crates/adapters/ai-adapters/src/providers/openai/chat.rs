@@ -9,11 +9,13 @@ use crate::stream::handle_openai_stream;
 #[cfg(feature = "subscription-auth")]
 use crate::stream::handle_qoder_stream;
 use crate::trace::ModelExchangeTraceConfig;
-use crate::types::{Message, ToolDefinition};
+use crate::types::{Message, ModelRequestContext, ToolDefinition};
 #[cfg(not(feature = "subscription-auth"))]
 use anyhow::anyhow;
 use anyhow::Result;
 use log::{debug, warn};
+use sha2::{Digest, Sha256};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 pub(crate) fn try_build_request_body(
@@ -143,6 +145,23 @@ pub(crate) fn build_request_body(
         .expect("request body should compile")
 }
 
+/// Generates a 32-character hex string suitable for CodeBuddy request IDs.
+/// Uses a monotonic counter + timestamp hashed with SHA-256 for uniqueness.
+static HEX32_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn generate_hex32() -> String {
+    let count = HEX32_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let time_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut hasher = Sha256::new();
+    hasher.update(count.to_le_bytes());
+    hasher.update(time_nanos.to_le_bytes());
+    let hash = hasher.finalize();
+    hex::encode(&hash[..16])
+}
+
 pub(crate) async fn send_stream(
     client: &AIClient,
     messages: Vec<Message>,
@@ -150,6 +169,7 @@ pub(crate) async fn send_stream(
     extra_body: Option<serde_json::Value>,
     max_tries: usize,
     trace: Option<ModelExchangeTraceConfig>,
+    request_context: Option<ModelRequestContext>,
 ) -> Result<StreamResponse> {
     let url = client.config.request_url.clone();
     debug!(
@@ -184,6 +204,7 @@ pub(crate) async fn send_stream(
         .await;
     }
 
+    let header_url = url.clone();
     execute_sse_request(
         "OpenAI Streaming API",
         &url,
@@ -191,7 +212,21 @@ pub(crate) async fn send_stream(
         max_tries,
         ttft_timeout,
         trace,
-        || common::apply_headers(client, client.client.post(&url)),
+        move || {
+            let mut builder = common::apply_headers(client, client.client.post(&header_url));
+            if header_url.contains("copilot.tencent.com") {
+                if let Some(ref ctx) = request_context {
+                    if let Some(ref sid) = ctx.session_id {
+                        builder = builder.header("X-Conversation-ID", sid.clone());
+                    }
+                }
+                let req_id = generate_hex32();
+                builder = builder.header("X-Conversation-Request-ID", generate_hex32());
+                builder = builder.header("X-Request-ID", req_id.clone());
+                builder = builder.header("X-Conversation-Message-ID", req_id);
+            }
+            builder
+        },
         move |response, tx, tx_raw, remaining_ttft_timeout| {
             handle_openai_stream(
                 response,
@@ -264,6 +299,7 @@ async fn send_qoder_signed_stream(
 }
 
 #[cfg(not(feature = "subscription-auth"))]
+#[allow(clippy::too_many_arguments)]
 async fn send_qoder_signed_stream(
     _client: &AIClient,
     _url: String,
@@ -277,4 +313,33 @@ async fn send_qoder_signed_stream(
     Err(anyhow!(
         "Qoder inference requires the subscription-auth feature"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generate_hex32_produces_32_char_hex() {
+        let id = generate_hex32();
+        assert_eq!(id.len(), 32, "hex32 must be exactly 32 characters");
+        assert!(
+            id.chars().all(|c| c.is_ascii_hexdigit()),
+            "hex32 must contain only hex digits, got: {id}"
+        );
+    }
+
+    #[test]
+    fn generate_hex32_unique_per_call() {
+        let a = generate_hex32();
+        let b = generate_hex32();
+        assert_ne!(a, b, "consecutive hex32 calls must produce distinct values");
+    }
+
+    #[test]
+    fn codebuddy_url_detection() {
+        assert!("https://copilot.tencent.com/v1/chat/completions".contains("copilot.tencent.com"));
+        assert!(!"https://api.openai.com/v1/chat/completions".contains("copilot.tencent.com"));
+        assert!(!"https://gateway.qoder.com.cn/v1".contains("copilot.tencent.com"));
+    }
 }
