@@ -575,10 +575,14 @@ impl ExecutionEngine {
     fn model_request_context(
         prompt_cache_lineage_id: &str,
         session_id: &str,
+        dialog_turn_id: &str,
     ) -> ModelRequestContext {
         ModelRequestContext {
             prompt_cache_route_key: Some(prompt_cache_lineage_id.to_string()),
             session_id: Some(session_id.to_string()),
+            // Turn-level stable request-group ID: one user prompt -> one
+            // value across every request of the turn (including retries).
+            conversation_request_id: Some(dialog_turn_id.to_string()),
         }
     }
 
@@ -3399,6 +3403,7 @@ impl ExecutionEngine {
         let model_request_context = Self::model_request_context(
             session.effective_prompt_cache_lineage_id(),
             &session.session_id,
+            &context.dialog_turn_id,
         );
 
         let primary_model_facts = Self::resolve_primary_model_context(
@@ -4539,6 +4544,7 @@ impl ExecutionEngine {
         let model_request_context = Self::model_request_context(
             session.effective_prompt_cache_lineage_id(),
             &session.session_id,
+            &context.dialog_turn_id,
         );
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).

@@ -656,6 +656,10 @@ pub struct ModelRequestContext {
     /// Session-level stable ID for provider request header injection
     /// (e.g. CodeBuddy `X-Conversation-ID`).
     pub session_id: Option<String>,
+    /// Turn-level (one user prompt) stable ID for provider request-group
+    /// header injection (e.g. CodeBuddy `X-Conversation-Request-ID`): stable
+    /// for every request of the same user turn, changes per new user turn.
+    pub conversation_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -871,6 +875,7 @@ mod model_request_context_tests {
         let ctx = ModelRequestContext::default();
         assert_eq!(ctx.session_id, None);
         assert_eq!(ctx.prompt_cache_route_key, None);
+        assert_eq!(ctx.conversation_request_id, None);
     }
 
     #[test]
@@ -878,9 +883,11 @@ mod model_request_context_tests {
         let ctx = ModelRequestContext {
             prompt_cache_route_key: Some("route-1".to_string()),
             session_id: Some("sess-abc-123".to_string()),
+            conversation_request_id: Some("turn-abc-123".to_string()),
         };
         assert_eq!(ctx.session_id.as_deref(), Some("sess-abc-123"));
         assert_eq!(ctx.prompt_cache_route_key.as_deref(), Some("route-1"));
+        assert_eq!(ctx.conversation_request_id.as_deref(), Some("turn-abc-123"));
     }
 
     #[test]
@@ -888,6 +895,7 @@ mod model_request_context_tests {
         let ctx = ModelRequestContext {
             prompt_cache_route_key: None,
             session_id: Some("session-42".to_string()),
+            conversation_request_id: None,
         };
         let cloned = ctx.clone();
         assert_eq!(cloned.session_id, ctx.session_id);

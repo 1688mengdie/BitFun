@@ -162,6 +162,46 @@ fn generate_hex32() -> String {
     hex::encode(&hash[..16])
 }
 
+/// Collects the official CodeBuddy (`copilot.tencent.com`) conversation
+/// fingerprint headers (mirrors the official CLI request assembly, see recon
+/// report R-CB-CONVID 2026-08-21):
+/// - `X-Conversation-ID`: session-stable (BitFun `session_id`).
+/// - `X-Conversation-Request-ID`: turn-stable (one value per user prompt,
+///   shared by every request/retry of that turn); falls back to a per-request
+///   value only when the turn-level ID is unavailable.
+/// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-Product`/`X-IDE-*`/
+///   `X-Product-Version`/`X-Requested-With`: official client fingerprint.
+///
+/// Request-unique IDs (`X-Request-ID`/`X-Conversation-Message-ID`) are
+/// appended by the caller so this function stays deterministic for tests.
+fn codebuddy_fingerprint_headers(
+    request_context: Option<&ModelRequestContext>,
+) -> Vec<(&'static str, String)> {
+    let mut headers: Vec<(&'static str, String)> = Vec::new();
+    if let Some(ctx) = request_context {
+        if let Some(sid) = &ctx.session_id {
+            headers.push(("X-Conversation-ID", sid.clone()));
+        }
+        headers.push((
+            "X-Conversation-Request-ID",
+            ctx.conversation_request_id
+                .clone()
+                .unwrap_or_else(generate_hex32),
+        ));
+    } else {
+        headers.push(("X-Conversation-Request-ID", generate_hex32()));
+    }
+    headers.push(("X-Agent-Intent", "craft".to_string()));
+    headers.push(("X-Agent-Purpose", "conversation".to_string()));
+    headers.push(("X-Product", "SaaS".to_string()));
+    headers.push(("X-IDE-Type", "CLI".to_string()));
+    headers.push(("X-IDE-Name", "codebuddy".to_string()));
+    headers.push(("X-IDE-Version", env!("CARGO_PKG_VERSION").to_string()));
+    headers.push(("X-Product-Version", env!("CARGO_PKG_VERSION").to_string()));
+    headers.push(("X-Requested-With", "XMLHttpRequest".to_string()));
+    headers
+}
+
 pub(crate) async fn send_stream(
     client: &AIClient,
     messages: Vec<Message>,
@@ -215,13 +255,10 @@ pub(crate) async fn send_stream(
         move || {
             let mut builder = common::apply_headers(client, client.client.post(&header_url));
             if header_url.contains("copilot.tencent.com") {
-                if let Some(ref ctx) = request_context {
-                    if let Some(ref sid) = ctx.session_id {
-                        builder = builder.header("X-Conversation-ID", sid.clone());
-                    }
+                for (name, value) in codebuddy_fingerprint_headers(request_context.as_ref()) {
+                    builder = builder.header(name, value);
                 }
                 let req_id = generate_hex32();
-                builder = builder.header("X-Conversation-Request-ID", generate_hex32());
                 builder = builder.header("X-Request-ID", req_id.clone());
                 builder = builder.header("X-Conversation-Message-ID", req_id);
             }
@@ -341,5 +378,106 @@ mod tests {
         assert!("https://copilot.tencent.com/v1/chat/completions".contains("copilot.tencent.com"));
         assert!(!"https://api.openai.com/v1/chat/completions".contains("copilot.tencent.com"));
         assert!(!"https://gateway.qoder.com.cn/v1".contains("copilot.tencent.com"));
+    }
+
+    fn ctx_with_ids() -> ModelRequestContext {
+        ModelRequestContext {
+            prompt_cache_route_key: Some("route-1".to_string()),
+            session_id: Some("sess-abc".to_string()),
+            conversation_request_id: Some("turn-xyz".to_string()),
+        }
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_conversation_request_id_is_turn_stable() {
+        let ctx = ctx_with_ids();
+        let first = codebuddy_fingerprint_headers(Some(&ctx));
+        let second = codebuddy_fingerprint_headers(Some(&ctx));
+        let get = |headers: &[(&'static str, String)], name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        };
+        // Same turn -> identical X-Conversation-Request-ID across requests.
+        assert_eq!(
+            get(&first, "X-Conversation-Request-ID"),
+            get(&second, "X-Conversation-Request-ID")
+        );
+        assert_eq!(get(&first, "X-Conversation-Request-ID"), "turn-xyz");
+        // Different turns -> different values.
+        let other = ModelRequestContext {
+            conversation_request_id: Some("turn-other".to_string()),
+            ..ctx
+        };
+        assert_ne!(
+            get(&first, "X-Conversation-Request-ID"),
+            get(
+                &codebuddy_fingerprint_headers(Some(&other)),
+                "X-Conversation-Request-ID"
+            )
+        );
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_includes_full_official_set() {
+        let headers = codebuddy_fingerprint_headers(Some(&ctx_with_ids()));
+        let names: Vec<&str> = headers.iter().map(|(n, _)| *n).collect();
+        for expected in [
+            "X-Conversation-ID",
+            "X-Conversation-Request-ID",
+            "X-Agent-Intent",
+            "X-Agent-Purpose",
+            "X-Product",
+            "X-IDE-Type",
+            "X-IDE-Name",
+            "X-IDE-Version",
+            "X-Product-Version",
+            "X-Requested-With",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "missing fingerprint header: {expected}"
+            );
+        }
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        assert_eq!(get("X-Conversation-ID"), "sess-abc");
+        assert_eq!(get("X-Agent-Intent"), "craft");
+        assert_eq!(get("X-Agent-Purpose"), "conversation");
+        assert_eq!(get("X-Product"), "SaaS");
+        assert_eq!(get("X-IDE-Type"), "CLI");
+        assert_eq!(get("X-IDE-Name"), "codebuddy");
+        assert_eq!(get("X-IDE-Version"), env!("CARGO_PKG_VERSION"));
+        assert_eq!(get("X-Product-Version"), env!("CARGO_PKG_VERSION"));
+        assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
+        // No duplicate header names.
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        let mut deduped = sorted.clone();
+        deduped.dedup();
+        assert_eq!(sorted, deduped, "header names must not repeat");
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_falls_back_when_context_missing() {
+        let headers = codebuddy_fingerprint_headers(None);
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        // Request-ID fallback still produced; fingerprint headers still present.
+        assert_eq!(get("X-Conversation-Request-ID").len(), 32);
+        assert!(headers.iter().all(|(n, _)| *n != "X-Conversation-ID"));
+        assert_eq!(get("X-Agent-Intent"), "craft");
     }
 }
