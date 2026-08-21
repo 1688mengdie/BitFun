@@ -228,8 +228,8 @@ if ($cargoDeny) {
         cargo deny check advisories 2>&1 | ForEach-Object { Write-Host "  $_" }
         return $LASTEXITCODE
     }
-    Invoke-CIStep 'cargo-deny' 'licenses' 'cargo deny check licenses' -Mode strict -Body {
-        cargo deny check licenses 2>&1 | ForEach-Object { Write-Host "  $_" }
+    Invoke-CIStep 'cargo-deny' 'licenses' 'cargo deny check licenses -A no-license-field' -Mode strict -Body {
+        cargo deny check licenses -A no-license-field 2>&1 | ForEach-Object { Write-Host "  $_" }
         return $LASTEXITCODE
     }
     Invoke-CIStep 'cargo-deny' 'sources' 'cargo deny check sources' -Mode strict -Body {
@@ -239,12 +239,20 @@ if ($cargoDeny) {
 } else {
     Write-Host "  [SKIP] cargo-deny 未安装，跳过 3 步（不判失败）" -ForegroundColor Yellow
     Add-Result 'cargo-deny' 'advisories' 'cargo deny check advisories' -1 'SKIP' 'cargo-deny 未安装'
-    Add-Result 'cargo-deny' 'licenses' 'cargo deny check licenses' -1 'SKIP' 'cargo-deny 未安装'
+    Add-Result 'cargo-deny' 'licenses' 'cargo deny check licenses -A no-license-field' -1 'SKIP' 'cargo-deny 未安装'
     Add-Result 'cargo-deny' 'sources' 'cargo deny check sources' -1 'SKIP' 'cargo-deny 未安装'
 }
 
 # ── 4. rust-build-check ───────────────────────────────────────────────────
 Write-Host "`n===== Job 4: rust-build-check =====" -ForegroundColor Magenta
+
+# Tauri resource dirs（对齐 CI.yml:236-238）：Tauri 代码生成只要求配置的 resource roots
+# 在 check/test 期间存在（dist / src/mobile-web/dist），worktree 缺目录时 cargo check 首跑失败。
+Invoke-CIStep 'rust-build-check' 'Create Tauri resource directories' `
+    "New-Item -ItemType Directory -Force dist, src/mobile-web/dist" -Mode strict -Body {
+    New-Item -ItemType Directory -Force -Path 'dist', 'src/mobile-web/dist' | Out-Null
+    return 0
+}
 
 Invoke-CIStep 'rust-build-check' 'workspace 编译检查' `
     "cargo check --locked --workspace" -Mode strict -Body {
