@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
+﻿import { existsSync, readdirSync, readFileSync, statSync } from 'fs';
 import { dirname, join, relative } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -43,6 +43,10 @@ import {
 } from './manifest-feature-helpers.mjs';
 import { checkCargoDependencyBoundariesSafely } from './cargo-dependency-boundaries.mjs';
 import { checkPeerCommandPolicySync } from './peer-command-policy.mjs';
+import {
+  listTrackedRustRepoPaths,
+  scanForbiddenContentUnder,
+} from './source-content-checks.mjs';
 import {
   agentRuntimeIntegrationTestTargets,
   checkAgentRuntimeIntegrationTestTopology,
@@ -893,29 +897,16 @@ function checkRequiredContent(repoPath, patterns, reason) {
   }
 }
 
-function checkForbiddenContentUnder(repoDir, patterns, reason) {
-  const dir = repoPathToFsPath(repoDir);
-  walkFiles(dir, (path) => {
-    if (!path.endsWith('.rs')) {
-      return;
-    }
-    const repoPath = toRepoPath(path);
-    const lines = readText(path).split(/\r?\n/);
-    lines.forEach((line, index) => {
-      for (const pattern of patterns) {
-        if (pattern.allowPaths?.includes(repoPath)) {
-          continue;
-        }
-        if (pattern.regex.test(line)) {
-          failures.push({
-            path,
-            line: index + 1,
-            message: `${reason}; ${pattern.message}`,
-          });
-        }
-      }
+
+function checkForbiddenContentUnder(repoDir, patterns, reason, trackedRustRepoPaths) {
+  const rule = { path: repoDir, patterns };
+  for (const finding of scanForbiddenContentUnder(ROOT, rule, trackedRustRepoPaths)) {
+    failures.push({
+      path: finding.path,
+      line: finding.line,
+      message: `${reason}; ${finding.message}`,
     });
-  });
+  }
 }
 
 export function runCoreBoundaryCheck() {
@@ -963,6 +954,7 @@ export function runCoreBoundaryCheck() {
   failures.push(...checkCliIntegrationTestTopology(ROOT));
   failures.push(...checkExternalSourceIntegrationTestTopologies(ROOT), ...checkReviewedIntegrationTestTopologies(ROOT));
   failures.push(...checkPeerCommandPolicySync(ROOT));
+  const trackedRustRepoPaths = listTrackedRustRepoPaths(ROOT);
 
   for (const rule of forbiddenManifestDependencyRules) {
     checkForbiddenManifestDependencyRule(rule);
@@ -1013,7 +1005,7 @@ export function runCoreBoundaryCheck() {
   }
 
   for (const rule of forbiddenContentUnderRules) {
-    checkForbiddenContentUnder(rule.path, rule.patterns, rule.reason);
+    checkForbiddenContentUnder(rule.path, rule.patterns, rule.reason, trackedRustRepoPaths);
   }
 
   for (const rule of requiredContentRules) {

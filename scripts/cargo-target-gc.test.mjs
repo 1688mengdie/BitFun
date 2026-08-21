@@ -6,6 +6,7 @@ import test from 'node:test';
 import {
   collectGcPlan,
   extractDepsArtifactHash,
+  isCompilerBusy,
   isTargetProfileBusy,
   parseGcArgs,
   profileFromTauriBuildArgs,
@@ -274,6 +275,29 @@ test('planDepsOrphanPrune skips everything when keptHashes is empty (d8-P2-5)', 
   } finally {
     cleanup();
   }
+});
+
+test('Windows compiler detection passes each tasklist filter as one argument', () => {
+  const calls = [];
+  const busy = isCompilerBusy({
+    platform: 'win32',
+    exec(command, args) {
+      calls.push({ command, args });
+      return args.includes('IMAGENAME eq rustc.exe') ? 'rustc.exe 123 Console 1 10,000 K\n' : '';
+    },
+  });
+
+  assert.equal(busy, true);
+  assert.deepEqual(calls, [
+    {
+      command: 'tasklist',
+      args: ['/FI', 'IMAGENAME eq cargo.exe', '/NH'],
+    },
+    {
+      command: 'tasklist',
+      args: ['/FI', 'IMAGENAME eq rustc.exe', '/NH'],
+    },
+  ]);
 });
 
 test('target busy detection scopes Cargo locks to the selected profile', () => {
