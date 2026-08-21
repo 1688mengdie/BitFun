@@ -194,10 +194,13 @@ fn codebuddy_fingerprint_headers(
     headers.push(("X-Agent-Intent", "craft".to_string()));
     headers.push(("X-Agent-Purpose", "conversation".to_string()));
     headers.push(("X-Product", "SaaS".to_string()));
+    // Official CLI client info (codebuddy.js module 33387 + clientInfoProvider):
+    // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType/ideName
+    // both fall back to platform; version = CLI package version 2.137.1.
     headers.push(("X-IDE-Type", "CLI".to_string()));
-    headers.push(("X-IDE-Name", "codebuddy".to_string()));
-    headers.push(("X-IDE-Version", env!("CARGO_PKG_VERSION").to_string()));
-    headers.push(("X-Product-Version", env!("CARGO_PKG_VERSION").to_string()));
+    headers.push(("X-IDE-Name", "CLI".to_string()));
+    headers.push(("X-IDE-Version", "2.137.1".to_string()));
+    headers.push(("X-Product-Version", "2.137.1".to_string()));
     headers.push(("X-Requested-With", "XMLHttpRequest".to_string()));
     headers
 }
@@ -453,9 +456,11 @@ mod tests {
         assert_eq!(get("X-Agent-Purpose"), "conversation");
         assert_eq!(get("X-Product"), "SaaS");
         assert_eq!(get("X-IDE-Type"), "CLI");
-        assert_eq!(get("X-IDE-Name"), "codebuddy");
-        assert_eq!(get("X-IDE-Version"), env!("CARGO_PKG_VERSION"));
-        assert_eq!(get("X-Product-Version"), env!("CARGO_PKG_VERSION"));
+        assert_eq!(get("X-IDE-Name"), "CLI");
+        // Official CodeBuddy CLI version (package.json of
+        // @tencent-ai/codebuddy-code 2.137.1), NOT BitFun's own version.
+        assert_eq!(get("X-IDE-Version"), "2.137.1");
+        assert_eq!(get("X-Product-Version"), "2.137.1");
         assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
         // No duplicate header names.
         let mut sorted = names.clone();
