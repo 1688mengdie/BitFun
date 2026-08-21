@@ -1204,6 +1204,7 @@ fn validate_entrypoint_pair(primary: &Path, legacy: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn validate_plugin_host_resources(directory: &Path) -> Result<()> {
     for entry in ["extension-host.js"] {
         let path = directory.join(entry);
@@ -1217,6 +1218,7 @@ fn validate_plugin_host_resources(directory: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn copy_plugin_host_resources(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination).with_context(|| {
         format!(

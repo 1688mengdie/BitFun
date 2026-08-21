@@ -327,7 +327,7 @@ mod windows {
         log::warn!("Requesting controlled application restart for WebView2 recovery");
         crate::crash_diagnostics::mark_clean_shutdown("webview_recovery_restart");
         crate::save_main_window_state(app);
-        crate::perform_process_exit_cleanup();
+        tauri::async_runtime::spawn(crate::perform_process_exit_cleanup());
         app.request_restart();
     }
 
@@ -353,7 +353,7 @@ mod windows {
                 _ => {
                     crate::crash_diagnostics::mark_clean_shutdown("webview_recovery_exit");
                     crate::save_main_window_state(&app);
-                    crate::perform_process_exit_cleanup();
+                    tauri::async_runtime::spawn(crate::perform_process_exit_cleanup());
                     app.exit(1);
                 }
             });
@@ -362,7 +362,7 @@ mod windows {
     fn request_user_restart(app: &tauri::AppHandle) {
         crate::crash_diagnostics::mark_clean_shutdown("webview_recovery_user_restart");
         crate::save_main_window_state(app);
-        crate::perform_process_exit_cleanup();
+        tauri::async_runtime::spawn(crate::perform_process_exit_cleanup());
         app.request_restart();
     }
 
