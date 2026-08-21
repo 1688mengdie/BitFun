@@ -2800,6 +2800,7 @@ mod tests {
             recovery: None,
             recovery_epoch: None,
             status: TurnStatus::Completed,
+            todos: None,
         }
     }
 

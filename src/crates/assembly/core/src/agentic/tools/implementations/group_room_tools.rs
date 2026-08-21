@@ -963,6 +963,7 @@ impl GroupRoomTool {
             recovery: None,
             recovery_epoch: None,
             status: bitfun_services_core::session::TurnStatus::Completed,
+            todos: None,
         };
         coordinator
             .get_session_manager()
@@ -2068,6 +2069,7 @@ mod tests {
             recovery: None,
             recovery_epoch: None,
             status: bitfun_services_core::session::TurnStatus::Completed,
+            todos: None,
         }
     }
 

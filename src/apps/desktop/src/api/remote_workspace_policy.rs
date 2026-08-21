@@ -1937,7 +1937,10 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         RemoteWorkspacePolicy::RemoteRouted,
     ),
     ("start_subscription_login", RemoteWorkspacePolicy::LocalOnly),
-    ("start_subscription_pat_login", RemoteWorkspacePolicy::LocalOnly),
+    (
+        "start_subscription_pat_login",
+        RemoteWorkspacePolicy::LocalOnly,
+    ),
     ("startup_window_control", RemoteWorkspacePolicy::LocalOnly),
     ("steer_dialog_turn", RemoteWorkspacePolicy::LegacyUnaudited),
     ("stop_acp_client", RemoteWorkspacePolicy::LegacyUnaudited),

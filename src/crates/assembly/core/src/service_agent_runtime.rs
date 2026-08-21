@@ -3096,6 +3096,7 @@ mod tests {
             recovery: None,
             recovery_epoch: None,
             status,
+            todos: None,
         }
     }
 }

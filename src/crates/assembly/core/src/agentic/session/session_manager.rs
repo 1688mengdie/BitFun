@@ -7942,7 +7942,8 @@ impl SessionManager {
             "[ci-probe] update_persisted: session_id={}, workspace_path={}, is_resolved={}",
             session_id,
             workspace_path.display(),
-            self.persistence_manager.is_resolved_sessions_dir(&workspace_path),
+            self.persistence_manager
+                .is_resolved_sessions_dir(&workspace_path),
         );
         self.update_session_metadata_at_workspace(&workspace_path, session_id, update)
             .await

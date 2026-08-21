@@ -4653,6 +4653,7 @@ mod tests {
             recovery_epoch: None,
             error: None,
             error_detail: None,
+            todos: None,
             status: TurnStatus::Completed,
         };
 
@@ -4740,6 +4741,7 @@ mod tests {
             error: None,
             error_detail: None,
             status: TurnStatus::Completed,
+            todos: None,
         }];
 
         omit_assistant_only_tool_results_for_session_view(&mut turns);
@@ -4807,6 +4809,7 @@ mod tests {
             error: None,
             error_detail: None,
             status: TurnStatus::Completed,
+            todos: None,
         }];
 
         omit_assistant_only_tool_results_for_session_view(&mut turns);
