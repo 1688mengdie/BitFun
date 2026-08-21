@@ -9361,25 +9361,30 @@ config: {
   }
 
   /**
-   * Get all todo items for session (aggregates todos from all DialogTurns)
-   * Mainly used by PlannerPanel to display overall progress
+   * Get all todo items for session (takes latest valid turn's todos as primary source)
+   * Mainly used by PlannerPanel to display overall progress.
+   * 
+   * Fix for root cause 3: Instead of concatenating all turn todos (which causes
+   * deletion failures and infinite stacking), we take the latest non-empty turn's
+   * todos as the authoritative source. This ensures:
+   * - Deleted todos are not retained from historical turns
+   * - Multi-turn replacements show only the latest state
+   * - Progress percentage in derivedState is accurate
    */
   public getTodos(sessionId: string): import('../types/flow-chat').TodoItem[] {
     const session = this.state.sessions.get(sessionId);
     if (!session) return [];
     
-    const allTodos: import('../types/flow-chat').TodoItem[] = [];
-    session.dialogTurns.forEach(turn => {
+    // Find the latest non-empty turn's todos (from back to front)
+    for (let i = session.dialogTurns.length - 1; i >= 0; i--) {
+      const turn = session.dialogTurns[i];
       if (turn.todos && turn.todos.length > 0) {
-        allTodos.push(...turn.todos);
+        return turn.todos;
       }
-    });
-    
-    if (session.todos && session.todos.length > 0) {
-      allTodos.push(...session.todos);
     }
     
-    return allTodos;
+    // Fallback to session-level todos if no turn has todos
+    return session.todos || [];
   }
 
   public setTodos(sessionId: string, todos: import('../types/flow-chat').TodoItem[]): void {

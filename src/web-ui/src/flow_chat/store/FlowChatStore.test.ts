@@ -7648,3 +7648,135 @@ describe('R-TODOLIST: TodoWrite 持久化链路', () => {
     expect(latestTodos).toEqual(round2Todos);
   });
 });
+
+// ============================================================================
+// R-TODOLIST: getTodos 聚合逻辑修复专项测试（根因 3）
+// ============================================================================
+
+describe('R-TODOLIST: getTodos 聚合逻辑修复（根因 3）', () => {
+  beforeEach(() => {
+    resetStore();
+    apiMocks.loadSessionTurns.mockClear();
+    (apiMocks as any).restoreSessionWithTurns = undefined;
+  });
+
+  const createMockTurnWithTodos = (turnId: string, todos: any[]) => ({
+    turnId,
+    turnIndex: 0,
+    sessionId: 'test-session',
+    timestamp: Date.now(),
+    userMessage: {
+      id: `${turnId}-msg`,
+      content: 'Test input',
+      timestamp: Date.now(),
+      metadata: {},
+    },
+    modelRounds: [],
+    startTime: Date.now(),
+    status: 'completed' as const,
+    todos,
+  });
+
+  // 场景 1：删除后 getTodos 不残留已删项
+  it('删除后 getTodos 不残留已删项', async () => {
+    const initialTodos = [
+      { id: 'todo-1', content: 'Task 1', status: 'pending' },
+      { id: 'todo-2', content: 'Task 2', status: 'pending' },
+    ];
+    const deletedTodos = [
+      { id: 'todo-1', content: 'Task 1', status: 'pending' },
+      // todo-2 deleted
+    ];
+
+    // Setup session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['test-session', createSession({
+          sessionId: 'test-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'test-session',
+    }));
+
+    // First load with 2 todos
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', initialTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    let session = flowChatStore.getState().sessions.get('test-session');
+    
+    // getTodos should return all turn todos (concat before fix)
+    // After fix: should return only latest turn's todos
+    expect(flowChatStore.getTodos('test-session')).toEqual(initialTodos);
+
+    // Second load (after delete) with 1 todo
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', deletedTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    session = flowChatStore.getState().sessions.get('test-session');
+    
+    // getTodos should NOT contain deleted todo-2
+    const allTodos = flowChatStore.getTodos('test-session');
+    expect(allTodos).toHaveLength(1);
+    expect(allTodos[0].id).toBe('todo-1');
+    expect(allTodos.some(t => t.id === 'todo-2')).toBe(false);
+  });
+
+  // 场景 2：多轮替换后 getTodos 取最新
+  it('多轮替换后 getTodos 取最新', async () => {
+    const round1Todos = [
+      { id: 'todo-1', content: 'Round 1 Task', status: 'completed' },
+    ];
+    const round2Todos = [
+      { id: 'todo-1', content: 'Updated Task', status: 'in_progress' },
+      { id: 'todo-2', content: 'New Task', status: 'pending' },
+    ];
+    const round3Todos = [
+      { id: 'todo-1', content: 'Final Task', status: 'pending' },
+      { id: 'todo-2', content: 'Also Final', status: 'completed' },
+      { id: 'todo-3', content: 'Third Task', status: 'pending' },
+    ];
+
+    // Setup session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['test-session', createSession({
+          sessionId: 'test-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'test-session',
+    }));
+
+    // Mock three rounds of turns
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', round1Todos),
+      createMockTurnWithTodos('turn-2', round2Todos),
+      createMockTurnWithTodos('turn-3', round3Todos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    const session = flowChatStore.getState().sessions.get('test-session');
+
+    // Verify all turns have their todos
+    expect(session?.dialogTurns).toHaveLength(3);
+    expect(session?.dialogTurns[0].todos).toEqual(round1Todos);
+    expect(session?.dialogTurns[1].todos).toEqual(round2Todos);
+    expect(session?.dialogTurns[2].todos).toEqual(round3Todos);
+
+    // getTodos should return ONLY the latest turn's todos (round3)
+    const allTodos = flowChatStore.getTodos('test-session');
+    expect(allTodos).toEqual(round3Todos);
+    expect(allTodos).toHaveLength(3);
+    
+    // Verify no stale todos from earlier rounds
+    expect(allTodos.some(t => t.content === 'Round 1 Task')).toBe(false);
+    expect(allTodos.some(t => t.content === 'Updated Task')).toBe(false);
+  });
+});
