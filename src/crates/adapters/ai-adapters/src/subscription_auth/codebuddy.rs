@@ -513,6 +513,7 @@ struct V3ModelsData {
 /// The wire shape is the same (`ModelsProductProvider` and
 /// `CloudProductProvider` share the model entry type in the official client).
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // fields used by serde deserialization and tests
 struct CodeBuddyModelEntry {
     id: String,
     #[serde(default)]
