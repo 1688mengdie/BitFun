@@ -44,6 +44,8 @@ export interface ConnectionTestResult {
 export interface RemoteModelInfo {
   id: string;
   display_name?: string;
+  /** When the discovery source reports a per-model reasoning capability. */
+  supports_reasoning?: boolean;
 }
 
 export interface AIModelCatalogEntry {
@@ -195,6 +197,7 @@ export type SubscriptionLoginStatus = 'pending' | 'authorized' | 'failed' | 'can
 export interface SubscriptionOfferingModel {
   id: string;
   display_name?: string | null;
+  supports_reasoning?: boolean | null;
 }
 
 export interface SubscriptionApiOffering {

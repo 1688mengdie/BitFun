@@ -927,6 +927,7 @@ pub(crate) async fn list_models(
             crate::types::RemoteModelInfo {
                 id,
                 display_name: entry.display_name,
+                supports_reasoning: None,
             }
         })
         .collect())
@@ -1012,6 +1013,7 @@ mod tests {
                 crate::types::RemoteModelInfo {
                     id,
                     display_name: entry.display_name,
+                    supports_reasoning: None,
                 }
             })
             .collect();

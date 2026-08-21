@@ -621,7 +621,7 @@ fn is_in_backoff() -> bool {
         .lock()
         .ok()
         .and_then(|g| *g)
-        .map_or(false, |until| Instant::now() < until)
+        .is_some_and(|until| Instant::now() < until)
 }
 
 /// Records a failure and sets the exponential backoff deadline.
@@ -742,6 +742,7 @@ fn map_model_entries(entries: Vec<CodeBuddyModelEntry>) -> Vec<crate::types::Rem
         .map(|e| crate::types::RemoteModelInfo {
             id: e.id,
             display_name: e.name,
+            supports_reasoning: Some(e.supports_reasoning),
         })
         .collect()
 }
@@ -1038,6 +1039,7 @@ mod tests {
         let cached = vec![crate::types::RemoteModelInfo {
             id: "cached-model".to_string(),
             display_name: Some("Cached".to_string()),
+            supports_reasoning: Some(true),
         }];
         super::store_models_in_cache(cached.clone());
         // Should return the cached value without touching the store.

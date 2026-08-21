@@ -137,6 +137,8 @@ pub struct SubscriptionOfferingModel {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning: Option<bool>,
 }
 
 /// A homogeneous group of models that share one OpenCode plan and wire format.

@@ -855,6 +855,11 @@ pub struct RemoteModelInfo {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// When the discovery source reports a per-model reasoning capability
+    /// (e.g. CodeBuddy's `supportsReasoning`), surface it so the UI can set a
+    /// sensible reasoning default on import. `None` = unknown/not reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_reasoning: Option<bool>,
 }
 
 #[cfg(test)]

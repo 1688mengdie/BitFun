@@ -1,6 +1,7 @@
 use crate::client::quirks::{
-    apply_openai_compatible_toggle, is_deepseek_reasoning_effort_model, is_deepseek_url,
-    is_glm_52_reasoning_effort_model, is_zhipuai_url, normalize_deepseek_reasoning_effort,
+    apply_openai_compatible_toggle, is_codebuddy_url, is_deepseek_reasoning_effort_model,
+    is_deepseek_url, is_glm_52_reasoning_effort_model, is_zhipuai_url,
+    normalize_codebuddy_reasoning_effort, normalize_deepseek_reasoning_effort,
     normalize_glm_52_reasoning_effort,
 };
 use crate::client::utils::{dedupe_remote_models, normalize_base_url_for_discovery};
@@ -58,8 +59,34 @@ pub(crate) fn compile_chat_reasoning_action(
         || is_deepseek_reasoning_effort_model(&execution_model);
     let is_glm_52_reasoning_target = is_glm_52_reasoning_effort_model(&execution_model)
         && (execution_provider.eq_ignore_ascii_case("zhipuai") || is_zhipuai_url(url));
+    // CodeBuddy's Tencent gateway uses an OpenAI-compatible body: a boolean
+    // `enable_thinking` toggle plus a `reasoning_effort` tier. It must take
+    // precedence over model-name detection because a deepseek/glm model served
+    // through copilot.tencent.com still speaks the CodeBuddy field shape.
+    let is_codebuddy_reasoning_target = is_codebuddy_url(url);
 
     match action {
+        ReasoningPresetAction::Toggle { enabled } if is_codebuddy_reasoning_target => {
+            request_body["enable_thinking"] = serde_json::json!(enabled);
+            if !*enabled {
+                request_body
+                    .as_object_mut()
+                    .map(|body| body.remove("reasoning_effort"));
+            }
+            Ok(true)
+        }
+        ReasoningPresetAction::Effort { value } if is_codebuddy_reasoning_target => {
+            let normalized = normalize_codebuddy_reasoning_effort(value).ok_or_else(|| {
+                anyhow!(
+                    "CodeBuddy reasoning effort '{}' is unsupported for model '{}'",
+                    value,
+                    execution_model
+                )
+            })?;
+            request_body["enable_thinking"] = serde_json::json!(true);
+            request_body["reasoning_effort"] = serde_json::json!(normalized);
+            Ok(true)
+        }
         ReasoningPresetAction::Toggle { enabled } if is_deepseek_reasoning_target => {
             request_body["thinking"] = serde_json::json!({
                 "type": if *enabled { "enabled" } else { "disabled" }
@@ -151,7 +178,7 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
         #[cfg(feature = "subscription-auth")]
         {
             let options = crate::subscription_auth::SubscriptionHttpOptions::default();
-            return Ok(crate::subscription_auth::list_codebuddy_models(&options).await?);
+            return crate::subscription_auth::list_codebuddy_models(&options).await;
         }
         #[cfg(not(feature = "subscription-auth"))]
         {
@@ -191,6 +218,7 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
             .map(|model| RemoteModelInfo {
                 id: model.id,
                 display_name: None,
+                supports_reasoning: None,
             })
             .collect(),
     ))
@@ -258,6 +286,7 @@ pub(crate) fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
         .map(|id| RemoteModelInfo {
             id: (*id).to_string(),
             display_name: None,
+            supports_reasoning: None,
         })
         .collect()
 }
@@ -291,6 +320,7 @@ fn static_qoder_models() -> Vec<RemoteModelInfo> {
         .map(|id| RemoteModelInfo {
             id: (*id).to_string(),
             display_name: None,
+            supports_reasoning: None,
         })
         .collect()
 }
@@ -441,6 +471,7 @@ fn codex_model_infos(model_ids: Vec<String>) -> Vec<RemoteModelInfo> {
             .map(|id| RemoteModelInfo {
                 id,
                 display_name: None,
+                supports_reasoning: None,
             })
             .collect(),
     )

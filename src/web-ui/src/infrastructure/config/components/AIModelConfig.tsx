@@ -55,6 +55,8 @@ const COLLAPSED_PROVIDER_COUNT = 6;
 interface RemoteModelOption {
   id: string;
   display_name?: string;
+  /** Reported by the discovery source (e.g. CodeBuddy `supportsReasoning`). */
+  supports_reasoning?: boolean;
 }
 
 interface SelectedModelDraft {
@@ -740,10 +742,17 @@ const AIModelConfig: React.FC = () => {
               .find(provider => provider.id === selectedProviderId)
               ?.models.find(model => model.id === modelName)
           : undefined;
+        const remoteReasoning = remoteModelOptions.find(
+          model => model.id === modelName
+        )?.supports_reasoning;
+        const defaultReasoning = remoteReasoning
+          ? { catalog: { source: 'auto' as const }, default_preset: 'on', presets: [] }
+          : undefined;
         return createModelDraft(modelName, draftBaseConfig, {
           configId: pinnedRowId,
           contextWindow: catalogModel?.limits?.context,
           category: catalogModel?.capabilities.attachment ? 'multimodal' : undefined,
+          reasoning: defaultReasoning,
         });
       })
     );
@@ -990,6 +999,8 @@ const AIModelConfig: React.FC = () => {
     const offeringModels = (offering?.models || []).map((model) => ({
       id: model.id,
       display_name: model.display_name || undefined,
+      supports_reasoning: model.supports_reasoning === true ? true
+        : model.supports_reasoning === false ? false : undefined,
     }));
     if (offeringModels.length > 0) {
       setRemoteModelOptions(offeringModels);
