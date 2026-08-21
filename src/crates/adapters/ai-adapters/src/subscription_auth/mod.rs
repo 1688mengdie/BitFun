@@ -895,6 +895,16 @@ pub async fn list_qoder_models(options: &SubscriptionHttpOptions) -> Result<Vec<
     qoder::list_models(options).await
 }
 
+/// Fetches the live CodeBuddy model catalog through the subscription auth
+/// layer. The fallback chain is: enterprise endpoint → /v3/config → static
+/// catalog. Results are cached in memory for 6 minutes; failed fetches back
+/// off exponentially (30s–300s) before retrying.
+pub async fn list_codebuddy_models(
+    options: &SubscriptionHttpOptions,
+) -> Result<Vec<RemoteModelInfo>> {
+    codebuddy::list_models(options).await
+}
+
 /// Signs a Qoder inference request body with the embedded wasm
 /// (`prepareInferRequest`), returning the signed URL, the COSY signature
 /// headers, and the encrypted body. Called by the OpenAI chat provider for

@@ -144,10 +144,19 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
     }
 
     // CodeBuddy's Tencent backend (`copilot.tencent.com`) exposes no public
-    // OpenAI `/models` endpoint. Serve a static catalog mirroring the official
-    // client's model list so subscription imports can pick a real model id.
+    // OpenAI `/models` endpoint. Fetch the dynamic model catalog through the
+    // subscription auth layer (enterprise endpoint → /v3/config → static
+    // fallback), mirroring the official client's ModelsProductProvider chain.
     if url.contains("copilot.tencent.com") {
-        return Ok(static_codebuddy_models());
+        #[cfg(feature = "subscription-auth")]
+        {
+            let options = crate::subscription_auth::SubscriptionHttpOptions::default();
+            return Ok(crate::subscription_auth::list_codebuddy_models(&options).await?);
+        }
+        #[cfg(not(feature = "subscription-auth"))]
+        {
+            return Ok(static_codebuddy_models());
+        }
     }
 
     // Qoder's inference gateway exposes no public OpenAI `/models` endpoint.
@@ -243,7 +252,7 @@ const CODEBUDDY_MODELS: &[&str] = &[
     "auto",
 ];
 
-fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
+pub(crate) fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
     CODEBUDDY_MODELS
         .iter()
         .map(|id| RemoteModelInfo {
