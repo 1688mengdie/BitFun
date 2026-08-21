@@ -26,6 +26,7 @@ mod model_selection;
 mod modes;
 mod peer_host;
 mod plugin_diagnostics;
+mod plugin_host_activation;
 mod product_assembly;
 mod prompt_stash;
 mod prompts;
@@ -49,6 +50,9 @@ use hook_import::HookAction;
 use mcp_import::{McpImportCommand, McpImportOutputFormat};
 use modes::chat::ChatMode;
 use modes::exec::{ExecApprovalMode, ExecOutputFormat};
+
+pub(crate) const PLUGIN_HOST_LAUNCH_POLICY: bitfun_core::plugin_host::PluginHostLaunchPolicy =
+    bitfun_core::plugin_host::PluginHostLaunchPolicy::Disabled;
 
 // ======================== Global MCP Service ========================
 
@@ -557,6 +561,13 @@ impl BootstrapProfile {
     const fn starts_mcp(self) -> bool {
         matches!(self, Self::Interactive | Self::Execution)
     }
+
+    const fn starts_plugin_host(self) -> bool {
+        matches!(
+            PLUGIN_HOST_LAUNCH_POLICY,
+            bitfun_core::plugin_host::PluginHostLaunchPolicy::Enabled
+        ) && matches!(self, Self::Interactive | Self::Execution)
+    }
 }
 
 impl SessionAction {
@@ -857,16 +868,6 @@ async fn initialize_core_services_for_deployment(
     // here so every model tool call sees it. An explicit environment value
     // wins over the config value when both exist (explicit env is the escape
     // hatch) — matching the desktop behavior exactly.
-    // Inject the knowledge base root into the environment for the
-    // KnowledgeBaseSearch tool (UX-P1-3, mirroring desktop/lib.rs:518-548).
-    // The tool reads `BITFUN_KNOWLEDGE_BASE_ROOT` at call time
-    // (knowledge_base_search_tool.rs); without an injection source the
-    // product feature is unusable in CLI deployments even when the user
-    // configures `ai.knowledge_base_root` (L6-P0-1 was desktop-only before).
-    // The value is optional: when the user configures the key it is injected
-    // here so every model tool call sees it. An explicit environment value
-    // wins over the config value when both exist (explicit env is the escape
-    // hatch) — matching the desktop behavior exactly.
     let configured_knowledge_base_root =
         match bitfun_core::service::config::get_global_config_service().await {
             Ok(service) => service
@@ -877,6 +878,24 @@ async fn initialize_core_services_for_deployment(
         };
     inject_knowledge_base_root_if_needed(configured_knowledge_base_root).await;
 
+    if matches!(
+        bootstrap_profile,
+        BootstrapProfile::Interactive | BootstrapProfile::Execution
+    ) {
+        plugin_host_activation::ensure_configured_plugin_execution_supported().await?;
+    }
+    if bootstrap_profile.starts_plugin_host() {
+        match bitfun_core::plugin_host::initialize_configured_plugin_host_with_log_file(
+            PLUGIN_HOST_LAUNCH_POLICY,
+            logging::active_plugin_host_log_path(),
+        )
+        .await
+        {
+            Ok(bitfun_core::plugin_host::PluginHostStartup::Disabled) => {}
+            Ok(status) => tracing::info!("Plugin host initialization completed: {:?}", status),
+            Err(error) => tracing::error!("Failed to initialize configured plugin host: {error}"),
+        }
+    }
     let path_manager = bitfun_core::infrastructure::try_get_path_manager_arc()
         .map_err(|error| anyhow!(error.to_string()))?;
     let entrypoint = match (deployment, bootstrap_profile) {
@@ -1657,7 +1676,24 @@ fn main() {
                 .enable_all()
                 .build()
                 .expect("failed to build tokio runtime");
-            runtime.block_on(run_cli())
+            runtime.block_on(async {
+                let result = run_cli().await;
+                match bitfun_core::plugin_host::shutdown_configured_plugin_host().await {
+                    Ok(Some(report)) => tracing::info!(
+                        generation = report.generation,
+                        disposition = ?report.disposition,
+                        rpc_completed = report.rpc_completed,
+                        exit_code = ?report.exit_code,
+                        duration_ms = report.duration_ms,
+                        "CLI plugin host shutdown completed"
+                    ),
+                    Ok(None) => {
+                        tracing::debug!("CLI plugin host shutdown skipped: host not started")
+                    }
+                    Err(error) => tracing::warn!("CLI plugin host shutdown failed: {error}"),
+                }
+                result
+            })
         })
         .expect("failed to spawn bitfun worker thread");
 
@@ -1860,12 +1896,12 @@ mod bootstrap_profile_tests {
     #[test]
     fn profiles_start_only_their_requested_background_services() {
         let cases = [
-            (BootstrapProfile::Interactive, true, true),
-            (BootstrapProfile::Execution, false, true),
-            (BootstrapProfile::Management, false, false),
+            (BootstrapProfile::Interactive, true, true, false),
+            (BootstrapProfile::Execution, false, true, false),
+            (BootstrapProfile::Management, false, false, false),
         ];
 
-        for (profile, starts_peer_host, starts_mcp) in cases {
+        for (profile, starts_peer_host, starts_mcp, starts_plugin_host) in cases {
             assert_eq!(
                 profile.starts_peer_host(
                     bitfun_services_core::runtime_ownership::RuntimeDeployment::Embedded,
@@ -1873,6 +1909,7 @@ mod bootstrap_profile_tests {
                 starts_peer_host
             );
             assert_eq!(profile.starts_mcp(), starts_mcp);
+            assert_eq!(profile.starts_plugin_host(), starts_plugin_host);
         }
     }
 

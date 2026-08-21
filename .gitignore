@@ -130,5 +130,6 @@ external/
 /target/debug/.bitfun/search/flashgrep-index/
 
 .design/
+.pnpm-store/
 __pycache__/
 *.pyc
