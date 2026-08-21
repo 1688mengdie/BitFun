@@ -612,6 +612,7 @@ impl LocalWorkspaceSnapshotPort for CoreLocalWorkspaceSnapshot {
 /// harnesses; plugin runtime bindings are deliberately not part of this API.
 pub struct CoreProductAgentRuntime;
 
+#[cfg(feature = "opencode-plugin-host")]
 pub(crate) async fn fork_session_for_plugin(
     workspace_path: PathBuf,
     source_session_id: String,
