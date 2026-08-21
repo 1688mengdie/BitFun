@@ -592,6 +592,10 @@ pub struct DialogTurnData {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_epoch: Option<u32>,
 
+    /// Todo list for this dialog turn (for persisting the turn's todo state)
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "todos")]
+    pub todos: Option<serde_json::Value>,
+
     /// Turn status
     pub status: TurnStatus,
 }
@@ -1255,6 +1259,7 @@ impl DialogTurnData {
             error_detail: None,
             recovery: None,
             recovery_epoch: None,
+            todos: None,
             status: TurnStatus::InProgress,
         }
     }

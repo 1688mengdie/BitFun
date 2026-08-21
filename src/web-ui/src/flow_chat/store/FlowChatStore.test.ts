@@ -33,6 +33,26 @@ const apiMocks = vi.hoisted(() => ({
   getAvailableModes: vi.fn(async () => []),
 }));
 
+// Mock agentAPI.restoreSessionWithTurns
+vi.mock('@/infrastructure/api/service-api/AgentAPI', () => ({
+  agentAPI: {
+    restoreSessionWithTurns: apiMocks.restoreSessionWithTurns,
+    cancelSession: apiMocks.cancelSession,
+    deleteSession: apiMocks.deleteSession,
+    deleteSessionTree: apiMocks.deleteSessionTree,
+    restoreSession: apiMocks.restoreSession,
+    get restoreSessionView() {
+      return apiMocks.restoreSessionView;
+    },
+    restoreSessionWithTurns: apiMocks.restoreSessionWithTurns,
+    loadSessionTurnWindow: apiMocks.loadSessionTurnWindow,
+    onPermissionRequestEvent: apiMocks.onPermissionRequestEvent,
+    subscribePermissionRequests: apiMocks.subscribePermissionRequests,
+    listPendingPermissionRequests: apiMocks.listPendingPermissionRequests,
+    getAvailableModes: apiMocks.getAvailableModes,
+  },
+}));
+
 const peerModeFlagMock = vi.hoisted(() => ({ active: false }));
 
 const configManagerMock = vi.hoisted(() => {
@@ -7429,5 +7449,202 @@ describe('FlowChatStore device surfaces', () => {
     ).rejects.toSatisfy(isSurfaceChangedError);
 
     expect(apiMocks.loadSessionTurns).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================================
+// R-TODOLIST: TodoWrite 持久化专项测试（四场景）
+// ============================================================================
+
+describe('R-TODOLIST: TodoWrite 持久化链路', () => {
+  beforeEach(() => {
+    resetStore();
+    apiMocks.loadSessionTurns.mockClear();
+    apiMocks.saveSessionTurn.mockClear();
+    // Block restoreSessionWithTurns to force direct loadSessionTurns path
+    (apiMocks as any).restoreSessionWithTurns = undefined;
+  });
+
+  const createMockTurnWithTodos = (turnId: string, todos: any[]) => ({
+    turnId,
+    turnIndex: 0,
+    sessionId: 'test-session',
+    timestamp: Date.now(),
+    userMessage: {
+      id: `${turnId}-msg`,
+      content: 'Test input',
+      timestamp: Date.now(),
+      metadata: {},
+    },
+    modelRounds: [],
+    startTime: Date.now(),
+    status: 'completed' as const,
+    todos, // 新增字段
+  });
+
+  // 场景 1：刷新恢复 - todos 从后端 loadSessionTurns 恢复
+  it('刷新恢复：todos 从后端 loadSessionTurns 恢复', async () => {
+    const testTodos = [
+      { id: 'todo-1', content: 'Task 1', status: 'pending' },
+      { id: 'todo-2', content: 'Task 2', status: 'in_progress' },
+    ];
+
+    // Setup session state first (required by loadSessionHistory)
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['test-session', createSession({
+          sessionId: 'test-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'test-session',
+    }));
+
+    // Mock loadSessionTurns directly returning turns array
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', testTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+
+    const session = flowChatStore.getState().sessions.get('test-session');
+    expect(session).toBeDefined();
+    expect(session?.dialogTurns[0].todos).toEqual(testTodos);
+  });
+
+  // 场景 2：子代理 - todo 归属明确
+  it('子代理：子代理 todo 不污染父会话 planner', async () => {
+    const parentTodos = [{ id: 'parent-1', content: 'Parent task', status: 'pending' }];
+    const subagentTodos = [{ id: 'sub-1', content: 'Subagent task', status: 'pending' }];
+
+    // Setup and mock parent session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['parent-session', createSession({
+          sessionId: 'parent-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'parent-session',
+    }));
+
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('parent-turn', parentTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('parent-session', '/repo/test');
+    const parentSession = flowChatStore.getState().sessions.get('parent-session');
+    expect(parentSession?.dialogTurns[0].todos).toEqual(parentTodos);
+
+    // Setup and mock subagent session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['subagent-session', createSession({
+          sessionId: 'subagent-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'subagent-session',
+    }));
+
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('subagent-turn', subagentTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('subagent-session', '/repo/test');
+    const subagentSession = flowChatStore.getState().sessions.get('subagent-session');
+    expect(subagentSession?.dialogTurns[0].todos).toEqual(subagentTodos);
+
+    // Verify subagent todos did not pollute parent session
+    expect(parentSession?.dialogTurns[0].todos).not.toContainEqual(
+      expect.objectContaining({ id: 'sub-1' })
+    );
+  });
+
+  // 场景 3：删除 - 删除不残留
+  it('删除：删除 todo 后不再恢复', async () => {
+    const initialTodos = [
+      { id: 'todo-1', content: 'Task 1', status: 'pending' },
+      { id: 'todo-2', content: 'Task 2', status: 'pending' },
+    ];
+    const deletedTodos = [
+      { id: 'todo-1', content: 'Task 1', status: 'pending' },
+      // todo-2 deleted
+    ];
+
+    // Setup session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['test-session', createSession({
+          sessionId: 'test-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'test-session',
+    }));
+
+    // First load with 2 todos
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', initialTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    let session = flowChatStore.getState().sessions.get('test-session');
+    expect(session?.dialogTurns[0].todos).toHaveLength(2);
+
+    // Second load (after delete) with 1 todo
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', deletedTodos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    session = flowChatStore.getState().sessions.get('test-session');
+    expect(session?.dialogTurns[0].todos).toHaveLength(1);
+    expect(session?.dialogTurns[0].todos?.[0].id).toBe('todo-1');
+  });
+
+  // 场景 4：多轮替换 - 取最新有效 turn
+  it('多轮替换：多轮 TodoWrite 后取最新 turn 的 todos', async () => {
+    const round1Todos = [
+      { id: 'todo-1', content: 'Round 1 Task', status: 'completed' },
+    ];
+    const round2Todos = [
+      { id: 'todo-1', content: 'Updated Task', status: 'in_progress' },
+      { id: 'todo-2', content: 'New Task', status: 'pending' },
+    ];
+
+    // Setup session
+    flowChatStore.setState(() => ({
+      sessions: new Map([
+        ['test-session', createSession({
+          sessionId: 'test-session',
+          isHistorical: true,
+          historyState: 'metadata-only',
+        })],
+      ]),
+      activeSessionId: 'test-session',
+    }));
+
+    // Mock two rounds of turns
+    apiMocks.loadSessionTurns.mockResolvedValueOnce([
+      createMockTurnWithTodos('turn-1', round1Todos),
+      createMockTurnWithTodos('turn-2', round2Todos),
+    ]);
+
+    await flowChatStore.loadSessionHistory('test-session', '/repo/test');
+    const session = flowChatStore.getState().sessions.get('test-session');
+
+    // Verify both turns restored with their todos
+    expect(session?.dialogTurns).toHaveLength(2);
+    expect(session?.dialogTurns[0].todos).toEqual(round1Todos);
+    expect(session?.dialogTurns[1].todos).toEqual(round2Todos);
+
+    // getDialogTurnTodos should return latest turn's todos
+    const latestTodos = flowChatStore.getDialogTurnTodos('test-session', 'turn-2');
+    expect(latestTodos).toEqual(round2Todos);
   });
 });

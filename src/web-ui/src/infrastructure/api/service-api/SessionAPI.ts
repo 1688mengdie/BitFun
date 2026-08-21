@@ -592,6 +592,27 @@ export class SessionAPI {
       throw createTauriCommandError('delete_all_archived_sessions', error, { workspacePath });
     }
   }
+
+  async updateSessionMetadata(
+    sessionId: string,
+    metadataPatch: Partial<SessionMetadata>,
+    workspacePath: string,
+    remoteConnectionId?: string,
+    remoteSshHost?: string
+  ): Promise<void> {
+    try {
+      await api.invoke('update_session_metadata', {
+        request: {
+          session_id: sessionId,
+          workspace_path: workspacePath,
+          metadata_patch: metadataPatch,
+          ...remoteSessionFields(remoteConnectionId, remoteSshHost),
+        }
+      });
+    } catch (error) {
+      throw createTauriCommandError('update_session_metadata', error, { sessionId, workspacePath });
+    }
+  }
 }
 
 export const sessionAPI = new SessionAPI();

@@ -9270,13 +9270,15 @@ config: {
             timestamp: rawTokenUsage.timestamp,
           }
         : undefined,
+      todos: Array.isArray(turn.todos) ? turn.todos : undefined,
       storageTurnIndex: turn.turnIndex,
       backendTurnIndex: turn.turnIndex,
     };
     });
   }
 
-  public setDialogTurnTodos(sessionId: string, turnId: string, todos: import('../types/flow-chat').TodoItem[]): void {
+  public async setDialogTurnTodos(sessionId: string, turnId: string, todos: import('../types/flow-chat').TodoItem[]): Promise<void> {
+    // Update memory state first for immediate UI feedback
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
       if (!session) {
@@ -9310,6 +9312,18 @@ config: {
         sessions: newSessions
       };
     });
+
+    // Trigger backend persistence via debounced save
+    try {
+      const { FlowChatManager } = await import('@/flow_chat/services/FlowChatManager');
+      const context = FlowChatManager.getInstance().getContext();
+      if (context) {
+        const { saveDialogTurnToDisk } = await import('@/flow_chat/services/flow-chat-manager/PersistenceModule');
+        await saveDialogTurnToDisk(context, sessionId, turnId);
+      }
+    } catch (error) {
+      log.error('Failed to persist turn todos to backend', { sessionId, turnId, error });
+    }
   }
 
   public getDialogTurnTodos(sessionId: string, turnId: string): import('../types/flow-chat').TodoItem[] {

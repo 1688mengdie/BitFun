@@ -66,6 +66,7 @@ import {
   updateSessionMetadata,
 } from './flow-chat-manager';
 import { ensureBackendSession } from './flow-chat-manager/SessionModule';
+import { requireSessionProjectWorkspacePath } from '../utils/sessionWorkspace';
 import { installPeerSessionRefresh } from './flow-chat-manager/PeerSessionRefreshModule';
 import { installDispatchJobObserver } from '../session-drivers/dispatch/install';
 import { driverForSession } from '../session-drivers/registry';
@@ -146,6 +147,10 @@ export class FlowChatManager {
       FlowChatManager.instance = new FlowChatManager();
     }
     return FlowChatManager.instance;
+  }
+
+  public getContext(): FlowChatContext {
+    return this.context;
   }
 
   public static disposeInstance(): void {
@@ -945,7 +950,7 @@ export class FlowChatManager {
     return taskId;
   }
 
-  private handleTodoWriteResult(sessionId: string, turnId: string, result: any): void {
+  private async handleTodoWriteResult(sessionId: string, turnId: string, result: any): Promise<void> {
     try {
       if (!result.todos || !Array.isArray(result.todos)) {
         log.debug('TodoWrite result missing todos array', { sessionId, turnId });
@@ -972,10 +977,13 @@ export class FlowChatManager {
         });
         
         const mergedTodos = Array.from(todoMap.values());
-        this.context.flowChatStore.setDialogTurnTodos(sessionId, turnId, mergedTodos);
+        await this.context.flowChatStore.setDialogTurnTodos(sessionId, turnId, mergedTodos);
       } else {
-        this.context.flowChatStore.setDialogTurnTodos(sessionId, turnId, incomingTodos);
+        await this.context.flowChatStore.setDialogTurnTodos(sessionId, turnId, incomingTodos);
       }
+      
+      // Update session-level metadata.todos for persistence
+      await this.updateSessionMetadataTodos(sessionId, incomingTodos);
       
       this.syncTodosToStateMachine(sessionId);
       
@@ -989,6 +997,26 @@ export class FlowChatManager {
       }));
     } catch (error) {
       log.error('Failed to handle TodoWrite result', { sessionId, turnId, error });
+    }
+  }
+
+  private async updateSessionMetadataTodos(sessionId: string, todos: import('../types/flow-chat').TodoItem[]): Promise<void> {
+    try {
+      const { sessionAPI } = await import('@/infrastructure/api/service-api/SessionAPI');
+      const state = this.context.flowChatStore.getState();
+      const session = state.sessions.get(sessionId);
+      if (session) {
+        const workspacePath = requireSessionProjectWorkspacePath(session, sessionId);
+        await sessionAPI.updateSessionMetadata(
+          sessionId,
+          { todos },
+          workspacePath,
+          session.remoteConnectionId,
+          session.remoteSshHost
+        );
+      }
+    } catch (error) {
+      log.error('Failed to update session metadata todos', { sessionId, error });
     }
   }
 
