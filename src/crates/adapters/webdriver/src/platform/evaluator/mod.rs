@@ -101,12 +101,12 @@ pub(crate) async fn evaluate_script<R: tauri::Runtime>(
             message: Some("Unknown JavaScript error".into()),
             stack: None,
         });
-        return Err(WebDriverErrorResponse::javascript_error(
+        Err(WebDriverErrorResponse::javascript_error(
             error
                 .message
                 .unwrap_or_else(|| "Unknown JavaScript error".into()),
             error.stack,
-        ));
+        ))
     }
 }
 
