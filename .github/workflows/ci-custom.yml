@@ -84,12 +84,16 @@ jobs:
 
       - name: Verify local CI replica stays in sync with remote ci.yml
         # 上游 ci.yml 新增/变更检查项 → local-replica.ps1 必须同步覆盖（总纲 §四 第9项）
-        # 只做核心步骤名对齐探测（缺步骤 = 失败提示），防漂移。
+        # 探测 local-replica.ps1 实际步骤名（中文别名），对应上游 ci.yml 英文步骤：
+        #   Check compilation → workspace 编译检查
+        #   Run core and desktop library tests → core + desktop 库测试
+        #   Validate i18n contract → i18n 契约（CI profile）
+        #   Lint web UI → web-ui lint（--max-warnings=0）
         run: |
           set -euo pipefail
-          for step in "Check compilation" "Run core and desktop library tests" "Validate i18n contract" "Lint web UI"; do
+          for step in "workspace 编译检查" "core + desktop 库测试" "i18n 契约（CI profile）" "web-ui lint（--max-warnings=0）"; do
             grep -qF "$step" scripts/ci/local-replica.ps1 || {
-              echo "::error::local-replica.ps1 缺少上游 ci.yml 步骤: $step（CI 标准同步核对，总纲 §四 第9项）"
+              echo "::error::local-replica.ps1 缺少上游 ci.yml 步骤对应项: $step（CI 标准同步核对，总纲 §四 第9项）"
               exit 1
             }
           done
