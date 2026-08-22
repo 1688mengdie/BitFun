@@ -2202,7 +2202,8 @@ mod tests {
     }
 
     // R-WF-09 守卫单测（不依赖全局 coordinator）：主会话放行、非主会话拒绝、
-    // 调用会话缺失拒绝。用隔离 coordinator + 直接调用守卫函数验证。
+    // 调用会话缺失回退内存主会话（BUG-01：有主会话可回退 → 放行；无主会话 →
+    // fail-closed 拒绝）。用隔离 coordinator + 直接调用守卫函数验证。
     #[tokio::test]
     async fn orchestration_guard_accepts_main_session_rejects_child() {
         let coordinator = new_isolated_test_coordinator().await;
@@ -2265,15 +2266,29 @@ mod tests {
             "error must name the offending caller session, got: {message}"
         );
 
-        // 调用会话缺失 → 拒绝（fail-closed）。
+        // BUG-01（2026-08-22）：调用会话缺失（execute_tool 前端通道）→ 回退
+        // 内存内任意主会话（本测试已建 main_id）→ 放行。
+        let no_session_context = empty_context();
+        GroupRoomTool::ensure_orchestration_main_session(&coordinator, &no_session_context)
+            .await
+            .expect("missing caller session must fall back to the in-memory main session");
+    }
+
+    // BUG-01（2026-08-22）：调用会话缺失且内存内无任何主会话（全新隔离
+    // coordinator，无会话）→ fail-closed 拒绝（回退失败仍保守拒绝，防误放行）。
+    #[tokio::test]
+    async fn orchestration_guard_missing_session_no_main_fallback_rejects() {
+        let coordinator = new_isolated_test_coordinator().await;
         let no_session_context = empty_context();
         let error =
             GroupRoomTool::ensure_orchestration_main_session(&coordinator, &no_session_context)
                 .await
-                .expect_err("missing caller session must be rejected");
+                .expect_err(
+                    "missing caller session with no main session fallback must be rejected",
+                );
         assert!(
             error.to_string().contains("caller session context"),
-            "missing-session rejection must be explicit, got: {error}"
+            "no-fallback rejection must be explicit, got: {error}"
         );
     }
 
