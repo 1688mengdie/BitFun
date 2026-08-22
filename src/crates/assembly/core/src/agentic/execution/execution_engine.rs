@@ -9232,7 +9232,7 @@ mod tests {
                 vec![crate::agentic::core::ToolCall {
                     tool_id: format!("call-{}", tool_name),
                     tool_name: tool_name.to_string(),
-                    arguments: json!({ "query": format!("{}", tool_name) }),
+                    arguments: json!({ "query": tool_name.to_string() }),
                     raw_arguments: None,
                     is_error: false,
                     parse_error: None,

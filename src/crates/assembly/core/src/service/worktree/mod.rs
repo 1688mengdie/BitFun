@@ -2564,7 +2564,7 @@ mod tests {
 
         // 直接调内部逻辑等价物：update_display_name 需要真实仓库上下文，此处
         // 验证 registry 层字段语义（display_name 与 receipt 持久化）。
-        let record = registry.worktrees.iter_mut().next().expect("record");
+        let record = registry.worktrees.first_mut().expect("record");
         record.display_name = Some("新会话名".to_string());
         registry.receipts.insert(
             "request-1".to_string(),
