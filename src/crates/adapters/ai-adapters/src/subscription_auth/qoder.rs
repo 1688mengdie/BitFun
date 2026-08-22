@@ -16,6 +16,7 @@ use super::{pkce::Pkce, ResolvedCredential, StartedLogin, SubscriptionHttpOption
 use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -186,11 +187,35 @@ fn authorization_url(pkce: &Pkce, machine_id: &str, nonce: &str) -> String {
     )
 }
 
-/// Recovers the machine id the same way the Qoder CLI does: reuse the
-/// persisted machine id, or fall back to a fresh UUID. BitFun does not
-/// persist a Qoder machine id, so this always falls back to a fresh UUID.
+/// Recovers the machine id the same way the Qoder CN CLI
+/// (`@qodercn-ai/qoderclicn`) does: reuse the persisted
+/// `~/.qoder-cn/.auth/machine_id` value, or fall back to a fresh UUID and
+/// write it back so one machine keeps a single stable id across logins and
+/// inference requests. Persistence is best-effort: if the file cannot be read
+/// or written we still return a valid id so the login flow is never blocked.
 pub(crate) fn recover_machine_id() -> String {
-    Uuid::new_v4().to_string()
+    match dirs::home_dir() {
+        Some(home) => recover_machine_id_at(&home.join(".qoder-cn").join(".auth")),
+        None => Uuid::new_v4().to_string(),
+    }
+}
+
+/// Core machine-id recovery. `auth_dir` is taken verbatim (it points at
+/// `~/.qoder-cn/.auth` at the call site, but tests inject a temp dir so they
+/// never touch the real Qoder CLI state).
+fn recover_machine_id_at(auth_dir: &Path) -> String {
+    const MACHINE_ID_FILE: &str = "machine_id";
+    let path = auth_dir.join(MACHINE_ID_FILE);
+    if let Ok(stored) = std::fs::read_to_string(&path) {
+        let stored = stored.trim();
+        if !stored.is_empty() {
+            return stored.to_string();
+        }
+    }
+    let id = Uuid::new_v4().to_string();
+    let _ = std::fs::create_dir_all(auth_dir);
+    let _ = std::fs::write(&path, &id);
+    id
 }
 
 /// One device-token poll. A `404` (or a 200 JSON body carrying an error code
@@ -1229,11 +1254,23 @@ mod tests {
     }
 
     #[test]
-    fn machine_id_falls_back_to_uuid() {
-        let first = recover_machine_id();
-        let second = recover_machine_id();
+    fn machine_id_reuses_persisted_value() {
+        let dir = std::env::temp_dir().join(format!("qoder-machine-id-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("machine_id"), "persisted-machine-id").unwrap();
+        assert_eq!(recover_machine_id_at(&dir), "persisted-machine-id");
+    }
+
+    #[test]
+    fn machine_id_generates_and_persists_when_missing() {
+        let dir = std::env::temp_dir().join(format!("qoder-machine-id-{}", uuid::Uuid::new_v4()));
+        let first = recover_machine_id_at(&dir);
         assert!(!first.is_empty());
-        assert_ne!(first, second);
+        // The fresh id is written back, so a second call reads the same value.
+        let second = recover_machine_id_at(&dir);
+        assert_eq!(first, second);
+        let stored = std::fs::read_to_string(dir.join("machine_id")).unwrap();
+        assert_eq!(stored, first);
     }
 
     #[test]
