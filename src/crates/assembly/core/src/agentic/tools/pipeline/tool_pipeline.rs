@@ -1497,6 +1497,15 @@ impl ToolPipeline {
     /// current atomic unit" — the remaining tool plan is still skipped as
     /// before, but the in-flight write operation itself is not interrupted.
     /// Read-like tools keep the original immediate-interrupt semantics.
+    ///
+    /// BUG-04: the check below runs before the tool starts, so the old
+    /// in-flight condition (`has_active_write_like_tools`) could never be
+    /// true for the very tool about to be skipped — queued write-like tools
+    /// fell through the write-protection window and were cancelled/skipped
+    /// (reported "failed (cancelled)") before executing. A write-like tool
+    /// itself is now protected unconditionally: it defers the injection
+    /// (InterruptAfterCurrentAtomicUnit semantics) and is never marked
+    /// skipped while waiting in the queue.
     async fn should_interrupt_for_round_injection(
         &self,
         context: &ToolExecutionContext,
@@ -1506,9 +1515,10 @@ impl ToolPipeline {
         if !pending.should_interrupt_after_current_atomic_unit() {
             return false;
         }
-        if is_write_like_tool_name(tool_name) && self.has_active_write_like_tools().await {
-            // A write-like tool is inside its atomic unit: defer the
-            // injection until it completes. Semantically equivalent to
+        if is_write_like_tool_name(tool_name) {
+            // BUG-04: protect the queued write-like tool itself (and, via
+            // has_active_write_like_tools, any already-running write tool)
+            // from the injection. Semantically equivalent to
             // InterruptAfterCurrentAtomicUnit — wait for the write.
             return false;
         }
@@ -1797,14 +1807,28 @@ impl ToolPipeline {
                 _ => false,
             };
             if batch_should_interrupt {
-                let remaining_task_ids = batch
+                let remaining_task_ids: Vec<String> = batch
                     .task_ids
                     .into_iter()
-                    .chain(batch_iter.flat_map(|(_, batch)| batch.task_ids.into_iter()));
-                all_results.extend(
-                    self.build_steering_interrupted_results(remaining_task_ids)
-                        .await,
-                );
+                    .chain(batch_iter.flat_map(|(_, batch)| batch.task_ids.into_iter()))
+                    .collect();
+                // BUG-04: split write-like tools out of the skipped set.
+                // Only read-like tools are skipped; queued write-like tools
+                // are protected by R-WF-22 and keep executing (their atomic
+                // unit must not be lost to a steering interrupt).
+                let (skippable, protected): (Vec<_>, Vec<_>) =
+                    remaining_task_ids.into_iter().partition(|task_id| {
+                        self.state_manager
+                            .get_task(task_id)
+                            .map(|task| !is_write_like_tool_name(task.effective_tool_name()))
+                            .unwrap_or(true)
+                    });
+                if !skippable.is_empty() {
+                    all_results.extend(self.build_steering_interrupted_results(skippable).await);
+                }
+                if !protected.is_empty() {
+                    all_results.extend(self.execute_protected_sequential(protected).await?);
+                }
                 break;
             }
 
@@ -1882,11 +1906,27 @@ impl ToolPipeline {
                 None => false,
             };
             if should_interrupt {
-                let remaining_task_ids = std::iter::once(task_id).chain(task_iter);
-                results.extend(
-                    self.build_steering_interrupted_results(remaining_task_ids)
-                        .await,
-                );
+                let remaining_task_ids: Vec<String> =
+                    std::iter::once(task_id).chain(task_iter).collect();
+                // BUG-04: only read-like tools are skipped; queued
+                // write-like tools are protected by R-WF-22 and keep
+                // executing (their atomic unit must not be lost to a
+                // steering interrupt). Protected tools are processed
+                // inline below so no recursive async call is needed.
+                let (skippable, protected): (Vec<_>, Vec<_>) =
+                    remaining_task_ids.into_iter().partition(|task_id| {
+                        self.state_manager
+                            .get_task(task_id)
+                            .map(|task| !is_write_like_tool_name(task.effective_tool_name()))
+                            .unwrap_or(true)
+                    });
+                if !skippable.is_empty() {
+                    results.extend(self.build_steering_interrupted_results(skippable).await);
+                }
+                if !protected.is_empty() {
+                    let protected_results = self.execute_protected_sequential(protected).await?;
+                    results.extend(protected_results);
+                }
                 break;
             }
 
@@ -1902,6 +1942,32 @@ impl ToolPipeline {
                 .await;
         }
 
+        Ok(results)
+    }
+
+    /// BUG-04: execute a set of write-protected tools after a steering
+    /// interruption skipped the rest of the plan. Write-like tools keep
+    /// executing (R-WF-22 atomic-unit protection); each tool runs with its
+    /// own cancellation watch so a pending injection still cancels the
+    /// watch-side deferral correctly once the write completes.
+    async fn execute_protected_sequential(
+        &self,
+        task_ids: Vec<String>,
+    ) -> BitFunResult<Vec<ToolExecutionResult>> {
+        let mut results = Vec::new();
+        for task_id in task_ids {
+            let task = self.state_manager.get_task(&task_id);
+            let interrupt = task.and_then(|task| task.context.steering_interrupt.clone());
+            let watch_handle =
+                self.spawn_round_injection_cancellation_watch(vec![task_id.clone()], interrupt);
+            let result = self.execute_single_tool(task_id.clone()).await;
+            if let Some(handle) = watch_handle {
+                handle.abort();
+                let _ = handle.await;
+            }
+            self.append_execution_result(&task_id, result, &mut results)
+                .await;
+        }
         Ok(results)
     }
 
@@ -2935,6 +3001,64 @@ impl ToolPipeline {
         Ok(())
     }
 
+    /// BUG-04: preserve the terminal outcome's timing metadata when a late
+    /// cancellation races with a completed tool. Each helper returns the
+    /// recorded value of the corresponding lifecycle field, or `None` when
+    /// the state variant does not carry it.
+    fn task_state_duration_ms(state: &ToolExecutionState) -> Option<u64> {
+        match state {
+            ToolExecutionState::Completed { duration_ms, .. } => Some(*duration_ms),
+            ToolExecutionState::Failed { duration_ms, .. } => *duration_ms,
+            ToolExecutionState::Cancelled { duration_ms, .. } => *duration_ms,
+            _ => None,
+        }
+    }
+
+    fn task_state_queue_wait_ms(state: &ToolExecutionState) -> Option<u64> {
+        match state {
+            ToolExecutionState::Completed { queue_wait_ms, .. } => *queue_wait_ms,
+            ToolExecutionState::Failed { queue_wait_ms, .. } => *queue_wait_ms,
+            ToolExecutionState::Cancelled { queue_wait_ms, .. } => *queue_wait_ms,
+            _ => None,
+        }
+    }
+
+    fn task_state_preflight_ms(state: &ToolExecutionState) -> Option<u64> {
+        match state {
+            ToolExecutionState::Completed { preflight_ms, .. } => *preflight_ms,
+            ToolExecutionState::Failed { preflight_ms, .. } => *preflight_ms,
+            ToolExecutionState::Cancelled { preflight_ms, .. } => *preflight_ms,
+            _ => None,
+        }
+    }
+
+    fn task_state_confirmation_wait_ms(state: &ToolExecutionState) -> Option<u64> {
+        match state {
+            ToolExecutionState::Completed {
+                confirmation_wait_ms,
+                ..
+            } => *confirmation_wait_ms,
+            ToolExecutionState::Failed {
+                confirmation_wait_ms,
+                ..
+            } => *confirmation_wait_ms,
+            ToolExecutionState::Cancelled {
+                confirmation_wait_ms,
+                ..
+            } => *confirmation_wait_ms,
+            _ => None,
+        }
+    }
+
+    fn task_state_execution_ms(state: &ToolExecutionState) -> Option<u64> {
+        match state {
+            ToolExecutionState::Completed { execution_ms, .. } => *execution_ms,
+            ToolExecutionState::Failed { execution_ms, .. } => *execution_ms,
+            ToolExecutionState::Cancelled { execution_ms, .. } => *execution_ms,
+            _ => None,
+        }
+    }
+
     /// Cancel tool execution
     pub async fn cancel_tool(&self, tool_id: &str, reason: String) -> BitFunResult<()> {
         let Some(task) = self.state_manager.get_task(tool_id) else {
@@ -2963,24 +3087,35 @@ impl ToolPipeline {
             );
         }
 
-        // 2. Update state to cancelled
-        self.state_manager
-            .update_state(
-                tool_id,
-                ToolExecutionState::Cancelled {
-                    reason: reason.clone(),
-                    duration_ms: None,
-                    queue_wait_ms: None,
-                    preflight_ms: None,
-                    confirmation_wait_ms: None,
-                    execution_ms: None,
-                },
-            )
+        // 2. Update state to cancelled.
+        // BUG-04: the terminal check and the state write must be atomic — the
+        // tool execution path may write a terminal outcome (Completed/Failed)
+        // in the window between the check above and this write. A racing
+        // cancellation must never overwrite an already-completed tool result
+        // (the "write tool finished but was reported failed (cancelled)"
+        // bug). cancel_state_if_not_terminal re-checks the terminal state
+        // under the task lock and keeps the original terminal state when the
+        // tool already finished, while still firing the cancellation token
+        // above so the execution future observes the cancel.
+        let cancelled_state = ToolExecutionState::Cancelled {
+            reason: reason.clone(),
+            // Keep the original timing metadata when the tool already
+            // recorded terminal data (a late cancel must not erase the
+            // completed outcome's duration).
+            duration_ms: Self::task_state_duration_ms(&task.state),
+            queue_wait_ms: Self::task_state_queue_wait_ms(&task.state),
+            preflight_ms: Self::task_state_preflight_ms(&task.state),
+            confirmation_wait_ms: Self::task_state_confirmation_wait_ms(&task.state),
+            execution_ms: Self::task_state_execution_ms(&task.state),
+        };
+        let state_updated = self
+            .state_manager
+            .cancel_state_if_not_terminal(tool_id, cancelled_state)
             .await;
 
         info!(
-            "Tool execution cancelled: tool_id={}, reason={}",
-            tool_id, reason
+            "Tool execution cancelled: tool_id={}, reason={}, state_updated={}",
+            tool_id, reason, state_updated
         );
         Ok(())
     }
@@ -5037,6 +5172,8 @@ mod tests {
     #[tokio::test]
     async fn user_steering_pending_still_skips_remaining_tool_plan() {
         let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 0).await;
+        register_static_test_tool(&pipeline, "Write", json!({ "ok": true }), 0).await;
         let buffer = Arc::new(SessionRoundInjectionBuffer::default());
         buffer.push(
             "session_1",
@@ -5072,13 +5209,123 @@ mod tests {
             results[0].result.result["category"],
             json!("user_steering_interrupted")
         );
-        assert_eq!(
-            results[1].result.result["category"],
-            json!("user_steering_interrupted")
-        );
+        // BUG-04: a queued write-like tool is protected by R-WF-22 — it
+        // executes instead of being skipped with the read-like plan.
+        assert!(!results[1].result.is_error);
+        assert_eq!(results[1].result.result["ok"], json!(true));
         // Skipped tools must not surface as failures (no retry / detour bait).
         assert!(!results[0].result.is_error);
+    }
+
+    #[tokio::test]
+    async fn queued_write_like_tool_is_not_skipped_by_round_injection() {
+        // BUG-04 regression: a write-like tool still waiting in the queue
+        // must be protected by the write guard — it must execute and return
+        // its real result instead of being skipped/cancelled as
+        // "failed (cancelled)".
+        let pipeline = test_tool_pipeline();
+        register_static_test_tool(&pipeline, "Read", json!({ "ok": true }), 0).await;
+        register_static_test_tool(&pipeline, "Write", json!({ "ok": true }), 0).await;
+
+        let buffer = Arc::new(SessionRoundInjectionBuffer::default());
+        buffer.push(
+            "session_1",
+            test_round_injection(
+                RoundInjectionKind::UserSteering,
+                RoundInjectionToolPreemption::CancelRunningCooperatively,
+            ),
+        );
+
+        let mut context = test_tool_execution_context();
+        context.steering_interrupt = Some(DialogRoundInjectionInterrupt::new(
+            "session_1".to_string(),
+            "turn_1".to_string(),
+            buffer,
+        ));
+        let options = ToolExecutionOptions {
+            allow_parallel: false,
+            ..Default::default()
+        };
+
+        let results = pipeline
+            .execute_tools(
+                vec![
+                    test_tool_call("tool_1", "Read"),
+                    test_tool_call("tool_2", "Write"),
+                ],
+                context,
+                options,
+            )
+            .await
+            .expect("steering should surface as tool results");
+
+        assert_eq!(results.len(), 2);
+        // The read-like tool is not write-protected: it is skipped.
+        assert_eq!(
+            results[0].result.result["category"],
+            json!("user_steering_interrupted")
+        );
+        // The queued write-like tool is protected: it executed normally and
+        // must never surface as "failed (cancelled)".
         assert!(!results[1].result.is_error);
+        assert_eq!(
+            results[1].result.result["ok"],
+            json!(true),
+            "unexpected result json: {}",
+            results[1].result.result
+        );
+        assert_ne!(results[1].result.result["category"], json!("cancelled"));
+    }
+
+    #[tokio::test]
+    async fn cancel_after_completion_never_overwrites_completed_state() {
+        // BUG-04 regression: a cancellation racing a completed write tool
+        // must not overwrite the terminal Completed outcome — the tool
+        // finished, so the result stays a success.
+        let pipeline = test_tool_pipeline();
+        let state_manager = pipeline.state_manager.clone();
+        let tool_id = "tool_race_1".to_string();
+        state_manager
+            .create_task(test_tool_task(&tool_id, "Write"))
+            .await;
+
+        // Tool completes (terminal state) first…
+        state_manager
+            .update_state(
+                &tool_id,
+                ToolExecutionState::Completed {
+                    result: FrameworkToolResult::Result {
+                        data: json!({ "ok": true }),
+                        result_for_assistant: None,
+                        image_attachments: None,
+                    },
+                    duration_ms: 12,
+                    queue_wait_ms: Some(1),
+                    preflight_ms: Some(2),
+                    confirmation_wait_ms: Some(3),
+                    execution_ms: Some(4),
+                },
+            )
+            .await;
+
+        // …then a late cancellation arrives (the round-injection watch
+        // window). It must not overwrite the Completed state.
+        pipeline
+            .cancel_tool(
+                &tool_id,
+                ROUND_INJECTION_RUNNING_TOOL_CANCELLED_MESSAGE.to_string(),
+            )
+            .await
+            .expect("late cancel should be accepted");
+
+        let task = state_manager
+            .get_task(&tool_id)
+            .expect("task should still exist");
+        assert!(
+            matches!(task.state, ToolExecutionState::Completed { .. }),
+            "terminal Completed must survive a racing cancel, got: {:?}",
+            task.state
+        );
     }
 
     #[tokio::test]

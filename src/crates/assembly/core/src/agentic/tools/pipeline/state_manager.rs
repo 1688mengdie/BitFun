@@ -91,6 +91,61 @@ impl ToolStateManager {
         self.tasks.get(tool_id).map(|t| t.clone())
     }
 
+    /// BUG-04: compare-and-set terminal-state guard for cancellation.
+    ///
+    /// Cancellation must never overwrite a terminal outcome (Completed /
+    /// Failed / Rejected / Cancelled) — a tool that already finished (or was
+    /// already cancelled) stays terminal even if a racing cancel request
+    /// arrives after the execution path wrote its final state.
+    ///
+    /// Unlike [`Self::update_state`] (unconditional overwrite used by the
+    /// normal lifecycle), this performs the terminal check and the write
+    /// inside one lock scope. The lock is only held for the check-and-set;
+    /// event emission happens after the guard is released, so a blocking
+    /// event sink cannot stall cancellation or hold the lock.
+    pub async fn cancel_state_if_not_terminal(
+        &self,
+        tool_id: &str,
+        new_state: ToolExecutionState,
+    ) -> bool {
+        let task_for_event = if let Some(mut task) = self.tasks.get_mut(tool_id) {
+            if tool_task_state_kind(&task.state).is_terminal() {
+                debug!(
+                    "Cancellation skipped for tool in terminal state: tool_id={}, state={:?}",
+                    tool_id,
+                    format!("{:?}", task.state).split('{').next().unwrap_or("")
+                );
+                return false;
+            }
+            let old_state = task.state.clone();
+            task.state = new_state.clone();
+
+            let new_state_kind = tool_task_state_kind(&new_state);
+            if new_state_kind.starts_execution_timer() {
+                task.started_at = Some(std::time::SystemTime::now());
+            }
+            if new_state_kind.completes_execution_timer() {
+                task.completed_at = Some(std::time::SystemTime::now());
+            }
+
+            debug!(
+                "Tool state changed: tool_id={}, old_state={:?}, new_state={:?}",
+                tool_id,
+                format!("{:?}", old_state).split('{').next().unwrap_or(""),
+                format!("{:?}", new_state).split('{').next().unwrap_or("")
+            );
+
+            Some(task.clone())
+        } else {
+            None
+        };
+
+        if let Some(task) = task_for_event {
+            self.emit_state_change_event(task).await;
+        }
+        true
+    }
+
     /// Replace a task's effective tool arguments before execution.
     /// Used by PreToolUse hook `updatedInput` rewrites; later readers
     /// (validation, permission planning, execution) observe the new value.
@@ -430,6 +485,96 @@ mod tests {
         );
         assert_eq!(identity.effective_name(), "CreatePlan");
         assert_eq!(params, &wire_arguments);
+    }
+
+    #[tokio::test]
+    async fn cancel_state_if_not_terminal_never_overwrites_terminal_outcome() {
+        // BUG-04 regression: cancellation must not overwrite a terminal
+        // outcome (the "write tool finished but was reported
+        // failed (cancelled)" race). The CAS guard must reject the
+        // cancellation write and keep the original terminal state.
+        let sink = Arc::new(CapturingEventSink::default());
+        let manager = ToolStateManager::new(sink.clone());
+        let tool_id = manager.create_task(test_task("tool-terminal-1")).await;
+
+        manager
+            .update_state(
+                &tool_id,
+                ToolExecutionState::Completed {
+                    result: crate::agentic::tools::framework::ToolResult::Result {
+                        data: serde_json::json!({ "ok": true }),
+                        result_for_assistant: None,
+                        image_attachments: None,
+                    },
+                    duration_ms: 12,
+                    queue_wait_ms: Some(1),
+                    preflight_ms: Some(2),
+                    confirmation_wait_ms: Some(3),
+                    execution_ms: Some(4),
+                },
+            )
+            .await;
+
+        let applied = manager
+            .cancel_state_if_not_terminal(
+                &tool_id,
+                ToolExecutionState::Cancelled {
+                    reason: "late cancel".to_string(),
+                    duration_ms: None,
+                    queue_wait_ms: None,
+                    preflight_ms: None,
+                    confirmation_wait_ms: None,
+                    execution_ms: None,
+                },
+            )
+            .await;
+
+        assert!(!applied, "terminal Completed must reject the cancel write");
+        let task = manager.get_task(&tool_id).expect("task should exist");
+        assert!(
+            matches!(task.state, ToolExecutionState::Completed { .. }),
+            "Completed must survive the racing cancel, got: {:?}",
+            task.state
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_state_if_not_terminal_applies_to_non_terminal_state() {
+        let sink = Arc::new(CapturingEventSink::default());
+        let manager = ToolStateManager::new(sink.clone());
+        let tool_id = manager.create_task(test_task("tool-active-1")).await;
+
+        manager
+            .update_state(
+                &tool_id,
+                ToolExecutionState::Running {
+                    started_at: std::time::SystemTime::now(),
+                    progress: None,
+                },
+            )
+            .await;
+
+        let applied = manager
+            .cancel_state_if_not_terminal(
+                &tool_id,
+                ToolExecutionState::Cancelled {
+                    reason: "cancel running tool".to_string(),
+                    duration_ms: None,
+                    queue_wait_ms: None,
+                    preflight_ms: None,
+                    confirmation_wait_ms: None,
+                    execution_ms: None,
+                },
+            )
+            .await;
+
+        assert!(applied, "Running state must accept the cancel write");
+        let task = manager.get_task(&tool_id).expect("task should exist");
+        assert!(
+            matches!(task.state, ToolExecutionState::Cancelled { .. }),
+            "Running must become Cancelled, got: {:?}",
+            task.state
+        );
     }
 }
 
