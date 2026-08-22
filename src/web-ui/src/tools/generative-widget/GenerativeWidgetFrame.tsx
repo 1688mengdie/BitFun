@@ -860,6 +860,7 @@ ${createWidgetAppearanceStaticShellCss()}
       }, true);
 
       window.addEventListener('message', function (event) {
+        if (event.source !== window.parent) return;
         var data = event.data;
         if (!data) return;
         if (data.type === 'bitfun-widget:clear-selection') {

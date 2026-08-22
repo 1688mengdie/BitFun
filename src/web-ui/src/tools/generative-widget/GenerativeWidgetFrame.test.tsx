@@ -63,4 +63,19 @@ describe('GenerativeWidgetFrame shell', () => {
     expect(iframe.getAttribute('sandbox')).toContain('allow-same-origin');
     expect(iframe.contentDocument?.documentElement.outerHTML).toContain('bitfun-widget');
   });
+
+  it('rejects non-parent-window message sources before processing widget updates (anti-injection)', () => {
+    // The iframe shell listens for `bitfun-widget:update` from its host page. Any other
+    // window posting a spoofed message could inject arbitrary HTML/scripts via setContent.
+    // Guard must reject non-parent sources and sit before setContent is invoked.
+    const shellSource = GENERATIVE_WIDGET_SHELL_HTML;
+    const listenerStart = shellSource.indexOf("window.addEventListener('message'");
+    const setContentCall = shellSource.indexOf('setContent(', listenerStart);
+
+    expect(listenerStart).toBeGreaterThan(-1);
+    expect(setContentCall).toBeGreaterThan(listenerStart);
+
+    const listenerBody = shellSource.slice(listenerStart, setContentCall);
+    expect(listenerBody).toMatch(/if \(event\.source !== window\.parent\) return;/);
+  });
 });
