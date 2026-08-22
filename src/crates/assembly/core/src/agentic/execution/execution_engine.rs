@@ -8915,7 +8915,8 @@ mod tests {
     fn provider_prompt_cache_route_key_depends_only_on_lineage() {
         let first = ExecutionEngine::model_request_context("session-1", "sid-a", "turn-1");
         let same_lineage = ExecutionEngine::model_request_context("session-1", "sid-a", "turn-2");
-        let changed_lineage = ExecutionEngine::model_request_context("session-2", "sid-b", "turn-3");
+        let changed_lineage =
+            ExecutionEngine::model_request_context("session-2", "sid-b", "turn-3");
 
         assert_eq!(first.prompt_cache_route_key.as_deref(), Some("session-1"));
         assert_eq!(first.session_id.as_deref(), Some("sid-a"));

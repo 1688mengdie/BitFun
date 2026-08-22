@@ -1,0 +1,116 @@
+# 玫瑰军团 · 本地定制门禁（fork 独立 workflow，白嫖远程 CI）
+#
+# 定位：上游 ci.yml（GCWing/BitFun）只覆盖官方 8 job（rust 3OS / cli-test / deny /
+#       frontend 三连审计 / vitest / web build）。本文件补上游盲区 =
+#       clippy 0 warning + cargo fmt --check + 定制 crate 全量测试。
+# 原则：custom-* job 命名前缀，与上游 job 错开；独立文件 = 上游同步零冲突（U-3 经验）；
+#       公开仓 = GitHub Actions 免费额度，白嫖远程算力。
+# 触发：仅 push main（不跑 PR——PR 面有上游 ci.yml 把关，本文件专盯 main 定制成果）。
+name: CI Custom (Rose Legion)
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'png/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-custom-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── 定制 Rust crate 全量测试（上游只测 subscription-auth / search:: 子集）──
+  custom-rust-tests:
+    name: Custom Rust Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      RUSTFLAGS: "-D warnings"
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system dependencies (Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libxdo-dev libssl-dev pkg-config build-essential
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: custom-rust-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            custom-rust-${{ runner.os }}-
+
+      - name: Install Rust toolchain (stable)
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cargo fmt check (0 容忍)
+        run: cargo fmt --all -- --check
+
+      - name: Clippy all targets (0 warning)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test ai-adapters full suite
+        # 上游只跑 subscription-auth 子集；本地门禁 = 全量（R-CB 指纹头等定制在此）
+        run: cargo test --locked -p bitfun-ai-adapters
+
+      - name: Test tool-runtime full suite
+        # 上游只跑 search:: 子集；全量覆盖本地群聊/legion/幽灵删除等定制工具
+        run: cargo test --locked -p tool-runtime
+
+      - name: Test assembly core library
+        # 上游只跑 bitfun-core --lib（单测）；本 job 跑全量（含集成测试）
+        # = 定制核心（群聊/steering/warden）测试盲区补全
+        run: cargo test --locked -p bitfun-core --lib
+
+  # ── 仓库卫生 + 定制符号留存检查 ──
+  custom-hygiene:
+    name: Custom Hygiene
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify local CI replica stays in sync with remote ci.yml
+        # 上游 ci.yml 新增/变更检查项 → local-replica.ps1 必须同步覆盖（总纲 §四 第9项）
+        # 只做核心步骤名对齐探测（缺步骤 = 失败提示），防漂移。
+        run: |
+          set -euo pipefail
+          for step in "Check compilation" "Run core and desktop library tests" "Validate i18n contract" "Lint web UI"; do
+            grep -qF "$step" scripts/ci/local-replica.ps1 || {
+              echo "::error::local-replica.ps1 缺少上游 ci.yml 步骤: $step（CI 标准同步核对，总纲 §四 第9项）"
+              exit 1
+            }
+          done
+          echo "local-replica.ps1 覆盖核对通过"
+
+      - name: Reject conflict markers
+        run: |
+          set -euo pipefail
+          if git grep -nE '^(<<<<<<<|=======|>>>>>>>)' -- ':!*.lock' | grep -q .; then
+            echo "::error::冲突标记残留（M-2）"
+            exit 1
+          fi
+          echo "无冲突标记"
+
+      - name: Reject CRLF in shell and deploy assets
+        run: |
+          set -euo pipefail
+          bad=$(git ls-files -z '*.sh' '*.bash' 'Dockerfile' 'Dockerfile.*' '*.Dockerfile' 'Caddyfile' 'docker-compose.yml' 'docker-compose.*.yml' | xargs -0 -r grep -lU $'\r' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::CRLF line endings found:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "All shell and deploy assets are LF-only."
