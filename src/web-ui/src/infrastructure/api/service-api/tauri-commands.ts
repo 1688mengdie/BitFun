@@ -91,6 +91,8 @@ export interface ExecuteToolRequest {
   toolName: string;
   parameters: any;
   workspacePath?: string;
+  /** Optional caller context propagated to the backend ToolUseContext (e.g. sessionId). */
+  context?: Record<string, string>;
 }
 
 export interface ValidateToolInputRequest {

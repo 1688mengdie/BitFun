@@ -122,7 +122,10 @@ pub struct ResetModeToolSelectionRequest {
     pub workspace_path: Option<String>,
 }
 
-async fn build_tool_context(workspace_path: Option<&str>) -> ToolUseContext {
+async fn build_tool_context(
+    workspace_path: Option<&str>,
+    caller_context: Option<&HashMap<String, String>>,
+) -> ToolUseContext {
     let normalized_workspace_path = workspace_path
         .map(str::trim)
         .filter(|path| !path.is_empty());
@@ -186,11 +189,21 @@ async fn build_tool_context(workspace_path: Option<&str>) -> ToolUseContext {
         .is_some_and(WorkspaceBinding::is_remote)
         .then(CoreRuntimeServicesProvider::remote_exec_port);
 
-    ToolUseContext::for_tool_listing_with_remote_exec_port(
+    let mut context = ToolUseContext::for_tool_listing_with_remote_exec_port(
         workspace,
         workspace_services,
         remote_exec_port,
-    )
+    );
+    // BUG-01（2026-08-22）：前端 execute_tool 通道把调用方上下文（当前激活
+    // 会话 id）经 request.context 传入——从调用方上下文取 session_id，而非
+    // 仅参数（群聊编排守卫 ensure_orchestration_main_session 依赖该字段）。
+    if let Some(session_id) = caller_context
+        .and_then(|caller| caller.get("sessionId"))
+        .filter(|value| !value.trim().is_empty())
+    {
+        context.session_id = Some(session_id.clone());
+    }
+    context
 }
 
 fn to_dynamic_mcp_tool_info(
@@ -334,7 +347,7 @@ pub async fn validate_tool_input(
                 request.workspace_path.as_deref(),
             )?;
 
-            let context = build_tool_context(request.workspace_path.as_deref()).await;
+            let context = build_tool_context(request.workspace_path.as_deref(), None).await;
 
             let validation_result = tool.validate_input(&request.input, Some(&context)).await;
 
@@ -365,7 +378,9 @@ pub async fn execute_tool(request: ToolExecutionRequest) -> Result<ToolExecution
                 request.workspace_path.as_deref(),
             )?;
 
-            let context = build_tool_context(request.workspace_path.as_deref()).await;
+            let context =
+                build_tool_context(request.workspace_path.as_deref(), request.context.as_ref())
+                    .await;
 
             let validation_result = tool.validate_input(&request.input, Some(&context)).await;
             if !validation_result.result {

@@ -53,6 +53,7 @@ export class ToolAPI {
           toolName: request.toolName,
           input: request.parameters,
           workspacePath: request.workspacePath,
+          context: request.context,
         }
       });
     } catch (error) {

@@ -180,6 +180,8 @@ const flowChatMocks = vi.hoisted(() => ({
   markSessionAsGroupChat: vi.fn(),
   addDialogTurn: vi.fn(),
   getState: vi.fn(() => ({ sessions: new Map(), activeSessionId: null })),
+  // BUG-01 (2026-08-22): executeTool caller context reads the active session id.
+  getActiveSession: vi.fn(() => null),
 }));
 
 vi.mock('@/flow_chat/store/FlowChatStore', () => ({
@@ -597,6 +599,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         workspace: '/workspace-a',
       },
       workspacePath: '/workspace-a',
+      context: { sessionId: '' },
     });
     expect(inviteCalls[1]![0].parameters.member_session_id).toBe('claw-2');
     expect(inviteCalls[2]![0].parameters.member_session_id).toBe('gen-1');
@@ -733,6 +736,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         member_session_id: 'claw-1',
       },
       workspacePath: '/workspace-a',
+      context: { sessionId: '' },
     });
   });
 
@@ -834,6 +838,7 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
         members: ['claw-1', 'claw-2', 'gen-1'],
       },
       workspacePath: '/workspace-a',
+      context: { sessionId: '' },
     });
 
     // fork 成功 → 登记子群 + 标记群聊 + 跳转子群视图（复用 R-GC-13 登记形态；

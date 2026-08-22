@@ -49,6 +49,21 @@ vi.mock('@/infrastructure/appearance/runtime/AppearanceOverlayHost', () => ({
   getAppearanceOverlayHost: () => document.body,
 }));
 
+// BUG-01 (2026-08-22): the create dialog reads the active session id from
+// flowChatStore for the executeTool caller context.
+vi.mock('@/flow_chat/store/FlowChatStore', () => ({
+  FlowChatStore: {
+    getInstance: () => ({
+      getActiveSession: vi.fn(() => null),
+      getState: vi.fn(() => ({ sessions: new Map(), activeSessionId: null })),
+    }),
+  },
+  flowChatStore: {
+    getActiveSession: vi.fn(() => null),
+    getState: vi.fn(() => ({ sessions: new Map(), activeSessionId: null })),
+  },
+}));
+
 vi.mock('@/infrastructure/i18n/hooks/useI18n', async () => {
   const { createTestI18nT } = await import('@/test/i18nTestUtils');
   return { useI18n: () => ({ t: createTestI18nT('common') }) };
@@ -180,6 +195,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
       toolName: 'create_group_chat',
       parameters: { action: 'create', name: '项目群', members: [], workspace: '/workspace-a' },
       workspacePath: '/workspace-a',
+      context: { sessionId: '' },
     });
     expect(onCreated).toHaveBeenCalledWith('group-1', '项目群');
     // R-GC-31 (P0): 建群提示单条 = 后端 welcome turn 气泡；前端不再发成功
@@ -313,6 +329,7 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
       toolName: 'create_group_chat',
       parameters: { action: 'create', name: '空工作区群', members: [], workspace: undefined },
       workspacePath: '',
+      context: { sessionId: '' },
     });
   });
 

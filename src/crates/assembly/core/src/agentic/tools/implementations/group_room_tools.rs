@@ -249,31 +249,58 @@ impl GroupRoomTool {
     /// action；非主会话（子会话/成员会话等带 creator 标记）拒绝并返回权限
     /// 错误。普通消息动作（send/history/list）不查指挥官（开放投递 Plan:169）。
     ///
+    /// BUG-01 修复（2026-08-22）：判定链路改为「活跃主会话」——
+    /// ①context.session_id 为调用方显式会话时直接按 is_main_session_by_creator
+    /// 判定（前端 execute_tool 通道带当前激活会话 id）；②context.session_id
+    /// 缺失（execute_tool 通道未带会话）或非主会话时，回退到内存内任意
+    /// 顶层主会话（kind=Standard + created_by=None，跨工作区共享内存会话
+    /// 表）——群聊编排由主人发起，主人 = 任意工作区的主会话；找不到任何
+    /// 主会话 → 拒绝（fail-closed，防误放行）。
+    ///
     /// 判定落点：coordinator::is_main_session_by_creator（会话元数据查询，
-    /// 不依赖 get_session_role——R-WF-01 已删 RBAC）。调用会话缺失 → 拒绝
-    /// （fail-closed，工具上下文必须带 session_id）。
+    /// 不依赖 get_session_role——R-WF-01 已删 RBAC）。
     async fn ensure_orchestration_main_session(
         coordinator: &ConversationCoordinator,
         context: &ToolUseContext,
     ) -> BitFunResult<()> {
-        let session_id = context.session_id.as_deref().ok_or_else(|| {
-            BitFunError::tool(
-                "group orchestration actions require a caller session context (main session only)"
-                    .to_string(),
-            )
-        })?;
         let manager = coordinator.get_session_manager();
-        let session = manager.get_session(session_id).ok_or_else(|| {
-            BitFunError::tool(format!(
-                "group orchestration actions require a main session but caller session '{session_id}' does not exist in memory"
-            ))
-        })?;
-        if !crate::agentic::coordination::coordinator::is_main_session_by_creator(&session) {
+        let matches = |session: &crate::agentic::core::Session| {
+            session.kind == crate::agentic::core::SessionKind::Standard
+                && crate::agentic::coordination::coordinator::is_main_session_by_creator(session)
+        };
+
+        // ① 显式调用方会话：主会话直接放行，非主会话明确拒绝（保留
+        // R-WF-09 权限错误语义——编排不允许子会话冒充主人发起）。
+        if let Some(session_id) = context.session_id.as_deref() {
+            let session = manager.get_session(session_id).ok_or_else(|| {
+                BitFunError::tool(format!(
+                    "group orchestration actions require a main session but caller session '{session_id}' does not exist in memory"
+                ))
+            })?;
+            if matches(&session) {
+                return Ok(());
+            }
             return Err(BitFunError::tool(format!(
                 "group orchestration actions are restricted to the main session; caller session '{session_id}' is not a main session (created_by is set)"
             )));
         }
-        Ok(())
+
+        // ② 调用方未带会话（execute_tool 前端通道）：回退内存内活跃主会话
+        // ——主人操作上下文 = 任意工作区顶层主会话（created_by == None）。
+        // 注意：loaded_sessions_snapshot 遍历内存会话表（跨工作区共享）；
+        // 会话树只含「活跃/最近打开」会话，且无全量遍历 API。
+        let main_session = manager
+            .loaded_sessions_snapshot()
+            .into_iter()
+            .find(|session| matches(session));
+        if main_session.is_some() {
+            return Ok(());
+        }
+
+        Err(BitFunError::tool(
+            "group orchestration actions require a caller session context (main session only)"
+                .to_string(),
+        ))
     }
 
     fn now_ms() -> i64 {

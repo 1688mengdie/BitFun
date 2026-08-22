@@ -257,6 +257,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
             workspace: workspacePath,
           },
           workspacePath,
+          context: { sessionId: flowChatStore.getActiveSession()?.sessionId ?? '' },
         });
         if (response?.success !== true) {
           const message =
@@ -295,6 +296,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
         toolName: 'remove_group_member',
         parameters: { action: 'remove', group_id: groupId, member_session_id: memberSessionId },
         workspacePath,
+        context: { sessionId: flowChatStore.getActiveSession()?.sessionId ?? '' },
       });
       if (response?.success !== true) {
         const message =
@@ -339,6 +341,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
           members: memberIds,
         },
         workspacePath,
+        context: { sessionId: flowChatStore.getActiveSession()?.sessionId ?? '' },
       });
       const childGroupId = response?.result?.childGroupId;
       if (response?.success !== true || typeof childGroupId !== 'string' || !childGroupId) {

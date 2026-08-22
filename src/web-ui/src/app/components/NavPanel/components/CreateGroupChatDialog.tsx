@@ -31,6 +31,7 @@ import { Button, Checkbox, Input, Modal } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import type { SessionMetadata } from '@/shared/types/session-history';
 import type { WorkspaceInfo } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
@@ -162,10 +163,14 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
       const memberIds = Array.from(selectedMemberIds);
       // Contract section 1.4: go through execute_tool (ToolAPI camelCase
       // wrapper); direct invoke('create_group_chat') is forbidden.
+      // BUG-01 (2026-08-22): pass the caller session id in the tool context so
+      // the backend orchestration guard sees a real caller session (the group
+      // is owned by the master actor, the caller = the current active session).
       const response = await toolAPI.executeTool({
         toolName: 'create_group_chat',
         parameters: { action: 'create', name: trimmedName, members: memberIds, workspace: workspacePath || undefined },
         workspacePath,
+        context: { sessionId: flowChatStore.getActiveSession()?.sessionId ?? '' },
       });
       const groupId = response?.result?.groupId;
       if (response?.success !== true || typeof groupId !== 'string' || !groupId) {
