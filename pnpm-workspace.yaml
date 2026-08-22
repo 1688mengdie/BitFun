@@ -7,5 +7,11 @@ packages:
   - "BitFun-Installer"
   - "tests/e2e"
 
+overrides:
+  dompurify: 3.4.11
+  lodash-es: 4.17.23
+  markdown-it: 14.2.0
+  linkify-it: 5.0.1
+
 patchedDependencies:
   mdast-util-gfm-autolink-literal@2.0.1: patches/mdast-util-gfm-autolink-literal@2.0.1.patch
