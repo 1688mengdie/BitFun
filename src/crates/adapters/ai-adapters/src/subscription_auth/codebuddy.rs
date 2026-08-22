@@ -1121,7 +1121,6 @@ mod tests {
         // a warning is logged and empty metadata is stored.
         // Note: We cannot easily mock the HTTP client in unit tests, so this
         // test documents the expected behavior rather than asserting logs.
-        assert!(true);
     }
 
     #[test]

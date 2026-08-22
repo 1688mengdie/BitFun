@@ -386,7 +386,7 @@ impl BrowserLauncher {
                 BrowserKind::Arc => Path::new("arc"),
                 BrowserKind::Unknown(_) => return None,
             };
-            return Some(config_root.join(relative));
+            Some(config_root.join(relative))
         }
     }
 

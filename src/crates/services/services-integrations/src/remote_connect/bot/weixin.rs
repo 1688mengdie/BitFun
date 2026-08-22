@@ -1320,7 +1320,7 @@ fn encrypt_aes_128_ecb_pkcs7(plaintext: &[u8], key: &[u8; 16]) -> Vec<u8> {
     let mut buf = plaintext.to_vec();
     buf.extend(std::iter::repeat_n(pad_len as u8, pad_len));
     let mut out = Vec::with_capacity(buf.len());
-    for chunk in buf.chunks_exact(16) {
+    for chunk in buf.chunks(16) {
         let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(chunk);
         cipher.encrypt_block(&mut block);
         out.extend_from_slice(&block);
@@ -1334,7 +1334,7 @@ fn decrypt_aes_128_ecb_pkcs7(ciphertext: &[u8], key: &[u8; 16]) -> Result<Vec<u8
     }
     let cipher = Aes128::new_from_slice(key).expect("AES-128 key len");
     let mut out = Vec::with_capacity(ciphertext.len());
-    for chunk in ciphertext.chunks_exact(16) {
+    for chunk in ciphertext.chunks(16) {
         let mut block = aes::cipher::generic_array::GenericArray::clone_from_slice(chunk);
         cipher.decrypt_block(&mut block);
         out.extend_from_slice(&block);

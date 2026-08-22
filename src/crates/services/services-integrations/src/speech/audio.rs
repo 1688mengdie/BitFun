@@ -8,7 +8,7 @@ pub(super) fn pcm16_le_to_f32_samples(bytes: &[u8]) -> BitFunResult<Vec<f32>> {
     }
 
     let mut samples = Vec::with_capacity(bytes.len() / 2);
-    for chunk in bytes.chunks_exact(2) {
+    for chunk in bytes.chunks(2) {
         let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
         samples.push(sample as f32 / i16::MAX as f32);
     }
