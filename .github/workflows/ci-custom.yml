@@ -33,6 +33,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Tauri code generation only requires its configured resource roots to
+      # exist during check/test (mirrors upstream ci.yml step).
+      - name: Create Tauri resource directories
+        shell: bash
+        run: mkdir -p dist src/mobile-web/dist
+
       - name: Install Linux system dependencies (Tauri)
         run: |
           sudo apt-get update
