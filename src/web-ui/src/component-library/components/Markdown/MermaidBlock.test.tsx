@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { sanitizeMermaidSvg } from './MermaidBlock';
+import { sanitizeMermaidSvg } from './sanitizeMermaidSvg';
 
 describe('sanitizeMermaidSvg', () => {
   describe('XSS vectors are removed', () => {
