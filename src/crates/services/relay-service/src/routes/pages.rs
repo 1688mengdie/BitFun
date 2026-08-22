@@ -921,51 +921,51 @@ fn parse_page_login_target(
 async fn page_for_login_request(
     db: &crate::db::DbPool,
     request: &PageLoginRequest,
-) -> Result<(PageRow, PageVisibility), Response> {
+) -> Result<(PageRow, PageVisibility), Box<Response>> {
     let page = match PageRow::get(db, &request.user_id, &request.slug).await {
         Ok(Some(page)) if page.generation == request.generation => page,
         Ok(_) => {
-            return Err(page_auth_error_response(
+            return Err(Box::new(page_auth_error_response(
                 StatusCode::NOT_FOUND,
                 "Page not found",
-            ))
+            )))
         }
         Err(error) => {
             tracing::error!("Page browser login lookup failed: {error}");
-            return Err(page_auth_error_response(
+            return Err(Box::new(page_auth_error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal error",
-            ));
+            )));
         }
     };
     if let Some(version_id) = request.version_id.as_deref() {
         match PageVersionRow::get(db, &page.user_id, &page.slug, version_id).await {
             Ok(Some(_)) => {}
             Ok(None) => {
-                return Err(page_auth_error_response(
+                return Err(Box::new(page_auth_error_response(
                     StatusCode::NOT_FOUND,
                     "Page not found",
-                ));
+                )));
             }
             Err(error) => {
                 tracing::error!("Page browser login version lookup failed: {error}");
-                return Err(page_auth_error_response(
+                return Err(Box::new(page_auth_error_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal error",
-                ));
+                )));
             }
         }
     } else if page.deployed_version_id.is_none() {
-        return Err(page_auth_error_response(
+        return Err(Box::new(page_auth_error_response(
             StatusCode::NOT_FOUND,
             "Page not found",
-        ));
+        )));
     }
     let Some(visibility) = page.visibility_enum() else {
-        return Err(page_auth_error_response(
+        return Err(Box::new(page_auth_error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal error",
-        ));
+        )));
     };
     Ok((page, visibility))
 }
@@ -990,7 +990,7 @@ async fn page_browser_sign_in(
     };
     let (_, visibility) = match page_for_login_request(db, &request).await {
         Ok(result) => result,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if visibility == PageVisibility::Public {
         return Redirect::to(&format!("{}{}", config.public_base_url, request.page_path))
@@ -1024,7 +1024,7 @@ async fn page_browser_login(
         };
         let (page, visibility) = match page_for_login_request(db, &request).await {
             Ok(result) => result,
-            Err(response) => return response,
+            Err(response) => return *response,
         };
         if visibility == PageVisibility::Public {
             return Json(PageBrowserLoginResponse {
@@ -1211,7 +1211,7 @@ async fn page_browser_callback(
     };
     let (page, visibility) = match page_for_login_request(db, &exchange.request).await {
         Ok(result) => result,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if visibility == PageVisibility::Private && exchange.viewer_user_id != page.user_id {
         return page_auth_error_response(

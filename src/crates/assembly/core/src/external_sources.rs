@@ -297,7 +297,7 @@ fn prompt_command_shell_path_bytes(path: &Path) -> Vec<u8> {
     #[cfg(unix)]
     {
         use std::os::unix::ffi::OsStrExt;
-        return path.as_os_str().as_bytes().to_vec();
+        path.as_os_str().as_bytes().to_vec()
     }
     #[cfg(windows)]
     {
