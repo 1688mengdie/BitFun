@@ -10912,11 +10912,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_hidden_subagent_internal(
         &self,
         request: HiddenSubagentExecutionRequest,
         cancel_token: Option<&CancellationToken>,
         timeout_seconds: Option<u64>,
+        suppress_review_propagation: bool,
     ) -> BitFunResult<SubagentResult> {
         let HiddenSubagentExecutionRequest {
             target_session_id,
@@ -12028,6 +12030,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
         // Propagate subagent completion to review propagation manager so that
         // parent sessions can be flagged for review when a leaf agent finishes.
+        // A-3（2026-08-22）：后台子代理路径（start_background_subagent）由
+        // 完成后的全文 follow-up turn 单通道投递（通知句 + 全文），
+        // ReviewPropagation 的极简 reminder 是第二条独立通道 → 双通道冗余
+        // （元数据通知 + 最终消息双通知，2026-08-18 复发）。后台路径传
+        // suppress=true 抑制 reminder（防回退断言见 review_propagation.rs）。
         {
             use super::review_propagation::{ReviewPropagationAction, ReviewPropagationManager};
             let parent_id = subagent_parent_info
@@ -12038,6 +12045,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 &agent_type,
                 &response_text,
                 parent_id,
+                suppress_review_propagation,
             );
             if let ReviewPropagationAction::ReviewNeeded {
                 parent_session_id,
@@ -13174,7 +13182,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         cancel_token: Option<&CancellationToken>,
         timeout_seconds: Option<u64>,
     ) -> BitFunResult<SubagentResult> {
-        self.execute_hidden_subagent_internal(request, cancel_token, timeout_seconds)
+        self.execute_hidden_subagent_internal(request, cancel_token, timeout_seconds, false)
             .await
     }
 
@@ -13538,7 +13546,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             external_generation_lease: None,
         };
 
-        self.execute_hidden_subagent_internal(hidden_request, cancel_token, timeout_seconds)
+        self.execute_hidden_subagent_internal(hidden_request, cancel_token, timeout_seconds, false)
             .await
     }
 
@@ -13923,6 +13931,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     request,
                     Some(&execution_cancel_token),
                     timeout_seconds,
+                    // A-3：后台子代理完成由下方全文 follow-up turn 单通道
+                    // 投递，抑制 ReviewPropagation 极简 reminder 双通道。
+                    true,
                 )
                 .await;
             cancel_bridge_handle.abort();
