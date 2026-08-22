@@ -77,7 +77,9 @@ jobs:
       - name: Test assembly core library
         # 上游只跑 bitfun-core --lib（单测）；本 job 跑全量（含集成测试）
         # = 定制核心（群聊/steering/warden）测试盲区补全
-        run: cargo test --locked -p bitfun-core --lib
+        # 不用 --lib：全量 target 编译才覆盖 configured_* 等 pub(crate) 辅助
+        # 函数的所有调用点（--lib + RUSTFLAGS=-D warnings 会把 unused 误报为 error）
+        run: cargo test --locked -p bitfun-core
 
   # ── 仓库卫生 + 定制符号留存检查 ──
   custom-hygiene:
