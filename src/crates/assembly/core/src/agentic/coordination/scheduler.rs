@@ -3130,6 +3130,20 @@ impl DialogScheduler {
             .take(session_id, turn_id)
     }
 
+    /// BUG-02（suppress 消息级化）：目标 turn 是否承载 normal 回传义务（该
+    /// turn 由 AgentSession 发起且带 reply_route，普通消息发起者在等回传）。
+    /// urgent 注入成功后，若该 turn 有 normal 义务，则**不得**置整 turn 抑制
+    /// 标记——最终回复仍异步回传普通消息发起者（source_session_id）；仅无
+    /// normal 义务的纯注入 turn 才标记抑制（R-ASYNC-01 需求 1 不回退）。
+    pub fn active_turn_has_agent_session_reply_obligation(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+    ) -> bool {
+        self.active_turns
+            .matches_agent_session_request(session_id, turn_id)
+    }
+
     async fn dispatch_next_if_idle(&self, session_id: &str) -> Result<(), String> {
         let _ = self
             .try_start_next_queued(session_id)
@@ -3309,13 +3323,25 @@ impl DialogScheduler {
         // reply_route 指向注入方（UserSteering 注入通道无回传能力，自动回传
         // 是注入方等待的唯一通道）→ 不抑制，正常 Forward；仅当 reply_route
         // 属于他人（重复自动回传场景）→ 抑制。
+        // BUG-02（suppress 消息级化）：reply_route 属于他人且该 turn 承载
+        // normal 回传义务（AgentSession 发起，普通消息发起者在等回传）→ 注入
+        // 抑制不生效（normal 义务回传不受 suppress 误伤；B1 mark 已按来源判别
+        // 不置标记，此处双保险）。仅无 normal 义务的纯注入 turn（reply_route
+        // 为 None 或非 AgentSession 发起）→ 抑制（R-ASYNC-01 需求 1 不回退）。
         let suppressed_injected_turn_reply = self
             .take_suppressed_injected_turn_reply(session_id, outcome.turn_id())
             .is_some_and(|injector_session_id| {
-                active_turn
-                    .as_ref()
-                    .and_then(|turn| turn.reply_route())
-                    .is_some_and(|route| route.source_session_id != injector_session_id)
+                let Some(active_turn) = active_turn.as_ref() else {
+                    return true;
+                };
+                match active_turn.reply_route() {
+                    // 注入通道无回传能力，自动回传是注入方等待的唯一通道 → 不抑制。
+                    Some(route) if route.source_session_id == injector_session_id => false,
+                    // 有 normal 回传义务（reply_route 存在且属他人）→ 不抑制。
+                    Some(_) => !active_turn.is_agent_session_request(),
+                    // 纯注入 turn（无 reply_route）→ 抑制（R-ASYNC-01 需求 1）。
+                    None => true,
+                }
             });
         let is_internal_turn = active_internal_turn.is_some();
         if !is_internal_turn {
@@ -3340,6 +3366,16 @@ impl DialogScheduler {
                     AgentSessionReplyAction::SkipSuppressedCancelledReply => {
                         debug!(
                             "Skipping cancelled auto-reply because the source session explicitly cancelled its own SessionMessage request: session_id={}, turn_id={}",
+                            session_id,
+                            outcome.turn_id()
+                        );
+                    }
+                    AgentSessionReplyAction::SkipSuppressedInjectedReply => {
+                        // BUG-02（suppress 消息级化）：纯 urgent 注入 turn（无
+                        // normal 回传义务）完成时抑制自动回传——注入消息的回复
+                        // 由注入通道交付，不再自动回传（R-ASYNC-01 需求 1 保留）。
+                        debug!(
+                            "Skipping injected-turn auto-reply because the injected message's reply was delivered by the injection channel: session_id={}, turn_id={}",
                             session_id,
                             outcome.turn_id()
                         );
@@ -6214,6 +6250,22 @@ mod tests {
         )
     }
 
+    /// BUG-02：无 normal 回传义务的 turn fixture（Cli 发起、reply_route=None）——
+    /// urgent 注入目标为纯注入 turn 时，完成仍抑制自动回传（R-ASYNC-01 需求 1）。
+    fn plain_cli_active_turn() -> ActiveDialogTurn {
+        ActiveDialogTurn::new(
+            "turn_1".to_string(),
+            Some("/workspace".to_string()),
+            None,
+            None,
+            "agentic".to_string(),
+            "hello".to_string(),
+            None,
+            DialogSubmissionPolicy::for_source(DialogTriggerSource::Cli),
+            None,
+        )
+    }
+
     #[test]
     fn requester_matching_reply_route_suppresses_cancelled_reply() {
         let active_turn = agent_session_active_turn("session_a");
@@ -6277,6 +6329,14 @@ mod tests {
         // 修复前 Completed+suppress=true 仍 Forward（现役测试实证：上方
         // cancelled_reply_is_skipped_only_when_suppressed 第 3 个断言），
         // suppress_injected_turn_reply=true 必须改变该行为（S-9 前后对比）。
+        //
+        // BUG-02（suppress 消息级化 · 语义修正）：该行为只适用于**无 normal
+        // 回传义务**的纯注入 turn（Cli 发起、reply_route=None）——完成仍抑制
+        // 自动回传（R-ASYNC-01 需求 1 不回退）。**有 normal 义务的 turn**
+        // （AgentSession 发起、普通消息发起者在等回传）在 urgent 插入后**仍
+        // Forward 最终回复**（BUG-02 断链修复：不吞普通消息发起者的回传）。
+        // 下方 agent_session_active_turn（有 reply_route）= 有 normal 义务 →
+        // 新语义下应 Forward；纯注入 turn（Cli 发起）→ SkipSuppressedInjectedReply。
         let active_turn = agent_session_active_turn("session_a");
         let completed = TurnOutcome::Completed {
             turn_id: "turn_1".to_string(),
@@ -6290,8 +6350,9 @@ mod tests {
             execution_generation: 0,
         };
 
-        // Completed + suppress_injected_turn_reply=true → Skip（修复前 Forward）。
-        assert_eq!(
+        // BUG-02：有 normal 义务 + suppress_injected_turn_reply=true → 仍
+        // Forward（普通消息发起者最终收到回复；修复前为 Skip = 断链）。
+        assert!(matches!(
             resolve_agent_session_reply_action(
                 "session_b",
                 None,
@@ -6301,10 +6362,39 @@ mod tests {
                 false,
                 true,
             ),
-            AgentSessionReplyAction::SkipSuppressedCancelledReply
-        );
-        // Cancelled / Interrupted + suppress=true → 同样 Skip。
+            AgentSessionReplyAction::Forward(_)
+        ));
+        // 无义务纯注入 turn（Cli 发起）+ suppress → SkipSuppressedInjectedReply
+        //（R-ASYNC-01 需求 1 保留：纯 urgent 注入 turn 完成不自动回传）。
+        let plain_turn = plain_cli_active_turn();
         assert_eq!(
+            resolve_agent_session_reply_action(
+                "session_b",
+                None,
+                None,
+                &plain_turn,
+                &completed,
+                false,
+                true,
+            ),
+            AgentSessionReplyAction::SkipSuppressedInjectedReply
+        );
+        // 无义务纯注入 turn + 无 suppress → NoReply（UI/Cli 正常 turn 不回传）。
+        assert_eq!(
+            resolve_agent_session_reply_action(
+                "session_b",
+                None,
+                None,
+                &plain_turn,
+                &completed,
+                false,
+                false,
+            ),
+            AgentSessionReplyAction::NoReply
+        );
+        // BUG-02：有 normal 义务的 turn 被 urgent 插入后 Cancelled → 仍回传
+        // 发起方（发起方需知结果；suppress_injected 只作用于无义务纯注入 turn）。
+        assert!(matches!(
             resolve_agent_session_reply_action(
                 "session_b",
                 None,
@@ -6314,8 +6404,10 @@ mod tests {
                 false,
                 true,
             ),
-            AgentSessionReplyAction::SkipSuppressedCancelledReply
-        );
+            AgentSessionReplyAction::Forward(_)
+        ));
+        // Interrupted（可恢复 turn）→ 保持原语义 Skip（恢复时继续，最终完成才
+        // 回传；中途 Interrupted 不回传防中间态）。
         assert_eq!(
             resolve_agent_session_reply_action(
                 "session_b",
@@ -6393,17 +6485,22 @@ mod tests {
         assert!(content.contains("urgent task done"));
     }
 
-    // urgent-reply-01（方案 B）：mark 注入方与 reply_route 不匹配（turn 的
-    // 回传目标另有其人）→ 抑制仍生效，防双回复（无 archive 文件）。
+    // urgent-reply-01（方案 B）+ BUG-02（suppress 消息级化）：mark 注入方与
+    // reply_route 不匹配（turn 的回传目标另有其人）。该 turn 由 AgentSession
+    // 发起（承载 normal 回传义务，普通消息发起者在等回传）→ 注入抑制不生效，
+    // 最终回复仍 Forward 普通消息发起者（BUG-02：同 turn normal+urgent 混合
+    // 时 normal 回传义务不被 suppress 误伤 → archive 文件生成）。
     #[tokio::test]
-    async fn injected_turn_reply_suppressed_when_reply_route_belongs_to_other() {
+    async fn injected_turn_reply_kept_when_mixed_with_normal_obligation() {
         let (scheduler, session_manager, _, root) = test_scheduler();
         let session_id = "injector-other-session";
         let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
         let (_, plan_file) = write_bound_plan_file(&root, "injector_other_plan.plan.md");
         let turn_id = "injector-other-turn";
         // The turn's reply_route points at a different requester (not the
-        // injector): suppressing prevents a duplicate auto-reply.
+        // injector): this is the BUG-02 mixed scenario — the turn carries a
+        // normal reply obligation (AgentSession-initiated) that must survive
+        // the urgent injection.
         scheduler.active_turns.insert(
             session_id,
             bound_active_turn(
@@ -6426,11 +6523,58 @@ mod tests {
             ))
             .expect("send completed outcome");
 
+        let archive_root = root.path().join("agent-replies");
+        for _ in 0..100 {
+            if !reply_archive_files(&archive_root).is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let files = reply_archive_files(&archive_root);
+        assert_eq!(
+            files.len(),
+            1,
+            "turn carries a normal reply obligation: auto-reply must NOT be suppressed"
+        );
+        let content = std::fs::read_to_string(&files[0]).expect("read reply archive");
+        assert!(content.contains("target_session: source-session"));
+        assert!(content.contains("done"));
+    }
+
+    // BUG-02（suppress 消息级化 · R-ASYNC-01 需求 1 保留）：纯 urgent 注入
+    // turn（无 normal 回传义务，reply_route=None）完成 → 仍抑制自动回传
+    //（无 archive 文件）——urgent 注入时无 normal 回传义务，注入消息的回复
+    // 由注入通道交付，不再自动回传。
+    #[tokio::test]
+    async fn pure_urgent_injected_turn_reply_still_suppressed() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "pure-urgent-session";
+        let workspace_path = create_bound_session(&session_manager, &root, session_id).await;
+        let (_, plan_file) = write_bound_plan_file(&root, "pure_urgent_plan.plan.md");
+        let turn_id = "pure-urgent-turn";
+        // Pure injection target: no reply_route, no agent-session request.
+        scheduler.active_turns.insert(
+            session_id,
+            bound_active_turn(turn_id, &workspace_path, &plan_file, None),
+        );
+        scheduler.mark_injected_turn_reply_suppressed(session_id, turn_id, "injector-session");
+
+        scheduler
+            .outcome_tx
+            .send((
+                session_id.to_string(),
+                TurnOutcome::Completed {
+                    turn_id: turn_id.to_string(),
+                    final_response: "urgent injected result".to_string(),
+                },
+            ))
+            .expect("send completed outcome");
+
         wait_for_active_turn_consumed(&scheduler, session_id, turn_id).await;
         let archive_root = root.path().join("agent-replies");
         assert!(
             reply_archive_files(&archive_root).is_empty(),
-            "reply_route belongs to another requester: auto-reply must be suppressed"
+            "pure urgent injected turn: auto-reply must be suppressed (R-ASYNC-01 requirement 1)"
         );
     }
 

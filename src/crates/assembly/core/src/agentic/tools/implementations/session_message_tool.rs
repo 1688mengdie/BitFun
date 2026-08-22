@@ -2644,11 +2644,23 @@ impl SessionMessageTool {
                             // 发起方等待回传时设定的）。但当 reply_route 指向
                             // 注入方时（注入通道无回传能力，自动回传是唯一
                             // 通道）不抑制——见 scheduler 消费点匹配。
-                            scheduler.mark_injected_turn_reply_suppressed(
+                            // BUG-02（suppress 消息级化 · 来源判别）：若该 turn
+                            // 本身承载 normal 回传义务（由普通 SessionMessage
+                            // 发起、reply_route 存在，普通消息发起者在等回传），
+                            // 则**不得**置整 turn 抑制标记——最终回复仍异步回传
+                            // 普通消息发起者（同 turn normal+urgent 混合场景
+                            // normal 义务不受误伤）；仅无 normal 义务的纯注入
+                            // turn 才标记抑制（R-ASYNC-01 需求 1 不回退）。
+                            if !scheduler.active_turn_has_agent_session_reply_obligation(
                                 &target_session_id,
                                 &turn_id,
-                                source_session_id,
-                            );
+                            ) {
+                                scheduler.mark_injected_turn_reply_suppressed(
+                                    &target_session_id,
+                                    &turn_id,
+                                    source_session_id,
+                                );
+                            }
                             info!(
                                 "Urgent SessionMessage steered into running turn: source_session_id={}, target_session_id={}, turn_id={}",
                                 source_session_id, target_session_id, turn_id

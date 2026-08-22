@@ -510,6 +510,68 @@ fn agent_session_reply_action_suppresses_cancelled_auto_reply_when_requested() {
     );
 }
 
+// BUG-02（suppress 消息级化）：同 turn normal+urgent 混合——turn 由
+// AgentSession 发起（承载 normal 回传义务）+ suppress_injected_turn_reply=true
+// → 注入抑制不生效，仍 Forward（普通消息发起者最终收到回复，回复断链修复）。
+#[test]
+fn agent_session_reply_action_keeps_forward_when_mixed_with_normal_obligation() {
+    let turn = agent_session_turn("source-session");
+    let outcome = TurnOutcome::Completed {
+        turn_id: "turn-1".to_string(),
+        final_response: "done".to_string(),
+    };
+
+    let action = resolve_agent_session_reply_action(
+        "target-session",
+        None,
+        None,
+        &turn,
+        &outcome,
+        false,
+        true,
+    );
+
+    let AgentSessionReplyAction::Forward(plan) = action else {
+        panic!("agent-session turn with a normal reply obligation must still forward");
+    };
+    assert_eq!(plan.target_session_id, "source-session");
+    assert_eq!(plan.user_input, "done");
+}
+
+// BUG-02（suppress 消息级化 · R-ASYNC-01 需求 1 保留）：纯 urgent 注入 turn
+//（无 normal 回传义务，非 AgentSession 发起）→ suppress_injected_turn_reply
+// 命中 → SkipSuppressedInjectedReply（注入消息的回复由注入通道交付，不自动回传）。
+#[test]
+fn agent_session_reply_action_skips_pure_injected_turn() {
+    let turn = ActiveDialogTurn::new(
+        "turn-1".to_string(),
+        Some("workspace".to_string()),
+        None,
+        None,
+        "agentic".to_string(),
+        "user task".to_string(),
+        None,
+        DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopUi),
+        None,
+    );
+    let outcome = TurnOutcome::Completed {
+        turn_id: "turn-1".to_string(),
+        final_response: "done".to_string(),
+    };
+
+    let action = resolve_agent_session_reply_action(
+        "target-session",
+        None,
+        None,
+        &turn,
+        &outcome,
+        false,
+        true,
+    );
+
+    assert_eq!(action, AgentSessionReplyAction::SkipSuppressedInjectedReply);
+}
+
 #[test]
 fn agent_session_reply_action_ignores_non_agent_session_turns() {
     let turn = ActiveDialogTurn::new(

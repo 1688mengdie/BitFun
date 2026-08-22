@@ -455,6 +455,12 @@ pub struct AgentSessionReplyPlan {
 pub enum AgentSessionReplyAction {
     NoReply,
     SkipSuppressedCancelledReply,
+    /// BUG-02（suppress 消息级化）：注入抑制语义与 cancelled 语义拆分——
+    /// 纯 urgent 注入 turn（无 normal 回传义务，非 AgentSession 发起）完成时
+    /// 抑制自动回传（R-ASYNC-01 需求 1 保留：urgent 注入时无 normal 回传义务）；
+    /// 注入消息的回复由注入通道交付，不再自动回传。有 normal 义务的 turn
+    /// （AgentSession 发起、reply_route 存在）→ 注入抑制不生效，仍 Forward。
+    SkipSuppressedInjectedReply,
     Forward(AgentSessionReplyPlan),
 }
 
@@ -1256,15 +1262,24 @@ pub fn resolve_agent_session_reply_action(
     suppressed_cancelled_reply: bool,
     suppress_injected_turn_reply: bool,
 ) -> AgentSessionReplyAction {
+    // BUG-02（suppress 消息级化 · 语义拆分 + 来源判别）：
+    // ① 注入抑制命中且目标 turn 无 normal 回传义务（非 AgentSession 发起、
+    //    reply_route 不存在 = 纯 urgent 注入 turn）→ SkipSuppressedInjectedReply——
+    //    注入消息的回复由注入通道交付，不自动回传（R-ASYNC-01 需求 1 保留：
+    //    纯 urgent 注入时无 normal 回传义务，仍 Skip 不回退）。
+    // ② 有 normal 回传义务（AgentSession 发起、reply_route 存在 = 同 turn
+    //    normal+urgent 混合场景）→ 注入抑制不生效（B1 mark 已按来源判别不置
+    //    标记；此处双保险），最终回复仍 Forward 普通消息发起者（BUG-02 修复：
+    //    normal 回传义务不被 suppress 误伤）。
+    // ③ Cancelled/Interrupted 抑制 → SkipSuppressedCancelledReply（cancelled 语义）。
+    if suppress_injected_turn_reply && !active_turn.is_agent_session_request() {
+        return AgentSessionReplyAction::SkipSuppressedInjectedReply;
+    }
     if !active_turn.is_agent_session_request() {
         return AgentSessionReplyAction::NoReply;
     }
 
-    if should_skip_agent_session_reply(
-        turn_outcome_kind(outcome),
-        suppressed_cancelled_reply,
-        suppress_injected_turn_reply,
-    ) {
+    if should_skip_agent_session_reply(turn_outcome_kind(outcome), suppressed_cancelled_reply) {
         return AgentSessionReplyAction::SkipSuppressedCancelledReply;
     }
 
