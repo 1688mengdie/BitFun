@@ -388,7 +388,7 @@ const WorkingCopyView: React.FC<WorkingCopyViewProps> = ({
         <div className="bitfun-git-scene-working-copy__placeholder" data-bf-component="working-copy-view" data-bf-part="placeholder">
           <FileCode2 size={48} aria-hidden />
           <p>{t('tabs.changes')}</p>
-          <p className="bitfun-git-scene-working-copy__hint">Open a workspace to see changes.</p>
+          <p className="bitfun-git-scene-working-copy__hint">{t('changesEmpty')}</p>
         </div>
       </div>
     );

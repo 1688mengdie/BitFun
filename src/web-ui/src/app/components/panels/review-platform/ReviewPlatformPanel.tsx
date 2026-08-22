@@ -268,33 +268,33 @@ function getPrIcon(pr: ReviewPlatformPullRequest) {
 function decisionLabel(decision: ReviewPlatformPullRequest['reviewDecision']): string {
   switch (decision) {
     case 'approved':
-      return 'Approved';
+      return i18nService.t('common:reviewPlatform.decision.approved');
     case 'changes_requested':
-      return 'Changes requested';
+      return i18nService.t('common:reviewPlatform.decision.changesRequested');
     case 'commented':
-      return 'Commented';
+      return i18nService.t('common:reviewPlatform.decision.commented');
     default:
-      return 'Pending review';
+      return i18nService.t('common:reviewPlatform.decision.pendingReview');
   }
 }
 
 function stateLabel(state: ReviewPlatformPullRequest['state']): string {
   switch (state) {
     case 'open':
-      return 'Open';
+      return i18nService.t('common:reviewPlatform.state.open');
     case 'draft':
-      return 'Draft';
+      return i18nService.t('common:reviewPlatform.state.draft');
     case 'merged':
-      return 'Merged';
+      return i18nService.t('common:reviewPlatform.state.merged');
     case 'closed':
-      return 'Closed';
+      return i18nService.t('common:reviewPlatform.state.closed');
     default:
       return state;
   }
 }
 
 function providerLabel(remote: ReviewPlatformRemote | ReviewPlatformAccount | null): string {
-  if (!remote) return 'No provider';
+  if (!remote) return i18nService.t('common:reviewPlatform.noProvider');
   switch (remote.platform) {
     case 'github':
       return 'GitHub';
@@ -312,52 +312,52 @@ function remoteLabel(remote: ReviewPlatformRemote): string {
 }
 
 function authLabel(account: ReviewPlatformAccount | null): string {
-  if (!account) return 'Disconnected';
+  if (!account) return i18nService.t('common:reviewPlatform.auth.disconnected');
   switch (account.authState) {
     case 'connected':
-      return 'Connected';
+      return i18nService.t('common:reviewPlatform.auth.connected');
     case 'not_required':
-      return 'Public';
+      return i18nService.t('common:reviewPlatform.auth.public');
     case 'unsupported':
-      return 'Unsupported';
+      return i18nService.t('common:reviewPlatform.auth.unsupported');
     case 'expired':
-      return 'Expired';
+      return i18nService.t('common:reviewPlatform.auth.expired');
     case 'error':
-      return 'Auth error';
+      return i18nService.t('common:reviewPlatform.auth.authError');
     default:
-      return 'Not connected';
+      return i18nService.t('common:reviewPlatform.auth.notConnected');
   }
 }
 
 function authSourceLabel(source: ReviewPlatformAccount['authSource'] | undefined): string {
   switch (source) {
     case 'gh_cli':
-      return 'GitHub CLI';
+      return i18nService.t('common:reviewPlatform.authSource.gitHubCli');
     case 'stored':
-      return 'Saved token';
+      return i18nService.t('common:reviewPlatform.authSource.savedToken');
     case 'env':
-      return 'Environment token';
+      return i18nService.t('common:reviewPlatform.authSource.environmentToken');
     case 'unsupported':
-      return 'Unsupported';
+      return i18nService.t('common:reviewPlatform.auth.unsupported');
     default:
-      return 'No token';
+      return i18nService.t('common:reviewPlatform.authSource.noToken');
   }
 }
 
 function authChallengeTitle(challenge: ReviewPlatformAuthChallenge): string {
-  if (challenge.platform === 'github') return 'GitHub CLI authentication required';
+  if (challenge.platform === 'github') return i18nService.t('common:reviewPlatform.authChallengeTitle.githubCliAuthRequired');
   switch (challenge.state) {
     case 'missing':
-      return 'Token required';
+      return i18nService.t('common:reviewPlatform.authChallengeTitle.tokenRequired');
     case 'insufficient_scope':
-      return 'Token permissions required';
+      return i18nService.t('common:reviewPlatform.authChallengeTitle.tokenPermissionsRequired');
     default:
-      return 'Token update required';
+      return i18nService.t('common:reviewPlatform.authChallengeTitle.tokenUpdateRequired');
   }
 }
 
 function authChallengeScopes(challenge: ReviewPlatformAuthChallenge): string {
-  return challenge.requiredScopes.length ? challenge.requiredScopes.join(', ') : 'Provider API access';
+  return challenge.requiredScopes.length ? challenge.requiredScopes.join(', ') : i18nService.t('common:reviewPlatform.authChallengeTitle.providerApiAccess');
 }
 
 function emptySnapshot(): ReviewPlatformWorkspaceSnapshot {
@@ -1244,9 +1244,9 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
     };
   }, [snapshot.pullRequests]);
 
-  const headerLabel = selectedRemote ? remoteLabel(selectedRemote) : repository ? repository.projectPath : 'No repository';
+  const headerLabel = selectedRemote ? remoteLabel(selectedRemote) : repository ? repository.projectPath : i18nService.t('common:reviewPlatform.noRepository');
   const isGithubUserList = !detailOnly && selectedRemote?.platform === 'github';
-  const panelTitle = detailOnly ? 'Pull Request' : isGithubUserList ? 'My Open Pull Requests' : 'Pull Requests';
+  const panelTitle = detailOnly ? i18nService.t('common:reviewPlatform.pullRequest') : isGithubUserList ? i18nService.t('common:reviewPlatform.myOpenPullRequests') : i18nService.t('common:reviewPlatform.pullRequests');
 
   const handleRemoteChange = useCallback((value: string | number | (string | number)[]) => {
     const remoteId = Array.isArray(value) ? String(value[0] ?? '') : String(value);
@@ -1419,7 +1419,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
     metadata?: Record<string, unknown>;
   }) => {
     if (!parentSession) {
-      notificationService.warning('Open or create a chat session before sending PR context.', { duration: 3500 });
+      notificationService.warning(i18nService.t('common:reviewPlatform.notify.chatSessionBeforePrContext'), { duration: 3500 });
       return;
     }
 
@@ -1462,7 +1462,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
 
   const handleStartReview = useCallback(async () => {
     if (!workspacePath || !selectedRemote || !repository || !selectedPr || !parentSession) {
-      notificationService.warning('Open or create a chat session before reviewing this pull request.', {
+      notificationService.warning(i18nService.t('common:reviewPlatform.notify.chatSessionBeforeReview'), {
         duration: 3500,
       });
       return;
@@ -1553,7 +1553,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
         prepared,
       });
       if (launched.launchStatus === 'uncertain') {
-        notificationService.warning('Review started, but its start acknowledgement is uncertain.', {
+        notificationService.warning(i18nService.t('common:reviewPlatform.notify.reviewStartAcknowledgementUncertain'), {
           duration: 8000,
         });
       }
@@ -1654,7 +1654,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
     if (!selectedRemote || selectedRemote.platform === 'unknown' || selectedRemote.platform === 'github') return;
     const token = authToken.trim();
     if (!token) {
-      setAuthError('Token is required.');
+      setAuthError(i18nService.t('common:reviewPlatform.tokenRequired'));
       return;
     }
 
@@ -1748,7 +1748,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
         <div className="review-platform__auth-gate-actions" data-bf-component="review-platform" data-bf-part="authActions">
           <Button className="review-platform__panel-button" size="small" variant="primary" onClick={handleOpenAuthModal} disabled={authSaving}>
             <KeyRound size={13} />
-            {selectedRemote.platform === 'github' ? 'Authenticate' : authChallenge.state === 'missing' ? 'Add token' : 'Update token'}
+            {selectedRemote.platform === 'github' ? i18nService.t('common:reviewPlatform.authenticate') : authChallenge.state === 'missing' ? i18nService.t('common:reviewPlatform.addToken') : i18nService.t('common:reviewPlatform.updateToken')}
           </Button>
           <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={() => refreshAuthSnapshot(selectedRemote.id)} disabled={authSaving || loading}>
             <RefreshCw size={13} />
@@ -1877,7 +1877,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                 size="small"
                 value={selectedRemoteId ?? ''}
                 options={remoteOptions}
-                placeholder="Select remote"
+                placeholder={i18nService.t('common:reviewPlatform.selectRemote')}
                 disabled={!remoteOptions.length || loading}
                 searchable
                 onChange={handleRemoteChange}
@@ -1895,7 +1895,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
               className="review-platform__icon-button"
               size="xs"
               variant="ghost"
-              tooltip={selectedRemote?.platform === 'github' ? 'GitHub CLI authentication' : account?.authSource === 'stored' ? 'Update token' : 'Add token'}
+              tooltip={selectedRemote?.platform === 'github' ? i18nService.t('common:reviewPlatform.authTooltipGithubCli') : account?.authSource === 'stored' ? i18nService.t('common:reviewPlatform.updateToken') : i18nService.t('common:reviewPlatform.addToken')}
               disabled={!selectedRemote || selectedRemote.platform === 'unknown' || loading || authSaving}
               onClick={handleOpenAuthModal}
             >
@@ -1906,7 +1906,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                 className="review-platform__icon-button"
                 size="xs"
                 variant="ghost"
-                tooltip="Clear token"
+                tooltip={i18nService.t('common:reviewPlatform.clearToken')}
                 disabled={!selectedRemote || loading || authSaving}
                 onClick={handleClearAuthToken}
               >
@@ -1917,7 +1917,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
               className="review-platform__icon-button"
               size="xs"
               variant="ghost"
-              tooltip="Refresh"
+              tooltip={i18nService.t('common:reviewPlatform.refresh')}
               onClick={() => void loadSnapshot(listRemoteId, { force: true, page: currentPageIndex + 1 })}
               isLoading={loading}
             >
@@ -1930,9 +1930,9 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
       {!detailOnly && (
       <div className="review-platform__subbar" data-bf-component="review-platform" data-bf-part="statusBar">
         <div className="review-platform__status-line" data-bf-component="review-platform" data-bf-part="statusLine">
-          <span><CircleDot size={12} /> {summary.open} open on page</span>
-          {!isGithubUserList && <span><GitPullRequestClosed size={12} /> {summary.merged} merged on page</span>}
-          <span><Sparkles size={12} /> {summary.reviewRequired} review on page</span>
+          <span><CircleDot size={12} /> {i18nService.t('common:reviewPlatform.summaryOpenOnPage', { count: summary.open })}</span>
+          {!isGithubUserList && <span><GitPullRequestClosed size={12} /> {i18nService.t('common:reviewPlatform.summaryMergedOnPage', { count: summary.merged })}</span>}
+          <span><Sparkles size={12} /> {i18nService.t('common:reviewPlatform.summaryReviewOnPage', { count: summary.reviewRequired })}</span>
           <span><Link2 size={12} /> {remoteStatus}</span>
           {loadingLabel && (
             <span className={loading ? 'review-platform__loading-status' : 'review-platform__cache-label'}>
@@ -1948,13 +1948,13 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
 
       <div className="review-platform__body" data-bf-component="review-platform" data-bf-part="body">
         {!detailOnly && (
-        <aside className="review-platform__list" data-bf-component="review-platform" data-bf-part="listPane" aria-label="Pull request list">
+        <aside className="review-platform__list" data-bf-component="review-platform" data-bf-part="listPane" aria-label={i18nService.t('common:reviewPlatform.pullRequestList')}>
           <div className="review-platform__list-toolbar" data-bf-component="review-platform" data-bf-part="listToolbar">
             <Input
               inputSize="small"
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="Search pull requests"
+              placeholder={i18nService.t('common:reviewPlatform.searchPullRequests')}
               prefix={<Search size={14} />}
               suffix={query ? <IconButton className="review-platform__icon-button" size="xs" variant="ghost" onClick={() => setQuery('')}><XCircle size={14} /></IconButton> : undefined}
             />
@@ -1967,7 +1967,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                     className={`review-platform__state-chip${stateFilter === state ? ' is-active' : ''}`}
                     onClick={() => setStateFilter(state)}
                   >
-                    {state === 'all' ? 'All' : stateLabel(state)}
+                    {state === 'all' ? i18nService.t('common:reviewPlatform.stateFilterAll') : stateLabel(state)}
                   </button>
                 ))}
               </div>
@@ -1976,14 +1976,14 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
 
           <div className="review-platform__list-scroll" data-bf-component="review-platform" data-bf-part="listScroll">
             {loading && (
-              <div className="review-platform__empty-state" data-bf-component="review-platform" data-bf-part="emptyState">Loading pull requests...</div>
+              <div className="review-platform__empty-state" data-bf-component="review-platform" data-bf-part="emptyState">{i18nService.t('common:reviewPlatform.loadingList')}</div>
             )}
             {error && (
               <div className="review-platform__error-state" data-bf-component="review-platform" data-bf-part="errorState">
                 <XCircle size={16} />
                 <span>{error}</span>
                 <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={() => void loadSnapshot(listRemoteId, { force: true, page: currentPageIndex + 1 })}>
-                  Retry
+                  {i18nService.t('common:reviewPlatform.retry')}
                 </Button>
               </div>
             )}
@@ -2027,7 +2027,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                         {decisionLabel(pr.reviewDecision)}
                       </span>
                       <span className="review-platform__counts">
-                        <span>{resolvedChangedFileCount(pr) ?? '—'} files</span>
+                        <span>{resolvedChangedFileCount(pr) != null ? i18nService.t('common:reviewPlatform.filesCount', { count: resolvedChangedFileCount(pr) }) : '—'}</span>
                         <span className="review-platform__additions">+{pr.additions}</span>
                         <span className="review-platform__deletions">-{pr.deletions}</span>
                       </span>
@@ -2043,20 +2043,20 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                 className="review-platform__icon-button"
                 size="xs"
                 variant="ghost"
-                tooltip="Previous page"
+                tooltip={i18nService.t('common:reviewPlatform.prevPage')}
                 disabled={currentPageIndex === 0}
                 onClick={() => handlePageChange(currentPageIndex - 1)}
               >
                 <ChevronLeft size={14} />
               </IconButton>
               <span>
-                {pageStart}-{pageEnd} of {totalCount ?? `${pageEnd}+`}
+                {i18nService.t('common:reviewPlatform.pageRange', { start: pageStart, end: pageEnd, total: totalCount ?? `${pageEnd}+` })}
               </span>
               <IconButton
                 className="review-platform__icon-button"
                 size="xs"
                 variant="ghost"
-                tooltip="Next page"
+                tooltip={i18nService.t('common:reviewPlatform.nextPage')}
                 disabled={!pagination.hasNext && currentPageIndex >= totalPages - 1}
                 onClick={() => handlePageChange(currentPageIndex + 1)}
               >
@@ -2071,7 +2071,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
           {!selectedPr && detailOnly && (loading || detailLoading) && (
             <div className="review-platform__detail-empty">
               <Loader2 size={20} className="review-platform__loading-inline review-platform__loading-inline--icon" />
-              <span>Loading pull request details...</span>
+              <span>{i18nService.t('common:reviewPlatform.loadingDetail')}</span>
             </div>
           )}
 
@@ -2087,12 +2087,12 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
               <span>{detailError || error}</span>
               <div className="review-platform__detail-empty-actions">
                 <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleRetryDetail}>
-                  Retry
+                  {i18nService.t('common:reviewPlatform.retry')}
                 </Button>
                 {selectedRemote && selectedRemote.platform !== 'unknown' && (
                   <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleOpenAuthModal} disabled={authSaving}>
                     <KeyRound size={13} />
-                    {selectedRemote.platform === 'github' ? 'Authenticate' : account?.authSource === 'stored' ? 'Update token' : 'Add token'}
+                    {selectedRemote.platform === 'github' ? i18nService.t('common:reviewPlatform.authenticate') : account?.authSource === 'stored' ? i18nService.t('common:reviewPlatform.updateToken') : i18nService.t('common:reviewPlatform.addToken')}
                   </Button>
                 )}
               </div>
@@ -2104,7 +2104,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
               <GitPullRequest size={24} />
               <span>
                 {snapshot.message
-                  || 'This pull request could not be resolved from the remotes of the current workspace.'}
+                  || i18nService.t('common:reviewPlatform.prResolveFailed')}
               </span>
               <div className="review-platform__detail-empty-actions">
                 <Button
@@ -2113,7 +2113,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                   variant="secondary"
                   onClick={() => void loadSnapshot(undefined, { force: true })}
                 >
-                  Retry
+                  {i18nService.t('common:reviewPlatform.retry')}
                 </Button>
                 {initialPullRequestUrl && (
                   <Button
@@ -2123,7 +2123,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                     onClick={handleOpenExternal}
                   >
                     <ExternalLink size={13} />
-                    Open in browser
+                    {i18nService.t('common:reviewPlatform.openInBrowser')}
                   </Button>
                 )}
               </div>
@@ -2133,7 +2133,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
           {!selectedPr && !detailOnly && !loading && (
             <div className="review-platform__detail-empty">
               <GitPullRequest size={24} />
-              <span>Select a pull request to inspect it.</span>
+              <span>{i18nService.t('common:reviewPlatform.selectToInspect')}</span>
             </div>
           )}
 
@@ -2154,7 +2154,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                   </div>
                 </div>
                 <div className="review-platform__detail-actions" data-bf-component="review-platform" data-bf-part="detailActions">
-                  <Tooltip content={!parentSession ? 'Open or create a chat first' : 'Start Review'}>
+                  <Tooltip content={!parentSession ? i18nService.t('common:reviewPlatform.openChatFirst') : i18nService.t('common:reviewPlatform.startReview')}>
                     <span>
                       <Button
                         className="review-platform__panel-button"
@@ -2172,20 +2172,20 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                         isLoading={reviewLaunching}
                       >
                         <Sparkles size={13} />
-                        {latestCurrentReview?.lifecycle === 'running' ? 'Review running' : 'Review'}
+                        {latestCurrentReview?.lifecycle === 'running' ? i18nService.t('common:reviewPlatform.reviewRunning') : i18nService.t('common:reviewPlatform.review')}
                       </Button>
                     </span>
                   </Tooltip>
                   <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleOpenExternal} disabled={!selectedPr.webUrl && !initialPullRequestUrl}>
                     <Link2 size={13} />
-                    Open
+                    {i18nService.t('common:reviewPlatform.open')}
                   </Button>
                   {detailOnly && selectedRemote && selectedRemote.platform !== 'unknown' && (
                     <IconButton
                       className="review-platform__icon-button"
                       size="xs"
                       variant="ghost"
-                      tooltip={selectedRemote.platform === 'github' ? 'GitHub CLI authentication' : account?.authSource === 'stored' ? 'Update token' : 'Add token'}
+                      tooltip={selectedRemote.platform === 'github' ? i18nService.t('common:reviewPlatform.authTooltipGithubCli') : account?.authSource === 'stored' ? i18nService.t('common:reviewPlatform.updateToken') : i18nService.t('common:reviewPlatform.addToken')}
                       onClick={handleOpenAuthModal}
                       disabled={authSaving}
                     >
@@ -2196,7 +2196,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                     className="review-platform__icon-button"
                     size="xs"
                     variant="ghost"
-                    tooltip="Refresh pull request"
+                    tooltip={i18nService.t('common:reviewPlatform.refreshPullRequest')}
                     disabled={detailLoading}
                     onClick={handleRefreshDetail}
                     isLoading={detailLoading}
@@ -2208,40 +2208,40 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
 
               <div className="review-platform__fact-list" data-bf-component="review-platform" data-bf-part="facts">
                 <div className="review-platform__fact-row">
-                  <span className="review-platform__fact-label"><Code2 size={14} /> Branches</span>
+                  <span className="review-platform__fact-label"><Code2 size={14} /> {i18nService.t('common:reviewPlatform.branches')}</span>
                   <div className="review-platform__fact-value review-platform__fact-value--branch">
                     <strong>{displayPr?.sourceBranch ?? selectedPr.sourceBranch}</strong>
                     <ChevronRight size={13} />
                     <strong>{displayPr?.targetBranch ?? selectedPr.targetBranch}</strong>
-                    <span>{resolvedChangedFileCount(displayPr, selectedPr) ?? '—'} files</span>
+                    <span>{resolvedChangedFileCount(displayPr, selectedPr) != null ? i18nService.t('common:reviewPlatform.filesCount', { count: resolvedChangedFileCount(displayPr, selectedPr) }) : '—'}</span>
                     <span className="review-platform__additions">+{displayPr?.additions ?? selectedPr.additions}</span>
                     <span className="review-platform__deletions">-{displayPr?.deletions ?? selectedPr.deletions}</span>
                   </div>
                 </div>
                 <div className="review-platform__fact-row">
-                  <span className="review-platform__fact-label"><UserRound size={14} /> Author</span>
+                  <span className="review-platform__fact-label"><UserRound size={14} /> {i18nService.t('common:reviewPlatform.author')}</span>
                   <div className="review-platform__fact-value">
                     <strong>{displayPr?.author ?? selectedPr.author}</strong>
                   </div>
                 </div>
                 <div className="review-platform__fact-row">
-                  <span className="review-platform__fact-label"><MessageSquareText size={14} /> Comments</span>
+                  <span className="review-platform__fact-label"><MessageSquareText size={14} /> {i18nService.t('common:reviewPlatform.comments')}</span>
                   <div className="review-platform__fact-value">{commentsText}</div>
                 </div>
                 <div className="review-platform__fact-row">
-                  <span className="review-platform__fact-label"><CheckCircle2 size={14} /> Checks</span>
+                  <span className="review-platform__fact-label"><CheckCircle2 size={14} /> {i18nService.t('common:reviewPlatform.checks')}</span>
                   <div className="review-platform__fact-value">
                     <strong>{checksStatusText}</strong>
                     {displayPr && displayPr.checks.total > 0 && <span>{checksText}</span>}
                   </div>
                 </div>
                 <div className="review-platform__fact-row">
-                  <span className="review-platform__fact-label"><Sparkles size={14} /> BitFun Review</span>
+                  <span className="review-platform__fact-label"><Sparkles size={14} /> {i18nService.t('common:reviewPlatform.bitfunReview')}</span>
                   <div className="review-platform__fact-value review-platform__fact-value--review">
                     <span>{reviewStatusText}</span>
                     {(latestCurrentReview || latestStaleReview || latestUnknownReview) && (
                       <Button className="review-platform__panel-button" size="small" variant="ghost" onClick={handleOpenLatestReview}>
-                        Open Review
+                        {i18nService.t('common:reviewPlatform.openReview')}
                       </Button>
                     )}
                   </div>
@@ -2255,14 +2255,14 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                 size="small"
                 className="review-platform__tabs"
               >
-                <TabPane tabKey="overview" label="Overview">
+                <TabPane tabKey="overview" label={i18nService.t('common:reviewPlatform.tabs.overview')}>
                   <div className="review-platform__tab-content review-platform__overview-scroll" data-bf-component="review-platform" data-bf-part="tabContent">
                     <section className="review-platform__detail-section" data-bf-component="review-platform" data-bf-part="section">
                       <div className="review-platform__detail-section-heading" data-bf-component="review-platform" data-bf-part="sectionHeading">
-                        <span>Description</span>
+                        <span>{i18nService.t('common:reviewPlatform.description')}</span>
                         <Button className="review-platform__panel-button" size="small" variant="ghost" onClick={handleFillPrContext} disabled={!selectedPr}>
                           <MessageSquareText size={13} />
-                          Add to chat
+                          {i18nService.t('common:reviewPlatform.addToChat')}
                         </Button>
                       </div>
                       {detailError ? (
@@ -2270,34 +2270,34 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                           <XCircle size={14} />
                           <span>{detailError}</span>
                           <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleRetryDetail}>
-                            Retry
+                            {i18nService.t('common:reviewPlatform.retry')}
                           </Button>
                         </div>
                       ) : detail ? (
                         <div className="review-platform__body-markdown review-platform__body-markdown--plain">
                           {detail.body
                             ? <MarkdownRenderer content={detail.body} basePath={workspacePath} />
-                            : <span className="review-platform__section-empty">No description was provided.</span>}
+                            : <span className="review-platform__section-empty">{i18nService.t('common:reviewPlatform.noDescription')}</span>}
                         </div>
                       ) : (
-                        renderDetailLoading('Loading pull request summary...')
+                        renderDetailLoading(i18nService.t('common:reviewPlatform.loadingPrSummary'))
                       )}
                     </section>
 
                     <section className="review-platform__detail-section review-platform__ci-list" data-bf-component="review-platform" data-bf-part="section">
                       <div className="review-platform__detail-section-heading" data-bf-component="review-platform" data-bf-part="sectionHeading">
-                        <span>Checks</span>
+                        <span>{i18nService.t('common:reviewPlatform.checks')}</span>
                         <div className="review-platform__detail-section-actions" data-bf-component="review-platform" data-bf-part="sectionActions">
                           <span className="review-platform__section-count">
-                            {ciTotal ? `${ciTotal} items · ${checksText}` : checksStatusText}
+                            {ciTotal ? `${i18nService.t('common:reviewPlatform.itemsCount', { count: ciTotal })} · ${checksText}` : checksStatusText}
                           </span>
                           <Button className="review-platform__panel-button" size="small" variant="ghost" onClick={handleAddCiPageContext} disabled={!selectedPr || !detail || detailLoading}>
                             <MessageSquareText size={13} />
-                            Add page
+                            {i18nService.t('common:reviewPlatform.addPage')}
                           </Button>
                         </div>
                       </div>
-                      {detailLoading && renderDetailLoading(pagedCiItems.length ? 'Refreshing checks...' : 'Loading checks...', pagedCiItems.length > 0)}
+                      {detailLoading && renderDetailLoading(pagedCiItems.length ? i18nService.t('common:reviewPlatform.refreshingChecks') : i18nService.t('common:reviewPlatform.loadingChecks'), pagedCiItems.length > 0)}
                       {pagedCiItems.map(item => {
                         const tone = ciItemTone(item);
                         const isCiExpanded = expandedCiItemIds.has(item.id);
@@ -2322,7 +2322,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                                     className="review-platform__icon-button review-platform__ci-action"
                                     size="xs"
                                     variant="ghost"
-                                    tooltip={isCiExpanded ? 'Collapse details' : 'Expand details'}
+                                    tooltip={isCiExpanded ? i18nService.t('common:reviewPlatform.collapseDetails') : i18nService.t('common:reviewPlatform.expandDetails')}
                                     onClick={() => toggleCiExpanded(item)}
                                     disabled={ciLogLoading}
                                     aria-busy={ciLogLoading}
@@ -2334,7 +2334,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                                   className="review-platform__icon-button review-platform__ci-action"
                                   size="xs"
                                   variant="ghost"
-                                  tooltip="Add this result to chat"
+                                  tooltip={i18nService.t('common:reviewPlatform.addResultToChat')}
                                   onClick={() => void handleAddCiItemContext(item)}
                                   disabled={!selectedPr}
                                 >
@@ -2345,7 +2345,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                                     className="review-platform__icon-button review-platform__ci-action"
                                     size="xs"
                                     variant="ghost"
-                                    tooltip="Open result in provider"
+                                    tooltip={i18nService.t('common:reviewPlatform.openInProvider')}
                                     onClick={() => void handleOpenCiUrl(item.webUrl)}
                                   >
                                     <Link2 size={12} />
@@ -2356,16 +2356,16 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                             {isCiExpanded && (
                               <div className="review-platform__ci-log-panel" data-bf-component="review-platform" data-bf-part="ciLog">
                                 <div className="review-platform__ci-detail-grid">
-                                  {item.stage && <div><span>Stage</span><strong>{item.stage}</strong></div>}
-                                  {item.detail && <div><span>Detail</span><strong>{item.detail}</strong></div>}
-                                  {item.webUrl && <div><span>URL</span><strong>{item.webUrl}</strong></div>}
+                                  {item.stage && <div><span>{i18nService.t('common:reviewPlatform.stage')}</span><strong>{item.stage}</strong></div>}
+                                  {item.detail && <div><span>{i18nService.t('common:reviewPlatform.detail')}</span><strong>{item.detail}</strong></div>}
+                                  {item.webUrl && <div><span>{i18nService.t('common:reviewPlatform.url')}</span><strong>{item.webUrl}</strong></div>}
                                 </div>
-                                {ciLogLoading && renderDetailLoading('Loading check details...')}
+                                {ciLogLoading && renderDetailLoading(i18nService.t('common:reviewPlatform.loadingCheckDetails'))}
                                 {!ciLogLoading && ciLogError && logAvailable && (
                                   <div className="review-platform__detail-error">
                                     <XCircle size={14} />
                                     <span>{ciLogError}</span>
-                                    <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={() => void loadCiLog(item)}>Retry</Button>
+                                    <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={() => void loadCiLog(item)}>{i18nService.t('common:reviewPlatform.retry')}</Button>
                                   </div>
                                 )}
                                 {!ciLogLoading && !ciLogError && (ciLog?.log || item.log) && <pre className="review-platform__ci-log-block">{ciLog?.log || item.log}</pre>}
@@ -2375,22 +2375,22 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                           </article>
                         );
                       })}
-                      {!detailLoading && detail && ciItems.length === 0 && <div className="review-platform__empty-state">No checks were reported.</div>}
-                      {renderDetailPagination('Checks', ciPage, ciTotal, setCiPageIndex)}
+                      {!detailLoading && detail && ciItems.length === 0 && <div className="review-platform__empty-state">{i18nService.t('common:reviewPlatform.noChecks')}</div>}
+                      {renderDetailPagination(i18nService.t('common:reviewPlatform.checks'), ciPage, ciTotal, setCiPageIndex)}
                     </section>
 
                     <section className="review-platform__detail-section review-platform__threads" data-bf-component="review-platform" data-bf-part="section">
                       <div className="review-platform__detail-section-heading" data-bf-component="review-platform" data-bf-part="sectionHeading">
-                        <span>Comments</span>
+                        <span>{i18nService.t('common:reviewPlatform.comments')}</span>
                         <div className="review-platform__detail-section-actions" data-bf-component="review-platform" data-bf-part="sectionActions">
                           <span className="review-platform__section-count">{reviewItemCount}</span>
                           <Button className="review-platform__panel-button" size="small" variant="ghost" onClick={handleAddReviewsContext} disabled={!selectedPr || !detail}>
                             <MessageSquareText size={13} />
-                            Add to chat
+                            {i18nService.t('common:reviewPlatform.addToChat')}
                           </Button>
                         </div>
                       </div>
-                      {detailLoading && renderDetailLoading(reviewThreads.length ? 'Refreshing comments...' : 'Loading comments...', reviewThreads.length > 0)}
+                      {detailLoading && renderDetailLoading(reviewThreads.length ? i18nService.t('common:reviewPlatform.refreshingComments') : i18nService.t('common:reviewPlatform.loadingComments'), reviewThreads.length > 0)}
                       {pagedReviewThreads.map(thread => {
                         const parent = thread.replyToProviderCommentId
                           ? reviewThreadByCommentId.get(thread.replyToProviderCommentId)
@@ -2408,10 +2408,10 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                             <div className="review-platform__thread-head" data-bf-component="review-platform" data-bf-part="threadHead">
                               <div className="review-platform__thread-tags">
                                 <span className={`review-platform__thread-tag review-platform__thread-tag--${thread.kind}`}>
-                                  {thread.kind === 'review' ? 'Review' : 'Comment'}
+                                  {thread.kind === 'review' ? i18nService.t('common:reviewPlatform.review') : i18nService.t('common:reviewPlatform.comment')}
                                 </span>
                                 <span className={`review-platform__thread-tag review-platform__thread-tag--${thread.resolved ? 'resolved' : 'open'}`}>
-                                  {thread.resolved ? 'Resolved' : 'Open'}
+                                  {thread.resolved ? i18nService.t('common:reviewPlatform.threadResolved') : i18nService.t('common:reviewPlatform.threadOpen')}
                                 </span>
                               </div>
                               <span>{formatRelativeTime(thread.updatedAt) || formatAbsoluteTime(thread.updatedAt)}</span>
@@ -2420,7 +2420,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                             {parent && (
                               <div className="review-platform__thread-reply-block">
                                 <div className="review-platform__thread-reply-header">
-                                  <span className="review-platform__thread-reply-label">Reply to</span>
+                                  <span className="review-platform__thread-reply-label">{i18nService.t('common:reviewPlatform.replyTo')}</span>
                                   <span className="review-platform__thread-reply-author">@{parent.author}</span>
                                 </div>
                                 <div className="review-platform__thread-reply-body"><MarkdownRenderer content={parent.body} basePath={workspacePath} /></div>
@@ -2431,24 +2431,24 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                           </article>
                         );
                       })}
-                      {!detailLoading && detail && reviewThreads.length === 0 && <div className="review-platform__empty-state">No comments yet.</div>}
-                      {renderDetailPagination('Comments', reviewPage, reviewThreads.length, setReviewPageIndex)}
+                      {!detailLoading && detail && reviewThreads.length === 0 && <div className="review-platform__empty-state">{i18nService.t('common:reviewPlatform.noComments')}</div>}
+                      {renderDetailPagination(i18nService.t('common:reviewPlatform.comments'), reviewPage, reviewThreads.length, setReviewPageIndex)}
                     </section>
                   </div>
                 </TabPane>
 
-                <TabPane tabKey="changes" label="Changes">
+                <TabPane tabKey="changes" label={i18nService.t('common:reviewPlatform.tabs.changes')}>
                   <section className="review-platform__tab-content review-platform__file-list" data-bf-component="review-platform" data-bf-part="fileList">
                     {detailError && (
                       <div className="review-platform__detail-error">
                         <XCircle size={14} />
                         <span>{detailError}</span>
                         <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleRetryDetail}>
-                          Retry
+                          {i18nService.t('common:reviewPlatform.retry')}
                         </Button>
                       </div>
                     )}
-                    {detailLoading && renderDetailLoading(pagedChangedFiles.length ? 'Refreshing files...' : 'Loading files...', pagedChangedFiles.length > 0)}
+                    {detailLoading && renderDetailLoading(pagedChangedFiles.length ? i18nService.t('common:reviewPlatform.refreshingFiles') : i18nService.t('common:reviewPlatform.loadingFiles'), pagedChangedFiles.length > 0)}
                     {pagedChangedFiles.map(file => {
                       const key = fileKey(file);
                       const isExpanded = expandedFileKeys.has(key);
@@ -2477,12 +2477,12 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                             </button>
                             <Button className="review-platform__panel-button review-platform__file-add-button" size="small" variant="ghost" onClick={() => void handleAddFileDiffContext(file)} disabled={!selectedPr}>
                               <MessageSquareText size={13} />
-                              Add
+                              {i18nService.t('common:reviewPlatform.add')}
                             </Button>
                           </div>
                           {isExpanded && (
                             file.patch ? (
-                              <pre className="review-platform__diff-block" data-bf-component="review-platform" data-bf-part="diff" aria-label={`Diff for ${file.path}`}>
+                              <pre className="review-platform__diff-block" data-bf-component="review-platform" data-bf-part="diff" aria-label={i18nService.t('common:reviewPlatform.diffFor', { path: file.path })}>
                                 {file.patch.split('\n').map((line, index) => (
                                   <span key={`${file.path}-${index}`} className={diffLineClass(line)}>
                                     {line || ' '}
@@ -2490,7 +2490,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                                 ))}
                               </pre>
                             ) : (
-                              <div className="review-platform__diff-empty">No inline diff is available for this file.</div>
+                              <div className="review-platform__diff-empty">{i18nService.t('common:reviewPlatform.noInlineDiff')}</div>
                             )
                           )}
                         </article>
@@ -2499,21 +2499,21 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                     {!detailLoading && detail && detail.files.length === 0 && (
                       <div className="review-platform__empty-state">
                         {detail.changedFileCountKnown === false
-                          ? 'Changed files are currently unavailable from this provider.'
-                          : 'No changed files were returned by this provider.'}
+                          ? i18nService.t('common:reviewPlatform.changedFilesUnavailable')
+                          : i18nService.t('common:reviewPlatform.noChangedFiles')}
                       </div>
                     )}
-                    {renderDetailPagination('Files', changePage, changedFiles.length, setChangePageIndex)}
+                    {renderDetailPagination(i18nService.t('common:reviewPlatform.files'), changePage, changedFiles.length, setChangePageIndex)}
                   </section>
                 </TabPane>
 
-                <TabPane tabKey="commits" label="Commits">
+                <TabPane tabKey="commits" label={i18nService.t('common:reviewPlatform.tabs.commits')}>
                   <section className="review-platform__tab-content review-platform__timeline">
                     <div className="review-platform__section-heading">
-                      <span>Commits</span>
+                      <span>{i18nService.t('common:reviewPlatform.commits')}</span>
                       <Button className="review-platform__panel-button" size="small" variant="ghost" onClick={handleAddCommitsContext} disabled={!selectedPr || !detail}>
                         <MessageSquareText size={13} />
-                        Add to chat
+                        {i18nService.t('common:reviewPlatform.addToChat')}
                       </Button>
                     </div>
                     {detailError && (
@@ -2521,11 +2521,11 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                         <XCircle size={14} />
                         <span>{detailError}</span>
                         <Button className="review-platform__panel-button" size="small" variant="secondary" onClick={handleRetryDetail}>
-                          Retry
+                          {i18nService.t('common:reviewPlatform.retry')}
                         </Button>
                       </div>
                     )}
-                    {detailLoading && renderDetailLoading(pagedCommits.length ? 'Refreshing commits...' : 'Loading commits...', pagedCommits.length > 0)}
+                    {detailLoading && renderDetailLoading(pagedCommits.length ? i18nService.t('common:reviewPlatform.refreshingCommits') : i18nService.t('common:reviewPlatform.loadingCommits'), pagedCommits.length > 0)}
                     {pagedCommits.map(commit => (
                       <div key={commit.hash} className="review-platform__timeline-item">
                         <GitCommitHorizontal size={14} />
@@ -2537,9 +2537,9 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
                       </div>
                     ))}
                     {!detailLoading && detail && commits.length === 0 && (
-                      <div className="review-platform__empty-state">No commits were returned by this provider.</div>
+                      <div className="review-platform__empty-state">{i18nService.t('common:reviewPlatform.noCommits')}</div>
                     )}
-                    {renderDetailPagination('Commits', commitPage, commits.length, setCommitPageIndex)}
+                    {renderDetailPagination(i18nService.t('common:reviewPlatform.commits'), commitPage, commits.length, setCommitPageIndex)}
                   </section>
                 </TabPane>
 
@@ -2556,7 +2556,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
             setAuthError(null);
           }
         }}
-        title={selectedRemote?.platform === 'github' ? 'GitHub CLI authentication' : `${selectedRemote ? providerLabel(selectedRemote) : 'Provider'} token`}
+        title={selectedRemote?.platform === 'github' ? i18nService.t('common:reviewPlatform.authTooltipGithubCli') : `${selectedRemote ? providerLabel(selectedRemote) : i18nService.t('common:reviewPlatform.provider')} ${i18nService.t('common:reviewPlatform.token')}`}
         size="small"
         contentInset
       >
@@ -2568,12 +2568,12 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
           }}
         >
           <div className="review-platform__auth-target">
-            <span>{selectedRemote?.host ?? 'No remote'}</span>
+            <span>{selectedRemote?.host ?? i18nService.t('common:reviewPlatform.noRemote')}</span>
             <strong>{selectedRemote?.projectPath ?? ''}</strong>
           </div>
           {selectedRemote?.platform === 'github' ? (
             <div className="review-platform__gh-auth">
-              <span>Run this command in the integrated terminal, finish the GitHub CLI flow, then retry.</span>
+              <span>{i18nService.t('common:reviewPlatform.runGhCliRetry')}</span>
               <code>{`gh auth login --hostname ${selectedRemote.host}`}</code>
               {authError && <span className="review-platform__gh-auth-error">{authError}</span>}
             </div>
@@ -2582,7 +2582,7 @@ export const ReviewPlatformPanel: React.FC<ReviewPlatformPanelProps> = ({
               type="password"
               autoComplete="off"
               autoFocus
-              label="Token"
+              label={i18nService.t('common:reviewPlatform.token')}
               value={authToken}
               disabled={authSaving}
               error={Boolean(authError)}

@@ -497,6 +497,80 @@
       "l5": "L5",
       "l6": "L6",
       "l7": "L7"
+    },
+    "patterns": {
+      "sparc-dev": {
+        "name": "SPARC Development",
+        "description": "5-stage SPARC development pipeline: specification → pseudocode → architecture → refinement → completion"
+      },
+      "cicd-pipeline": {
+        "name": "CI/CD Pipeline",
+        "description": "Lint → Unit test → Build → Integration test → Security audit → Deploy → Verify"
+      },
+      "fan-out-converge": {
+        "name": "Fan-out Converge",
+        "description": "Dispatch → Parallel research (N bees) → Synthesize → Final review"
+      },
+      "triad-minimal": {
+        "name": "Three-Bee Minimal",
+        "description": "Prompt Bee → Execute Bee → Review Bee. Atomic execution unit."
+      },
+      "state-machine": {
+        "name": "State Machine",
+        "description": "Multi-state flow with conditional branches and escalation."
+      },
+      "deep-research": {
+        "name": "Deep Research",
+        "description": "6-phase research pipeline with parallel specialists, debate, and arbitration."
+      },
+      "react-loop": {
+        "name": "ReAct Loop",
+        "description": "Thought → Action → Observation loop with stop condition."
+      },
+      "plan-exec-reflect": {
+        "name": "Plan-Execute-Reflect",
+        "description": "Plan → Execute step by step → Draft → Reflect and critique → Refine or stop."
+      },
+      "event-driven": {
+        "name": "Event-Driven Response",
+        "description": "Detect → Classify → Triage → Resolve → Postmortem. For incidents and alerts."
+      },
+      "coding-agent": {
+        "name": "Coding Agent",
+        "description": "Repo inspection → Scoped plan → File edits → Tests & checks → Patch & summary."
+      },
+      "dag-data-pipeline": {
+        "name": "DAG Data Pipeline",
+        "description": "Extract → Transform (parallel partitions) → Validate → Load → Report."
+      },
+      "pr-code-review": {
+        "name": "PR Code Review",
+        "description": "PR created → Lint → Code review (max 3 rounds) → Merge → Deploy."
+      },
+      "deploy-orchestration": {
+        "name": "Deploy Orchestration",
+        "description": "Configure → Schedule → Health check → Rolling update → Self-heal loop."
+      },
+      "six-layer-runtime": {
+        "name": "Six-Layer Agent Runtime",
+        "description": "Intent dispatch → State & memory → Execution sandbox → Tool boundary → Control → Endpoint."
+      },
+      "memory-retrieval": {
+        "name": "Memory & Retrieval",
+        "description": "Working memory → Promote/discard → Episodic/Semantic memory → Retrieval → Notes → Task context."
+      },
+      "customer-support": {
+        "name": "Customer Support",
+        "description": "Triage → Policy grounding → Draft → Guardrails → Human review queue."
+      },
+      "evaluation-observability": {
+        "name": "Evaluation & Observability",
+        "description": "Offline eval → Online monitoring → Structured traces → Failure triage."
+      },
+      "workflow-agent-hybrid": {
+        "name": "Workflow-Agent Hybrid",
+        "description": "Known path → workflow. Unknown path → agent. Hybrid embeds agent nodes in workflow or vice versa."
+      }
     }
   },
   "teamsZone": {
@@ -507,6 +581,38 @@
     "empty": {
       "noTeams": "No teams have been created yet",
       "noMatch": "No matching teams"
+    },
+    "mockTeams": {
+      "agent-team-coding": {
+        "name": "Coding Team",
+        "description": "Code review, refactoring and quality assurance"
+      },
+      "agent-team-research": {
+        "name": "Research Team",
+        "description": "Information gathering, data analysis and report writing"
+      },
+      "agent-team-ppt": {
+        "name": "PPT Production",
+        "description": "Content planning, visual design and copy polishing"
+      }
+    },
+    "templates": {
+      "tpl-coding": {
+        "name": "Coding Team",
+        "description": "Code review, refactoring and quality assurance"
+      },
+      "tpl-research": {
+        "name": "Research Team",
+        "description": "Information gathering, data analysis and report writing"
+      },
+      "tpl-ppt": {
+        "name": "PPT Production",
+        "description": "Content planning, copy and visual planning"
+      },
+      "tpl-fullstack": {
+        "name": "Fullstack Team",
+        "description": "End-to-end development, testing and documentation"
+      }
     }
   },
   "composer": {

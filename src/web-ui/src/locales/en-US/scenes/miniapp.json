@@ -1,5 +1,7 @@
 {
   "title": "Mini Apps",
+  "titleLoading": "Mini App",
+  "defaultName": "Mini App",
   "subtitle": "Instantly generated mini apps, ready to use right away. You can also continue to iterate on them.",
   "searchPlaceholder": "Search mini apps...",
   "importFromFolder": "Import from folder",

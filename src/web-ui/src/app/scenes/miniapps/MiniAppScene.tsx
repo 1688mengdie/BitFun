@@ -150,7 +150,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
     onOpen: handleOpenCustomize,
   });
 
-  const appName = app ? pickLocalizedString(app, currentLanguage, 'name') : 'Mini App';
+  const appName = app ? pickLocalizedString(app, currentLanguage, 'name') : t('defaultName');
 
   return (
     <div
@@ -164,7 +164,7 @@ const MiniAppScene: React.FC<MiniAppSceneProps> = ({ appId }) => {
           {app ? (
             <span className="miniapp-scene__title">{appName}</span>
           ) : (
-            <span className="miniapp-scene__title miniapp-scene__title--loading">Mini App</span>
+            <span className="miniapp-scene__title miniapp-scene__title--loading">{t('titleLoading')}</span>
           )}
         </div>
         <div className="miniapp-scene__header-actions">

@@ -206,7 +206,7 @@ const BranchesView: React.FC<BranchesViewProps> = ({ workspacePath }) => {
         <div data-bf-component="branches-view" data-bf-part="placeholder" className="bitfun-git-scene-branches__placeholder">
           <GitBranch size={48} />
           <p>{t('tabs.branches')}</p>
-          <p className="bitfun-git-scene-branches__hint">Open a workspace to see branches.</p>
+          <p className="bitfun-git-scene-branches__hint">{t('branchesEmpty')}</p>
         </div>
       </div>
     );

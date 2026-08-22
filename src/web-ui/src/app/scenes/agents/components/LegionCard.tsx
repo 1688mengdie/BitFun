@@ -25,6 +25,8 @@ const LegionCard: React.FC<LegionCardProps> = ({
     t(`legionPattern.complexityLabel.l${pattern.complexityLevel}`, {
       defaultValue: `L${pattern.complexityLevel}`,
     });
+  const patternName = t(`legionPattern.patterns.${pattern.id}.name`, { defaultValue: pattern.name });
+  const patternDescription = t(`legionPattern.patterns.${pattern.id}.description`, { defaultValue: pattern.description });
 
   return (
     <div
@@ -37,7 +39,7 @@ const LegionCard: React.FC<LegionCardProps> = ({
       role="button"
       tabIndex={0}
       onKeyDown={(e) => e.key === 'Enter' && openDetails()}
-      aria-label={pattern.name}
+      aria-label={patternName}
       data-testid="legion-list-item"
       data-legion-id={pattern.id}
       data-bf-component="legion-card"
@@ -51,7 +53,7 @@ const LegionCard: React.FC<LegionCardProps> = ({
         </div>
         <div className="legion-card__header-info" data-bf-component="legion-card" data-bf-part="headerInfo">
           <div className="legion-card__title-row" data-bf-component="legion-card" data-bf-part="titleRow">
-            <span className="legion-card__name" data-bf-component="legion-card" data-bf-part="name">{pattern.name}</span>
+            <span className="legion-card__name" data-bf-component="legion-card" data-bf-part="name">{patternName}</span>
             <div className="legion-card__badges" data-bf-component="legion-card" data-bf-part="badges">
               <Badge variant="neutral">
                 {complexityLabel}
@@ -62,7 +64,7 @@ const LegionCard: React.FC<LegionCardProps> = ({
       </div>
 
       <div className="legion-card__body" data-bf-component="legion-card" data-bf-part="body">
-        <p className="legion-card__desc" data-bf-component="legion-card" data-bf-part="description">{pattern.description}</p>
+        <p className="legion-card__desc" data-bf-component="legion-card" data-bf-part="description">{patternDescription}</p>
       </div>
 
       <div className="legion-card__footer" data-bf-component="legion-card" data-bf-part="footer">

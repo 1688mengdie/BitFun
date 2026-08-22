@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Modal } from '@/component-library';
 import { globalEventBus } from '@/infrastructure/event-bus';
 import { MCPAPI } from '@/infrastructure/api/service-api/MCPAPI';
@@ -32,6 +33,7 @@ function stringifyParams(params: unknown): string {
 }
 
 export const MCPInteractionDialog: React.FC = () => {
+  const { t } = useTranslation('common');
   const [queue, setQueue] = useState<MCPInteractionRequestEvent[]>([]);
   const [editorValue, setEditorValue] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -147,17 +149,17 @@ export const MCPInteractionDialog: React.FC = () => {
               Server: {currentRequest.serverName || currentRequest.serverId}
             </span>
             {queueCount > 1 && (
-              <span className="mcp-interaction-dialog__queue">Queue: {queueCount}</span>
+              <span className="mcp-interaction-dialog__queue">{t('mcpInteraction.queue')}: {queueCount}</span>
             )}
           </div>
 
           <div className="mcp-interaction-dialog__section" data-bf-component="mcp-interaction-dialog" data-bf-part="section">
-            <div className="mcp-interaction-dialog__label" data-bf-component="mcp-interaction-dialog" data-bf-part="label">Request Params</div>
+            <div className="mcp-interaction-dialog__label" data-bf-component="mcp-interaction-dialog" data-bf-part="label">{t('mcpInteraction.requestParams')}</div>
             <pre className="mcp-interaction-dialog__params" data-bf-component="mcp-interaction-dialog" data-bf-part="params">{paramsPreview}</pre>
           </div>
 
           <div className="mcp-interaction-dialog__section" data-bf-component="mcp-interaction-dialog" data-bf-part="section">
-            <div className="mcp-interaction-dialog__label" data-bf-component="mcp-interaction-dialog" data-bf-part="label">Response JSON</div>
+            <div className="mcp-interaction-dialog__label" data-bf-component="mcp-interaction-dialog" data-bf-part="label">{t('mcpInteraction.responseJson')}</div>
             <textarea
               className="mcp-interaction-dialog__editor"
               data-bf-component="mcp-interaction-dialog"

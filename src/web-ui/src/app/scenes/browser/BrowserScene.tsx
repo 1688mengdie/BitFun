@@ -101,7 +101,7 @@ const BrowserScene: React.FC = () => {
           <iframe
             className="browser-scene__iframe"
             src={browser.currentUrl}
-            title="Embedded Browser"
+            title={t('browser.embeddedSceneTitle')}
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
           />
         ) : (

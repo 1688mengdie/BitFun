@@ -86,7 +86,7 @@ const SceneBar: React.FC<SceneBarProps> = ({
     <div data-bf-component="scene-bar" data-bf-part="root"
       className={sceneBarClassName}
       role="tablist"
-      aria-label="Scene tabs"
+      aria-label={t('sceneBar.sceneTabs')}
       onMouseDown={handleBarMouseDown}
       onDoubleClick={handleBarDoubleClick}
     >

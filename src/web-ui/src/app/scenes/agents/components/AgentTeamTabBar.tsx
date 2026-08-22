@@ -221,8 +221,8 @@ const AgentTeamTabBar: React.FC = () => {
                         <IconComp size={16} />
                       </span>
                       <div className="bt-tabbar__tpl-info">
-                        <span className="bt-tabbar__tpl-name">{tpl.name}</span>
-                        <span className="bt-tabbar__tpl-desc">{tpl.description}</span>
+                        <span className="bt-tabbar__tpl-name">{t(`teamsZone.templates.${tpl.id}.name`, { defaultValue: tpl.name })}</span>
+                        <span className="bt-tabbar__tpl-desc">{t(`teamsZone.templates.${tpl.id}.description`, { defaultValue: tpl.description })}</span>
                       </div>
                       <span className="bt-tabbar__tpl-cnt">{tpl.memberIds.length}</span>
                     </button>

@@ -70,7 +70,7 @@ const MiniAppEntry: React.FC<MiniAppEntryProps> = ({
         <span className="bitfun-nav-panel__miniapp-entry-main">
           <span className="bitfun-nav-panel__miniapp-entry-copy">
             <span className="bitfun-nav-panel__miniapp-entry-title">{t('scenes.miniApps')}</span>
-            <Badge variant="neutral" className="bitfun-nav-panel__miniapp-badge">Beta</Badge>
+            <Badge variant="neutral" className="bitfun-nav-panel__miniapp-badge">{t('miniappEntry.beta')}</Badge>
           </span>
         </span>
 

@@ -7,6 +7,7 @@ const require = createRequire(import.meta.url);
 const root = process.cwd();
 const contractPath = path.join(root, 'src', 'shared', 'i18n', 'contract', 'locales.json');
 const hardcodedBaselinePath = path.join(root, 'scripts', 'i18n-hardcoded-baseline.json');
+const uiEnglishAllowlistPath = path.join(root, 'scripts', 'i18n-ui-english-allowlist.json');
 const literalFallbackBaselinePath = path.join(root, 'scripts', 'i18n-literal-fallback-baseline.json');
 const localeFormatBaselinePath = path.join(root, 'scripts', 'i18n-locale-format-baseline.json');
 const dynamicKeyAllowlistPath = path.join(root, 'scripts', 'i18n-dynamic-key-allowlist.json');
@@ -2335,6 +2336,114 @@ function auditHardcodedSourceBudgets() {
   }
 }
 
+// R-6/R-7: user-visible English UI strings must route through i18n (t(...)).
+// Detects JSX text nodes / JSX string attributes that render raw English to the
+// user, complementing the CJK-only hardcode gate. Legitimate proper nouns and
+// product names are exempted via scripts/i18n-ui-english-allowlist.json.
+const UI_ENGLISH_ATTR_PATTERN =
+  /\b(title|placeholder|aria-label|label|tooltip|heading|description|alt)\s*=\s*"(?:[A-Z][^"]*)"/g;
+// Clean JSX text node: literal text between tags. To avoid TS/JS false
+// positives (arrows, calls, type annotations), the captured content must be a
+// real phrase/sentence and the line must not contain JS expression markers.
+const UI_ENGLISH_TEXT_PATTERN =
+  />\s*([A-Z][A-Za-z0-9'.,\-–—:!?/& ]{2,})\s*(?:<\/|$)/g;
+const UI_ENGLISH_CODE_MARKER =
+  /(=>|\(|\)|;|Boolean|Object|Math|Date|String|Number|React|Array|Record|Promise|typeof|instanceof|\bas\b|\bimport\b|\bexport\b|\binterface\b|\btype\s+\w+\b|\bconst\b|\breturn\b)/;
+
+function isCommentOnlyLine(line) {
+  const trimmed = line.trim();
+  return (
+    trimmed.startsWith('//') ||
+    trimmed.startsWith('*') ||
+    trimmed.startsWith('/*') ||
+    trimmed.startsWith('{/*') ||
+    trimmed.startsWith('<!--')
+  );
+}
+
+function isUiEnglishAllowed(line, allowlistedStrings) {
+  for (const allowed of allowlistedStrings) {
+    if (line.includes(allowed)) return true;
+  }
+  return false;
+}
+
+function collectUiEnglishHardcodeFindings() {
+  const allowlist = fs.existsSync(uiEnglishAllowlistPath)
+    ? readJsonFile(uiEnglishAllowlistPath)
+    : { version: 1, allowlistedStrings: [], allowlistedFiles: [] };
+  const allowlistedStrings = Array.isArray(allowlist.allowlistedStrings) ? allowlist.allowlistedStrings : [];
+  const allowlistedFiles = new Set(
+    (Array.isArray(allowlist.allowlistedFiles) ? allowlist.allowlistedFiles : []).map((p) => toPosixPath(p)),
+  );
+
+  const appScanRoot = path.join(webSourceDir, 'app');
+  const sourceFiles = listFiles(
+    appScanRoot,
+    (file) =>
+      file.endsWith('.tsx') &&
+      !shouldSkipSourceScan(file) &&
+      !allowlistedFiles.has(toPosixPath(path.relative(root, file))),
+  );
+
+  const findings = [];
+  for (const file of sourceFiles) {
+    const relativeFile = toPosixPath(path.relative(root, file));
+    const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (isCommentOnlyLine(line)) return;
+      // Skip i18n-aware lines entirely: a t() call already routes the string.
+      if (/\bt\s*\(/.test(line)) return;
+      // Skip keyboard-shortcut renderings (kbd blocks).
+      if (/<kbd>/i.test(line)) return;
+      if (isUiEnglishAllowed(line, allowlistedStrings)) return;
+
+      UI_ENGLISH_ATTR_PATTERN.lastIndex = 0;
+      let attrMatch;
+      while ((attrMatch = UI_ENGLISH_ATTR_PATTERN.exec(line)) != null) {
+        findings.push({
+          file: relativeFile,
+          location: `${relativeFile}:${index + 1}`,
+          snippet: attrMatch[0].trim().slice(0, 160),
+          reason: 'ui-english-attribute',
+        });
+      }
+
+      // Text-node gate: a line that carries JS expression/code markers is almost
+      // certainly not a plain user-facing text node, so skip it to avoid TS
+      // false positives (arrows, calls, type annotations).
+      if (UI_ENGLISH_CODE_MARKER.test(line)) return;
+      UI_ENGLISH_TEXT_PATTERN.lastIndex = 0;
+      let textMatch;
+      while ((textMatch = UI_ENGLISH_TEXT_PATTERN.exec(line)) != null) {
+        const captured = textMatch[1];
+        // Require a real phrase (>=1 space) or a single alphabetic word >=3 chars.
+        const isPhrase = captured.includes(' ');
+        const isSingleWord = /^[A-Za-z]{3,}$/.test(captured.trim());
+        if (isPhrase || isSingleWord) {
+          findings.push({
+            file: relativeFile,
+            location: `${relativeFile}:${index + 1}`,
+            snippet: textMatch[0].trim().slice(0, 160),
+            reason: 'ui-english-text-node',
+          });
+        }
+      }
+    });
+  }
+
+  return findings.sort(sortByReportIdentity);
+}
+
+function auditUiEnglishHardcode() {
+  const findings = collectUiEnglishHardcodeFindings();
+  for (const finding of findings) {
+    reportError(
+      `Hardcoded user-visible English in ${finding.location} (${finding.reason}): ${finding.snippet} — move it into a locale resource and render via t(...) or add it to scripts/i18n-ui-english-allowlist.json if it is a proper noun.`,
+    );
+  }
+}
+
 auditGeneratedContract();
 auditSharedTermsCoverage();
 auditSurfaceResourceRoots();
@@ -2356,6 +2465,7 @@ auditCoreFluentParity();
 auditRelayStaticHomepageResources();
 auditSourceText();
 auditLocaleFormatUsageBudget();
+auditUiEnglishHardcode();
 auditHardcodedSourceBudgets();
 auditI18nGovernanceReport(namespaces);
 writeGovernanceReport();

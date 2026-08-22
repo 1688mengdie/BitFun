@@ -1160,7 +1160,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
               className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
               type="text"
               placeholder="123456:xxxxxxxxxxxxxxxxxxxxxxxx"
-              prefix={<span className="bitfun-remote-connect__field-prefix">Bot Token</span>}
+              prefix={<span className="bitfun-remote-connect__field-prefix">{t('remoteConnect.botToken')}</span>}
               value={tgToken}
               onChange={(e) => setTgToken(e.target.value)}
             />
@@ -1205,7 +1205,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
               className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
               type="text"
               placeholder="cli_xxxxxxxx"
-              prefix={<span className="bitfun-remote-connect__field-prefix">App ID</span>}
+              prefix={<span className="bitfun-remote-connect__field-prefix">{t('remoteConnect.appId')}</span>}
               value={feishuAppId}
               onChange={(e) => setFeishuAppId(e.target.value)}
             />
@@ -1213,7 +1213,7 @@ export const RemoteConnectDialog: React.FC<RemoteConnectDialogProps> = ({
               className="bitfun-remote-connect__field bitfun-remote-connect__field--inline"
               type="password"
               placeholder="xxxxxxxxxxxxxxxx"
-              prefix={<span className="bitfun-remote-connect__field-prefix">App Secret</span>}
+              prefix={<span className="bitfun-remote-connect__field-prefix">{t('remoteConnect.appSecret')}</span>}
               value={feishuAppSecret}
               onChange={(e) => setFeishuAppSecret(e.target.value)}
             />

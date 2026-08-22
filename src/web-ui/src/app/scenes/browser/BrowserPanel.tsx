@@ -234,7 +234,7 @@ const BrowserPanel: React.FC<BrowserPanelProps> = ({ isActive, initialUrl }) => 
             data-bf-part="iframe"
             className="browser-panel__iframe"
             src={currentUrl}
-            title="Embedded Browser Panel"
+            title={t('browser.embeddedPanelTitle')}
             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"
           />
         ) : (

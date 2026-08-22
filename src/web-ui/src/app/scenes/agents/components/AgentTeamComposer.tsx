@@ -12,6 +12,7 @@ import {
   type CapabilityCategory,
 } from '../agentsStore';
 import { AGENT_ICON_MAP } from '../agentsIcons';
+import { getCapabilityLabel } from '../utils';
 import { APPEARANCE_DOMAIN_TOKENS } from '@/infrastructure/appearance/appearanceDomainTokens';
 import { computeDAGLayout } from '@/tools/bitfun-canvas/runtime/sdk/diagramLayout';
 import { Badge } from '@/component-library';
@@ -192,7 +193,7 @@ const FormationNode: React.FC<NodeProps> = ({
               className="tcf__node-cap"
               style={{ color: CAPABILITY_COLORS[primaryCap as CapabilityCategory] }}
             >
-              {primaryCap}
+              {getCapabilityLabel(t, primaryCap)}
             </span>
           )}
           {agent?.model && (

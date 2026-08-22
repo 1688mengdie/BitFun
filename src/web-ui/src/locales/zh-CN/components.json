@@ -627,7 +627,11 @@
       "taskDetail": "加载任务详情...",
       "dependencyGraph": "加载依赖关系图...",
       "planViewer": "加载计划...",
-      "terminal": "加载终端..."
+      "terminal": "加载终端...",
+      "pullRequests": "正在加载拉取请求...",
+      "pullRequest": "正在加载拉取请求...",
+      "widgetPreview": "正在加载小组件预览...",
+      "canvasPreview": "正在加载画布预览..."
     },
     "aiSession": {
       "title": "AI会话: {{sessionId}}",

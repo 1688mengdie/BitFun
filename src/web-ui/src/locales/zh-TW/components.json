@@ -627,7 +627,11 @@
       "taskDetail": "載入任務詳情...",
       "dependencyGraph": "載入依賴關係圖...",
       "planViewer": "載入計劃...",
-      "terminal": "載入終端..."
+      "terminal": "載入終端...",
+      "pullRequests": "正在載入拉取請求...",
+      "pullRequest": "正在載入拉取請求...",
+      "widgetPreview": "正在載入小工具預覽...",
+      "canvasPreview": "正在載入畫布預覽..."
     },
     "aiSession": {
       "title": "AI會話: {{sessionId}}",

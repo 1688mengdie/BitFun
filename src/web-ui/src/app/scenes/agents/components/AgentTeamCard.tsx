@@ -2,9 +2,10 @@ import React from 'react';
 import { Bot, Pencil, Users } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/component-library';
-import type { AgentTeam, AgentWithCapabilities } from '../agentsStore';
+import type { AgentTeam, AgentWithCapabilities, CapabilityCategory } from '../agentsStore';
 import { AGENT_ICON_MAP, AGENT_TEAM_ICON_MAP, getAgentTeamAccent } from '../agentsIcons';
 import { CAPABILITY_ACCENT } from '../agentAppearance';
+import { getCapabilityLabel } from '../utils';
 import './AgentTeamCard.scss';
 
 interface AgentTeamCardProps {
@@ -113,7 +114,7 @@ const AgentTeamCard: React.FC<AgentTeamCardProps> = ({
                     borderColor: `${CAPABILITY_ACCENT[cap as keyof typeof CAPABILITY_ACCENT]}44`,
                   }}
                 >
-                  {cap}
+                  {getCapabilityLabel(t, cap as CapabilityCategory)}
                 </span>
               ))}
             </div>

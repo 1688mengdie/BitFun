@@ -1,5 +1,9 @@
 {
   "title": "Git",
+  "branchesEmpty": "Open a workspace to see branches.",
+  "commitGraphEmpty": "Open a workspace to see the commit graph.",
+  "changesEmpty": "Open a workspace to see changes.",
+  "statusUntracked": "Untracked",
   "init": {
     "title": "Initialize Git",
     "notRepository": "Current directory is not a Git repository",

@@ -1,5 +1,7 @@
 {
   "title": "小应用",
+  "titleLoading": "小应用",
+  "defaultName": "小应用",
   "subtitle": "即时生成的小应用，打开就能用，也能继续迭代。",
   "searchPlaceholder": "搜索小应用...",
   "importFromFolder": "从文件夹导入",

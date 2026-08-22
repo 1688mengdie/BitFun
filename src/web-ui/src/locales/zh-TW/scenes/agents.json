@@ -497,6 +497,80 @@
       "l5": "L5",
       "l6": "L6",
       "l7": "L7"
+    },
+    "patterns": {
+      "sparc-dev": {
+        "name": "SPARC 開發",
+        "description": "五階段 SPARC 開發管線：規格 → 偽代碼 → 架構 → 細化 → 完成"
+      },
+      "cicd-pipeline": {
+        "name": "CI/CD 流水線",
+        "description": "Lint → 單元測試 → 建置 → 整合測試 → 安全稽核 → 部署 → 驗證"
+      },
+      "fan-out-converge": {
+        "name": "扇出匯聚",
+        "description": "派發 → 並行研究（N 隻蜜蜂）→ 綜合 → 最終審核"
+      },
+      "triad-minimal": {
+        "name": "三蜜蜂極簡",
+        "description": "提示蜜蜂 → 執行蜜蜂 → 審核蜜蜂。原子執行單元。"
+      },
+      "state-machine": {
+        "name": "狀態機",
+        "description": "帶條件分支與升級的多狀態流程。"
+      },
+      "deep-research": {
+        "name": "深度研究",
+        "description": "六階段研究管線，含並行專家、辯論與仲裁。"
+      },
+      "react-loop": {
+        "name": "ReAct 循環",
+        "description": "思考 → 行動 → 觀察循環，帶停止條件。"
+      },
+      "plan-exec-reflect": {
+        "name": "計劃-執行-反思",
+        "description": "計劃 → 逐步執行 → 草稿 → 反思與批判 → 細化或停止。"
+      },
+      "event-driven": {
+        "name": "事件驅動回應",
+        "description": "偵測 → 分類 → 分診 → 解決 → 復盤。適用於事件與告警。"
+      },
+      "coding-agent": {
+        "name": "編碼智能體",
+        "description": "倉庫檢查 → 範圍化計劃 → 檔案編輯 → 測試與檢查 → 修補與總結。"
+      },
+      "dag-data-pipeline": {
+        "name": "DAG 資料管線",
+        "description": "提取 → 轉換（並行分割）→ 校驗 → 載入 → 報告。"
+      },
+      "pr-code-review": {
+        "name": "PR 程式碼審核",
+        "description": "PR 建立 → Lint → 程式碼審核（最多 3 輪）→ 合併 → 部署。"
+      },
+      "deploy-orchestration": {
+        "name": "部署編排",
+        "description": "配置 → 排程 → 健康檢查 → 滾動更新 → 自癒循環。"
+      },
+      "six-layer-runtime": {
+        "name": "六層智能體執行環境",
+        "description": "意圖派發 → 狀態與記憶 → 執行沙箱 → 工具邊界 → 控制 → 端點。"
+      },
+      "memory-retrieval": {
+        "name": "記憶與檢索",
+        "description": "工作記憶 → 提升/丟棄 → 情景/語義記憶 → 檢索 → 筆記 → 任務上下文。"
+      },
+      "customer-support": {
+        "name": "客戶支援",
+        "description": "分診 → 政策依據 → 草擬 → 護欄 → 人工審核佇列。"
+      },
+      "evaluation-observability": {
+        "name": "評測與可觀測性",
+        "description": "離線評測 → 線上監控 → 結構化追蹤 → 失敗分診。"
+      },
+      "workflow-agent-hybrid": {
+        "name": "工作流-智能體混合",
+        "description": "已知路徑 → 工作流。未知路徑 → 智能體。混合在流程中嵌入智能體節點或反之。"
+      }
     }
   },
   "teamsZone": {
@@ -507,6 +581,38 @@
     "empty": {
       "noTeams": "當前還沒有團隊",
       "noMatch": "沒有匹配的團隊"
+    },
+    "mockTeams": {
+      "agent-team-coding": {
+        "name": "編碼團隊",
+        "description": "程式碼審核、重構與品質保障"
+      },
+      "agent-team-research": {
+        "name": "研究團隊",
+        "description": "資訊收集、資料分析與報告撰寫"
+      },
+      "agent-team-ppt": {
+        "name": "PPT 製作",
+        "description": "內容策劃、視覺設計與文案打磨"
+      }
+    },
+    "templates": {
+      "tpl-coding": {
+        "name": "編碼團隊",
+        "description": "程式碼審核、重構與品質保障"
+      },
+      "tpl-research": {
+        "name": "研究團隊",
+        "description": "資訊收集、資料分析與報告撰寫"
+      },
+      "tpl-ppt": {
+        "name": "PPT 製作",
+        "description": "內容策劃、文案與視覺規劃"
+      },
+      "tpl-fullstack": {
+        "name": "全端團隊",
+        "description": "端到端開發、測試與文件"
+      }
     }
   },
   "composer": {

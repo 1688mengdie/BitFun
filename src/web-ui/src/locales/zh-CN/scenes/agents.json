@@ -497,6 +497,80 @@
       "l5": "L5",
       "l6": "L6",
       "l7": "L7"
+    },
+    "patterns": {
+      "sparc-dev": {
+        "name": "SPARC 开发",
+        "description": "五阶段 SPARC 开发管线：规格 → 伪代码 → 架构 → 细化 → 完成"
+      },
+      "cicd-pipeline": {
+        "name": "CI/CD 流水线",
+        "description": "Lint → 单元测试 → 构建 → 集成测试 → 安全审计 → 部署 → 验证"
+      },
+      "fan-out-converge": {
+        "name": "扇出汇聚",
+        "description": "派发 → 并行研究（N 只蜜蜂）→ 综合 → 最终审核"
+      },
+      "triad-minimal": {
+        "name": "三蜜蜂极简",
+        "description": "提示蜜蜂 → 执行蜜蜂 → 审核蜜蜂。原子执行单元。"
+      },
+      "state-machine": {
+        "name": "状态机",
+        "description": "带条件分支与升级的多状态流程。"
+      },
+      "deep-research": {
+        "name": "深度研究",
+        "description": "六阶段研究管线，含并行专家、辩论与仲裁。"
+      },
+      "react-loop": {
+        "name": "ReAct 循环",
+        "description": "思考 → 行动 → 观察循环，带停止条件。"
+      },
+      "plan-exec-reflect": {
+        "name": "计划-执行-反思",
+        "description": "计划 → 逐步执行 → 草稿 → 反思与批判 → 细化或停止。"
+      },
+      "event-driven": {
+        "name": "事件驱动响应",
+        "description": "检测 → 分类 → 分诊 → 解决 → 复盘。适用于事件与告警。"
+      },
+      "coding-agent": {
+        "name": "编码智能体",
+        "description": "仓库检查 → 范围化计划 → 文件编辑 → 测试与检查 → 补丁与总结。"
+      },
+      "dag-data-pipeline": {
+        "name": "DAG 数据管线",
+        "description": "提取 → 转换（并行分区）→ 校验 → 加载 → 报告。"
+      },
+      "pr-code-review": {
+        "name": "PR 代码审核",
+        "description": "PR 创建 → Lint → 代码审核（最多 3 轮）→ 合并 → 部署。"
+      },
+      "deploy-orchestration": {
+        "name": "部署编排",
+        "description": "配置 → 调度 → 健康检查 → 滚动更新 → 自愈循环。"
+      },
+      "six-layer-runtime": {
+        "name": "六层智能体运行时",
+        "description": "意图分发 → 状态与记忆 → 执行沙箱 → 工具边界 → 控制 → 端点。"
+      },
+      "memory-retrieval": {
+        "name": "记忆与检索",
+        "description": "工作记忆 → 提升/丢弃 → 情景/语义记忆 → 检索 → 笔记 → 任务上下文。"
+      },
+      "customer-support": {
+        "name": "客户支持",
+        "description": "分诊 → 政策依据 → 草拟 → 护栏 → 人工审核队列。"
+      },
+      "evaluation-observability": {
+        "name": "评测与可观测性",
+        "description": "离线评测 → 在线监控 → 结构化追踪 → 失败分诊。"
+      },
+      "workflow-agent-hybrid": {
+        "name": "工作流-智能体混合",
+        "description": "已知路径 → 工作流。未知路径 → 智能体。混合在流程中嵌入智能体节点或反之。"
+      }
     }
   },
   "teamsZone": {
@@ -507,6 +581,38 @@
     "empty": {
       "noTeams": "当前还没有团队",
       "noMatch": "没有匹配的团队"
+    },
+    "mockTeams": {
+      "agent-team-coding": {
+        "name": "编码团队",
+        "description": "代码审核、重构与质量保障"
+      },
+      "agent-team-research": {
+        "name": "研究团队",
+        "description": "信息收集、数据分析与报告撰写"
+      },
+      "agent-team-ppt": {
+        "name": "PPT 制作",
+        "description": "内容策划、视觉设计与文案打磨"
+      }
+    },
+    "templates": {
+      "tpl-coding": {
+        "name": "编码团队",
+        "description": "代码审核、重构与质量保障"
+      },
+      "tpl-research": {
+        "name": "研究团队",
+        "description": "信息收集、数据分析与报告撰写"
+      },
+      "tpl-ppt": {
+        "name": "PPT 制作",
+        "description": "内容策划、文案与视觉规划"
+      },
+      "tpl-fullstack": {
+        "name": "全栈团队",
+        "description": "端到端开发、测试与文档"
+      }
     }
   },
   "composer": {

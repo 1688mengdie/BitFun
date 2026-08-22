@@ -154,7 +154,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
           <ArrowLeft size={18} />
         </IconButton>
         <h1 className="create-agent-page__title">
-          {selectedPattern ? selectedPattern.name : t('legionPattern.choosePattern')}
+          {selectedPattern ? t(`legionPattern.patterns.${selectedPattern.id}.name`, { defaultValue: selectedPattern.name }) : t('legionPattern.choosePattern')}
         </h1>
       </div>
 
@@ -201,7 +201,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
               <span className="legion-pattern-chip__icon" data-bf-component="create-legion-page" data-bf-part="patternChipIcon">
                 <Network size={16} />
               </span>
-              <span className="legion-pattern-chip__name">{pattern.name}</span>
+              <span className="legion-pattern-chip__name">{t(`legionPattern.patterns.${pattern.id}.name`, { defaultValue: pattern.name })}</span>
             </div>
           ))}
         </div>
@@ -218,7 +218,7 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
             data-bf-part="summary"
           >
             <h2 className="create-agent-page__section-title">{t('legionPattern.overview')}</h2>
-            <p className="legion-summary-desc">{selectedPattern.description}</p>
+            <p className="legion-summary-desc">{t(`legionPattern.patterns.${selectedPattern.id}.description`, { defaultValue: selectedPattern.description })}</p>
             <div className="legion-summary-meta">
               <span>{t('legionPattern.complexity', { level: selectedPattern.complexityLevel })}</span>
               <span>{t('legionPattern.nodesCount', { count: selectedPattern.nodes.length })}</span>

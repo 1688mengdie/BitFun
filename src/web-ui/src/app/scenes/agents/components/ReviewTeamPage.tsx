@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { i18nService } from '@/infrastructure/i18n';
 import { Badge, Button, ConfigPageLoading } from '@/component-library';
 import {
   ConfigPageContent,
@@ -105,7 +106,7 @@ class ReviewTeamErrorBoundary extends Component<ReviewTeamErrorBoundaryProps, Re
     return (
       <ConfigPageLayout className="review-team-page">
         <ConfigPageContent>
-          <ConfigPageSection title="Code Review Team" description={this.state.error?.message ?? 'Unknown error'}>
+          <ConfigPageSection title={i18nService.t('common:reviewTeamErrorTitle')} description={this.state.error?.message ?? i18nService.t('errors:boundary.unknown')}>
             <pre className="review-team-page__error-detail">
               {import.meta.env.DEV ? this.state.error?.stack : null}
             </pre>

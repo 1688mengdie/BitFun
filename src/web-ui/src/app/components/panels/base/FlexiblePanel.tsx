@@ -827,14 +827,14 @@ const FlexiblePanel: React.FC<ExtendedFlexiblePanelProps> = memo(({
 
       case 'review-platform':
         return (
-          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">Loading pull requests...</div>}>
+          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">{t('flexiblePanel.loading.pullRequests')}</div>}>
             <ReviewPlatformPanel workspacePath={content.data?.workspacePath || workspacePath} />
           </React.Suspense>
         );
 
       case 'review-platform-pr-detail':
         return (
-          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">Loading pull request...</div>}>
+          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">{t('flexiblePanel.loading.pullRequest')}</div>}>
             <ReviewPlatformPanel
               workspacePath={content.data?.workspacePath || workspacePath}
               initialRemoteId={content.data?.remoteId}
@@ -857,7 +857,7 @@ const FlexiblePanel: React.FC<ExtendedFlexiblePanelProps> = memo(({
 
       case 'generative-widget':
         return (
-          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">Loading widget preview...</div>}>
+          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">{t('flexiblePanel.loading.widgetPreview')}</div>}>
             <GenerativeWidgetPanel
               title={content.title}
               widgetId={content.data?.widgetId}
@@ -938,7 +938,7 @@ const FlexiblePanel: React.FC<ExtendedFlexiblePanelProps> = memo(({
 
       case 'bitfun-canvas':
         return (
-          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">Loading Canvas preview...</div>}>
+          <React.Suspense fallback={<div className="bitfun-flexible-panel__loading" data-bf-component="flexible-panel" data-bf-part="loading" data-bf-state="loading">{t('flexiblePanel.loading.canvasPreview')}</div>}>
             <BitfunCanvasPanel
               title={content.title}
               artifactReference={content.data?.artifactReference}

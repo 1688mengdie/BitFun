@@ -627,7 +627,11 @@
       "taskDetail": "Loading task detail...",
       "dependencyGraph": "Loading dependency graph...",
       "planViewer": "Loading plan...",
-      "terminal": "Loading terminal..."
+      "terminal": "Loading terminal...",
+      "pullRequests": "Loading pull requests...",
+      "pullRequest": "Loading pull request...",
+      "widgetPreview": "Loading widget preview...",
+      "canvasPreview": "Loading Canvas preview..."
     },
     "aiSession": {
       "title": "AI Session: {{sessionId}}",
