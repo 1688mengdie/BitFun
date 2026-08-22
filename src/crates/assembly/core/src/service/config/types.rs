@@ -2945,6 +2945,9 @@ pub(crate) async fn configured_output_tokens_ratio_percent() -> u32 {
 /// Resolve the configured insight-analysis thresholds
 /// (`ai.thresholds.insights.*`), falling back to the legacy hard-coded
 /// constants when the config service is unavailable (R-THR-01 批2 2-2).
+// TODO(R-THR-01): insights 域尚未接线主流程（collector/service 无外部调用），
+// 保持函数供接线时使用；接线后删除本 allow。
+#[allow(dead_code)]
 pub(crate) async fn configured_insights_thresholds() -> InsightsThresholds {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return InsightsThresholds::default();
@@ -2959,6 +2962,7 @@ pub(crate) async fn configured_insights_thresholds() -> InsightsThresholds {
 /// Resolve the configured AskUserQuestion header max chars
 /// (`ai.thresholds.user_questions.header_max_chars`), falling back to the
 /// legacy hard-coded 20 when unset or invalid (R-THR-01 批2 2-1).
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_user_questions_header_max_chars() -> usize {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return default_user_questions_header_max_chars();
@@ -2980,6 +2984,7 @@ pub(crate) async fn configured_user_questions_header_max_chars() -> usize {
 /// (`ai.thresholds.session_control.short_name_max_chars`), falling back to the
 /// legacy `SHORT_NAME_MAX_CHARS = 60` when unset or invalid
 /// (R-THR-01 批2 2-8；60 过 / 61 拒边界由校验函数保持）。
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_session_control_short_name_max_chars() -> usize {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return default_session_control_short_name_max_chars();
@@ -3001,6 +3006,7 @@ pub(crate) async fn configured_session_control_short_name_max_chars() -> usize {
 /// (`ai.thresholds.file_read.max_total_chars`), falling back to the legacy
 /// `DEFAULT_READ_MAX_TOTAL_CHARS = 64_000` when unset or invalid
 /// (R-THR-01 批2 2-10；勿混 tool_output_cap.read_chars = 72_000）。
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_file_read_max_total_chars() -> usize {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return default_file_read_max_total_chars();
@@ -3021,6 +3027,7 @@ pub(crate) async fn configured_file_read_max_total_chars() -> usize {
 /// Resolve the configured session-title user-message truncation cap
 /// (`ai.thresholds.session_title.truncate_user_message_chars`), falling back
 /// to the legacy hard-coded 200 when unset or invalid (R-THR-01 批2 2-11).
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_session_title_truncate_user_message_chars() -> usize {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return default_session_title_truncate_user_message_chars();
@@ -3043,6 +3050,7 @@ pub(crate) async fn configured_session_title_truncate_user_message_chars() -> us
 /// falling back to the legacy
 /// `SESSION_REFERENCE_TRANSCRIPT_CHAR_LIMIT = 60_000` when unset or invalid
 /// (R-THR-01 批2 2-12).
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_persistence_session_reference_transcript_char_limit() -> usize {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return default_persistence_session_reference_transcript_char_limit();
@@ -3067,6 +3075,7 @@ pub(crate) async fn configured_persistence_session_reference_transcript_char_lim
 /// `browser_condition_timeout_ms`), falling back to the legacy
 /// `MAX_WAIT_MS = 3_600_000` / `DEFAULT_CONDITION_TIMEOUT_MS = 15_000` when
 /// unset or invalid (R-THR-01 批2 2-9).
+#[allow(dead_code)] // TODO(R-THR-01): 接线后删除
 pub(crate) async fn configured_browser_timeouts() -> (u64, u64) {
     let Ok(config_service) = crate::service::config::get_global_config_service().await else {
         return (
