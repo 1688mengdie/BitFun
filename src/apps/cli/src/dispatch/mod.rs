@@ -1220,6 +1220,9 @@ mod tests {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
+        // SAFETY: pre_exec runs in the child after fork; the closure only
+        // calls setsid() and inspects its return value, touching no shared
+        // memory, so it is safe in the fork context.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {

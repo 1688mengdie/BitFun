@@ -161,6 +161,9 @@ fn configure_detached_process(command: &mut Command) {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        // SAFETY: pre_exec runs in the child after fork; the closure only
+        // calls setsid() and inspects its return value, touching no shared
+        // memory, so it is safe in the fork context.
         unsafe {
             command.pre_exec(|| {
                 if libc::setsid() == -1 {

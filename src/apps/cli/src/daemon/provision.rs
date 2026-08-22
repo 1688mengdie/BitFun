@@ -168,7 +168,14 @@ fn ensure_private_request_file(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if metadata.mode() & 0o077 != 0 || metadata.uid() != unsafe { libc::geteuid() } {
+        if metadata.mode() & 0o077 != 0
+            || metadata.uid()
+                != unsafe {
+                    // SAFETY: geteuid() is a plain libc query with no preconditions
+                    // and no side effects; the returned uid is compared immediately.
+                    libc::geteuid()
+                }
+        {
             return Err(anyhow!(
                 "daemon provisioning request must be owned by the current user with mode 0600"
             ));

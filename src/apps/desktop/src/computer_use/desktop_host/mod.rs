@@ -593,7 +593,7 @@ impl DesktopComputerUseHost {
         }
         #[cfg(target_os = "linux")]
         {
-            return Self::session_snapshot_linux();
+            Self::session_snapshot_linux()
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {

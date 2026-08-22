@@ -1206,14 +1206,13 @@ fn validate_entrypoint_pair(primary: &Path, legacy: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn validate_plugin_host_resources(directory: &Path) -> Result<()> {
-    for entry in ["extension-host.js"] {
-        let path = directory.join(entry);
-        if !path.is_file() {
-            return Err(anyhow!(
-                "CLI package is missing plugin Host resource {}",
-                path.display()
-            ));
-        }
+    let entry = "extension-host.js";
+    let path = directory.join(entry);
+    if !path.is_file() {
+        return Err(anyhow!(
+            "CLI package is missing plugin Host resource {}",
+            path.display()
+        ));
     }
     Ok(())
 }
@@ -1226,10 +1225,9 @@ fn copy_plugin_host_resources(source: &Path, destination: &Path) -> Result<()> {
             destination.display()
         )
     })?;
-    for entry in ["extension-host.js"] {
-        fs::copy(source.join(entry), destination.join(entry))
-            .with_context(|| format!("stage plugin Host resource {entry}"))?;
-    }
+    let entry = "extension-host.js";
+    fs::copy(source.join(entry), destination.join(entry))
+        .with_context(|| format!("stage plugin Host resource {entry}"))?;
     Ok(())
 }
 

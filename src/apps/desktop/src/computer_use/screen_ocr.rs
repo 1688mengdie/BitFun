@@ -791,6 +791,7 @@ mod linux_backend {
         Ok(ranked)
     }
 
+    #[allow(clippy::too_many_arguments)] // tesseract word + viewport geometry, kept flat for clarity
     fn tesseract_word_to_match(
         shot: &ComputerScreenshot,
         text_query: &str,

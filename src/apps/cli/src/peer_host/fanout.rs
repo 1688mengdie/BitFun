@@ -611,7 +611,7 @@ pub(crate) async fn fanout_peer_device_event(event: String, payload: serde_json:
         tracing::warn!(
             "Peer event delivery queue closed before accepting command event; using direct delivery"
         );
-        fanout_peer_device_event_once(queued).await;
+        fanout_peer_device_event_once(*queued).await;
     }
 }
 
@@ -627,7 +627,7 @@ fn enqueue_inherited_peer_device_event(
                     tracing::warn!(
                         "Peer event delivery queue closed while draining inherited routing event"
                     );
-                    fanout_peer_device_event_once(queued).await;
+                    fanout_peer_device_event_once(*queued).await;
                 }
             });
         }
@@ -645,8 +645,8 @@ fn enqueue_inherited_peer_device_event(
 async fn enqueue_peer_device_event(
     sender: &mpsc::Sender<QueuedPeerDeviceEvent>,
     queued: QueuedPeerDeviceEvent,
-) -> Result<(), QueuedPeerDeviceEvent> {
-    sender.send(queued).await.map_err(|error| error.0)
+) -> Result<(), Box<QueuedPeerDeviceEvent>> {
+    sender.send(queued).await.map_err(|error| Box::new(error.0))
 }
 
 async fn fanout_peer_device_event_once(queued: QueuedPeerDeviceEvent) {

@@ -171,6 +171,9 @@ fn detect_terminal_appearance(timeout: Duration) -> Option<Appearance> {
         use std::os::fd::AsRawFd;
 
         let fd = std::io::stdin().as_raw_fd();
+        // SAFETY: fd is a valid open stdin descriptor and the fcntl calls
+        // only query/set file status flags on it; F_GETFL/F_SETFL on a tty
+        // are always safe with a valid fd.
         unsafe {
             let flags = libc::fcntl(fd, libc::F_GETFL);
             if flags < 0 {
