@@ -34,6 +34,23 @@ where
     builder
 }
 
+/// CodeBuddy fingerprint headers owned exclusively by
+/// `codebuddy_fingerprint_headers` (providers/openai/chat.rs). That layer
+/// reads configured values via `configured_header` and enforces fixed
+/// semantics (e.g. `X-Private-Data` is always "false" per 主人定标 — model
+/// optimization must stay off, never configurable). Re-applying these keys
+/// from `custom_headers` here would produce duplicate header values because
+/// reqwest's `header()` appends instead of replaces.
+///
+/// `X-API-Key` is deliberately NOT reserved: other channels (e.g. Qoder)
+/// rely on `custom_headers` to inject their own `X-API-Key`.
+const CODEBUDDY_FINGERPRINT_RESERVED_HEADERS: &[&str] = &[
+    "X-Private-Data",
+    "X-IDE-Version",
+    "X-Product-Version",
+    "X-Agent-Purpose",
+];
+
 pub(crate) fn apply_custom_headers(
     client: &AIClient,
     mut builder: RequestBuilder,
@@ -41,6 +58,9 @@ pub(crate) fn apply_custom_headers(
     if let Some(custom_headers) = &client.config.custom_headers {
         if !custom_headers.is_empty() {
             for (key, value) in custom_headers {
+                if CODEBUDDY_FINGERPRINT_RESERVED_HEADERS.contains(&key.as_str()) {
+                    continue;
+                }
                 builder = builder.header(key.as_str(), value.as_str());
             }
         }
@@ -439,8 +459,71 @@ pub(crate) fn collect_function_declaration_names_or_object_keys(
 
 #[cfg(test)]
 mod tests {
-    use super::should_log_full_request_body;
     use super::summarize_request_body_for_log;
+    use super::{apply_custom_headers, should_log_full_request_body};
+    use crate::client::AIClient;
+    use crate::types::AIConfig;
+
+    #[test]
+    fn custom_headers_never_override_codebuddy_fingerprint_headers() {
+        // P2-1 regression: X-Private-Data is always "false" (主人定标 — model
+        // optimization must stay off) and must not be overridden by
+        // custom_headers. The fingerprint layer owns X-Private-Data,
+        // X-IDE-Version, X-Product-Version and X-Agent-Purpose exclusively;
+        // custom_headers entries for these keys must be dropped so reqwest's
+        // append semantics cannot produce duplicate values.
+        let config = AIConfig {
+            name: "shared-test".to_string(),
+            base_url: "https://copilot.tencent.com/v1".to_string(),
+            request_url: "https://copilot.tencent.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
+            format: "openai".to_string(),
+            context_window: 128000,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: Some(
+                [
+                    ("X-Private-Data".to_string(), "true".to_string()),
+                    ("X-IDE-Version".to_string(), "9.9.9".to_string()),
+                    ("X-Agent-Purpose".to_string(), "person_agent".to_string()),
+                    ("X-Custom-Other".to_string(), "kept".to_string()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            custom_headers_mode: Some("merge".to_string()),
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        };
+        let client = AIClient::new(config);
+
+        let request = apply_custom_headers(&client, client.client.post("https://example.com/v1"))
+            .build()
+            .expect("request should build");
+        let headers = request.headers();
+
+        // Fingerprint-reserved keys are dropped entirely.
+        for reserved in [
+            "X-Private-Data",
+            "X-IDE-Version",
+            "X-Product-Version",
+            "X-Agent-Purpose",
+        ] {
+            assert!(
+                headers.get(reserved).is_none(),
+                "custom_headers must not emit reserved fingerprint header {reserved}"
+            );
+        }
+        // Unrelated custom headers still pass through.
+        assert_eq!(
+            headers.get("X-Custom-Other").and_then(|v| v.to_str().ok()),
+            Some("kept")
+        );
+    }
 
     #[test]
     fn request_body_log_summary_keeps_shape_without_message_contents() {

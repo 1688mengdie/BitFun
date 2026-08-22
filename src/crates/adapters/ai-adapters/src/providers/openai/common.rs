@@ -36,6 +36,16 @@ pub(crate) fn apply_headers(client: &AIClient, builder: RequestBuilder) -> Reque
             builder = builder.header("X-Verification-Code", "from_bitfun");
         }
 
+        // CodeBuddy's Tencent gateway accepts `X-API-Key` as a fingerprint
+        // header whose value equals the configured api_key (same value as the
+        // Authorization Bearer token). It is only emitted for the codebuddy
+        // domain so other OpenAI-compatible providers stay untouched. The
+        // value always comes from the runtime config (`client.config.api_key`
+        // loaded from app.json) — never hard-coded.
+        if is_codebuddy_url(&client.config.base_url) {
+            builder = builder.header("X-API-Key", client.config.api_key.clone());
+        }
+
         builder
     })
 }

@@ -171,10 +171,16 @@ fn generate_hex32() -> String {
 ///   value only when the turn-level ID is unavailable.
 /// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-Product`/`X-IDE-*`/
 ///   `X-Product-Version`/`X-Requested-With`: official client fingerprint.
+/// - `X-Private-Data`: model-optimization switch, always `"false"` (主人定标:
+///   enableModelOptimization 必须关, never configurable).
+/// - `X-IDE-Version`/`X-Product-Version`: default to the official CodeBuddy
+///   CLI version 2.137.1; a configured `custom_headers` value overrides it so
+///   the version follows the channel (CLI vs Workbuddy vs desktop).
 ///
 /// Request-unique IDs (`X-Request-ID`/`X-Conversation-Message-ID`) are
 /// appended by the caller so this function stays deterministic for tests.
 fn codebuddy_fingerprint_headers(
+    client: &AIClient,
     request_context: Option<&ModelRequestContext>,
 ) -> Vec<(&'static str, String)> {
     let mut headers: Vec<(&'static str, String)> = Vec::new();
@@ -192,17 +198,42 @@ fn codebuddy_fingerprint_headers(
         headers.push(("X-Conversation-Request-ID", generate_hex32()));
     }
     headers.push(("X-Agent-Intent", "craft".to_string()));
-    headers.push(("X-Agent-Purpose", "conversation".to_string()));
+    // Official semantics: `X-Agent-Purpose` is only injected for
+    // `person_agent` purpose; ordinary requests omit it. BitFun has no
+    // person_agent mode, so the header is emitted only when explicitly
+    // configured via `custom_headers`.
+    if let Some(purpose) = configured_header(client, "X-Agent-Purpose") {
+        headers.push(("X-Agent-Purpose", purpose));
+    }
     headers.push(("X-Product", "SaaS".to_string()));
     // Official CLI client info (codebuddy.js module 33387 + clientInfoProvider):
     // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType/ideName
     // both fall back to platform; version = CLI package version 2.137.1.
     headers.push(("X-IDE-Type", "CLI".to_string()));
     headers.push(("X-IDE-Name", "CLI".to_string()));
-    headers.push(("X-IDE-Version", "2.137.1".to_string()));
-    headers.push(("X-Product-Version", "2.137.1".to_string()));
+    // Version follows the channel: default to the official CodeBuddy CLI
+    // version, overridable per model entry via `custom_headers` (e.g.
+    // Workbuddy 2.115.0 or a desktop version).
+    let ide_version =
+        configured_header(client, "X-IDE-Version").unwrap_or_else(|| "2.137.1".to_string());
+    headers.push(("X-IDE-Version", ide_version.clone()));
+    headers.push(("X-Product-Version", ide_version));
+    // Model-optimization switch: 主人定标 enableModelOptimization 必须关,
+    // always send "false" — never configurable, never "true".
+    headers.push(("X-Private-Data", "false".to_string()));
     headers.push(("X-Requested-With", "XMLHttpRequest".to_string()));
     headers
+}
+
+/// Reads a CodeBuddy fingerprint header override from the model entry's
+/// `custom_headers` (app.json `ai.models[].custom_headers`), so fingerprint
+/// values stay runtime-configurable and never hard-coded.
+fn configured_header(client: &AIClient, name: &str) -> Option<String> {
+    client
+        .config
+        .custom_headers
+        .as_ref()
+        .and_then(|headers| headers.get(name).cloned())
 }
 
 pub(crate) async fn send_stream(
@@ -258,7 +289,8 @@ pub(crate) async fn send_stream(
         move || {
             let mut builder = common::apply_headers(client, client.client.post(&header_url));
             if header_url.contains("copilot.tencent.com") {
-                for (name, value) in codebuddy_fingerprint_headers(request_context.as_ref()) {
+                for (name, value) in codebuddy_fingerprint_headers(client, request_context.as_ref())
+                {
                     builder = builder.header(name, value);
                 }
                 let req_id = generate_hex32();
@@ -358,6 +390,7 @@ async fn send_qoder_signed_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::AIConfig;
 
     #[test]
     fn generate_hex32_produces_32_char_hex() {
@@ -391,11 +424,33 @@ mod tests {
         }
     }
 
+    fn test_client() -> AIClient {
+        AIClient::new(AIConfig {
+            name: "codebuddy-test".to_string(),
+            base_url: "https://copilot.tencent.com/v1".to_string(),
+            request_url: "https://copilot.tencent.com/v1/chat/completions".to_string(),
+            api_key: "test-key".to_string(),
+            model: "deepseek-v4-flash".to_string(),
+            format: "openai".to_string(),
+            context_window: 128000,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            inline_think_in_text: false,
+            custom_headers: None,
+            custom_headers_mode: None,
+            skip_ssl_verify: false,
+            custom_request_body: None,
+            custom_request_body_mode: None,
+        })
+    }
+
     #[test]
     fn codebuddy_fingerprint_headers_conversation_request_id_is_turn_stable() {
+        let client = test_client();
         let ctx = ctx_with_ids();
-        let first = codebuddy_fingerprint_headers(Some(&ctx));
-        let second = codebuddy_fingerprint_headers(Some(&ctx));
+        let first = codebuddy_fingerprint_headers(&client, Some(&ctx));
+        let second = codebuddy_fingerprint_headers(&client, Some(&ctx));
         let get = |headers: &[(&'static str, String)], name: &str| {
             headers
                 .iter()
@@ -417,7 +472,7 @@ mod tests {
         assert_ne!(
             get(&first, "X-Conversation-Request-ID"),
             get(
-                &codebuddy_fingerprint_headers(Some(&other)),
+                &codebuddy_fingerprint_headers(&client, Some(&other)),
                 "X-Conversation-Request-ID"
             )
         );
@@ -425,18 +480,19 @@ mod tests {
 
     #[test]
     fn codebuddy_fingerprint_headers_includes_full_official_set() {
-        let headers = codebuddy_fingerprint_headers(Some(&ctx_with_ids()));
+        let client = test_client();
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
         let names: Vec<&str> = headers.iter().map(|(n, _)| *n).collect();
         for expected in [
             "X-Conversation-ID",
             "X-Conversation-Request-ID",
             "X-Agent-Intent",
-            "X-Agent-Purpose",
             "X-Product",
             "X-IDE-Type",
             "X-IDE-Name",
             "X-IDE-Version",
             "X-Product-Version",
+            "X-Private-Data",
             "X-Requested-With",
         ] {
             assert!(
@@ -453,7 +509,12 @@ mod tests {
         };
         assert_eq!(get("X-Conversation-ID"), "sess-abc");
         assert_eq!(get("X-Agent-Intent"), "craft");
-        assert_eq!(get("X-Agent-Purpose"), "conversation");
+        // X-Agent-Purpose is a conditional header: not emitted for ordinary
+        // requests, only when explicitly configured via custom_headers.
+        assert!(
+            !names.contains(&"X-Agent-Purpose"),
+            "X-Agent-Purpose must be omitted by default"
+        );
         assert_eq!(get("X-Product"), "SaaS");
         assert_eq!(get("X-IDE-Type"), "CLI");
         assert_eq!(get("X-IDE-Name"), "CLI");
@@ -461,6 +522,8 @@ mod tests {
         // @tencent-ai/codebuddy-code 2.137.1), NOT BitFun's own version.
         assert_eq!(get("X-IDE-Version"), "2.137.1");
         assert_eq!(get("X-Product-Version"), "2.137.1");
+        // Model-optimization switch defaults to "false" (official default).
+        assert_eq!(get("X-Private-Data"), "false");
         assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
         // No duplicate header names.
         let mut sorted = names.clone();
@@ -471,8 +534,57 @@ mod tests {
     }
 
     #[test]
+    fn codebuddy_fingerprint_headers_custom_headers_override_fingerprint_values() {
+        let mut client = test_client();
+        client.config.custom_headers = Some(
+            [
+                ("X-IDE-Version".to_string(), "2.115.0".to_string()),
+                ("X-Product-Version".to_string(), "2.115.0".to_string()),
+                ("X-Agent-Purpose".to_string(), "person_agent".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        // Channel-scoped version override (Workbuddy) wins over the CLI default.
+        assert_eq!(get("X-IDE-Version"), "2.115.0");
+        assert_eq!(get("X-Product-Version"), "2.115.0");
+        // X-Agent-Purpose is injected only when configured.
+        assert_eq!(get("X-Agent-Purpose"), "person_agent");
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_private_data_is_always_false() {
+        // 主人定标: enableModelOptimization 必须关 — X-Private-Data is always
+        // "false" and must ignore any custom_headers override.
+        let mut client = test_client();
+        client.config.custom_headers = Some(
+            [("X-Private-Data".to_string(), "true".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        assert_eq!(get("X-Private-Data"), "false");
+    }
+
+    #[test]
     fn codebuddy_fingerprint_headers_falls_back_when_context_missing() {
-        let headers = codebuddy_fingerprint_headers(None);
+        let client = test_client();
+        let headers = codebuddy_fingerprint_headers(&client, None);
         let get = |name: &str| {
             headers
                 .iter()

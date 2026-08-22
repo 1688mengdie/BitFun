@@ -2397,6 +2397,46 @@ mod tests {
         assert_eq!(request.timeout(), None);
     }
 
+    #[test]
+    fn openai_apply_headers_emits_x_api_key_only_for_codebuddy_domain() {
+        // CodeBuddy domain: X-API-Key = configured api_key (same value as the
+        // Authorization Bearer token), sourced from runtime config only.
+        let mut codebuddy_client = make_test_client("openai", None);
+        codebuddy_client.config.base_url = "https://copilot.tencent.com/v1".to_string();
+        let request = openai::common::apply_headers(
+            &codebuddy_client,
+            codebuddy_client
+                .client
+                .post("https://copilot.tencent.com/v1/chat/completions"),
+        )
+        .build()
+        .expect("request should build");
+        let headers = request.headers();
+        assert_eq!(
+            headers.get("X-API-Key").and_then(|v| v.to_str().ok()),
+            Some("test-key")
+        );
+        assert_eq!(
+            headers.get("Authorization").and_then(|v| v.to_str().ok()),
+            Some("Bearer test-key")
+        );
+
+        // Non-codebuddy domains stay untouched (no X-API-Key fingerprint).
+        let plain_client = make_test_client("openai", None);
+        let request = openai::common::apply_headers(
+            &plain_client,
+            plain_client
+                .client
+                .post("https://api.openai.com/v1/chat/completions"),
+        )
+        .build()
+        .expect("request should build");
+        assert!(
+            request.headers().get("X-API-Key").is_none(),
+            "X-API-Key must not be emitted for non-codebuddy domains"
+        );
+    }
+
     #[tokio::test]
     async fn aggregated_send_message_retries_every_stream_error() {
         let attempts = Arc::new(AtomicUsize::new(0));
