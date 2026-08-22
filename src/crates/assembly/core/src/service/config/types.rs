@@ -1626,6 +1626,9 @@ pub struct KnowledgeSearchThresholds {
     /// Hard cap for `max_results`. Legacy `MAX_RESULTS_CAP = 200`.
     #[serde(default = "default_knowledge_search_max_results_cap")]
     pub max_results_cap: usize,
+    /// Max number of files scanned in one call. Legacy `MAX_SCANNED_FILES = 100_000`.
+    #[serde(default = "default_knowledge_search_max_scanned_files")]
+    pub max_scanned_files: usize,
 }
 
 impl Default for KnowledgeSearchThresholds {
@@ -1635,6 +1638,7 @@ impl Default for KnowledgeSearchThresholds {
             max_scan_depth: default_knowledge_search_max_depth(),
             default_max_results: default_knowledge_search_default_max_results(),
             max_results_cap: default_knowledge_search_max_results_cap(),
+            max_scanned_files: default_knowledge_search_max_scanned_files(),
         }
     }
 }
@@ -1653,6 +1657,10 @@ fn default_knowledge_search_default_max_results() -> usize {
 
 fn default_knowledge_search_max_results_cap() -> usize {
     200
+}
+
+fn default_knowledge_search_max_scanned_files() -> usize {
+    100_000
 }
 
 /// External ACP client timeouts (`ai.thresholds.acp_timeout.*`, seconds).

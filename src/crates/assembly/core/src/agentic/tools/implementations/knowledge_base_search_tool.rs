@@ -75,6 +75,7 @@ struct ResolvedKnowledgeSearchThresholds {
     max_scan_depth: usize,
     default_max_results: usize,
     max_results_cap: usize,
+    max_scanned_files: usize,
 }
 
 /// Load the configured knowledge-search thresholds, falling back to the legacy
@@ -86,6 +87,7 @@ async fn resolved_knowledge_search_thresholds() -> ResolvedKnowledgeSearchThresh
             max_scan_depth: MAX_SCAN_DEPTH,
             default_max_results: DEFAULT_MAX_RESULTS,
             max_results_cap: MAX_RESULTS_CAP,
+            max_scanned_files: MAX_SCANNED_FILES,
         };
     };
     let Ok(thresholds) = config_service
@@ -97,6 +99,7 @@ async fn resolved_knowledge_search_thresholds() -> ResolvedKnowledgeSearchThresh
             max_scan_depth: MAX_SCAN_DEPTH,
             default_max_results: DEFAULT_MAX_RESULTS,
             max_results_cap: MAX_RESULTS_CAP,
+            max_scanned_files: MAX_SCANNED_FILES,
         };
     };
     let ks = &thresholds.knowledge_search;
@@ -105,6 +108,7 @@ async fn resolved_knowledge_search_thresholds() -> ResolvedKnowledgeSearchThresh
         max_scan_depth: ks.max_scan_depth.max(1),
         default_max_results: ks.default_max_results.max(1),
         max_results_cap: ks.max_results_cap.max(ks.default_max_results.max(1)),
+        max_scanned_files: ks.max_scanned_files.max(1),
     }
 }
 
@@ -208,11 +212,12 @@ fn search_dir(
     depth: usize,
     max_scan_depth: usize,
     max_scan_file_bytes: u64,
+    max_scanned_files: usize,
 ) {
     if results.len() >= max_results {
         return;
     }
-    if depth > max_scan_depth || stats.scanned_files >= MAX_SCANNED_FILES {
+    if depth > max_scan_depth || stats.scanned_files >= max_scanned_files {
         stats.file_cap_reached = true;
         return;
     }
@@ -231,7 +236,7 @@ fn search_dir(
         if results.len() >= max_results {
             break;
         }
-        if stats.scanned_files >= MAX_SCANNED_FILES {
+        if stats.scanned_files >= max_scanned_files {
             stats.file_cap_reached = true;
             break;
         }
@@ -266,6 +271,7 @@ fn search_dir(
                 depth + 1,
                 max_scan_depth,
                 max_scan_file_bytes,
+                max_scanned_files,
             );
         } else if file_type.is_file() {
             scan_file(
@@ -275,6 +281,7 @@ fn search_dir(
                 results,
                 stats,
                 max_scan_file_bytes,
+                max_scanned_files,
             );
         }
         // Special files are skipped.
@@ -289,11 +296,12 @@ fn scan_file(
     results: &mut Vec<Value>,
     stats: &mut ScanStats,
     max_scan_file_bytes: u64,
+    max_scanned_files: usize,
 ) {
     if results.len() >= max_results {
         return;
     }
-    if stats.scanned_files >= MAX_SCANNED_FILES {
+    if stats.scanned_files >= max_scanned_files {
         stats.file_cap_reached = true;
         return;
     }
@@ -532,9 +540,10 @@ Examples:
         }
 
         let keyword_lower = keyword.to_lowercase();
-        // 阈值参数配置化：ai.thresholds.knowledge_search.max_scan_depth / max_scan_file_bytes
+        // 阈值参数配置化：ai.thresholds.knowledge_search.max_scan_depth / max_scan_file_bytes / max_scanned_files
         let scan_depth = search_thresholds.max_scan_depth.max(1);
         let scan_file_bytes = search_thresholds.max_scan_file_bytes.max(1);
+        let scanned_files_cap = search_thresholds.max_scanned_files.max(1);
         // The recursive scan is CPU/IO-bound and unbounded in the worst case
         // (the whole knowledge base). Run it on the blocking pool so a large
         // scan never stalls the async executor, and return the capped
@@ -551,6 +560,7 @@ Examples:
                 0,
                 scan_depth,
                 scan_file_bytes,
+                scanned_files_cap,
             );
             (results, stats)
         })
@@ -749,6 +759,7 @@ mod tests {
                 0,
                 MAX_SCAN_DEPTH,
                 MAX_SCAN_FILE_SIZE,
+                MAX_SCANNED_FILES,
             );
             assert!(
                 results
@@ -784,6 +795,7 @@ mod tests {
             0,
             MAX_SCAN_DEPTH,
             MAX_SCAN_FILE_SIZE,
+            MAX_SCANNED_FILES,
         );
         assert!(stats.file_cap_reached);
         assert!(
