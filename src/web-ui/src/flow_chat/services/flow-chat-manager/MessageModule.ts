@@ -410,6 +410,24 @@ export async function sendMessage(
       return;
     }
 
+    if ((error as any)?.isSessionBusy === true) {
+      // The session was revived busy (e.g. by a background command) after the
+      // drain gate confirmed IDLE. Do NOT surface a "Thinking process error"
+      // toast or mark the queued message failed; drop the optimistic turn and
+      // re-throw so the drain path re-queues the message until the next IDLE.
+      if (turnTracker.createdLocalTurnId && !options?.preserveTurnOnStartError) {
+        const state = context.flowChatStore.getState();
+        const currentSession = state.sessions.get(sessionId);
+        if (currentSession) {
+          context.flowChatStore.deleteDialogTurn(sessionId, turnTracker.createdLocalTurnId);
+        }
+      }
+      if (latestSendBySession.get(sendCoordinationKey) === sendAttempt) {
+        latestSendBySession.delete(sendCoordinationKey);
+      }
+      throw error;
+    }
+
     log.error('Failed to send message', { sessionId: sessionId, error });
 
     const errorMessage = error instanceof Error ? error.message : 'Failed to send message';
@@ -607,6 +625,18 @@ export async function drainPendingQueue(
     // reset of the retry counter, and FIFO order is preserved).
     pendingQueueManager.remove(sessionId, next.id);
   } catch (error) {
+    // Fallback (R-WF-25 removal): if the session was revived busy after the
+    // gate confirmed IDLE, re-queue the message and wait silently instead of
+    // marking it failed (which surfaces a "Thinking process error" toast and
+    // forces the user to manually retry). Auto-drain re-applies once IDLE.
+    if ((error as any)?.isSessionBusy === true) {
+      log.debug('Pending queue item re-queued: session revived busy', {
+        sessionId,
+        itemId: next.id,
+      });
+      pendingQueueManager.setStatus(sessionId, next.id, 'queued');
+      return;
+    }
     log.error('Failed to drain pending queue item', { sessionId, itemId: next.id, error });
     // Mark in place. The auto-drain listener skips `failed` items so the user
     // can edit / send-now / delete without entering a tight retry loop.

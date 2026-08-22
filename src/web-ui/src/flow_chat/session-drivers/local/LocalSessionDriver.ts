@@ -369,7 +369,16 @@ export const localSessionDriver: SessionDriver = {
     surfaceScope.assertCurrent('start session state machine');
     if (!startOk) {
       const currentState = stateMachineManager.getCurrentState(sessionId);
-      throw new Error(`Session is still busy finishing the previous turn (current state: ${currentState})`);
+      // Fallback (R-WF-25 removal): the state machine is not IDLE (e.g. it was
+      // revived to PROCESSING by a background command while the pending queue
+      // drained). Throwing "still busy" surfaces a `Thinking process error`
+      // toast and marks the queued message failed. Instead tag the error so the
+      // caller re-queues the message silently and drains it once IDLE again.
+      const error = new Error(
+        `Session is still busy finishing the previous turn (current state: ${currentState})`,
+      );
+      (error as any).isSessionBusy = true;
+      throw error;
     }
 
     context.processingManager.registerStatus({

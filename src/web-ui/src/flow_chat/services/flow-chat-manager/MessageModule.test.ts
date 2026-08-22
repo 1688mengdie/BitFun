@@ -1144,3 +1144,74 @@ describe('MessageModule device surface switch', () => {
     expect(mockNotificationError).toHaveBeenCalled();
   });
 });
+
+describe('MessageModule queued-drain resurrect fallback (R-WF-25 removal)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    interruptedTurnRecoveryGate.resetForTests();
+    resetRuntimeStatuses();
+    mockPendingList.mockReturnValue([]);
+    mockGetCurrentState.mockReturnValue('idle');
+  });
+
+  it('re-queues a drained message silently when the session is revived non-IDLE', async () => {
+    // drain gate passes on IDLE, but the state machine is resurrected busily by
+    // the time startTurn runs: transition(START) returns false.
+    mockGetCurrentState
+      .mockReturnValueOnce('idle')
+      .mockReturnValue('processing');
+    mockTransition.mockResolvedValue(false);
+    const pendingItem = {
+      id: 'pending-resurrect',
+      sessionId: 'session-resurrect',
+      content: 'run it',
+      status: 'queued',
+      retryCount: 0,
+    };
+    mockPendingList.mockReturnValue([pendingItem]);
+    const session: any = {
+      sessionId: 'session-resurrect',
+      sessionKind: 'normal',
+      mode: 'agentic',
+      titleStatus: 'generated',
+      dialogTurns: [],
+      config: { modelName: 'auto' },
+      maxContextTokens: 32_000,
+    };
+    const context: any = {
+      flowChatStore: {
+        getSurfaceGeneration: () => 0,
+        getState: () => ({ sessions: new Map([[session.sessionId, session]]) }),
+        addDialogTurn: vi.fn((_s: string, turn: any) => session.dialogTurns.push(turn)),
+        deleteDialogTurn: vi.fn(),
+        updateSessionLastSubmittedMode: vi.fn(),
+        updateSessionMode: vi.fn(),
+      },
+      processingManager: {
+        registerStatus: vi.fn(),
+        clearSessionStatus: vi.fn(),
+      },
+      userCancelledSessionIds: new Set<string>(),
+      pendingHistoryLoads: new Map(),
+      contentBuffers: new Map(),
+      activeTextItems: new Map(),
+    };
+
+    await drainPendingQueue(context, session.sessionId);
+
+    // Silent re-queue, not failed, and no error surfaced.
+    expect(mockPendingSetStatus).toHaveBeenCalledWith(
+      session.sessionId,
+      pendingItem.id,
+      'queued',
+    );
+    expect(mockPendingSetStatus).not.toHaveBeenCalledWith(
+      session.sessionId,
+      pendingItem.id,
+      'failed',
+    );
+    expect(mockNotificationError).not.toHaveBeenCalled();
+    // The message must stay queued for the next idle drain; never removed.
+    expect(mockPendingRemove).not.toHaveBeenCalled();
+  });
+});

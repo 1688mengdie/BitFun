@@ -19,10 +19,6 @@ import { SessionExecutionState, SessionExecutionEvent, StateTransitionTable, Pro
 export const STATE_TRANSITIONS: StateTransitionTable = {
   [SessionExecutionState.IDLE]: {
     [SessionExecutionEvent.START]: SessionExecutionState.PROCESSING,
-    // R-WF-25: a background command reported alive after the turn completed
-    // (DialogTurnCompleted already settled the state machine) revives the
-    // running projection until the command exits.
-    [SessionExecutionEvent.BACKGROUND_COMMAND_RUNNING]: SessionExecutionState.PROCESSING,
   },
   
   [SessionExecutionState.PROCESSING]: {
@@ -32,10 +28,6 @@ export const STATE_TRANSITIONS: StateTransitionTable = {
     [SessionExecutionEvent.ERROR_OCCURRED]: SessionExecutionState.ERROR,
     
     [SessionExecutionEvent.BACKEND_STREAM_COMPLETED]: SessionExecutionState.FINISHING,
-    
-    // R-WF-25: re-affirms PROCESSING while a background command stays alive
-    // (DialogTurnCompleted may arrive while the machine is still PROCESSING).
-    [SessionExecutionEvent.BACKGROUND_COMMAND_RUNNING]: SessionExecutionState.PROCESSING,
     
     [SessionExecutionEvent.COMPACTION_STARTED]: SessionExecutionState.PROCESSING,
     [SessionExecutionEvent.MODEL_ROUND_START]: SessionExecutionState.PROCESSING,
@@ -53,8 +45,6 @@ export const STATE_TRANSITIONS: StateTransitionTable = {
     [SessionExecutionEvent.USER_CANCEL_FAILED]: SessionExecutionState.PROCESSING,
     [SessionExecutionEvent.ERROR_OCCURRED]: SessionExecutionState.ERROR,
     [SessionExecutionEvent.FINISHING_SETTLED]: SessionExecutionState.IDLE,
-    // R-WF-25: keep the running projection while a background command is alive.
-    [SessionExecutionEvent.BACKGROUND_COMMAND_RUNNING]: SessionExecutionState.PROCESSING,
     [SessionExecutionEvent.COMPACTION_STARTED]: SessionExecutionState.FINISHING,
     [SessionExecutionEvent.MODEL_ROUND_START]: SessionExecutionState.FINISHING,
     [SessionExecutionEvent.TEXT_CHUNK_RECEIVED]: SessionExecutionState.FINISHING,
@@ -89,7 +79,6 @@ export const PHASE_TRANSITIONS: Record<SessionExecutionEvent, ProcessingPhase | 
   [SessionExecutionEvent.TOOL_REJECTED]: null,
   [SessionExecutionEvent.BACKEND_STREAM_COMPLETED]: ProcessingPhase.FINALIZING,
   [SessionExecutionEvent.FINISHING_SETTLED]: null,
-  [SessionExecutionEvent.BACKGROUND_COMMAND_RUNNING]: ProcessingPhase.TOOL_CALLING,
   [SessionExecutionEvent.USER_CANCEL]: null,
   [SessionExecutionEvent.USER_CANCEL_FAILED]: null,
   [SessionExecutionEvent.ERROR_OCCURRED]: null,
