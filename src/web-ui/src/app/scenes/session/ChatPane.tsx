@@ -14,6 +14,7 @@ import type { LineRange } from '@/component-library';
 import path from 'path-browserify';
 import { createLogger } from '@/shared/utils/logger';
 import { hasNonFileUriScheme } from '@/shared/utils/pathUtils';
+import { useChatFullWidth } from '@/app/hooks/useApp';
 
 import './ChatPane.scss';
 
@@ -50,6 +51,7 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
   chatInputRegistration,
 }) => {
   const addTab = useCanvasStore(state => state.addTab);
+  const chatFullWidth = useChatFullWidth();
   const deferredTaskDetailTimersRef = useRef<number[]>([]);
   const deferredTaskDetailIdleCallbacksRef = useRef<number[]>([]);
 
@@ -151,7 +153,7 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
 
   return (
     <div data-bf-component="chat-pane" data-bf-part="root"
-      className="bitfun-chat-pane__content"
+      className={`bitfun-chat-pane__content${chatFullWidth ? ' bitfun-chat-pane__content--chat-full-width' : ''}`}
       data-shortcut-scope="chat"
       data-fullscreen={isFullscreen}
       data-testid="chat-pane"
@@ -178,6 +180,7 @@ const ChatPaneInner: React.FC<ChatPaneProps> = ({
           isSceneActive={isSceneActive}
           onSendMessage={(_message: string) => {}}
           registration={chatInputRegistration}
+          className={chatFullWidth ? 'bitfun-chat-input--chat-full-width' : ''}
         />
       )}
     </div>

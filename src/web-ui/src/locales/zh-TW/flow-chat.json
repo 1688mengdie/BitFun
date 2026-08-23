@@ -75,6 +75,10 @@
       "comfortable": "舒適",
       "expanded": "展開"
     },
+    "fullWidth": {
+      "enter": "全寬平鋪對話",
+      "exit": "退出全寬平鋪"
+    },
     "resizer": {
       "leftAriaLabel": "調整左側面板大小",
       "centerAriaLabel": "調整面板大小",

@@ -6,7 +6,7 @@
   /* Same column box as .model-round-item so the collapse header (`>`) and the
    * round's body text share one leading edge. */
   box-sizing: border-box;
-  width: min(100%, 900px);
+  width: min(100%, var(--bf-appearance-token-flowchat-content-max-width));
   margin: 0 auto;
   padding: 0 var(--bf-appearance-token-flowchat-content-inline-pad);
 

@@ -57,6 +57,15 @@ vi.mock('@/shared/utils/tabUtils', () => ({
   createReviewPlatformTab: vi.fn(),
 }));
 
+const { mockToggleChatFullWidth } = vi.hoisted(() => ({
+  mockToggleChatFullWidth: vi.fn(),
+}));
+
+vi.mock('@/app/hooks/useApp', () => ({
+  useApp: () => ({ toggleChatFullWidth: mockToggleChatFullWidth }),
+  useChatFullWidth: () => false,
+}));
+
 vi.mock('./SessionFilesBadge', () => ({
   SessionFilesBadge: () => <div data-testid="session-files-badge" />,
 }));
@@ -143,6 +152,22 @@ describe('FlowChatHeader', () => {
     expect(container.querySelector('[data-testid="flowchat-header-turn-list"]')).toBeNull();
     expect(container.querySelector('[data-testid="flowchat-header-turn-prev"]')).toBeNull();
     expect(container.querySelector('[data-testid="flowchat-header-turn-next"]')).toBeNull();
+  });
+
+  it('renders a full-width toggle that flips the chat layout', () => {
+    mockToggleChatFullWidth.mockClear();
+
+    act(() => {
+      root.render(<FlowChatHeader {...createProps()} />);
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="session-fullwidth-toggle"]');
+    expect(toggle).not.toBeNull();
+
+    act(() => {
+      toggle?.click();
+    });
+    expect(mockToggleChatFullWidth).toHaveBeenCalledTimes(1);
   });
 
   it('places the Agent tree entry immediately before background commands', () => {

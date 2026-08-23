@@ -3,7 +3,7 @@
  * Provides unified app state management and actions.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import {
   UseAppReturn,
   AppState,
@@ -56,11 +56,19 @@ export const useApp = (): UseAppReturn => {
     const nextChatCollapsed = !state.layout.chatCollapsed;
     appManager.updateLayout({
       chatCollapsed: nextChatCollapsed,
+      // Collapsing the chat pane exits full-width tiled chat so the layout
+      // resets to its centered column state.
+      chatFullWidth: nextChatCollapsed ? false : state.layout.chatFullWidth,
       // Keep behavior aligned with editor-mode layout:
       // when chat is hidden, ensure the right panel is visible to occupy center space.
       rightPanelCollapsed: nextChatCollapsed ? false : state.layout.rightPanelCollapsed
     });
-  }, [state.layout.chatCollapsed, state.layout.rightPanelCollapsed]);
+  }, [state.layout.chatCollapsed, state.layout.rightPanelCollapsed, state.layout.chatFullWidth]);
+
+  const toggleChatFullWidth = useCallback(() => {
+    const next = !state.layout.chatFullWidth;
+    appManager.updateLayout({ chatFullWidth: next });
+  }, [state.layout.chatFullWidth]);
 
   const switchLeftPanelTab = useCallback((tab: PanelType) => {
     appManager.updateLayout({
@@ -222,6 +230,7 @@ export const useApp = (): UseAppReturn => {
     toggleRightPanel,
     toggleBottomTerminalPanel,
     toggleChatPanel,
+    toggleChatFullWidth,
     switchLeftPanelTab,
     updateLeftPanelWidth,
     updateCenterPanelWidth,
@@ -289,4 +298,15 @@ export const useTabs = () => {
     closeTab,
     selectTab
   };
+};
+
+// Fine-grained read-only subscription to the chat full-width flag. Uses
+// `useSyncExternalStore` so only components observing this flag re-render when
+// it flips, instead of re-rendering on any app state change.
+export const useChatFullWidth = (): boolean => {
+  return useSyncExternalStore(
+    (callback) => appManager.addEventListener(callback),
+    () => appManager.getState().layout.chatFullWidth,
+    () => false, // SSR / non-browser snapshot
+  );
 };

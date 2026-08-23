@@ -10,7 +10,7 @@
    * groups, user messages, notices). Matches ChatInput's 900px so headers,
    * `>` collapse rows, and bubbles all sit on the same leading edge.
    */
-  max-width: 900px;
+  max-width: var(--bf-appearance-token-flowchat-content-max-width);
   margin: 0 auto;
   box-sizing: border-box;
   min-height: 1px;

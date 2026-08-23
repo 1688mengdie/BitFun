@@ -6,7 +6,7 @@
 
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronDown, ChevronUp, GitPullRequest, Keyboard, MoreHorizontal, Search, Square, SquareTerminal, Terminal, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, GitPullRequest, Keyboard, Maximize2, Minimize2, MoreHorizontal, Search, Square, SquareTerminal, Terminal, X } from 'lucide-react';
 import { Tooltip, IconButton, Input } from '@/component-library';
 import { useTranslation } from 'react-i18next';
 import { SessionFilesBadge } from './SessionFilesBadge';
@@ -16,6 +16,7 @@ import { getAppearanceOverlayHost } from '@/infrastructure/appearance';
 import { computeFixedPopoverPosition } from '@/shared/utils/fixedPopoverViewport';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
 import { createReviewPlatformTab } from '@/shared/utils/tabUtils';
+import { useApp, useChatFullWidth } from '@/app/hooks/useApp';
 import './FlowChatHeader.scss';
 
 export interface FlowChatHeaderCommandSummary {
@@ -102,6 +103,8 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   onStopAllBackgroundCommands,
 }) => {
   const { t } = useTranslation('flow-chat');
+  const { toggleChatFullWidth } = useApp();
+  const isChatFullWidth = useChatFullWidth();
   const { currentWorkspace } = useWorkspaceContext();
   const [isBackgroundCommandPanelOpen, setIsBackgroundCommandPanelOpen] = useState(false);
   const [isBackgroundCommandSectionMenuOpen, setIsBackgroundCommandSectionMenuOpen] = useState(false);
@@ -769,6 +772,18 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
             <Search size={14} />
           </IconButton>
         )}
+
+        <IconButton
+          className="flowchat-header__fullwidth-btn"
+          variant="ghost"
+          size="xs"
+          onClick={() => toggleChatFullWidth()}
+          tooltip={t(isChatFullWidth ? 'layout.fullWidth.exit' : 'layout.fullWidth.enter')}
+          aria-label={t(isChatFullWidth ? 'layout.fullWidth.exit' : 'layout.fullWidth.enter')}
+          data-testid="session-fullwidth-toggle"
+        >
+          {isChatFullWidth ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+        </IconButton>
       </div>
     </div>
   );

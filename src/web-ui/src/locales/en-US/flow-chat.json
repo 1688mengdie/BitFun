@@ -75,6 +75,10 @@
       "comfortable": "Comfortable",
       "expanded": "Expanded"
     },
+    "fullWidth": {
+      "enter": "Tile chat full width",
+      "exit": "Exit full-width tiled chat"
+    },
     "resizer": {
       "leftAriaLabel": "Resize left panel",
       "centerAriaLabel": "Resize panel",

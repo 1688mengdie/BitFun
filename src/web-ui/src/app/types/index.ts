@@ -41,6 +41,7 @@ export interface LayoutState {
   centerPanelWidth: number;
   centerPanelCollapsed: boolean;
   chatCollapsed: boolean;
+  chatFullWidth: boolean;
   rightPanelWidth: number; // Fixed right panel width
   rightPanelCollapsed: boolean;
   bottomTerminalPanelHeight: number;
@@ -191,6 +192,7 @@ export interface UseAppReturn {
   toggleRightPanel: () => void;
   toggleBottomTerminalPanel: () => void;
   toggleChatPanel: () => void;
+  toggleChatFullWidth: () => void;
   switchLeftPanelTab: (tab: PanelType) => void;
   updateLeftPanelWidth: (width: number, options?: { persist?: boolean }) => void;
   updateCenterPanelWidth: (width: number) => void;
@@ -231,6 +233,7 @@ export const DEFAULT_LAYOUT_STATE: LayoutState = {
     : 960,
   centerPanelCollapsed: false,
   chatCollapsed: false,
+  chatFullWidth: false,
   rightPanelWidth: typeof window !== 'undefined'
     ? Math.max(540, Math.min(800, Math.floor(window.innerWidth * 0.35))) // Right 35%, min 540px (for config-tabs), max 800px
     : 540,
