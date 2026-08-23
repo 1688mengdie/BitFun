@@ -16,7 +16,7 @@ import { getAppearanceOverlayHost } from '@/infrastructure/appearance';
 import { computeFixedPopoverPosition } from '@/shared/utils/fixedPopoverViewport';
 import { useAnchoredPopoverPosition } from '@/shared/utils/useAnchoredPopoverPosition';
 import { createReviewPlatformTab } from '@/shared/utils/tabUtils';
-import { useApp, useChatFullWidth } from '@/app/hooks/useApp';
+import { useChatFullWidth, useToggleChatFullWidth } from '@/app/hooks/useApp';
 import './FlowChatHeader.scss';
 
 export interface FlowChatHeaderCommandSummary {
@@ -103,7 +103,7 @@ export const FlowChatHeader: React.FC<FlowChatHeaderProps> = ({
   onStopAllBackgroundCommands,
 }) => {
   const { t } = useTranslation('flow-chat');
-  const { toggleChatFullWidth } = useApp();
+  const toggleChatFullWidth = useToggleChatFullWidth();
   const isChatFullWidth = useChatFullWidth();
   const { currentWorkspace } = useWorkspaceContext();
   const [isBackgroundCommandPanelOpen, setIsBackgroundCommandPanelOpen] = useState(false);

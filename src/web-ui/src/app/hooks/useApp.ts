@@ -310,3 +310,14 @@ export const useChatFullWidth = (): boolean => {
     () => false, // SSR / non-browser snapshot
   );
 };
+
+// Fine-grained action to toggle the chat full-width flag without subscribing to
+// the whole app store. Reads the current value straight from the manager rather
+// than a subscribed snapshot, so components that only need this action re-render
+// only when they observe the flag via `useChatFullWidth`, never on arbitrary app
+// state changes.
+export const useToggleChatFullWidth = (): (() => void) => {
+  return useCallback(() => {
+    appManager.updateLayout({ chatFullWidth: !appManager.getState().layout.chatFullWidth });
+  }, []);
+};

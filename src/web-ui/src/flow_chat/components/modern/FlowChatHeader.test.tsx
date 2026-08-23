@@ -62,7 +62,7 @@ const { mockToggleChatFullWidth } = vi.hoisted(() => ({
 }));
 
 vi.mock('@/app/hooks/useApp', () => ({
-  useApp: () => ({ toggleChatFullWidth: mockToggleChatFullWidth }),
+  useToggleChatFullWidth: () => mockToggleChatFullWidth,
   useChatFullWidth: () => false,
 }));
 
