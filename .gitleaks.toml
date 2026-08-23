@@ -1,0 +1,34 @@
+title = "taiji gitleaks config"
+
+# 加载 gitleaks 内置全部规则（保留真实凭据检测能力）
+[extend]
+useDefault = true
+
+# 全局 allowlist：经人工核实（2026-08-23，gitleaks v8.30.1）的伪阳性
+# ①构建产物 target/（libpem/libpkcs1/libpkcs8/librussh_keys 的 .rmeta 命中 =
+#    编译缓存噪声，非 git 内容，不应被扫描）
+# ②generic-api-key 规则对"代码字段名 / 哈希校验值 / 协议头"的误报——
+#    命中文本均为代码标识符或非凭据值，非真实密钥（逐一人工核实 file:行号）
+[allowlist]
+description = "taiji verified false positives (code field names / hashes / protocol headers / build artifacts)"
+paths = [
+  '''target/''',
+  # docs 内 minisign 公开签名公钥（Public key: RWR2o8Bsvn...）非机密
+  '''docs/verify-downloads.md''',
+]
+regexTarget = "match"
+regexes = [
+  '''repo_key''',
+  '''decisionKey''',
+  '''savingKey''',
+  '''sharedSecret''',
+  '''mobileWebSharedSecret''',
+  '''master_key''',
+  '''SHADOW_KEY''',
+  '''Sec-WebSocket-Key''',
+  '''api_sha256"''',
+  # swatinem/rust-cache@v2 的缓存 key 输入参数名（值 = 缓存命名，非凭据）
+  '''shared-key:''',
+  # 契约测试 DEBUG 数据占位符（gitleaks match 从 token 起，无前导引号）
+  '''token": "0123456789abcdef"''',
+]

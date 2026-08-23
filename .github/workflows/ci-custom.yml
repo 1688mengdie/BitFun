@@ -127,3 +127,28 @@ jobs:
             exit 1
           fi
           echo "All shell and deploy assets are LF-only."
+
+  # ── gitleaks 门禁化（S-9 敏感/安全：全仓敏感扫描，发现真实凭据即 exit 非 0 失败）──
+  # 去伪凭据 = .gitleaks.toml（经人工核实 2026-08-23 的伪阳性：代码字段名/哈希/公钥/测试占位）
+  # 不用 gitleaks-action（org 账户需 GITLEAKS_LICENSE + GITHUB_TOKEN 评论依赖）；
+  # 直接下载 pin v8.30.1 二进制跑 detect，门禁化 = 发现凭据 exit 非 0 失败。
+  gitleaks-secret-scan:
+    name: Gitleaks Secret Scan (门禁化)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download gitleaks (pinned v8.30.1)
+        run: |
+          set -euo pipefail
+          GL_VERSION="8.30.1"
+          curl -sfL "https://github.com/gitleaks/gitleaks/releases/download/v${GL_VERSION}/gitleaks_${GL_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp
+
+      - name: Gitleaks detect (发现真实凭据即失败)
+        run: |
+          set -euo pipefail
+          /tmp/gitleaks detect --source . --config .gitleaks.toml --redact --no-banner
