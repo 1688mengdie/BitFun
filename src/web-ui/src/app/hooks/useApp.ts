@@ -90,10 +90,12 @@ export const useApp = (): UseAppReturn => {
   }, []);
 
   const updateRightPanelWidth = useCallback((width: number) => {
-    // Clamp width: 200px min, 1200px max
+    // Clamp to the right-panel compact minimum. There is no fixed MAX_WIDTH cap:
+    // the drag path bounds the width to the dynamic upper bound
+    // (container - resizer - MIN_CENTER_WIDTH) via calculateValidRightWidth, so a
+    // wider manual width survives and the chat pane keeps its one-page minimum.
     const MIN_WIDTH = 200;
-    const MAX_WIDTH = 1200;
-    const clampedWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, width));
+    const clampedWidth = Math.max(MIN_WIDTH, width);
     
     appManager.updateLayout({
       rightPanelWidth: clampedWidth

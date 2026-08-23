@@ -91,6 +91,12 @@ const SessionScene: React.FC<SessionSceneProps> = ({
   const currentBottomHeight = state.layout.bottomTerminalPanelHeight || BOTTOM_TERMINAL_PANEL_CONFIG.COMFORTABLE_DEFAULT;
   const isTerminalDockedBottom = terminalPanelPosition === 'bottom';
   const isDragging = isDraggingRight || isDraggingBottom;
+  // Dynamic right-panel resize max: the right panel may extend past the classic
+  // 1200px cap up to (container - resizer - min chat width). Falls back to the
+  // MAX_WIDTH constant before the container is measured.
+  const rightPanelResizeMax = containerRef.current
+    ? Math.max(RIGHT_PANEL_CONFIG.COMPACT_WIDTH, containerRef.current.offsetWidth - PANEL_COMMON_CONFIG.RESIZER_WIDTH - PANEL_COMMON_CONFIG.MIN_CENTER_WIDTH)
+    : RIGHT_PANEL_CONFIG.MAX_WIDTH;
 
   const stopRightPanelTransition = useCallback(() => {
     if (rightPanelTransitionTimerRef.current !== null) {
@@ -159,11 +165,12 @@ const SessionScene: React.FC<SessionSceneProps> = ({
     // When the container hasn't been laid out yet (e.g. window just restored from
     // minimize), offsetWidth may be 0. Bail early to avoid clamping to a tiny value.
     if (containerWidth <= 0) return newWidth;
-    // NavPanel (240px) is outside SessionScene — only account for resizer + min chat width
+    // NavPanel (240px) is outside SessionScene — only account for resizer + min chat width.
+    // Pure dynamic upper bound (no MAX_WIDTH hard cap): the right panel stretches until
+    // the chat pane reaches its one-page minimum (MIN_CENTER_WIDTH).
     const reserved = PANEL_COMMON_CONFIG.RESIZER_WIDTH + PANEL_COMMON_CONFIG.MIN_CENTER_WIDTH;
     const dynamicMax = containerWidth - reserved;
-    const maxWidth = Math.min(RIGHT_PANEL_CONFIG.MAX_WIDTH, dynamicMax);
-    return Math.min(maxWidth, Math.max(RIGHT_PANEL_CONFIG.COMPACT_WIDTH, newWidth));
+    return Math.min(dynamicMax, Math.max(RIGHT_PANEL_CONFIG.COMPACT_WIDTH, newWidth));
   }, []);
 
   const calculateValidBottomHeight = useCallback((newHeight: number): number => {
@@ -204,7 +211,11 @@ const SessionScene: React.FC<SessionSceneProps> = ({
     if (!containerRef.current) return;
 
     const startX = e.clientX;
-    const startWidth = currentRightWidth;
+    // Start from the DOM's real width, not the (possibly stale) state value: the
+    // previous drag wrote the width directly to the DOM, so the state can lag
+    // behind a width pulled past the classic cap. Reading the DOM keeps the next
+    // drag starting from the actual position (no "bounce back").
+    const startWidth = auxPaneElementRef.current?.offsetWidth ?? currentRightWidth;
     let lastValidWidth = startWidth;
 
     setIsDraggingRight(true);
@@ -236,6 +247,8 @@ const SessionScene: React.FC<SessionSceneProps> = ({
       if (snapped !== lastValidWidth) {
         saveAndUpdateRightWidth(snapped);
       } else {
+        // updateRightPanelWidth has no fixed cap — the effective limit is the
+        // dynamic bound from calculateValidRightWidth, so the wider width survives.
         updateRightPanelWidth(lastValidWidth);
         setLastRightWidth(lastValidWidth);
         savePanelWidth(STORAGE_KEYS.RIGHT_PANEL_LAST_WIDTH, lastValidWidth);
@@ -376,14 +389,17 @@ const SessionScene: React.FC<SessionSceneProps> = ({
       if (nowVisible && !prevVisibleRef.current) {
         const saved = loadPanelWidth(STORAGE_KEYS.RIGHT_PANEL_LAST_WIDTH, currentRightWidth);
         if (saved !== currentRightWidth && !state.layout.rightPanelCollapsed) {
-          updateRightPanelWidth(saved);
+          // Clamp to the dynamic upper bound so a width widened past 1200px on a
+          // larger window does not squash the chat pane below its one-page minimum
+          // after the window shrank (P2-1).
+          updateRightPanelWidth(calculateValidRightWidth(saved));
         }
       }
       prevVisibleRef.current = nowVisible;
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [currentRightWidth, updateRightPanelWidth, state.layout.rightPanelCollapsed]);
+  }, [currentRightWidth, calculateValidRightWidth, updateRightPanelWidth, state.layout.rightPanelCollapsed]);
 
   // Cleanup animation frames
   useEffect(() => () => {
@@ -553,7 +569,7 @@ const SessionScene: React.FC<SessionSceneProps> = ({
             aria-label={t('layout.resizer.rightAriaLabel')}
             aria-valuenow={currentRightWidth}
             aria-valuemin={RIGHT_PANEL_CONFIG.COMPACT_WIDTH}
-            aria-valuemax={RIGHT_PANEL_CONFIG.MAX_WIDTH}
+            aria-valuemax={rightPanelResizeMax}
             title={t('layout.resizer.title', { mode: panelModeLabels[rightPanelMode] })}
             data-testid="session-right-pane-resizer"
           >

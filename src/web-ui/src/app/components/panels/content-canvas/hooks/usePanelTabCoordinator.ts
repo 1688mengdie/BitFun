@@ -12,7 +12,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useCanvasStore } from '../stores';
 import { useApp } from '@/app/hooks/useApp';
 import { TAB_EVENTS } from '../types';
-import { loadPanelWidth, STORAGE_KEYS, RIGHT_PANEL_CONFIG } from '@/app/layout/panelConfig';
+import { loadPanelWidth, STORAGE_KEYS, RIGHT_PANEL_CONFIG, PANEL_COMMON_CONFIG } from '@/app/layout/panelConfig';
 interface UsePanelTabCoordinatorOptions {
   /** Auto-collapse when all tabs are closed */
   autoCollapseOnEmpty?: boolean;
@@ -88,7 +88,15 @@ export const usePanelTabCoordinator = (options: UsePanelTabCoordinatorOptions = 
     if (rightPanelCollapsedRef.current && toggleRightPanelRef.current && updateRightPanelWidth) {
       // Restore last width if available, otherwise use default
       const lastWidth = loadPanelWidth(STORAGE_KEYS.RIGHT_PANEL_LAST_WIDTH, RIGHT_PANEL_CONFIG.COMFORTABLE_DEFAULT);
-      updateRightPanelWidth(lastWidth);
+      // Clamp to the dynamic upper bound (session-scene container - resizer - min chat)
+      // so a width widened past 1200px on a larger window does not squash the chat pane
+      // below its one-page minimum when the panel expands on a narrower window (P2-1).
+      const sceneEl = document.querySelector<HTMLElement>('[data-bf-part="root"]');
+      const sceneWidth = sceneEl?.offsetWidth ?? 0;
+      const dynamicMax = sceneWidth > 0
+        ? Math.max(RIGHT_PANEL_CONFIG.COMPACT_WIDTH, sceneWidth - PANEL_COMMON_CONFIG.RESIZER_WIDTH - PANEL_COMMON_CONFIG.MIN_CENTER_WIDTH)
+        : RIGHT_PANEL_CONFIG.MAX_WIDTH;
+      updateRightPanelWidth(Math.min(dynamicMax, Math.max(RIGHT_PANEL_CONFIG.COMPACT_WIDTH, lastWidth)));
       
       // Expand immediately without animation (notify WorkspaceLayout)
       window.dispatchEvent(new CustomEvent('expand-right-panel-immediate', { 
