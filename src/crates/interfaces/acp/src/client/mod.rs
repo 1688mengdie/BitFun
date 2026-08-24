@@ -18,7 +18,7 @@ pub use config::{
     RemoteAcpClientRequirementSnapshot,
 };
 pub use manager::{
-    AcpClientPermissionResponse, AcpClientService, AcpSessionConfigValue,
+    AcpClientPermissionResponse, AcpClientPortAdapter, AcpClientService, AcpSessionConfigValue,
     CreateAcpFlowSessionRecordResponse, SetAcpSessionConfigOptionRequest,
     SetAcpSessionModelRequest, SubmitAcpPermissionResponseRequest,
 };

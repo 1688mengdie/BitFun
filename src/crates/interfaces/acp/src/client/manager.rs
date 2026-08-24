@@ -23,8 +23,15 @@ use bitfun_core::agentic::tools::registry::get_global_tool_registry;
 use bitfun_core::infrastructure::events::{emit_global_event, BackendEvent};
 use bitfun_core::infrastructure::PathManager;
 use bitfun_core::service::config::ConfigService;
+use bitfun_core::service::remote_ssh::workspace_state::get_effective_session_path;
 use bitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_manager;
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
+use bitfun_runtime_ports::{
+    acp_backend_error, acp_flow_client_id_from_session_id, AcpClientBitfunMessageRequest,
+    AcpClientCreateRequest, AcpClientCreateResult, AcpClientMessageRequest, AcpClientMessageResult,
+    AcpClientPort, AcpClientStreamChunk, AcpClientStreamChunkSink, PortError, PortErrorKind,
+    PortResult, RuntimeServiceCapability, RuntimeServicePort,
+};
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use futures::io::{AsyncRead as FuturesAsyncRead, AsyncWrite as FuturesAsyncWrite};
@@ -2743,6 +2750,160 @@ fn select_permission_option_id(options: &[PermissionOption], approve: bool) -> S
         })
 }
 
+/// Thin adapter that makes [`AcpClientService`] implement the runtime
+/// [`AcpClientPort`] boundary without violating the orphan rule (the trait and
+/// the service live in different crates). Every method delegates to the
+/// service's native ACP methods; no ACP-domain logic lives here.
+pub struct AcpClientPortAdapter(pub Arc<AcpClientService>);
+
+impl AcpClientPortAdapter {
+    /// Wrap an existing `AcpClientService` Arc so it can be injected as the
+    /// runtime `AcpClientPort`.
+    pub fn new(service: Arc<AcpClientService>) -> Self {
+        Self(service)
+    }
+}
+
+impl RuntimeServicePort for AcpClientPortAdapter {
+    fn capability(&self) -> RuntimeServiceCapability {
+        RuntimeServiceCapability::AcpClient
+    }
+}
+
+#[async_trait::async_trait]
+impl AcpClientPort for AcpClientPortAdapter {
+    async fn create_session(
+        &self,
+        request: AcpClientCreateRequest,
+    ) -> PortResult<AcpClientCreateResult> {
+        let session_storage_path =
+            get_effective_session_path(&request.workspace_path, None, None).await;
+        let response = self
+            .0
+            .create_flow_session_record(
+                &session_storage_path,
+                &request.workspace_path,
+                &request.client_id,
+                request.session_name,
+            )
+            .await
+            .map_err(|error| acp_backend_error(format!("failed to create ACP session: {error}")))?;
+
+        if let Err(error) = self
+            .0
+            .start_client_for_session(
+                &request.client_id,
+                &response.session_id,
+                Some(&request.workspace_path),
+                request.remote_connection_id.as_deref(),
+            )
+            .await
+        {
+            // Roll the persisted record back so a failed process start leaves no
+            // orphan record behind.
+            let _ = self
+                .0
+                .delete_flow_session_record(&session_storage_path, &response.session_id)
+                .await;
+            return Err(acp_backend_error(format!(
+                "failed to start ACP client for session: {error}"
+            )));
+        }
+
+        Ok(AcpClientCreateResult {
+            session_id: response.session_id,
+            session_name: response.session_name,
+            agent_type: response.agent_type,
+        })
+    }
+
+    async fn send_message_stream(
+        &self,
+        request: AcpClientMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult> {
+        let client_id = acp_flow_client_id_from_session_id(&request.session_id).ok_or_else(|| {
+            PortError::new(
+                PortErrorKind::InvalidRequest,
+                format!(
+                    "session_id '{}' is not an ACP flow session id (expected acp_<client_id>_<uuid>)",
+                    request.session_id
+                ),
+            )
+        })?;
+        let mut response = String::new();
+        self.0
+            .prompt_agent_stream(
+                &client_id,
+                request.message,
+                request.workspace_path,
+                None,
+                request.session_id.clone(),
+                None,
+                request.timeout_seconds,
+                |event| forward_acp_stream_event(event, &mut response, &chunk_sink),
+            )
+            .await
+            .map_err(|error| acp_backend_error(format!("ACP agent failed: {error}")))?;
+        Ok(AcpClientMessageResult {
+            session_id: request.session_id,
+            response,
+        })
+    }
+
+    async fn send_message_to_bitfun_session_stream(
+        &self,
+        request: AcpClientBitfunMessageRequest,
+        chunk_sink: AcpClientStreamChunkSink,
+    ) -> PortResult<AcpClientMessageResult> {
+        let mut response = String::new();
+        self.0
+            .prompt_agent_stream(
+                &request.client_id,
+                request.message,
+                request.workspace_path,
+                None,
+                request.bitfun_session_id.clone(),
+                None,
+                request.timeout_seconds,
+                |event| forward_acp_stream_event(event, &mut response, &chunk_sink),
+            )
+            .await
+            .map_err(|error| acp_backend_error(format!("ACP agent failed: {error}")))?;
+        Ok(AcpClientMessageResult {
+            session_id: request.bitfun_session_id,
+            response,
+        })
+    }
+}
+
+/// Translate a native `AcpClientStreamEvent` into the boundary
+/// `AcpClientStreamChunk` sequence pushed into `chunk_sink`, accumulating the
+/// full response text from `AgentText` chunks so the returned result carries it.
+fn forward_acp_stream_event(
+    event: AcpClientStreamEvent,
+    response: &mut String,
+    chunk_sink: &AcpClientStreamChunkSink,
+) -> BitFunResult<()> {
+    match event {
+        AcpClientStreamEvent::AgentText(text) => {
+            response.push_str(&text);
+            let _ = chunk_sink.send(AcpClientStreamChunk::Text { text });
+        }
+        AcpClientStreamEvent::AgentThought(text) => {
+            let _ = chunk_sink.send(AcpClientStreamChunk::Thought { text });
+        }
+        AcpClientStreamEvent::Completed => {
+            let _ = chunk_sink.send(AcpClientStreamChunk::Completed);
+        }
+        AcpClientStreamEvent::Cancelled => {
+            let _ = chunk_sink.send(AcpClientStreamChunk::Cancelled);
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2941,3 +3102,5 @@ mod tests {
         assert!(resolved.enabled);
     }
 }
+
+

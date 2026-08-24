@@ -17,6 +17,7 @@ client = [
     "dep:bitfun-core",
     "bitfun-core/agent-runtime",
     "bitfun-core/ssh-remote",
+    "dep:bitfun-runtime-ports",
 ]
 server = [
     "dep:bitfun-agent-tools",
@@ -51,6 +52,7 @@ bitfun-agent-runtime = { path = "../../execution/agent-runtime", optional = true
 bitfun-agent-tools = { path = "../../execution/tool-contracts", optional = true }
 bitfun-events = { path = "../../contracts/events" }
 bitfun-core-types = { path = "../../contracts/core-types", optional = true }
+bitfun-runtime-ports = { path = "../../contracts/runtime-ports", features = ["acp-client"], optional = true }
 
 agent-client-protocol = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "process", "rt", "sync", "time"] }

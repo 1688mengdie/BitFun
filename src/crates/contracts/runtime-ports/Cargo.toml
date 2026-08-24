@@ -43,6 +43,7 @@ ts-rs = { workspace = true, optional = true }
 
 [features]
 default = []
+acp-client = ["dep:tokio"]
 agent-api = ["dep:bitfun-core-types"]
 plugin-runtime = []
 script-tool-runtime = []

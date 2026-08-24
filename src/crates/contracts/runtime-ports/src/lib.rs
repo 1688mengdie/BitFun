@@ -126,6 +126,7 @@ pub enum RuntimeServiceCapability {
     RemoteWorkspace,
     RemoteProjection,
     RemoteCapabilities,
+    AcpClient,
 }
 
 impl RuntimeServiceCapability {
@@ -146,6 +147,7 @@ impl RuntimeServiceCapability {
             Self::RemoteWorkspace => "remote_workspace",
             Self::RemoteProjection => "remote_projection",
             Self::RemoteCapabilities => "remote_capabilities",
+            Self::AcpClient => "acp_client",
         }
     }
 }
@@ -160,6 +162,8 @@ pub trait RuntimeServicePort: Send + Sync {
     fn capability(&self) -> RuntimeServiceCapability;
 }
 
+#[cfg(feature = "acp-client")]
+mod acp_client_port;
 #[cfg(feature = "agent-api")]
 mod agent_api;
 #[cfg(feature = "git-port")]
@@ -178,6 +182,8 @@ mod tool_runtime_handles;
 #[cfg(feature = "workspace-ports")]
 mod workspace_ports;
 
+#[cfg(feature = "acp-client")]
+pub use acp_client_port::*;
 #[cfg(feature = "agent-api")]
 pub use agent_api::*;
 #[cfg(feature = "git-port")]
