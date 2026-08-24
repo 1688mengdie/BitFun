@@ -5,10 +5,12 @@
 //! messages that may still run later through the scheduler.
 
 use super::util::normalize_path;
+use crate::agentic::agents::get_agent_registry;
 use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler};
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
+use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -24,9 +26,10 @@ use bitfun_agent_runtime::session_control::{
 };
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AgentSessionCreateRequest, AgentSessionDeleteRequest, AgentSessionListRequest,
-    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
-    AgentSubmissionSource, AgentTurnCancellationRequest,
+    AcpClientCreateRequest, AcpClientCreateResult, AcpClientPort, AgentSessionCreateRequest,
+    AgentSessionDeleteRequest, AgentSessionListRequest, AgentSessionSummary,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest, AgentSubmissionSource,
+    AgentTurnCancellationRequest,
 };
 use serde_json::{json, Value};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -35,6 +38,34 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub struct SessionControlTool;
 
 const CANCEL_WAIT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Dynamic agent-type enumeration source shared by `SessionControl` (create) and
+/// `SessionMessage` (send) paths. Reuses the native registry queries
+/// (`get_modes_info` + `get_subagents_info`) instead of adding a fork-specific
+/// registry method, so the value set stays in sync with the agent registry.
+pub(crate) async fn get_available_agent_type_ids_for_creation(
+    context: Option<&ToolUseContext>,
+) -> Vec<String> {
+    let registry = get_agent_registry();
+    let workspace_root = context.and_then(|ctx| ctx.workspace_root());
+    registry.load_custom_agents(workspace_root).await;
+    let mut ids: Vec<String> = registry
+        .get_modes_info()
+        .await
+        .iter()
+        .map(|info| info.id.clone())
+        .collect();
+    ids.extend(
+        registry
+            .get_subagents_info(workspace_root)
+            .await
+            .iter()
+            .map(|info| info.id.clone()),
+    );
+    ids.sort();
+    ids.dedup();
+    ids
+}
 
 #[derive(Debug, Clone)]
 struct SessionControlWorkspaceTarget {
@@ -91,6 +122,32 @@ impl SessionControlTool {
             BitFunError::tool("create requires a creator session in tool context".to_string())
         })?;
         Ok(session_control_creator_marker(creator_session_id))
+    }
+
+    /// ACP real-session creation: create an external ACP flow session through the
+    /// [`AcpClientPort`] (backed by `AcpClientService`). Returns the flow session
+    /// id (`acp_<client>_<uuid>`) and agent type; does not create a local
+    /// internal session, so no createdBy/metadata/lineage is written.
+    async fn create_acp_session_via_port(
+        &self,
+        workspace: &SessionControlWorkspaceTarget,
+        client_id: &str,
+        session_name: Option<String>,
+        port: &dyn AcpClientPort,
+    ) -> BitFunResult<AcpClientCreateResult> {
+        port.create_session(AcpClientCreateRequest {
+            client_id: client_id.to_string(),
+            workspace_path: workspace.display_workspace.clone(),
+            session_name,
+            remote_connection_id: workspace.remote_connection_id.clone(),
+        })
+        .await
+        .map_err(|error| {
+            BitFunError::tool(format!(
+                "ACP client port failed ({:?}): {}",
+                error.kind, error.message
+            ))
+        })
     }
 
     async fn resolve_effective_workspace(
@@ -317,13 +374,28 @@ Arguments:
                 },
                 "agent_type": {
                     "type": "string",
-                    "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
-                    "description": "Optional agent type when creating a session. Defaults to agentic."
+                    "description": "Optional agent type when creating a session. Defaults to \"agentic\". Use \"acp__<client_id>\" to create a real external ACP agent session (the external client process starts immediately)."
                 }
             },
             "required": ["action"],
             "additionalProperties": false
         })
+    }
+
+    async fn input_schema_for_model_with_context(
+        &self,
+        context: Option<&ToolUseContext>,
+    ) -> Value {
+        let agent_type_ids = get_available_agent_type_ids_for_creation(context).await;
+        let agent_type_enum: Vec<&str> = agent_type_ids.iter().map(String::as_str).collect();
+        let mut schema = self.input_schema();
+        if let Some(agent_type) = schema
+            .get_mut("properties")
+            .and_then(|props| props.get_mut("agent_type"))
+        {
+            agent_type["enum"] = json!(agent_type_enum);
+        }
+        schema
     }
 
     fn is_readonly(&self) -> bool {
@@ -382,6 +454,69 @@ Arguments:
                 let session_name =
                     session_control_session_name_or_default(params.session_name.as_deref());
                 let agent_type = session_control_agent_type_or_default(params.agent_type.as_ref());
+
+                // ACP real-session path: an `acp__<client_id>` agent type creates
+                // a true external ACP session through the injected port (backed by
+                // `AcpClientService`), returning the flow session id
+                // `acp_<client>_<uuid>`. No local internal session is created, so
+                // no createdBy/metadata/lineage is written.
+                if let Some(client_id) = agent_type
+                    .as_str()
+                    .strip_prefix(ACP_TOOL_PREFIX)
+                    .filter(|client_id| !client_id.trim().is_empty())
+                {
+                    let port = coordinator.acp_client_port().ok_or_else(|| {
+                        BitFunError::tool(
+                            "ACP client port is not available; the desktop host did not inject it"
+                                .to_string(),
+                        )
+                    })?;
+                    let created = self
+                        .create_acp_session_via_port(
+                            &workspace,
+                            client_id,
+                            params.session_name.clone(),
+                            port.as_ref(),
+                        )
+                        .await?;
+                    let result_for_assistant = session_control_created_result_message(
+                        &created.session_id,
+                        &workspace.display_workspace,
+                        &created.agent_type,
+                    );
+                    return Ok(vec![ToolResult::Result {
+                        data: json!({
+                            "success": true,
+                            "action": "create",
+                            "workspace": workspace.display_workspace.clone(),
+                            "session": {
+                                "session_id": created.session_id,
+                                "session_name": created.session_name,
+                                "agent_type": created.agent_type,
+                            }
+                        }),
+                        result_for_assistant: Some(result_for_assistant),
+                        image_attachments: None,
+                    }]);
+                }
+
+                // Non-ACP path: reject an unregistered agent type before it can
+                // form a zombie session.
+                {
+                    let workspace_path = std::path::Path::new(&workspace.display_workspace);
+                    let registry = get_agent_registry();
+                    registry.load_custom_agents(Some(workspace_path)).await;
+                    if registry
+                        .get_agent(&agent_type, Some(workspace_path))
+                        .is_none()
+                    {
+                        return Err(BitFunError::tool(format!(
+                            "Unknown agent_type '{}' for SessionControl create; agent must be registered in the agent registry",
+                            agent_type
+                        )));
+                    }
+                }
+
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
@@ -824,5 +959,89 @@ mod tests {
         );
 
         assert_eq!(message, "Cancel active turn for session worker_1");
+    }
+
+    // -- ACP create path coverage --
+
+    use bitfun_runtime_ports::{
+        AcpClientCreateRequest, AcpClientCreateResult, AcpClientPort, AcpClientStreamChunkSink,
+    };
+
+    #[derive(Default)]
+    struct FakeAcpClientPort {
+        created: std::sync::Arc<std::sync::Mutex<Vec<AcpClientCreateRequest>>>,
+    }
+
+    impl bitfun_runtime_ports::RuntimeServicePort for FakeAcpClientPort {
+        fn capability(&self) -> bitfun_runtime_ports::RuntimeServiceCapability {
+            bitfun_runtime_ports::RuntimeServiceCapability::AcpClient
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AcpClientPort for FakeAcpClientPort {
+        async fn create_session(
+            &self,
+            request: AcpClientCreateRequest,
+        ) -> bitfun_runtime_ports::PortResult<AcpClientCreateResult> {
+            self.created.lock().unwrap().push(request.clone());
+            Ok(AcpClientCreateResult {
+                session_id: format!(
+                    "acp_{}_{}",
+                    request.client_id, "7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+                ),
+                session_name: request
+                    .session_name
+                    .clone()
+                    .unwrap_or_else(|| "New Session".to_string()),
+                agent_type: format!("acp:{}", request.client_id),
+            })
+        }
+        async fn send_message_stream(
+            &self,
+            _request: bitfun_runtime_ports::AcpClientMessageRequest,
+            _chunk_sink: AcpClientStreamChunkSink,
+        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+            unimplemented!()
+        }
+        async fn send_message_to_bitfun_session_stream(
+            &self,
+            _request: bitfun_runtime_ports::AcpClientBitfunMessageRequest,
+            _chunk_sink: AcpClientStreamChunkSink,
+        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+            unimplemented!()
+        }
+    }
+
+    fn acp_workspace_target() -> SessionControlWorkspaceTarget {
+        SessionControlWorkspaceTarget {
+            display_workspace: "/repo".to_string(),
+            project_workspace: "/repo".to_string(),
+            execution_target: None,
+            workspace_id: None,
+            remote_connection_id: None,
+            remote_ssh_host: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_acp_session_via_port_forwards_client_and_workspace() {
+        let port = std::sync::Arc::new(FakeAcpClientPort::default());
+        let tool = SessionControlTool::new();
+        let created = tool
+            .create_acp_session_via_port(
+                &acp_workspace_target(),
+                "codex",
+                Some("my acp".to_string()),
+                port.as_ref(),
+            )
+            .await
+            .expect("acp create should succeed");
+        assert_eq!(created.session_name, "my acp");
+        assert_eq!(created.agent_type, "acp:codex");
+        let recorded = port.created.lock().unwrap();
+        assert_eq!(recorded[0].client_id, "codex");
+        assert_eq!(recorded[0].workspace_path, "/repo");
+        assert_eq!(recorded[0].session_name.as_deref(), Some("my acp"));
     }
 }

@@ -102,7 +102,7 @@ use bitfun_agent_runtime::user_questions::USER_INPUT_AVAILABLE_CONTEXT_KEY;
 use bitfun_events::{ToolEventData, ToolEventIdentity};
 use bitfun_product_domains::external_sources::EcosystemId;
 use bitfun_runtime_ports::{
-    agent_workspace_references_from_metadata, resolve_permission_mode,
+    agent_workspace_references_from_metadata, resolve_permission_mode, AcpClientPort,
     AgentMessageWorkspaceReferencesRequest, AgentSessionComposerUpdate,
     AgentSessionWorkspaceBinding, AgentThreadGoalDeliveryKind, AgentThreadGoalDeliveryRequest,
     AgentWorkspaceReference, AgentWorkspaceReferenceKind, AgentWorkspaceReferenceSearchEntry,
@@ -1185,6 +1185,7 @@ pub struct ConversationCoordinator {
     thread_goal_runtime: Arc<ThreadGoalRuntime>,
     terminal_port: OnceLock<Arc<dyn TerminalPort>>,
     remote_exec_port: OnceLock<Arc<dyn RemoteExecPort>>,
+    acp_client_port: OnceLock<Arc<dyn AcpClientPort>>,
 }
 
 impl ConversationCoordinator {
@@ -2225,6 +2226,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             thread_goal_runtime: Arc::new(ThreadGoalRuntime::new()),
             terminal_port: OnceLock::new(),
             remote_exec_port: OnceLock::new(),
+            acp_client_port: OnceLock::new(),
         }
     }
 
@@ -2374,6 +2376,16 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
     pub fn remote_exec_port(&self) -> Option<Arc<dyn RemoteExecPort>> {
         self.remote_exec_port.get().map(Arc::clone)
+    }
+
+    pub fn set_acp_client_port(&self, acp_client_port: Arc<dyn AcpClientPort>) {
+        if self.acp_client_port.set(acp_client_port).is_err() {
+            log::warn!("ACP client port is already configured; ignoring duplicate injection");
+        }
+    }
+
+    pub fn acp_client_port(&self) -> Option<Arc<dyn AcpClientPort>> {
+        self.acp_client_port.get().map(Arc::clone)
     }
 
     pub(super) fn execution_cancel_token_for_dialog_turn(
