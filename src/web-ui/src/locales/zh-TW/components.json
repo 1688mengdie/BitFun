@@ -346,6 +346,9 @@
     "popOut": "彈出為獨立場景",
     "closeOthers": "關閉其他",
     "closeAll": "全部關閉",
+    "exitGrid": "退出宮格佈局",
+    "mergeCell": "合併到此視窗",
+    "removeCell": "刪除此宮格",
     "closeRight": "關閉右側標籤",
     "pin": "固定",
     "unpin": "取消固定",
@@ -550,6 +553,7 @@
   },
   "canvas": {
     "noContentOpen": "暫未開啟任何內容",
+    "grid9EmptyHint": "目前宮格為空，可透過標籤列的模板選單調整佈局。",
     "filesCount": "{{count}} 個檔案",
     "searchPlaceholder": "搜尋檔案名稱或路徑...",
     "noPreview": "暫無預覽內容",
@@ -578,6 +582,15 @@
     "dropTop": "上",
     "dropBottom": "下",
     "dropCenter": "放置"
+  },
+  "grid9": "宮格佈局",
+  "gridTemplate": {
+    "label": "宮格模板",
+    "four": "四宮格",
+    "six": "六宮格",
+    "nine": "九宮格",
+    "sixteen": "十六宮格",
+    "exit": "退出宮格"
   },
   "flexiblePanel": {
     "empty": {

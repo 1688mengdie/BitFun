@@ -346,6 +346,9 @@
     "popOut": "Pop out as scene",
     "closeOthers": "Close Others",
     "closeAll": "Close All",
+    "exitGrid": "Exit Grid",
+    "mergeCell": "Merge into this window",
+    "removeCell": "Remove this cell",
     "closeRight": "Close Tabs to the Right",
     "pin": "Pin",
     "unpin": "Unpin Tab",
@@ -550,6 +553,7 @@
   },
   "canvas": {
     "noContentOpen": "No content open",
+    "grid9EmptyHint": "Your grid is empty. Adjust the grid template from the tab bar to open a layout.",
     "filesCount": "{{count}} files",
     "searchPlaceholder": "Search file name or path...",
     "noPreview": "No preview available",
@@ -578,6 +582,15 @@
     "dropTop": "Top",
     "dropBottom": "Bottom",
     "dropCenter": "Drop"
+  },
+  "grid9": "Grid Layout",
+  "gridTemplate": {
+    "label": "Grid Template",
+    "four": "Grid of 4",
+    "six": "Grid of 6",
+    "nine": "Grid of 9",
+    "sixteen": "Grid of 16",
+    "exit": "Exit Grid"
   },
   "flexiblePanel": {
     "empty": {

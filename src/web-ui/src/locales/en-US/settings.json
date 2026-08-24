@@ -221,6 +221,7 @@
         "missionControl": "Mission Control",
         "splitHorizontal": "Horizontal Split",
         "splitVertical": "Vertical Split",
+        "splitGrid9": "Grid Layout (3x3)",
         "anchorZone": "Toggle Anchor Zone",
         "maximize": "Maximize Editor",
         "closePreview": "Close Preview"

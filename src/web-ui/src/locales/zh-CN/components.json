@@ -346,6 +346,9 @@
     "popOut": "弹出为独立场景",
     "closeOthers": "关闭其他",
     "closeAll": "全部关闭",
+    "exitGrid": "退出宫格布局",
+    "mergeCell": "合并到此窗口",
+    "removeCell": "删除此宫格",
     "closeRight": "关闭右侧标签",
     "pin": "固定",
     "unpin": "取消固定",
@@ -550,6 +553,7 @@
   },
   "canvas": {
     "noContentOpen": "暂未打开任何内容",
+    "grid9EmptyHint": "当前宫格为空，可通过标签栏的模板菜单调整布局。",
     "filesCount": "{{count}} 个文件",
     "searchPlaceholder": "搜索文件名或路径...",
     "noPreview": "暂无预览内容",
@@ -578,6 +582,15 @@
     "dropTop": "上",
     "dropBottom": "下",
     "dropCenter": "放置"
+  },
+  "grid9": "宫格布局",
+  "gridTemplate": {
+    "label": "宫格模板",
+    "four": "四宫格",
+    "six": "六宫格",
+    "nine": "九宫格",
+    "sixteen": "十六宫格",
+    "exit": "退出宫格"
   },
   "flexiblePanel": {
     "empty": {
