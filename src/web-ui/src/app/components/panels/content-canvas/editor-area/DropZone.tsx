@@ -1,13 +1,13 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { DropPosition, EditorGroupId } from '../types';
+import type { DropPosition, EditorGroupId, SplitMode } from '../types';
 import './DropZone.scss';
 
 export interface DropZoneProps {
   groupId: EditorGroupId;
   isDragging: boolean;
   draggingFromGroupId: EditorGroupId | null;
-  splitMode: 'none' | 'horizontal' | 'vertical' | 'grid';
+  splitMode: SplitMode;
   onDrop: (position: DropPosition) => void;
   children: React.ReactNode;
 }
@@ -84,6 +84,20 @@ export const DropZone: React.FC<DropZoneProps> = ({
 
     if (splitMode === 'grid') {
       return [{ position: 'center', label: t('canvas.dropCenter'), show: true }];
+    }
+
+    if (splitMode === 'grid9') {
+      // grid9 with independent rows/columns: every cell offers edge zones
+      // (left/right = grow columns, top/bottom = grow rows) plus a center
+      // placement. This lets the user build the grid in any order — rows
+      // first, columns first, or interleaved — up to GRID_MAX_DIM.
+      return [
+        { position: 'left',   label: t('canvas.dropLeft'),   show: true },
+        { position: 'right',  label: t('canvas.dropRight'),  show: true },
+        { position: 'top',    label: t('canvas.dropTop'),    show: true },
+        { position: 'bottom', label: t('canvas.dropBottom'), show: true },
+        { position: 'center', label: t('canvas.dropCenter'), show: true },
+      ];
     }
 
     return [];

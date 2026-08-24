@@ -24,15 +24,23 @@ export type {
   LayoutState,
   CanvasState,
   CanvasPersistState,
+  Grid9Slot,
+  Grid9Template,
 } from './layout';
 
 export {
   LAYOUT_CONFIG,
+  GRID_MAX_DIM,
+  GRID9_RATIO_CONFIG,
+  EDITOR_GROUP_IDS,
+  EDITOR_GROUP_COL,
+  EDITOR_GROUP_ROW,
   createEditorGroupState,
   createLayoutState,
   createCanvasState,
   clampSplitRatio,
   clampAnchorSize,
+  clampGrid9Ratio,
 } from './layout';
 
 // Content-related types
