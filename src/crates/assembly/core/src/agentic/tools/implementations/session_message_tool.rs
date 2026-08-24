@@ -1,7 +1,9 @@
 use super::util::normalize_path;
+use crate::agentic::coordination::plan_todo_binding::{
+    PLAN_FILE_METADATA_KEY, TODO_ID_METADATA_KEY,
+};
 use crate::agentic::coordination::{
-    PLAN_FILE_METADATA_KEY, TODO_ID_METADATA_KEY, get_global_coordinator, get_global_scheduler,
-    DialogSubmissionPolicy, DialogTriggerSource,
+    get_global_coordinator, get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
 };
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -1134,5 +1136,117 @@ mod tests {
             validation.message.as_deref(),
             Some("workspace is required when session_id is omitted")
         );
+    }
+
+    #[tokio::test]
+    async fn validate_new_session_rejects_plan_file_without_todo_id() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "message": "hello",
+                    "session_name": "Worker Session",
+                    "agent_type": "agentic",
+                    "plan_file": "my_plan_1234.plan.md",
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("plan_file and todo_id must be provided together")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_new_session_rejects_todo_id_without_plan_file() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "message": "hello",
+                    "session_name": "Worker Session",
+                    "agent_type": "agentic",
+                    "todo_id": "setup-auth",
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("plan_file and todo_id must be provided together")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_existing_session_rejects_plan_todo_binding() {
+        let tool = SessionMessageTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": "C:/work",
+                    "session_id": "worker_1",
+                    "message": "hello",
+                    "plan_file": "my_plan_1234.plan.md",
+                    "todo_id": "setup-auth",
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("plan_file/todo_id binding is only allowed when session_id is omitted")
+        );
+    }
+
+    #[test]
+    fn session_message_input_parses_plan_todo_binding() {
+        let input: SessionMessageInput = serde_json::from_value(json!({
+            "workspace": "C:/work",
+            "message": "hello",
+            "session_name": "Worker Session",
+            "agent_type": "agentic",
+            "plan_file": "my_plan_1234.plan.md",
+            "todo_id": "setup-auth",
+        }))
+        .expect("payload with plan-todo binding must parse");
+
+        assert_eq!(input.plan_file.as_deref(), Some("my_plan_1234.plan.md"));
+        assert_eq!(input.todo_id.as_deref(), Some("setup-auth"));
+    }
+
+    #[tokio::test]
+    async fn validate_new_session_accepts_plan_todo_binding_shape() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "message": "hello",
+                    "session_name": "Worker Session",
+                    "agent_type": "agentic",
+                    "plan_file": "my_plan_1234.plan.md",
+                    "todo_id": "setup-auth",
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
     }
 }

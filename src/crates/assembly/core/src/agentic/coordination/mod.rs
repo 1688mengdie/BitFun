@@ -16,10 +16,6 @@ pub use scheduler::*;
 pub use state_manager::*;
 pub use turn_outcome::*;
 
-pub(crate) use plan_todo_binding::{
-    PLAN_FILE_METADATA_KEY, TODO_ID_METADATA_KEY, read_todo_binding, should_auto_complete_todo,
-};
-
 pub(crate) use background_outcomes::{
     BackgroundSubagentOutcome, BackgroundSubagentOutcomeStore, BackgroundSubagentWaitMode,
     BackgroundSubagentWaitResult,
