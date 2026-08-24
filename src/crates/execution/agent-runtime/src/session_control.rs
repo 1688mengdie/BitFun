@@ -145,31 +145,30 @@ pub const SHORT_NAME_MAX_CHARS: usize = 60;
 /// [`SHORT_NAME_MAX_CHARS`] so both paths share a single bound.
 pub const COMPACT_SESSION_NAME_MAX_CHARS: usize = SHORT_NAME_MAX_CHARS;
 
-/// Truncate a compact display name to at most [`COMPACT_SESSION_NAME_MAX_CHARS`]
-/// characters with a trailing ellipsis. Character-based truncation keeps
-/// multi-byte (CJK) names intact.
-fn truncate_compact_display_name(name: &str) -> String {
-    let trimmed = name.trim();
+/// Clip a label to at most [`COMPACT_SESSION_NAME_MAX_CHARS`] characters,
+/// appending an ellipsis when it had to be shortened. The clip is
+/// character-based so multi-byte (CJK) labels are never split mid-symbol.
+fn clip_compact_label(label: &str) -> String {
+    let trimmed = label.trim();
     if trimmed.chars().count() <= COMPACT_SESSION_NAME_MAX_CHARS {
         return trimmed.to_string();
     }
-    let truncated: String = trimmed
+    let head: String = trimmed
         .chars()
         .take(COMPACT_SESSION_NAME_MAX_CHARS)
         .collect();
-    format!("{truncated}...")
+    format!("{head}...")
 }
 
-/// Resolve the compact display name used by `list` compact output: the explicit
-/// short name wins; otherwise the full session name is truncated to
-/// [`COMPACT_SESSION_NAME_MAX_CHARS`] characters with a trailing ellipsis.
-/// Both paths share the same character-based cap, so multi-byte (CJK) names
-/// stay intact and a short name cannot exceed the bound.
-pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>) -> String {
-    if let Some(short_name) = short_name.filter(|value| !value.trim().is_empty()) {
-        return truncate_compact_display_name(short_name);
+/// Resolve the label the compact `list` output shows for a session. An
+/// explicit short name is preferred; otherwise the full session name is
+/// clipped to the shared cap. Both paths share one character-based bound, so
+/// multi-byte names stay intact and a short name cannot exceed the cap.
+pub fn compact_session_display_name(session_name: &str, alias: Option<&str>) -> String {
+    if let Some(explicit) = alias.filter(|value| !value.trim().is_empty()) {
+        return clip_compact_label(explicit);
     }
-    truncate_compact_display_name(session_name)
+    clip_compact_label(session_name)
 }
 
 pub fn session_control_agent_type_or_default(
