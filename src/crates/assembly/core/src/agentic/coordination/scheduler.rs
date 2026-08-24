@@ -556,6 +556,22 @@ impl DialogScheduler {
         }
     }
 
+    /// Returns the id of the turn currently being processed by the given session,
+    /// if any. This is the precise turn that `steer_dialog_turn` can target; callers
+    /// should query this first and fall back to a normal submission when idle.
+    pub fn current_processing_turn_id(&self, session_id: &str) -> Option<String> {
+        match self
+            .session_manager
+            .get_session(session_id)
+            .map(|s| s.state.clone())
+        {
+            Some(SessionState::Processing {
+                current_turn_id, ..
+            }) => Some(current_turn_id),
+            _ => None,
+        }
+    }
+
     /// Resume auto-continuation toward an active thread goal (after pause / blocked / usage limit).
     pub async fn deliver_thread_goal_resumed(
         &self,
@@ -4271,6 +4287,24 @@ mod tests {
             )
             .await
             .expect("mark turn active");
+    }
+
+    #[tokio::test]
+    async fn current_processing_turn_id_reports_running_turn_and_none_for_idle() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "queries-running-session";
+        let turn_id = "running-turn";
+        mark_session_processing(&session_manager, &root, session_id, turn_id).await;
+
+        assert_eq!(
+            scheduler.current_processing_turn_id(session_id),
+            Some(turn_id.to_string())
+        );
+        // A session that is not running (or does not exist) reports None.
+        assert_eq!(
+            scheduler.current_processing_turn_id("no-such-session"),
+            None
+        );
     }
 
     #[tokio::test]
