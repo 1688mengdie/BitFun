@@ -40,6 +40,15 @@ impl DesktopRuntimeContext {
         acp_client_service: Option<Arc<bitfun_acp::AcpClientService>>,
         session_event_journal: Arc<SessionEventJournal>,
     ) -> Result<Self, String> {
+        // Inject the ACP client port so SessionControl/SessionMessage can reach
+        // the real external ACP client end-to-end (reuse the thin
+        // `AcpClientPortAdapter` wrapper over `AcpClientService`, no duplicated
+        // ACP-domain logic, no "ACP client port is not available").
+        if let Some(acp_client_service) = acp_client_service.clone() {
+            coordinator.set_acp_client_port(Arc::new(
+                bitfun_acp::client::AcpClientPortAdapter::new(acp_client_service),
+            ));
+        }
         let host_effects = Arc::new(ProductionDesktopSessionHostEffects::new(acp_client_service));
         let session_application = DesktopSessionApplication::build(
             coordinator,
