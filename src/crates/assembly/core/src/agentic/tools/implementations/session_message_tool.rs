@@ -1,3 +1,4 @@
+use super::session_control_tool::get_available_agent_type_ids_for_creation;
 use super::util::normalize_path;
 use crate::agentic::coordination::{
     get_global_coordinator, get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
@@ -9,11 +10,13 @@ use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
+use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
-    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
+    AcpClientStreamChunkSink, AgentDialogPrependedReminder, AgentDialogTurnRequest,
+    AgentSessionCreateRequest, AgentSessionListRequest, AgentSessionReplyRoute,
+    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -239,6 +242,28 @@ impl SessionMessageTool {
         agent_type.filter(|value| !value.trim().is_empty())
     }
 
+    /// The ACP client id when the target agent type is an ACP bridge agent
+    /// (`acp__<client_id>`; see `ACP_TOOL_PREFIX`), otherwise `None`. ACP
+    /// targets bypass the local model entirely: the message is forwarded through
+    /// the ACP client port instead of submitting a local dialog turn.
+    fn acp_client_id_from_agent_type(agent_type: &str) -> Option<&str> {
+        agent_type
+            .strip_prefix(ACP_TOOL_PREFIX)
+            .filter(|client_id| !client_id.trim().is_empty())
+    }
+
+    /// The ACP client id when `session_id` is a flow session id of the shape
+    /// `acp_<client_id>_<uuid>`; otherwise `None`. Flow sessions live in the ACP
+    /// persistence store, not the internal session store. Single authoritative
+    /// implementation lives in `bitfun_runtime_ports` (d3-P2-2).
+    fn acp_flow_client_id_from_session_id(session_id: &str) -> Option<&str> {
+        bitfun_runtime_ports::acp_flow_client_id_from_session_id(session_id).and_then(|_| {
+            let start = "acp_".len();
+            let end = session_id.len().checked_sub(37)?;
+            session_id.get(start..end)
+        })
+    }
+
     fn target_agent_type_from_sessions(
         sessions: &[AgentSessionSummary],
         target_session_id: &str,
@@ -267,39 +292,12 @@ impl SessionMessageTool {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-enum SessionMessageAgentType {
-    #[serde(rename = "agentic", alias = "Agentic", alias = "AGENTIC")]
-    Agentic,
-    #[serde(rename = "Plan", alias = "plan", alias = "PLAN")]
-    Plan,
-    #[serde(rename = "Cowork", alias = "cowork", alias = "COWORK")]
-    Cowork,
-    #[serde(
-        rename = "DeepResearch",
-        alias = "deepresearch",
-        alias = "DEEPRESEARCH"
-    )]
-    DeepResearch,
-}
-
-impl SessionMessageAgentType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Agentic => "agentic",
-            Self::Plan => "Plan",
-            Self::Cowork => "Cowork",
-            Self::DeepResearch => "DeepResearch",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct SessionMessageInput {
     workspace: Option<String>,
     session_id: Option<String>,
     session_name: Option<String>,
     message: String,
-    agent_type: Option<SessionMessageAgentType>,
+    agent_type: Option<String>,
 }
 
 #[async_trait]
@@ -356,13 +354,25 @@ Allowed agent types when creating a session:
                 },
                 "agent_type": {
                     "type": "string",
-                    "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
-                    "description": "Required when session_id is omitted. Not allowed when sending to an existing session."
+                    "description": "Required when session_id is omitted. Not allowed when sending to an existing session. Use \"acp__<client_id>\" to forward directly to a real external ACP agent."
                 }
             },
             "required": ["message"],
             "additionalProperties": false
         })
+    }
+
+    async fn input_schema_for_model_with_context(&self, context: Option<&ToolUseContext>) -> Value {
+        let agent_type_ids = get_available_agent_type_ids_for_creation(context).await;
+        let agent_type_enum: Vec<&str> = agent_type_ids.iter().map(String::as_str).collect();
+        let mut schema = self.input_schema();
+        if let Some(agent_type) = schema
+            .get_mut("properties")
+            .and_then(|props| props.get_mut("agent_type"))
+        {
+            agent_type["enum"] = json!(agent_type_enum);
+        }
+        schema
     }
 
     fn is_readonly(&self) -> bool {
@@ -687,6 +697,68 @@ Allowed agent types when creating a session:
                     workspace_target,
                 )
             };
+
+        // ACP direct path: forward a message to a real external ACP agent
+        // (`acp__<client>` target or `acp_<client>_<uuid>` flow session) through
+        // the ACP client port, bypassing the local model. No local dialog turn
+        // is submitted, so no bridge re-translation / double billing happens.
+        let acp_target_via_agent = Self::acp_client_id_from_agent_type(&target_agent_type);
+        let acp_target_via_flow = Self::acp_flow_client_id_from_session_id(&target_session_id);
+        if acp_target_via_agent.is_some() || acp_target_via_flow.is_some() {
+            let coordinator = get_global_coordinator()
+                .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
+            let port = coordinator.acp_client_port().ok_or_else(|| {
+                BitFunError::tool(
+                    "ACP client port is not available; the desktop host did not inject it"
+                        .to_string(),
+                )
+            })?;
+            // Streamed chunks are not consumed here (the reply is routed back
+            // out-of-band); the port still accumulates and returns the full text.
+            let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel();
+            let delivery = if let Some(client_id) = acp_target_via_agent {
+                port.send_message_to_bitfun_session_stream(
+                    AcpClientBitfunMessageRequest {
+                        client_id: client_id.to_owned(),
+                        bitfun_session_id: target_session_id.clone(),
+                        message: params.message.clone(),
+                        workspace_path: Some(workspace_target.workspace_path.clone()),
+                        timeout_seconds: None,
+                    },
+                    chunk_tx,
+                )
+                .await
+            } else {
+                port.send_message_stream(
+                    AcpClientMessageRequest {
+                        session_id: target_session_id.clone(),
+                        message: params.message.clone(),
+                        workspace_path: Some(workspace_target.workspace_path.clone()),
+                        timeout_seconds: None,
+                    },
+                    chunk_tx,
+                )
+                .await
+            };
+            delivery.map_err(|error| {
+                BitFunError::tool(format!("ACP direct delivery failed: {error}"))
+            })?;
+            let result_for_assistant = format!(
+                "Message accepted for external ACP session '{}' in workspace '{}' using agent type '{}'.",
+                target_session_id, workspace_target.workspace_path, target_agent_type
+            );
+            return Ok(vec![ToolResult::Result {
+                data: json!({
+                    "success": true,
+                    "target_workspace": workspace_target.workspace_path.clone(),
+                    "target_session_id": target_session_id.clone(),
+                    "target_agent_type": target_agent_type.clone(),
+                    "created_session_id": created_session_id.clone(),
+                }),
+                result_for_assistant: Some(result_for_assistant),
+                image_attachments: None,
+            }]);
+        }
 
         let (forwarded_message, prepended_messages) =
             self.format_forwarded_message(&params.message);
