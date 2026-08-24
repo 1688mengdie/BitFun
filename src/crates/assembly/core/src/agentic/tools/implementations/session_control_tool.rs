@@ -104,6 +104,7 @@ impl SessionControlTool {
         match action {
             SessionControlAction::Cancel
             | SessionControlAction::Delete
+            | SessionControlAction::Compact
             | SessionControlAction::Rename => {
                 let session_id = session_id.ok_or_else(|| {
                     BitFunError::tool(format!("session_id is required for {}", action.as_str()))
@@ -274,6 +275,7 @@ Actions:
 - "create": Create a new session. You may optionally provide session_name and agent_type.
 - "cancel": Cancel the target session's currently running dialog turn. This does not delete the session or clear any queued messages that may still run later.
 - "delete": Delete an existing session by session_id.
+- "compact": Compact the target session's context to reduce its token footprint. Returns the applied compaction statistics.
 - "rename": Rename an existing session by session_id using session_name as the new title.
 - "list": List all sessions.
 
@@ -285,13 +287,13 @@ Arguments:
   - "Plan": Planning agent for clarifying requirements and producing an implementation plan before coding.
   - "Cowork": Collaborative agent for office-style work such as research, documentation, presentations, etc.
   - "DeepResearch": Research agent for systematic investigation and evidence-driven reports.
-- "session_id": Required for cancel, delete, and rename."#
+- "session_id": Required for cancel, delete, compact, and rename."#
                 .to_string(),
         )
     }
 
     fn short_description(&self) -> String {
-        "Create, list, rename, cancel, and delete persisted agent sessions.".to_string()
+        "Create, list, rename, compact, cancel, and delete persisted agent sessions.".to_string()
     }
 
     fn default_exposure(&self) -> ToolExposure {
@@ -304,7 +306,7 @@ Arguments:
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "cancel", "delete", "rename", "list"],
+                    "enum": ["create", "cancel", "delete", "compact", "rename", "list"],
                     "description": "The session action to perform."
                 },
                 "workspace": {
@@ -313,7 +315,7 @@ Arguments:
                 },
                 "session_id": {
                     "type": "string",
-                    "description": "Required for cancel, delete, and rename."
+                    "description": "Required for cancel, delete, compact, and rename."
                 },
                 "session_name": {
                     "type": "string",
@@ -642,6 +644,113 @@ Arguments:
                     image_attachments: None,
                 }])
             }
+            SessionControlAction::Compact => {
+                let session_id = params.session_id.as_deref().ok_or_else(|| {
+                    BitFunError::tool("session_id is required for compact".to_string())
+                })?;
+                validate_session_id(session_id).map_err(BitFunError::tool)?;
+                let workspace = self
+                    .resolve_effective_workspace(
+                        SessionControlAction::Compact,
+                        Some(session_id),
+                        context,
+                        &runtime,
+                    )
+                    .await?;
+
+                // Authorization follows the owner/creator/ancestor semantics and
+                // additionally permits compacting the caller's own session.
+                let current_session_id = context.session_id.as_ref().ok_or_else(|| {
+                    BitFunError::tool(
+                        "cannot compact a session without a caller session in tool context"
+                            .to_string(),
+                    )
+                })?;
+                let session_manager = coordinator.get_session_manager();
+                let caller_is_owner = session_manager
+                    .get_session(current_session_id)
+                    .is_some_and(|session| session.created_by.is_none());
+                let is_self = current_session_id == session_id;
+                let created_by_match = session_manager
+                    .load_session_metadata(
+                        std::path::Path::new(&workspace.project_workspace),
+                        session_id,
+                    )
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|metadata| metadata.created_by)
+                    .is_some_and(|creator| {
+                        creator == session_control_creator_marker(current_session_id)
+                    });
+                if !caller_is_owner && !is_self && !created_by_match {
+                    let mut ancestors = Vec::new();
+                    let mut visited = std::collections::HashSet::new();
+                    visited.insert(session_id.to_string());
+                    let mut current = session_id.to_string();
+                    loop {
+                        let metadata = session_manager
+                            .load_session_metadata(
+                                std::path::Path::new(&workspace.project_workspace),
+                                &current,
+                            )
+                            .await
+                            .ok()
+                            .flatten();
+                        match metadata
+                            .and_then(|m| m.relationship.and_then(|r| r.parent_session_id))
+                        {
+                            Some(parent_id) => {
+                                if !visited.insert(parent_id.clone()) {
+                                    break;
+                                }
+                                ancestors.push(parent_id.clone());
+                                current = parent_id;
+                            }
+                            None => break,
+                        }
+                    }
+                    if !ancestors.is_empty() && !ancestors.contains(current_session_id) {
+                        return Err(BitFunError::tool(format!(
+                            "session '{current_session_id}' is not authorized to compact session '{session_id}': not a parent/ancestor and not the creator"
+                        )));
+                    }
+                }
+
+                let outcome = coordinator
+                    .compact_session_with_outcome(session_id.to_string())
+                    .await
+                    .map_err(|error| {
+                        BitFunError::tool(format!(
+                            "cannot compact session '{session_id}': {}",
+                            error
+                        ))
+                    })?;
+
+                Ok(vec![ToolResult::Result {
+                    data: json!({
+                        "success": true,
+                        "action": "compact",
+                        "workspace": workspace.display_workspace.clone(),
+                        "session_id": session_id,
+                        "applied": outcome.applied,
+                        "tokens_before": outcome.tokens_before,
+                        "tokens_after": outcome.tokens_after,
+                        "compression_ratio": outcome.compression_ratio,
+                        "duration": outcome.duration_ms,
+                        "summary_source": if outcome.has_summary {
+                            Some(outcome.summary_source)
+                        } else {
+                            None
+                        },
+                    }),
+                    result_for_assistant: Some(format!(
+                        "Compacted session '{session_id}' in workspace '{}'.",
+                        workspace.display_workspace
+                    )),
+                    image_attachments: None,
+                }])
+            }
             SessionControlAction::List => {
                 let workspace = self
                     .resolve_effective_workspace(
@@ -949,6 +1058,65 @@ mod tests {
                     "action": "rename",
                     "session_id": "worker_1",
                     "session_name": "new-title",
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_compact_requires_session_id() {
+        let tool = SessionControlTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "compact",
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("session_id is required for compact")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_compact_rejects_session_name() {
+        let tool = SessionControlTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "compact",
+                    "session_id": "worker_1",
+                    "session_name": "should-not-be-here",
+                }),
+                Some(&empty_context()),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("session_name is only allowed for create")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_compact_accepts_session_id() {
+        let tool = SessionControlTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "action": "compact",
+                    "session_id": "worker_1",
                 }),
                 Some(&empty_context()),
             )
