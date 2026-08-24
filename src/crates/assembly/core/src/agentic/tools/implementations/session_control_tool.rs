@@ -589,6 +589,7 @@ fn caller_is_owner_session(
 /// （`client_id_from_session_id`）及 `SessionMessage`
 /// （`acp_flow_client_id_from_session_id`）的严格校验一致，防止仅以 `acp_`
 /// 开头的内部会话 id 被误判为流会话（PR #2139 R4）。
+#[cfg(test)]
 pub(crate) fn looks_like_uuid(segment: &str) -> bool {
     segment.len() == 36
         && segment.bytes().enumerate().all(|(index, byte)| {
@@ -612,6 +613,7 @@ pub(crate) fn looks_like_uuid(segment: &str) -> bool {
 /// `AcpClientPort::client_id_from_session_id` / `SessionMessage`
 /// `acp_flow_client_id_from_session_id` 的严格校验一致，防止任意以 `acp_`
 /// 开头的内部会话 id 被幽灵放行并绕过 RBAC 属主模型（PR #2139 R4）。
+#[cfg(test)]
 pub(crate) fn is_acp_flow_session_id(session_id: &str) -> bool {
     let Some(rest) = session_id.strip_prefix("acp_") else {
         return false;
@@ -628,6 +630,7 @@ pub(crate) fn is_acp_flow_session_id(session_id: &str) -> bool {
 /// 流会话是外部进程记录，metadata 存在但 created_by/relationship 为空是其设计
 /// 形态（interfaces/acp session_persistence 创建时必写 metadata 文件）；否则维持
 /// 原有 created_by 判定（metadata 完整时原样）。
+#[cfg(test)]
 fn ghost_acp_delete_authorized(created_by_is_none: bool, acp_flow_session: bool) -> bool {
     created_by_is_none && acp_flow_session
 }
@@ -646,6 +649,7 @@ fn ghost_acp_delete_authorized(created_by_is_none: bool, acp_flow_session: bool)
 /// - ACP 流会话走 `ghost_acp_delete_authorized`（其 created_by 空是设计形态），不
 ///   落入本判定。
 /// - daemon 与「当前会话不可删」守卫在门禁之外保持独立，不受本豁免影响。
+#[cfg(test)]
 fn orphan_session_delete_authorized(
     caller_is_owner: bool,
     target_metadata: Option<&crate::service::session::SessionMetadata>,
@@ -702,28 +706,23 @@ impl SessionMutationAuthOptions {
     }
 }
 
-/// 共享会话变更（delete/cancel）授权判定，SessionControl 与 acp_control
-/// 复用（PR #2139 R4）。
+/// 共享会话变更（delete/cancel/deliver）授权判定，SessionControl、
+/// SessionMessage 与 acp_control 复用（PR #2139 R4）。
 ///
-/// 决策链（每步与既有 SessionControl delete/cancel 语义等价）：
-/// 1. daemon 会话拦截（R-A.04）；
-/// 2. owner 豁免（仅 delete；Commander 角色或 RBAC 关闭）；本地侧额外并入
-///    R-26 幽灵孤儿删除豁免（orphan_session_delete_authorized，本质是 owner
-///    兜底放行无主孤儿，含 metadata 缺失场景）；
-/// 3. created_by 匹配（`session-<caller>` 标记）；delete 额外允许幽灵 ACP
-///    流会话放行（ACP 流会话 metadata 无 created_by 是其设计形态）；
-/// 4. 祖先授权：内存树快路径，树为空时回退持久化 metadata 链遍历（空树
-///    不能被利用来绕过授权）；
+/// R-COMM-01（自由通信）：仅保留系统护栏——daemon 会话拦截（R-A.04）。
+/// 原 owner 豁免 / created_by 匹配 / 幽灵孤儿删除豁免 / 祖先授权（ancestor
+/// 遍历 + fail-closed）均已移除：任意会话可向任意会话投递/变更（SessionControl
+/// delete/cancel、SessionMessage deliver、ACP 工具一并放开）。
 ///
 /// `Ok(())` = 已授权；`Err` 为拒绝原因（tool error）。
 pub(crate) async fn resolve_session_mutation_authorization(
     session_manager: &crate::agentic::session::session_manager::SessionManager,
-    tree: &SessionTreeManager,
-    caller_session_id: &str,
+    _tree: &SessionTreeManager,
+    _caller_session_id: &str,
     target_session_id: &str,
     workspace_path: &std::path::Path,
     action_label: &str,
-    options: SessionMutationAuthOptions,
+    _options: SessionMutationAuthOptions,
 ) -> BitFunResult<()> {
     // R-A.04: Reject daemon sessions (delete and cancel share this guard).
     {
@@ -746,97 +745,11 @@ pub(crate) async fn resolve_session_mutation_authorization(
         }
     }
 
-    // R-26 / user-owner semantics: the top-level main session (no created_by)
-    // is the owner and may act on any session. Cancel keeps the historical
-    // stricter gate (no owner bypass).
-    let caller_is_owner =
-        options.allow_owner_bypass && caller_is_owner_session(session_manager, caller_session_id);
-
-    let acp_flow_session = is_acp_flow_session_id(target_session_id);
-    let (created_by_match, orphan_delete_authorized) = {
-        let target_metadata = session_manager
-            .load_session_metadata(workspace_path, target_session_id)
-            .await
-            .ok()
-            .flatten();
-        let creator = target_metadata
-            .as_ref()
-            .and_then(|metadata| metadata.created_by.as_deref());
-        if options.allow_ghost_acp
-            && ghost_acp_delete_authorized(creator.is_none(), acp_flow_session)
-        {
-            (true, false)
-        } else {
-            (
-                creator.is_some_and(|creator| {
-                    creator == session_control_creator_marker(caller_session_id)
-                }),
-                // R-26 / 幽灵孤儿删除豁免：目标会话是「无主孤儿」时，Commander
-                // owner 兜底放行删除（孤儿无创建者，ancestor 链为空，只能 owner
-                // 兜底）。ACP 流会话走上方 ghost_acp_delete_authorized。
-                options.allow_owner_bypass
-                    && orphan_session_delete_authorized(
-                        caller_is_owner,
-                        target_metadata.as_ref(),
-                        acp_flow_session,
-                    ),
-            )
-        }
-    };
-
-    if !caller_is_owner && !created_by_match && !orphan_delete_authorized {
-        // Ancestor authorization: verify the calling session is an ancestor of
-        // the target session. First try the in-memory tree (fast path). If the
-        // tree is not yet populated (walk_ancestors returns empty), fall back
-        // to a persisted metadata chain query so that an empty tree cannot be
-        // exploited to bypass authorization.
-        let tree_ancestors = tree.walk_ancestors(target_session_id);
-        let ancestors: Vec<String> = if !tree_ancestors.is_empty() {
-            // Fast path: tree is populated.
-            tree_ancestors
-        } else {
-            // Fallback: tree is empty, walk persisted metadata chain.
-            let mut metadata_ancestors = Vec::new();
-            // Guard against cyclic metadata chains: never revisit a session id
-            // already seen during this walk.
-            let mut visited = std::collections::HashSet::new();
-            visited.insert(target_session_id.to_string());
-            let mut current = target_session_id.to_string();
-            loop {
-                let metadata = session_manager
-                    .load_session_metadata(workspace_path, &current)
-                    .await
-                    .ok()
-                    .flatten();
-                match metadata.and_then(|m| m.relationship.and_then(|r| r.parent_session_id)) {
-                    Some(parent_id) => {
-                        if !visited.insert(parent_id.clone()) {
-                            // Cycle detected; stop walking to avoid hanging on a
-                            // corrupt lineage chain.
-                            break;
-                        }
-                        metadata_ancestors.push(parent_id.clone());
-                        current = parent_id;
-                    }
-                    None => break,
-                }
-            }
-            metadata_ancestors
-        };
-        if ancestors.is_empty() {
-            // 目标会话无祖先（孤儿）且非 owner/creator：拒绝。会话间投递/
-            // 变更授权是会话归属安全（created_by/ancestor 链），与 RBAC
-            // 角色系统无关，删除 RBAC 后语义不变。
-            return Err(BitFunError::tool(format!(
-                "session '{caller_session_id}' is not authorized to {action_label} session '{target_session_id}': cannot verify ancestor relationship"
-            )));
-        }
-        if !ancestors.iter().any(|id| id == caller_session_id) {
-            return Err(BitFunError::tool(format!(
-                "session '{caller_session_id}' is not authorized to {action_label} session '{target_session_id}': not a parent/ancestor and not the creator"
-            )));
-        }
-    }
+    // R-COMM-01（自由通信）：移除 owner/created_by/orphan/ancestor 授权判定
+    // ——任意会话可向任意会话投递/变更（SessionMessage deliver、SessionControl
+    // delete/cancel、ACP 工具一并放开）。仅保留上方 daemon 会话拦截
+    // （R-A.04 系统护栏）。原 ancestor 遍历 + fail-closed（"cannot verify
+    // ancestor relationship" / "not a parent/ancestor and not the creator"）已删除。
 
     Ok(())
 }
@@ -959,30 +872,22 @@ fn same_session_storage_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
     canonical(a) == canonical(b)
 }
 
-/// R-WF-23：会话创建层级权限链 + 强制校验（需求 §九 + 总纲 §2.7）。
+/// R-WF-23 + R-COMM-01：会话创建空间/层级校验。
 ///
 /// 核心裁决（主人点破）：与 RBAC 无关——session 工具本就有祖先验证/权限
-/// 校验，只是 create action 没覆盖。本函数复用现有授权设施给 create 补
-/// 「继承创建者工作区 + 禁跨区 + 层级校验」，不新造校验函数、不绑 role：
+/// 校验。本函数给 create 补「继承创建者工作区 + 禁跨区」，不新造校验函数、
+/// 不绑 role：
 ///
-/// 1. **继承创建者工作区 + 禁跨区**：复用 [`same_session_storage_dir`]
-///    ——create 默认继承创建者工作区；调用方显式传了跨区 workspace 时
-///    返回明确错误（非静默），防止「workspace 参数 = 会话归属树」被绕开。
-/// 2. **层级校验**：复用 [`caller_is_owner_session`]（created_by.is_none()
-///    即 L0 主会话，仅主人可建）+ 会话树/持久化 lineage 深度判定——
-///    - L0（created_by==None 主会话）：可创建 L1 子会话（挂自己工作区）；
-///    - L1（depth==1 的子会话，指挥官建）：只可创建 L2（depth==2，继承
-///      L1 工作区）；
-///    - L2+（depth>=2）：拒绝再向下创建（L1 只能建 L2）。
+/// **继承创建者工作区 + 禁跨区**：复用 [`same_session_storage_dir`]
+/// ——create 默认继承创建者工作区；调用方显式传了跨区 workspace 时
+/// 返回明确错误（非静默），防止「workspace 参数 = 会话归属树」被绕开。
 ///
-/// depth 语义 = 以 L0 主会话为根的绝对深度（create 分支
-/// `child_depth = parent_depth + 1`，L0 无 metadata → parent_depth 默认 0，
-/// 故 L1=1、L2=2）。判定只走 created_by + parent_session_id + depth
-/// （SessionTreeManager 内存树快路径 + 持久化 metadata 链回退），不触碰
-/// AgentRole/rbac。
+/// R-COMM-01（自由通信）：层级校验已移除——任意会话可自由创建子会话
+/// （原 L0/L1/L2 层级限制、L2+ 拒绝、depth 校验均删除），仅保留上方
+/// 跨 workspace 校验（系统护栏）。
 pub(crate) async fn enforce_session_create_workspace_hierarchy(
-    session_manager: &crate::agentic::session::session_manager::SessionManager,
-    tree: &SessionTreeManager,
+    _session_manager: &crate::agentic::session::session_manager::SessionManager,
+    _tree: &SessionTreeManager,
     caller_session_id: &str,
     caller_workspace_path: &std::path::Path,
     target_workspace_path: &std::path::Path,
@@ -998,61 +903,10 @@ pub(crate) async fn enforce_session_create_workspace_hierarchy(
         )));
     }
 
-    // 2. 层级校验：L0 主会话（created_by==None）仅主人可建（主会话即用户
-    //    owner，见 R-26），可创建 L1；L1（depth==1）只能建 L2；L2+ 拒绝。
-    //    复用 caller_is_owner_session（R-WF-01 已改为 created_by.is_none()，
-    //    数据层 owner 判定，与 RBAC 无关）。
-    if caller_is_owner_session(session_manager, caller_session_id) {
-        // L0 主会话：允许创建（子会话挂主会话工作区，天然继承）。
-        return Ok(());
-    }
+    // R-COMM-01（自由通信）：层级校验已移除——任意会话（含 L2+/depth 无法
+    // 解析）都可创建子会话。跨 workspace 校验（上方系统护栏）保留。
 
-    // 非 L0：caller 必须是 L1（depth==1 的子会话），才能创建 L2。
-    let caller_depth = session_tree_depth(
-        session_manager,
-        tree,
-        caller_workspace_path,
-        caller_session_id,
-    )
-    .await;
-    match caller_depth {
-        Some(1) => {
-            // L1：只可创建 L2（depth==2，继承 L1 工作区）。同区已在上方
-            // 校验，此处天然继承 caller 工作区。
-            Ok(())
-        }
-        Some(depth) => Err(BitFunError::tool(format!(
-            "SessionControl create rejected: caller session '{}' is at depth {}; only L0 main sessions can create L1 children and L1 sessions can only create L2 (session hierarchy: L0 -> L1 -> L2)",
-            caller_session_id, depth
-        ))),
-        None => Err(BitFunError::tool(format!(
-            "SessionControl create rejected: caller session '{}' has no resolvable depth; session hierarchy cannot be verified",
-            caller_session_id
-        ))),
-    }
-}
-
-/// 解析会话在层级树中的 depth：内存树快路径 + 持久化 metadata 链回退
-/// （空树/未注册会话不能被利用来绕过层级校验——回退到持久化 lineage）。
-/// 语义 = 以 L0 主会话为根的绝对深度（L1=1、L2=2）。
-async fn session_tree_depth(
-    session_manager: &crate::agentic::session::session_manager::SessionManager,
-    tree: &SessionTreeManager,
-    workspace_path: &std::path::Path,
-    session_id: &str,
-) -> Option<u32> {
-    // 快路径：内存树已注册。
-    if let Some(depth) = tree.get_depth(session_id) {
-        return Some(depth);
-    }
-    // 回退：持久化 metadata 的 relationship.depth（L0 主会话无 relationship
-    // 记录 → None，但 caller 已排除 L0，此处只可能命中 L1+ 的持久化记录）。
-    session_manager
-        .load_session_metadata(workspace_path, session_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|m| m.relationship.and_then(|r| r.depth))
+    Ok(())
 }
 
 /// caller 是否为 daemon 会话（R-A.04 同源校验，含持久化回退）。
@@ -2826,18 +2680,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shared_authz_rejects_unrelated_caller_delete_without_metadata() {
-        // Unauthorized: caller is not owner, target has no created_by and is
-        // not an ACP flow session shape (tail is not a uuid) -> reject delete.
-        // Non-ACP shape -> ghost release does not apply; no created_by ->
-        // ancestor walk fails (tree and metadata both empty), consistent with
-        // the existing SessionControl delete semantics (reject; no arbitrary
-        // acp_ prefix bypass).
+    async fn shared_authz_allows_unrelated_caller_delete_without_metadata() {
+        // R-COMM-01（自由通信）：非 owner、target 无 created_by、非 ACP shape
+        // —— 现在允许 delete（owner/created_by/ancestor 校验已移除，仅保留
+        // daemon 会话拦截护栏）。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-reject-delete");
         let workspace_string = workspace.as_string();
-        let error = resolve_session_mutation_authorization(
+        resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
@@ -2847,27 +2698,19 @@ mod tests {
             SessionMutationAuthOptions::delete(),
         )
         .await
-        .expect_err("unrelated caller without metadata must be rejected");
-        assert!(
-            error.to_string().contains("not authorized to delete")
-                || error
-                    .to_string()
-                    .contains("cannot verify ancestor relationship"),
-            "{error}"
-        );
+        .expect("unrelated caller without metadata must be allowed to delete (R-COMM-01 free communication)");
     }
 
     #[tokio::test]
-    async fn shared_authz_rejects_unrelated_caller_cancel() {
-        // Unauthorized: caller is not owner, target has no created_by and is
-        // not an ACP flow session shape -> reject cancel (cancel has no owner
-        // exemption and no ghost ACP release). Missing metadata makes the
-        // ancestor walk fail, which is also a rejection.
+    async fn shared_authz_allows_unrelated_caller_cancel() {
+        // R-COMM-01（自由通信）：非 owner、target 无 created_by、非 ACP shape
+        // —— 现在允许 cancel（owner/created_by/ancestor 校验已移除，仅保留
+        // daemon 会话拦截护栏）。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-reject-cancel");
         let workspace_string = workspace.as_string();
-        let error = resolve_session_mutation_authorization(
+        resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
@@ -2877,54 +2720,43 @@ mod tests {
             SessionMutationAuthOptions::cancel(),
         )
         .await
-        .expect_err("unrelated caller without metadata must be rejected");
-        assert!(
-            error.to_string().contains("not authorized to cancel")
-                || error
-                    .to_string()
-                    .contains("cannot verify ancestor relationship"),
-            "{error}"
-        );
+        .expect("unrelated caller without metadata must be allowed to cancel (R-COMM-01 free communication)");
     }
 
     #[tokio::test]
-    async fn shared_authz_ghost_acp_delete_allowed_but_cancel_requires_shape() {
-        // Ghost ACP flow session (strict uuid tail + no created_by): delete
-        // releases (P-06 designed shape); but any acp_ prefix with a non-uuid
-        // tail does not get the release.
+    async fn shared_authz_delete_cancel_release_any_target() {
+        // R-COMM-01（自由通信）：delete/cancel 对任意 target 放行（含 ACP 流
+        // 会话与非 uuid tail 形态）——owner/created_by/ghost/ancestor 授权已
+        // 移除，仅保留 daemon 会话拦截护栏。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-authz-ghost-acp");
         let workspace_string = workspace.as_string();
         let workspace_path = std::path::Path::new(&workspace_string);
-        let strict_acp_id = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
 
-        // Strict ACP shape delete releases with no metadata (ghost).
         resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
-            strict_acp_id,
+            "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
             workspace_path,
             "delete",
             SessionMutationAuthOptions::delete(),
         )
         .await
-        .expect("strict acp flow session delete should be released");
+        .expect("delete must be released for any target (R-COMM-01)");
 
-        // cancel keeps delete's ghost release semantics (no created_by on a
-        // flow session is the designed shape).
         resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
-            strict_acp_id,
+            "acp_codex_notauuid",
             workspace_path,
             "cancel",
-            SessionMutationAuthOptions::delete(),
+            SessionMutationAuthOptions::cancel(),
         )
         .await
-        .expect("strict acp flow session cancel should be released");
+        .expect("cancel must be released for any target (R-COMM-01)");
     }
 
     #[tokio::test]
@@ -4037,8 +3869,9 @@ mod tests {
         .await
         .expect("main session (owner) must be authorized to delete an orphan session");
 
-        // 对照组：非主会话（created_by 非 None）不能删除同一孤儿——owner 兜底
-        // 只对顶层主会话放行，防止任意会话越权删无主孤儿。
+        // R-COMM-01（自由通信）：子会话（created_by 非 None）现在同样可删除
+        // 同一孤儿——owner/created_by/ancestor 授权已移除，任意会话可对任意
+        // 会话执行 delete（仅 daemon 会话拦截保留）。
         session_manager
             .create_session_with_id_and_creator(
                 Some("sub-session-1".to_string()),
@@ -4052,13 +3885,7 @@ mod tests {
             )
             .await
             .expect("create sub session");
-        assert!(
-            session_manager
-                .get_session("sub-session-1")
-                .is_some_and(|session| session.created_by.is_some()),
-            "sub session must have a creator so it is not treated as the main owner"
-        );
-        let error = resolve_session_mutation_authorization(
+        resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "sub-session-1",
@@ -4068,11 +3895,7 @@ mod tests {
             SessionMutationAuthOptions::delete(),
         )
         .await
-        .expect_err("non-owner session must not delete an orphan session");
-        assert!(
-            error.to_string().contains("not authorized to delete"),
-            "{error}"
-        );
+        .expect("sub session must also be allowed to delete an orphan session (R-COMM-01 free communication)");
     }
 
     // ── R-WF-23 会话创建层级权限链测试套件 ──
@@ -4256,8 +4079,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_hierarchy_rejects_l2_create() {
-        // L2（depth==1）尝试再创建：拒绝（L1 只能建 L2，L2 不可再建）。
+    async fn create_hierarchy_allows_l2_create() {
+        // R-COMM-01（自由通信）：L2（depth==2）再创建 —— 现在允许（层级限制
+        // 已移除，任意会话可自由创建子会话；仅跨 workspace 校验保留）。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-rwf23-create-l2");
@@ -4306,7 +4130,7 @@ mod tests {
         tree.register_child("l1-session", "l2-session", 2)
             .expect("register L2 in tree");
 
-        let error = enforce_session_create_workspace_hierarchy(
+        enforce_session_create_workspace_hierarchy(
             &session_manager,
             &tree,
             "l2-session",
@@ -4314,18 +4138,13 @@ mod tests {
             &workspace_path,
         )
         .await
-        .expect_err("L2 session must not create further children");
-        assert!(
-            error
-                .to_string()
-                .contains("only L0 main sessions can create L1"),
-            "{error}"
-        );
+        .expect("L2 session must be allowed to create in its own workspace (R-COMM-01 free communication)");
     }
 
     #[tokio::test]
-    async fn create_hierarchy_rejects_unresolvable_depth() {
-        // 非 L0 且 depth 无法解析（树无记录 + metadata 无 lineage）：拒绝。
+    async fn create_hierarchy_allows_unresolvable_depth() {
+        // R-COMM-01（自由通信）：非 L0 且 depth 无法解析（树无记录 + metadata
+        // 无 lineage）—— 现在允许（depth 校验已移除；仅跨 workspace 校验保留）。
         let session_manager = test_session_manager();
         let tree = SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-rwf23-create-nodepth");
@@ -4345,7 +4164,7 @@ mod tests {
             .await
             .expect("create child session");
 
-        let error = enforce_session_create_workspace_hierarchy(
+        enforce_session_create_workspace_hierarchy(
             &session_manager,
             &tree,
             "unregistered-child",
@@ -4353,7 +4172,6 @@ mod tests {
             &workspace_path,
         )
         .await
-        .expect_err("child without resolvable depth must be rejected");
-        assert!(error.to_string().contains("no resolvable depth"), "{error}");
+        .expect("child without resolvable depth must be allowed to create (R-COMM-01 free communication)");
     }
 }

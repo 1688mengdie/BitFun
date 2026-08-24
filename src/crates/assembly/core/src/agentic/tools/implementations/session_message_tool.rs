@@ -2571,14 +2571,11 @@ impl SessionMessageTool {
         // resolved (exists) and not an ACP direct path (both ACP direct paths
         // above returned after registry verification); only local delivery is
         // handled here (steer_dialog_turn / submit_dialog_turn). Shares the R4
-        // authorization verdict with SessionControl delete/cancel:
-        // daemon session interception (R-A.04), owner (Commander role
-        // or RBAC off) exemption, created_by matching
-        // (`session-<caller>` marker, written by creator_session_marker when
-        // creating a new session), ancestor authorization (in-memory tree fast
-        // path + persisted metadata chain fallback). The new-session branch
-        // (created_session_id.is_some()) is a self-created session and skips
-        // the gate.
+        // authorization verdict with SessionControl delete/cancel.
+        // R-COMM-01（自由通信）：授权门仅保留系统护栏——daemon 会话拦截
+        // （R-A.04）；owner 豁免 / created_by 匹配 / 祖先授权（父链）已移除，
+        // 任意会话可向任意会话投递。新会话分支
+        // （created_session_id.is_some()）为自建会话，跳过本门。
         if created_session_id.is_none() {
             resolve_session_mutation_authorization(
                 coordinator.get_session_manager(),
@@ -4931,9 +4928,10 @@ mod tests {
 
     // PR #2139 #5: delivery authorization gate (dispatch_single local delivery
     // to an existing session). Reuses the R4 shared verdict
-    // resolve_session_mutation_authorization (daemon interception ->
-    // owner exemption -> created_by match -> ancestor traversal), with option
-    // deliver(): owner exemption + no ghost ACP allowance.
+    // resolve_session_mutation_authorization. R-COMM-01（自由通信）：
+    // 授权门仅保留 daemon 会话拦截护栏——owner 豁免 / created_by 匹配 /
+    // ancestor 遍历（父链）已移除，任意会话可向任意会话投递，deliver()
+    // 选项语义随之收敛（不再有父链/属主分支）。
     // ---------------------------------------------------------------------
 
     fn delivery_authz_session_manager() -> Arc<SessionManager> {
@@ -4957,16 +4955,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delivery_authz_rejects_unrelated_caller_without_metadata() {
-        // Not owner, target has no created_by, no ancestor relationship
-        // -> reject (consistent with delete semantics).
+    async fn delivery_authz_allows_unrelated_caller_without_metadata() {
+        // R-COMM-01（自由通信）：非 owner、target 无 created_by、无祖先关系
+        // 的 caller —— 现在允许 deliver（父链/created_by/owner 校验已移除，
+        // 仅保留 daemon 会话拦截护栏）。
         let session_manager = delivery_authz_session_manager();
         let tree = bitfun_services_core::session::tree::SessionTreeManager::new(8);
         let workspace = TestTempDir::new("bitfun-delivery-authz-unrelated");
         let workspace_string = workspace.as_string();
         let workspace_path = std::path::Path::new(&workspace_string);
 
-        let error = resolve_session_mutation_authorization(
+        resolve_session_mutation_authorization(
             &session_manager,
             &tree,
             "caller-1",
@@ -4976,14 +4975,7 @@ mod tests {
             SessionMutationAuthOptions::deliver(),
         )
         .await
-        .expect_err("unrelated caller without metadata must be rejected");
-        assert!(
-            error.to_string().contains("not authorized to deliver to")
-                || error
-                    .to_string()
-                    .contains("cannot verify ancestor relationship"),
-            "{error}"
-        );
+        .expect("unrelated caller without metadata must be allowed to deliver (R-COMM-01 free communication)");
     }
 
     #[tokio::test]
