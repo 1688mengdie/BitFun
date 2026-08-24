@@ -281,214 +281,180 @@ fn build_session_tree_json(
     build_session_tree_json_impl(sessions, tree)
 }
 
+/// Grouping result for a session forest: nodes keyed by their effective
+/// parent, the trunk (root) nodes, and the ids whose parent chain was fully
+/// filtered out of the current listing.
+struct SessionForest<'a> {
+    children_of_parent: HashMap<String, Vec<&'a AgentSessionSummary>>,
+    trunk_nodes: Vec<&'a AgentSessionSummary>,
+    detached_session_ids: HashSet<&'a str>,
+}
+
+impl<'a> SessionForest<'a> {
+    /// Group a flat session list into a forest using each session's effective
+    /// parent. A session whose direct parent is absent from the listing is
+    /// re-hung onto the nearest surviving ancestor (orphan re-hang). Only
+    /// sessions with no surviving ancestor at all become trunk (root) nodes;
+    /// those whose parent chain was filtered out are flagged as detached.
+    fn build(sessions: &'a [AgentSessionSummary], tree: Option<&SessionTreeManager>) -> Self {
+        let present_ids: HashSet<&'a str> = sessions
+            .iter()
+            .map(|session| session.session_id.as_str())
+            .collect();
+
+        let nearest_surviving_ancestor = |session: &'a AgentSessionSummary| -> Option<String> {
+            let mut cursor = session.parent_session_id.clone()?;
+            loop {
+                if present_ids.contains(cursor.as_str()) {
+                    return Some(cursor);
+                }
+                cursor = tree.and_then(|manager| manager.get_parent(&cursor))?;
+            }
+        };
+
+        let mut children_of_parent: HashMap<String, Vec<&'a AgentSessionSummary>> = HashMap::new();
+        let mut trunk_nodes: Vec<&'a AgentSessionSummary> = Vec::new();
+        let mut detached_session_ids: HashSet<&'a str> = HashSet::new();
+
+        for session in sessions {
+            if let Some(parent_id) = nearest_surviving_ancestor(session) {
+                children_of_parent
+                    .entry(parent_id)
+                    .or_default()
+                    .push(session);
+            } else {
+                if session.parent_session_id.is_some() {
+                    detached_session_ids.insert(session.session_id.as_str());
+                }
+                trunk_nodes.push(session);
+            }
+        }
+
+        Self {
+            children_of_parent,
+            trunk_nodes,
+            detached_session_ids,
+        }
+    }
+}
+
+/// Build the JSON tree view of the session forest. Sessions are grouped by
+/// their effective parent and rendered top-down, with a depth guard so a deep
+/// tree cannot overflow the stack.
 fn build_session_tree_json_impl(
     sessions: &[AgentSessionSummary],
     tree: Option<&SessionTreeManager>,
 ) -> String {
-    // children_by_parent: parent_session_id -> list of children
-    let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
-    let mut roots: Vec<&AgentSessionSummary> = Vec::new();
-    // Sessions whose parent chain is fully filtered out (no surviving ancestor
-    // in this list). They are promoted to roots but flagged as orphaned.
-    let mut orphaned: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let forest = SessionForest::build(sessions, tree);
 
-    let known_ids: std::collections::HashSet<&str> =
-        sessions.iter().map(|s| s.session_id.as_str()).collect();
+    const MAX_SERIALIZE_LEVEL: usize = bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH;
 
-    // R-19: resolve the effective parent of a session - the nearest ancestor
-    // present in this (possibly filtered) list. When the direct parent is
-    // filtered out (e.g. daemon sessions), the child is re-hung onto the
-    // nearest surviving ancestor instead of being promoted to a fake root,
-    // which would break the lineage. The in-memory tree is used to walk past
-    // filtered sessions.
-    let resolve_effective_parent = |session: &AgentSessionSummary| -> Option<String> {
-        let mut current = session.parent_session_id.clone()?;
-        loop {
-            if known_ids.contains(current.as_str()) {
-                return Some(current);
-            }
-            {
-                let parent = tree.and_then(|tree| tree.get_parent(&current))?;
-                current = parent;
-            }
-        }
-    };
-
-    for session in sessions {
-        match resolve_effective_parent(session) {
-            Some(parent_id) => {
-                children_by_parent
-                    .entry(parent_id)
-                    .or_default()
-                    .push(session);
-            }
-            None => {
-                if session.parent_session_id.is_some() {
-                    // No surviving ancestor in this list — promote to a root
-                    // but flag the broken lineage.
-                    orphaned.insert(session.session_id.as_str());
-                }
-                roots.push(session);
-            }
-        }
-    }
-
-    /// Maximum recursion depth for tree serialization to prevent stack overflow.
-    /// Authoritative value in `bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH`.
-    const TREE_SERIALIZE_MAX_DEPTH: usize =
-        bitfun_core_types::session_tree::MAX_TREE_SERIALIZE_DEPTH;
-
-    fn serialize_node(
+    fn encode_session_node(
         session: &AgentSessionSummary,
-        children_by_parent: &HashMap<String, Vec<&AgentSessionSummary>>,
+        forest: &SessionForest,
         tree: Option<&SessionTreeManager>,
-        orphaned: &std::collections::HashSet<&str>,
-        recursion_depth: usize,
+        level: usize,
     ) -> serde_json::Value {
-        // When the recursion budget is exhausted the subtree is truncated; mark
-        // the node so consumers can tell a complete tree from a capped one.
-        let truncated = recursion_depth >= TREE_SERIALIZE_MAX_DEPTH;
-        let children: Vec<serde_json::Value> = if truncated {
+        // Beyond the recursion guard the subtree is cut short; a flag lets the
+        // reader tell a complete tree from a depth-capped one.
+        let truncated = level >= MAX_SERIALIZE_LEVEL;
+        let child_nodes = if truncated {
             Vec::new()
         } else {
-            children_by_parent
+            forest
+                .children_of_parent
                 .get(session.session_id.as_str())
-                .map(|list| {
-                    let mut sorted = list.to_vec();
-                    sorted.sort_by_key(|s| s.created_at_ms);
-                    sorted
-                        .iter()
-                        .map(|s| {
-                            serialize_node(
-                                s,
-                                children_by_parent,
-                                tree,
-                                orphaned,
-                                recursion_depth + 1,
-                            )
-                        })
+                .map(|entries| {
+                    let mut ordered = entries.clone();
+                    ordered.sort_by_key(|entry| entry.created_at_ms);
+                    ordered
+                        .into_iter()
+                        .map(|entry| encode_session_node(entry, forest, tree, level + 1))
                         .collect()
                 })
                 .unwrap_or_default()
         };
 
-        let depth = tree
-            .and_then(|t| t.get_depth(&session.session_id))
+        let node_depth = tree
+            .and_then(|manager| manager.get_depth(&session.session_id))
             .unwrap_or(0);
-
-        let status = session
+        let runtime_status = session
             .status
             .clone()
             .unwrap_or_else(|| "active".to_string());
 
-        let mut map = serde_json::Map::new();
-        map.insert("sessionId".to_string(), json!(session.session_id));
-        map.insert("sessionName".to_string(), json!(session.session_name));
-        map.insert("agentType".to_string(), json!(session.agent_type));
-        map.insert("depth".to_string(), json!(depth));
-        map.insert("status".to_string(), json!(status));
-        // R-WF-11: surface the seven-state display projection in the list JSON
-        // output so tree consumers can render dots/markers without re-deriving.
-        map.insert(
+        let mut node = serde_json::Map::new();
+        node.insert("sessionId".to_string(), json!(session.session_id));
+        node.insert("sessionName".to_string(), json!(session.session_name));
+        node.insert("agentType".to_string(), json!(session.agent_type));
+        node.insert("depth".to_string(), json!(node_depth));
+        node.insert("status".to_string(), json!(runtime_status));
+        // Surface the seven-state display projection so tree consumers can
+        // render markers without re-deriving it from the runtime status.
+        node.insert(
             "display_state".to_string(),
             json!(session
                 .display_state
                 .clone()
-                .unwrap_or_else(|| status.clone())),
+                .unwrap_or_else(|| runtime_status.clone())),
         );
-        if orphaned.contains(session.session_id.as_str()) {
-            map.insert("orphaned".to_string(), json!(true));
+        if forest
+            .detached_session_ids
+            .contains(session.session_id.as_str())
+        {
+            node.insert("orphaned".to_string(), json!(true));
         }
         if truncated {
-            map.insert("truncated".to_string(), json!(true));
+            node.insert("truncated".to_string(), json!(true));
         }
-        map.insert("children".to_string(), json!(children));
-        serde_json::Value::Object(map)
+        node.insert("children".to_string(), json!(child_nodes));
+        serde_json::Value::Object(node)
     }
 
-    // Sort roots by created_at_ms descending (newest first)
-    let mut sorted_roots = roots;
-    sorted_roots.sort_by_key(|s| std::cmp::Reverse(s.created_at_ms));
+    let mut ranked_trunks = forest.trunk_nodes.clone();
+    ranked_trunks.sort_by_key(|node| std::cmp::Reverse(node.created_at_ms));
 
-    let forest: Vec<serde_json::Value> = sorted_roots
+    let forest_values: Vec<serde_json::Value> = ranked_trunks
         .iter()
-        .map(|s| serialize_node(s, &children_by_parent, tree, &orphaned, 0))
+        .map(|node| encode_session_node(node, &forest, tree, 0))
         .collect();
 
-    serde_json::to_string_pretty(&forest).unwrap_or_else(|_| "[]".to_string())
+    serde_json::to_string_pretty(&forest_values).unwrap_or_else(|_| "[]".to_string())
 }
 
-/// Build the compact text tree used by the default `list` output: one line per
-/// session with `sessionId | agentType | status | compact name`. The tree
-/// shape mirrors [`build_session_tree_json_impl`] (same grouping, orphan
-/// promotion, and sort orders); only the per-node rendering is text.
+/// Build the compact one-line-per-session text view of the session forest. The
+/// tree shape mirrors [`build_session_tree_json_impl`] (same grouping, orphan
+/// re-hang and sort orders); only the per-node rendering is text.
 fn build_compact_tree_lines(
     sessions: &[AgentSessionSummary],
     tree: Option<&SessionTreeManager>,
     short_names: &HashMap<String, Option<String>>,
 ) -> Vec<String> {
-    // children_by_parent: parent_session_id -> list of children
-    let mut children_by_parent: HashMap<String, Vec<&AgentSessionSummary>> = HashMap::new();
-    let mut roots: Vec<&AgentSessionSummary> = Vec::new();
-    // Sessions whose parent chain has no surviving ancestor in this list are
-    // promoted to roots and flagged orphaned (consistent with JSON mode).
-    let mut orphaned: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    let known_ids: std::collections::HashSet<&str> =
-        sessions.iter().map(|s| s.session_id.as_str()).collect();
+    let forest = SessionForest::build(sessions, tree);
 
-    // R-19: resolve the effective parent - the nearest ancestor present in this
-    // (possibly filtered) list.
-    let resolve_effective_parent = |session: &AgentSessionSummary| -> Option<String> {
-        let mut current = session.parent_session_id.clone()?;
-        loop {
-            if known_ids.contains(current.as_str()) {
-                return Some(current);
-            }
-            {
-                let parent = tree.and_then(|tree| tree.get_parent(&current))?;
-                current = parent;
-            }
-        }
-    };
-
-    for session in sessions {
-        match resolve_effective_parent(session) {
-            Some(parent_id) => {
-                children_by_parent
-                    .entry(parent_id)
-                    .or_default()
-                    .push(session);
-            }
-            None => {
-                if session.parent_session_id.is_some() {
-                    orphaned.insert(session.session_id.as_str());
-                }
-                roots.push(session);
-            }
-        }
-    }
-
-    fn compact_line(
+    fn render_compact_entry(
         session: &AgentSessionSummary,
         short_names: &HashMap<String, Option<String>>,
-        orphaned: &std::collections::HashSet<&str>,
+        forest: &SessionForest,
     ) -> String {
-        let status = session
+        let runtime_status = session
             .status
             .clone()
             .unwrap_or_else(|| "active".to_string());
-        // R-WF-11: surface the seven-state display projection in the text tree.
         let display_state = session
             .display_state
             .clone()
-            .unwrap_or_else(|| status.clone());
-        let display_name = compact_session_display_name(
+            .unwrap_or_else(|| runtime_status.clone());
+        let shown_name = compact_session_display_name(
             &session.session_name,
             short_names
                 .get(&session.session_id)
                 .and_then(Option::as_deref),
         );
-        let orphan_marker = if orphaned.contains(session.session_id.as_str()) {
+        let detached_tag = if forest
+            .detached_session_ids
+            .contains(session.session_id.as_str())
+        {
             " (orphaned)"
         } else {
             ""
@@ -497,55 +463,40 @@ fn build_compact_tree_lines(
             "- [{}] {} | {} | {} | {}{}",
             session.session_id,
             session.agent_type,
-            status,
+            runtime_status,
             display_state,
-            display_name,
-            orphan_marker
+            shown_name,
+            detached_tag
         )
     }
 
-    fn collect_lines(
+    fn append_visible_branch(
         session: &AgentSessionSummary,
-        depth: usize,
-        children_by_parent: &HashMap<String, Vec<&AgentSessionSummary>>,
+        level: usize,
+        forest: &SessionForest,
         short_names: &HashMap<String, Option<String>>,
-        orphaned: &std::collections::HashSet<&str>,
         lines: &mut Vec<String>,
     ) {
-        let indent = "  ".repeat(depth);
+        let pad = "  ".repeat(level);
         lines.push(format!(
-            "{indent}{}",
-            compact_line(session, short_names, orphaned)
+            "{pad}{}",
+            render_compact_entry(session, short_names, forest)
         ));
-        if let Some(children) = children_by_parent.get(session.session_id.as_str()) {
-            let mut sorted = children.to_vec();
-            sorted.sort_by_key(|s| s.created_at_ms);
-            for child in sorted {
-                collect_lines(
-                    child,
-                    depth + 1,
-                    children_by_parent,
-                    short_names,
-                    orphaned,
-                    lines,
-                );
+        if let Some(entries) = forest.children_of_parent.get(session.session_id.as_str()) {
+            let mut ordered = entries.clone();
+            ordered.sort_by_key(|entry| entry.created_at_ms);
+            for child in ordered {
+                append_visible_branch(child, level + 1, forest, short_names, lines);
             }
         }
     }
 
-    let mut sorted_roots = roots;
-    sorted_roots.sort_by_key(|s| std::cmp::Reverse(s.created_at_ms));
+    let mut ranked_trunks = forest.trunk_nodes.clone();
+    ranked_trunks.sort_by_key(|node| std::cmp::Reverse(node.created_at_ms));
 
     let mut lines = Vec::new();
-    for root in sorted_roots {
-        collect_lines(
-            root,
-            0,
-            &children_by_parent,
-            short_names,
-            &orphaned,
-            &mut lines,
-        );
+    for root in ranked_trunks {
+        append_visible_branch(root, 0, &forest, short_names, &mut lines);
     }
     lines
 }
