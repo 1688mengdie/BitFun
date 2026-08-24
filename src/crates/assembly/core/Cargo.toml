@@ -204,7 +204,6 @@ agent-runtime = [
     "dep:bitfun-agent-stream",
     "dep:bitfun-agent-tools",
     "bitfun-agent-tools/computer-use-contract",
-    "bitfun-agent-tools/acp-bridge",
     "bitfun-runtime-ports/agent-api",
     "bitfun-runtime-ports/git-port",
     "bitfun-runtime-ports/remote-exec-port",

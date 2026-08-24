@@ -10,13 +10,12 @@ use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
-use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AgentDialogPrependedReminder,
-    AgentDialogTurnRequest, AgentSessionCreateRequest, AgentSessionListRequest,
-    AgentSessionReplyRoute, AgentSessionSummary, AgentSessionWorkspaceBinding,
-    AgentSessionWorkspaceRequest,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, ACP_TOOL_PREFIX,
+    AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
+    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
+    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};

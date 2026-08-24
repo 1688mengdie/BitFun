@@ -15,6 +15,12 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+/// Prefix used to address a real external ACP agent from the session tools
+/// (`acp__<client_id>`). Defined here (a capability contract crate) so core can
+/// reach it without enabling `bitfun-agent-tools/acp-bridge` (which the
+/// agent-runtime boundary forbids).
+pub const ACP_TOOL_PREFIX: &str = "acp__";
+
 /// `SessionControl` create request for a real external ACP flow session.
 ///
 /// Starts an external ACP client process bound to a persisted session.
