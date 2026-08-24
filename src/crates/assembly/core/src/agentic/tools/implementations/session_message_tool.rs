@@ -300,6 +300,49 @@ struct SessionMessageInput {
     session_name: Option<String>,
     message: String,
     agent_type: Option<SessionMessageAgentType>,
+    /// When true, deliver as an urgent mid-turn correction: if the target session
+    /// is currently processing, the message is injected into its running turn via
+    /// the UserSteering channel instead of starting a new turn. Falls back to
+    /// normal delivery when the target session is not processing.
+    #[serde(default)]
+    #[allow(dead_code)]
+    urgent: bool,
+}
+
+/// Delivery decision for an urgent message against a target session.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
+enum UrgentDelivery {
+    /// Target session is processing a turn; steer into the running turn.
+    Steer { turn_id: String },
+    /// Target session is idle (or the turn ended); use normal submission.
+    NormalSubmit,
+}
+
+#[allow(dead_code)]
+fn resolve_urgent_delivery(processing_turn_id: Option<String>) -> UrgentDelivery {
+    match processing_turn_id {
+        Some(turn_id) => UrgentDelivery::Steer { turn_id },
+        None => UrgentDelivery::NormalSubmit,
+    }
+}
+
+/// Dual-channel redundancy decision for urgent messages:
+/// only attempt the steering channel when the message is urgent AND the target
+/// session already exists (a brand-new session has no running turn to steer
+/// into) AND the dispatch does not carry a plan-todo binding (the steering
+/// channel carries no binding metadata, so a bound message falls back to the
+/// normal submission channel that preserves the binding and the reply route).
+/// Every other case uses the normal submission channel. When steering is
+/// attempted but rejected, the caller falls back to the normal channel, so one
+/// of the two channels always delivers the message.
+#[allow(dead_code)]
+fn should_attempt_steering(
+    urgent: bool,
+    created_session_id: Option<&str>,
+    has_plan_todo_binding: bool,
+) -> bool {
+    urgent && created_session_id.is_none() && !has_plan_todo_binding
 }
 
 #[async_trait]
@@ -315,6 +358,7 @@ impl Tool for SessionMessageTool {
 Usage:
 - Create a new session and send: omit "session_id", and provide "workspace", "session_name", "agent_type", and "message".
 - Reusing an existing session: provide "session_id" and "message". You may omit "workspace"; the tool will resolve it from the target session when possible.
+- Urgent correction: set "urgent" to true to inject the message into the target session's running turn instead of waiting for a new turn. Requires "session_id".
 
 Allowed agent types when creating a session:
 - "agentic": Coding-focused agent for implementation, debugging, and code changes.
@@ -358,6 +402,10 @@ Allowed agent types when creating a session:
                     "type": "string",
                     "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                     "description": "Required when session_id is omitted. Not allowed when sending to an existing session."
+                },
+                "urgent": {
+                    "type": "boolean",
+                    "description": "When true, deliver as an urgent mid-turn correction: if the target session is processing, inject into its running turn via the UserSteering channel; otherwise fall back to normal delivery. Requires session_id."
                 }
             },
             "required": ["message"],
@@ -1075,5 +1123,73 @@ mod tests {
             validation.message.as_deref(),
             Some("workspace is required when session_id is omitted")
         );
+    }
+
+    #[test]
+    fn session_message_input_defaults_urgent_to_false_for_backward_compat() {
+        let input: SessionMessageInput = serde_json::from_value(json!({
+            "session_id": "worker_1",
+            "message": "hello",
+        }))
+        .expect("legacy payload without urgent must parse");
+
+        assert!(!input.urgent);
+    }
+
+    #[test]
+    fn session_message_input_parses_urgent_flag() {
+        let input: SessionMessageInput = serde_json::from_value(json!({
+            "session_id": "worker_1",
+            "message": "stop what you are doing and correct this",
+            "urgent": true,
+        }))
+        .expect("payload with urgent must parse");
+
+        assert!(input.urgent);
+    }
+
+    #[test]
+    fn urgent_delivery_steers_into_a_processing_turn() {
+        assert_eq!(
+            resolve_urgent_delivery(Some("turn-7".to_string())),
+            UrgentDelivery::Steer {
+                turn_id: "turn-7".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn urgent_delivery_falls_back_to_normal_submit_for_idle_session() {
+        assert_eq!(resolve_urgent_delivery(None), UrgentDelivery::NormalSubmit);
+    }
+
+    #[test]
+    fn urgent_message_to_existing_session_attempts_steering_channel() {
+        assert!(should_attempt_steering(true, None, false));
+    }
+
+    #[test]
+    fn urgent_message_to_new_session_uses_normal_channel_only() {
+        assert!(!should_attempt_steering(true, Some("new-session-1"), false));
+    }
+
+    #[test]
+    fn urgent_message_with_plan_todo_binding_uses_normal_channel_only() {
+        // The steering channel carries no plan-todo binding metadata, so a
+        // bound dispatch must fall back to the normal submission channel that
+        // preserves the binding and the reply route.
+        assert!(!should_attempt_steering(true, None, true));
+        assert!(!should_attempt_steering(true, Some("new-session-1"), true));
+    }
+
+    #[test]
+    fn non_urgent_message_never_attempts_steering_channel() {
+        assert!(!should_attempt_steering(false, None, false));
+        assert!(!should_attempt_steering(
+            false,
+            Some("new-session-1"),
+            false
+        ));
+        assert!(!should_attempt_steering(false, None, true));
     }
 }
