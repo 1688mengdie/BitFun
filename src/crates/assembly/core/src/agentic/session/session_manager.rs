@@ -11008,6 +11008,7 @@ impl SessionManager {
         let edit_constraints_store = self.edit_constraints_store.clone();
         let file_read_state_store = self.file_read_state_store.clone();
         let evidence_ledger = self.evidence_ledger.clone();
+        let evidence_ledger_operation_locks = self.evidence_ledger_operation_locks.clone();
         // Orphan recycling rebuilds a thin `Self` handle inside the ticker (the
         // same pattern used by `spawn_model_reconciliation_listener`) so the
         // full `&self` archive/delete chain can be reused.
@@ -11045,6 +11046,7 @@ impl SessionManager {
                 edit_constraints_store: edit_constraints_store.clone(),
                 file_read_state_store: file_read_state_store.clone(),
                 evidence_ledger: evidence_ledger.clone(),
+                evidence_ledger_operation_locks: evidence_ledger_operation_locks.clone(),
                 persistence_manager: persistence.clone(),
                 memory_database: memory_database.clone(),
                 subagent_children: subagent_children.clone(),
@@ -11196,6 +11198,7 @@ impl SessionManager {
             edit_constraints_store: self.edit_constraints_store.clone(),
             file_read_state_store: self.file_read_state_store.clone(),
             evidence_ledger: self.evidence_ledger.clone(),
+            evidence_ledger_operation_locks: self.evidence_ledger_operation_locks.clone(),
             persistence_manager: self.persistence_manager.clone(),
             memory_database: self.memory_database.clone(),
             subagent_children: self.subagent_children.clone(),
