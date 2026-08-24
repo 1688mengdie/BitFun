@@ -319,6 +319,10 @@ Arguments:
                     "type": "string",
                     "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                     "description": "Optional agent type when creating a session. Defaults to agentic."
+                },
+                "model_id": {
+                    "type": "string",
+                    "description": "Optional model id used when creating a session; the created session binds to this model."
                 }
             },
             "required": ["action"],
@@ -395,7 +399,7 @@ Arguments:
                         workspace_id: workspace.workspace_id.clone(),
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
-                        model_id: None,
+                        model_id: params.model_id.clone(),
                         metadata,
                     })
                     .await
@@ -405,6 +409,7 @@ Arguments:
                 let created_session_id = session.session_id.clone();
                 let created_session_name = session.session_name.clone();
                 let created_agent_type = session.agent_type.clone();
+                let created_model_id = session.model_id.clone();
                 let result_for_assistant = session_control_created_result_message(
                     &created_session_id,
                     &workspace.display_workspace,
@@ -420,6 +425,7 @@ Arguments:
                             "session_id": created_session_id,
                             "session_name": created_session_name,
                             "agent_type": created_agent_type,
+                            "model_id": created_model_id,
                         }
                     }),
                     result_for_assistant: Some(result_for_assistant),
