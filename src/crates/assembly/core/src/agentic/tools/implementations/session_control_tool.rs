@@ -994,6 +994,13 @@ mod tests {
                 agent_type: format!("acp:{}", request.client_id),
             })
         }
+        async fn list_clients(
+            &self,
+        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientListResult> {
+            Ok(bitfun_runtime_ports::AcpClientListResult {
+                clients: Vec::new(),
+            })
+        }
         async fn send_message_stream(
             &self,
             _request: bitfun_runtime_ports::AcpClientMessageRequest,

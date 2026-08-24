@@ -28,9 +28,10 @@ use bitfun_core::service::remote_ssh::workspace_state::get_remote_workspace_mana
 use bitfun_core::util::errors::{BitFunError, BitFunResult};
 use bitfun_runtime_ports::{
     acp_backend_error, acp_flow_client_id_from_session_id, AcpClientBitfunMessageRequest,
-    AcpClientCreateRequest, AcpClientCreateResult, AcpClientMessageRequest, AcpClientMessageResult,
-    AcpClientPort, AcpClientStreamChunk, AcpClientStreamChunkSink, PortError, PortErrorKind,
-    PortResult, RuntimeServiceCapability, RuntimeServicePort,
+    AcpClientCreateRequest, AcpClientCreateResult, AcpClientListResult, AcpClientMessageRequest,
+    AcpClientMessageResult, AcpClientPort, AcpClientStreamChunk, AcpClientStreamChunkSink,
+    AcpClientSummary, PortError, PortErrorKind, PortResult, RuntimeServiceCapability,
+    RuntimeServicePort,
 };
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -2814,6 +2815,25 @@ impl AcpClientPort for AcpClientPortAdapter {
             session_id: response.session_id,
             session_name: response.session_name,
             agent_type: response.agent_type,
+        })
+    }
+
+    async fn list_clients(&self) -> PortResult<AcpClientListResult> {
+        let infos =
+            self.0.list_clients().await.map_err(|error| {
+                acp_backend_error(format!("failed to list ACP clients: {error}"))
+            })?;
+        Ok(AcpClientListResult {
+            clients: infos
+                .into_iter()
+                .map(|info| AcpClientSummary {
+                    client_id: info.id,
+                    name: info.name,
+                    status: format!("{:?}", info.status),
+                    session_count: info.session_count,
+                    readonly: info.readonly,
+                })
+                .collect(),
         })
     }
 

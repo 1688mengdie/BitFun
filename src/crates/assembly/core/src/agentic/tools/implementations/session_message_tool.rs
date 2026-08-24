@@ -268,6 +268,67 @@ impl SessionMessageTool {
         })
     }
 
+    /// COORD-03 authoritative check before routing a flow-session target through
+    /// the external ACP direct path: the shape is only a clue, the persisted
+    /// flow-session registry (provider=acp + acpClientId) is authoritative.
+    /// Rejects recycled (`Missing`), non-ACP (`NotAcpFlow`) or misowned
+    /// (client mismatch) sessions so a stale/shape-colliding internal session is
+    /// never routed to an external ACP agent.
+    async fn verify_acp_flow_session_registry(
+        workspace_path: &str,
+        session_id: &str,
+        flow_client_id: &str,
+    ) -> BitFunResult<()> {
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::infrastructure::get_path_manager_arc;
+        use crate::service::remote_ssh::workspace_state::get_effective_session_path;
+        use bitfun_core_types::{SESSION_PROVIDER_ACP, SESSION_PROVIDER_METADATA_KEY};
+
+        let storage_path = get_effective_session_path(workspace_path, None, None).await;
+        let persistence = PersistenceManager::new(get_path_manager_arc())
+            .map_err(|error| BitFunError::tool(error.to_string()))?;
+        let Some(metadata) = persistence
+            .load_session_metadata(&storage_path, session_id)
+            .await
+            .map_err(|error| BitFunError::tool(error.to_string()))?
+        else {
+            return Err(BitFunError::tool(format!(
+                "ACP flow session '{}' was not found in the flow-session registry; it may have been recycled or never created",
+                session_id
+            )));
+        };
+        let Some(custom) = metadata.custom_metadata.as_ref() else {
+            return Err(BitFunError::tool(format!(
+                "session '{}' is not an ACP flow session (its persisted record is not an ACP session record); refusing to route it through the external ACP direct path",
+                session_id
+            )));
+        };
+        if custom
+            .get(SESSION_PROVIDER_METADATA_KEY)
+            .and_then(Value::as_str)
+            != Some(SESSION_PROVIDER_ACP)
+        {
+            return Err(BitFunError::tool(format!(
+                "session '{}' is not an ACP flow session (its persisted record is not an ACP session record); refusing to route it through the external ACP direct path",
+                session_id
+            )));
+        }
+        let registered_client = custom
+            .get("acpClientId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if registered_client != Some(flow_client_id) {
+            return Err(BitFunError::tool(format!(
+                "ACP flow session '{}' is registered for client '{}', not '{}'; refusing to route",
+                session_id,
+                registered_client.unwrap_or(""),
+                flow_client_id
+            )));
+        }
+        Ok(())
+    }
+
     fn target_agent_type_from_sessions(
         sessions: &[AgentSessionSummary],
         target_session_id: &str,
@@ -724,6 +785,37 @@ Allowed agent types when creating a session:
                         .to_string(),
                 )
             })?;
+            // COORD-03: the `acp__`/`acp_<client>_<uuid>` shape is only a clue —
+            // the ACP registry is authoritative. Verify the target is a live,
+            // correctly-owned external ACP target before routing.
+            if let Some(client_id) = acp_target_via_agent {
+                let listed = port.list_clients().await.map_err(|error| {
+                    BitFunError::tool(format!(
+                        "failed to verify the ACP client registry for agent type '{}': {}",
+                        target_agent_type, error.message
+                    ))
+                })?;
+                if !listed
+                    .clients
+                    .iter()
+                    .any(|client| client.client_id == client_id)
+                {
+                    return Err(BitFunError::tool(format!(
+                        "session '{}' uses agent type '{}' but ACP client '{}' is not registered; refusing to route to a non-existent external agent",
+                        target_session_id, target_agent_type, client_id
+                    )));
+                }
+            } else if let Some(flow_client_id) = acp_target_via_flow {
+                // Flow sessions live in the ACP flow-session registry (provider=acp
+                // persisted record). Verify the record is active and owned by the
+                // same client before routing; reject recycled/misowned sessions.
+                Self::verify_acp_flow_session_registry(
+                    &workspace_target.workspace_path,
+                    &target_session_id,
+                    flow_client_id,
+                )
+                .await?;
+            }
             let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel();
             let target_session_for_delivery = target_session_id.clone();
             let user_input = params.message.clone();

@@ -62,6 +62,24 @@ pub struct AcpClientMessageResult {
     pub response: String,
 }
 
+/// One registered ACP client entry from [`AcpClientPort::list_clients`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientSummary {
+    pub client_id: String,
+    pub name: String,
+    pub status: String,
+    pub session_count: usize,
+    pub readonly: bool,
+}
+
+/// Result of [`AcpClientPort::list_clients`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpClientListResult {
+    pub clients: Vec<AcpClientSummary>,
+}
+
 /// `SessionMessage` ACP direct-path request: forward one message to the
 /// external ACP agent bound to an internal BitFun session
 /// (`acp__<client_id>` session).
@@ -111,6 +129,12 @@ pub trait AcpClientPort: RuntimeServicePort {
         &self,
         request: AcpClientCreateRequest,
     ) -> PortResult<AcpClientCreateResult>;
+
+    /// List registered ACP clients with their current runtime facts. Used by the
+    /// `SessionMessage` ACP direct path to verify the target client is actually
+    /// registered before routing (COORD-03: the `acp__` prefix is only a clue,
+    /// the ACP client registry is authoritative).
+    async fn list_clients(&self) -> PortResult<AcpClientListResult>;
 
     /// Forward one message through the real channel to an external ACP agent
     /// addressed by a flow session id (`acp_<client_id>_<uuid>`) and stream the
