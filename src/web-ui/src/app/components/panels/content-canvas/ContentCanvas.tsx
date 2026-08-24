@@ -8,13 +8,7 @@ import { EditorArea } from './editor-area';
 import { AnchorZone } from './anchor-zone';
 import { MissionControl } from './mission-control';
 import { EmptyState } from './empty-state';
-import {
-  useCanvasStore,
-  useAgentCanvasStore,
-  useProjectCanvasStore,
-  useGitCanvasStore,
-  useBottomTerminalCanvasStore,
-} from './stores';
+import { useCanvasStore } from './stores';
 import { useTabLifecycle, useKeyboardShortcuts, usePanelTabCoordinator } from './hooks';
 import type { AnchorPosition, EditorGroupState, Grid9Slot } from './types';
 import { TAB_EVENTS } from './types';
@@ -123,23 +117,21 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   // Keep the editor area mounted for hidden terminal tabs. Closing a terminal
   // tab backgrounds it without destroying the xterm instance. Slot-aware: in
   // grid9 mode tabs live in `layout.grid9Cells`, so count every renderable
-  // group (legacy + grid9 cells) via getAllRenderableGroups(), not just the
-  // three hard-coded fields.
+  // group (legacy + grid9 cells), not just the three hard-coded fields.
+  // These values are already subscribed through the mode-aware `useCanvasStore`
+  // selectors above, so the memo recomputes whenever the current mode's store
+  // changes — reading them here (instead of a fresh `store.getState()`) keeps the
+  // deps truthful and the result responsive.
   const hasRenderableTabs = useMemo(() => {
-    let store = useAgentCanvasStore;
-    if (mode === 'project') store = useProjectCanvasStore;
-    else if (mode === 'git') store = useGitCanvasStore;
-    else if (mode === 'bottom-terminal') store = useBottomTerminalCanvasStore;
-    const state = store.getState();
+    const groups: EditorGroupState[] = layout.splitMode === 'grid9'
+      ? Object.values(layout.grid9Cells).filter((g): g is EditorGroupState => !!g)
+      : [primaryGroup, secondaryGroup, tertiaryGroup];
     // Any group (legacy or grid9 cell) with visible tabs counts as renderable.
-    if (state.getAllRenderableGroups().length > 0) return true;
+    if (groups.some(group => group.tabs.some(tab => !tab.isHidden))) return true;
     // Keep hidden terminal tabs mounted (keep-alive) so reopening a terminal
     // reuses the xterm buffer instead of replaying history.
-    const groups: EditorGroupState[] = state.layout.splitMode === 'grid9'
-      ? Object.values(state.layout.grid9Cells).filter((g): g is EditorGroupState => !!g)
-      : [state.primaryGroup, state.secondaryGroup, state.tertiaryGroup];
     return groups.some(group => group.tabs.some(tab => tab.content.type === 'terminal'));
-  }, [mode, layout, primaryGroup, secondaryGroup, tertiaryGroup]);
+  }, [layout, primaryGroup, secondaryGroup, tertiaryGroup]);
 
   // Handle anchor close
   const handleAnchorClose = useCallback(() => {
