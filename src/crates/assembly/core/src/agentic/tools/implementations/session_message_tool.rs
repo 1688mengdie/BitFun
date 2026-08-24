@@ -1008,7 +1008,7 @@ Allowed agent types when creating a session:
             }
         };
 
-        // Batch mode: the whole batch is validated up front — any structurally
+        // Batch mode: the whole batch is validated up front - any structurally
         // invalid item rejects the entire batch before anything executes.
         if let Some(batch) = parsed.batch.as_ref() {
             return self.validate_batch(&parsed, batch, context).await;
@@ -1186,6 +1186,9 @@ Allowed agent types when creating a session:
             .get("workspace")
             .and_then(|value| value.as_str())
             .unwrap_or("resolved workspace");
+        if let Some(batch) = input.get("batch").and_then(|value| value.as_array()) {
+            return format!("Batch dispatch {} message(s) in {}", batch.len(), workspace);
+        }
         if let Some(session_id) = input.get("session_id").and_then(|value| value.as_str()) {
             format!("Send message to session {} in {}", session_id, workspace)
         } else {
@@ -1567,5 +1570,250 @@ mod tests {
             validation.message.as_deref(),
             Some("workspace is required when session_id is omitted")
         );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_empty_batch() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("batch cannot be empty")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_top_level_message() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "message": "hello",
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("message cannot be combined with batch")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_top_level_session_fields() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "session_id": "worker_1",
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("session fields must be provided per batch item when batch is used")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_requires_workspace_for_create_item() {
+        let tool = SessionMessageTool::new();
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("workspace is required when a batch item omits session_id")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_item_empty_message() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "",
+                            "agent_type": "agentic",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("batch[0].message cannot be empty")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_item_missing_session_name() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("batch[0].session_name is required when session_id is omitted")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_item_self_session() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_id": "source_1",
+                            "message": "hi",
+                        }
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result);
+        assert_eq!(
+            validation.message.as_deref(),
+            Some("batch[0].session_id cannot send a message to the same session")
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_accepts_create_items() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        },
+                        {
+                            "session_name": "Plan Session",
+                            "message": "plan",
+                            "agent_type": "Plan",
+                        },
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_batch_accepts_mixed_send_and_create_items() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                        },
+                        {
+                            "session_id": "worker_2",
+                            "message": "hello worker",
+                        },
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
     }
 }
