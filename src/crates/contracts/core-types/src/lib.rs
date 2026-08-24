@@ -9,6 +9,7 @@ pub mod lsp;
 pub mod model;
 pub mod session;
 pub mod session_usage;
+pub mod session_tree;
 pub mod speech;
 pub mod surface;
 pub mod tool_image_attachment;

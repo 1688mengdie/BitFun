@@ -113,6 +113,7 @@ use bitfun_runtime_ports::{
     ThreadGoalContinuationPlan, ThreadGoalStatus,
 };
 use bitfun_services_core::filesystem::{FileSearchOptions, FileSystemService, FileTreeNode};
+use bitfun_services_core::session::tree::SessionTreeManager;
 use bitfun_services_core::workspace_text::{
     normalize_workspace_relative_path, resolve_workspace_relative_entry, WorkspaceEntryKind,
     WorkspaceTextReadError,
@@ -1147,6 +1148,7 @@ fn turn_stop_key(session_id: &str, turn_id: &str) -> String {
 /// Conversation coordinator
 pub struct ConversationCoordinator {
     session_manager: Arc<SessionManager>,
+    session_tree: Arc<SessionTreeManager>,
     runtime_ownership: Arc<CoreRuntimeOwnership>,
     execution_engine: Arc<ExecutionEngine>,
     tool_pipeline: Arc<ToolPipeline>,
@@ -1188,6 +1190,11 @@ pub struct ConversationCoordinator {
 }
 
 impl ConversationCoordinator {
+    /// Borrow the in-memory session tree manager.
+    pub fn session_tree(&self) -> &Arc<SessionTreeManager> {
+        &self.session_tree
+    }
+
     pub(crate) async fn resolve_workspace_id_for_config(config: &SessionConfig) -> Option<String> {
         let explicit = config
             .workspace_id
@@ -2205,6 +2212,9 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         ));
         Self {
             session_manager,
+            session_tree: Arc::new(SessionTreeManager::new(
+                bitfun_core_types::session_tree::MAX_TREE_DEPTH,
+            )),
             runtime_ownership,
             execution_engine,
             tool_pipeline,
@@ -12534,6 +12544,10 @@ fn runtime_session_summary(session: SessionSummary) -> bitfun_runtime_ports::Age
         turn_count: session.turn_count,
         created_at_ms: runtime_session_time_ms(session.created_at),
         last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
+        parent_session_id: None,
+        status: None,
+        display_state: None,
+        is_daemon: false,
     }
 }
 
@@ -13082,6 +13096,10 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for ConversationCoordina
                 turn_count: session.dialog_turn_ids.len(),
                 created_at_ms: runtime_session_time_ms(session.created_at),
                 last_active_at_ms: runtime_session_time_ms(session.last_activity_at),
+                parent_session_id: None,
+                status: None,
+                display_state: None,
+                is_daemon: false,
             },
             state: session.state,
         })

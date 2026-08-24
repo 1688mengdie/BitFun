@@ -618,6 +618,10 @@ fn summary(session_id: &str) -> AgentSessionSummary {
         turn_count: 0,
         created_at_ms: 1,
         last_active_at_ms: 1,
+        parent_session_id: None,
+        status: None,
+        display_state: None,
+        is_daemon: false,
     }
 }
 

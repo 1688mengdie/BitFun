@@ -266,6 +266,10 @@ impl AgentSessionRestorePort for SessionControlProvider {
                 turn_count: 4,
                 created_at_ms: 10,
                 last_active_at_ms: 20,
+                parent_session_id: None,
+                status: None,
+                display_state: None,
+                is_daemon: false,
             },
             state: SessionState::Processing {
                 current_turn_id: "turn-active".to_string(),
@@ -386,6 +390,10 @@ impl bitfun_agent_runtime::sdk::AgentSessionRestorePort for Phase2Provider {
                 turn_count: 1,
                 created_at_ms: 10,
                 last_active_at_ms: 20,
+                parent_session_id: None,
+                status: None,
+                display_state: None,
+                is_daemon: false,
             },
             state: SessionState::Processing {
                 current_turn_id: "turn-active".to_string(),

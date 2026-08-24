@@ -93,6 +93,20 @@ pub struct AgentSessionSummary {
     pub turn_count: usize,
     pub created_at_ms: u64,
     pub last_active_at_ms: u64,
+    /// Optional parent session ID for tree-structured display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
+    /// Optional session runtime status (e.g. "idle", "active", "error").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Display/management state (seven-state projection), e.g. "standby",
+    /// "processing", "completed", "hung", "interrupted", "pending_attention",
+    /// "viewed". Distinct from the runtime `status` above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_state: Option<String>,
+    /// Daemon session marker.
+    #[serde(default)]
+    pub is_daemon: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -3317,6 +3331,10 @@ mod tests {
             turn_count: 3,
             created_at_ms: 1000,
             last_active_at_ms: 2000,
+            parent_session_id: None,
+            status: None,
+            display_state: None,
+            is_daemon: false,
         };
         let delete_request = AgentSessionDeleteRequest {
             workspace_path: "/workspace/project".to_string(),
