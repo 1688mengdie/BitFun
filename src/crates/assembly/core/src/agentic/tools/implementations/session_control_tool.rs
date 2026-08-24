@@ -172,6 +172,7 @@ impl SessionControlTool {
         SessionControlValidationContext {
             current_session_id: context.and_then(|value| value.session_id.as_deref()),
             has_workspace_root: context.and_then(|value| value.workspace_root()).is_some(),
+            short_name_max_chars: None,
         }
     }
 

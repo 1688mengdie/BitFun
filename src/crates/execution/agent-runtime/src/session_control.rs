@@ -58,12 +58,20 @@ pub struct SessionControlInput {
     pub session_id: Option<String>,
     pub session_name: Option<String>,
     pub agent_type: Option<SessionControlAgentType>,
+    /// Optional compact display name used when creating a session; shown by the
+    /// compact `list` output (only for create).
+    pub short_name: Option<String>,
+    /// When true, `list` returns the full session tree with full names instead
+    /// of the compact output (only for list).
+    pub detail: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SessionControlValidationContext<'a> {
     pub current_session_id: Option<&'a str>,
     pub has_workspace_root: bool,
+    /// Override for the short-name length cap (R-THR-01 config). Defaults to 60.
+    pub short_name_max_chars: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -127,6 +135,43 @@ pub fn session_control_session_name_or_default(session_name: Option<&str>) -> St
         .to_string()
 }
 
+/// Maximum number of characters a user-provided short name may keep. The cap
+/// bounds `list` compact output; validation rejects longer values and the
+/// compact renderer truncates defensively.
+pub const SHORT_NAME_MAX_CHARS: usize = 60;
+
+/// Maximum number of characters a compact display name keeps from the full
+/// session name when no explicit short name is set. Aliased to
+/// [`SHORT_NAME_MAX_CHARS`] so both paths share a single bound.
+pub const COMPACT_SESSION_NAME_MAX_CHARS: usize = SHORT_NAME_MAX_CHARS;
+
+/// Truncate a compact display name to at most [`COMPACT_SESSION_NAME_MAX_CHARS`]
+/// characters with a trailing ellipsis. Character-based truncation keeps
+/// multi-byte (CJK) names intact.
+fn truncate_compact_display_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if trimmed.chars().count() <= COMPACT_SESSION_NAME_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    let truncated: String = trimmed
+        .chars()
+        .take(COMPACT_SESSION_NAME_MAX_CHARS)
+        .collect();
+    format!("{truncated}...")
+}
+
+/// Resolve the compact display name used by `list` compact output: the explicit
+/// short name wins; otherwise the full session name is truncated to
+/// [`COMPACT_SESSION_NAME_MAX_CHARS`] characters with a trailing ellipsis.
+/// Both paths share the same character-based cap, so multi-byte (CJK) names
+/// stay intact and a short name cannot exceed the bound.
+pub fn compact_session_display_name(session_name: &str, short_name: Option<&str>) -> String {
+    if let Some(short_name) = short_name.filter(|value| !value.trim().is_empty()) {
+        return truncate_compact_display_name(short_name);
+    }
+    truncate_compact_display_name(session_name)
+}
+
 pub fn session_control_agent_type_or_default(
     agent_type: Option<&SessionControlAgentType>,
 ) -> String {
@@ -161,6 +206,12 @@ fn validate_mutating_action_target(
     }
     if input.session_name.is_some() {
         return invalid("session_name is only allowed for create");
+    }
+    if input.short_name.is_some() {
+        return invalid("short_name is only allowed for create");
+    }
+    if input.detail.is_some() {
+        return invalid("detail is only allowed for list");
     }
 
     let Some(session_id) = input.session_id.as_deref() else {
@@ -207,6 +258,20 @@ pub fn validate_session_control_input(
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for create");
             }
+            if input.detail.is_some() {
+                return invalid("detail is only allowed for list");
+            }
+            if let Some(short_name) = input.short_name.as_deref() {
+                let short_name_max_chars = context
+                    .short_name_max_chars
+                    .unwrap_or(SHORT_NAME_MAX_CHARS)
+                    .max(1);
+                if short_name.trim().chars().count() > short_name_max_chars {
+                    return invalid(format!(
+                        "short_name must be at most {short_name_max_chars} characters"
+                    ));
+                }
+            }
             if context.current_session_id.is_none() {
                 return invalid("create requires a creator session in tool context");
             }
@@ -223,6 +288,9 @@ pub fn validate_session_control_input(
             }
             if input.session_name.is_some() {
                 return invalid("session_name is only allowed for create");
+            }
+            if input.short_name.is_some() {
+                return invalid("short_name is only allowed for create");
             }
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for list");
