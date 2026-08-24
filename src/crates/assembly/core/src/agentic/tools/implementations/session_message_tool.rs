@@ -22,6 +22,7 @@ use bitfun_runtime_ports::{
     AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
     AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
 };
+use log::warn;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -521,15 +522,23 @@ impl SessionMessageTool {
                 )
             };
 
+        // Explicitly reject an empty message rather than silently defaulting the
+        // now-optional top-level field (the single-target path requires one).
+        let message = params
+            .message
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| BitFunError::tool("message cannot be empty".to_string()))?;
+
         let (forwarded_message, prepended_messages) =
-            self.format_forwarded_message(&params.message);
+            self.format_forwarded_message(&message);
 
         shared
             .runtime
             .submit_dialog_turn(AgentDialogTurnRequest {
                 session_id: target_session_id.clone(),
                 message: forwarded_message,
-                original_message: Some(params.message.clone()),
+                original_message: Some(message),
                 turn_id: None,
                 execution: Default::default(),
                 agent_type: target_agent_type.clone(),
@@ -573,6 +582,204 @@ impl SessionMessageTool {
             created_worktree,
         })
     }
+
+    /// Validate a batch up front: the batch must be non-empty, the top-level
+    /// `message` and session fields must be omitted, the shared workspace must
+    /// be present (and shape-checked) when any item creates a session, and every
+    /// item must satisfy the single-target structural rules. Any structurally
+    /// invalid item rejects the whole batch before anything executes.
+    async fn validate_batch(
+        &self,
+        parsed: &SessionMessageInput,
+        batch: &[BatchItem],
+        context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        if batch.is_empty() {
+            return Self::invalid("batch cannot be empty");
+        }
+        if parsed
+            .message
+            .as_deref()
+            .is_some_and(|message| !message.trim().is_empty())
+        {
+            return Self::invalid("message cannot be combined with batch");
+        }
+        if parsed.session_id.is_some()
+            || parsed.session_name.is_some()
+            || parsed.agent_type.is_some()
+        {
+            return Self::invalid(
+                "session fields must be provided per batch item when batch is used",
+            );
+        }
+
+        // The shared workspace must be present (and well-formed) when any item
+        // creates a new session; when present it is always shape-checked.
+        if let Some(workspace) = parsed.workspace.as_deref() {
+            let workspace_validation = self.validate_workspace_shape(workspace, context);
+            if !workspace_validation.result {
+                return workspace_validation;
+            }
+        } else if batch.iter().any(|item| item.session_id.is_none()) {
+            return Self::invalid("workspace is required when a batch item omits session_id");
+        }
+
+        let source_session_id = context.and_then(|context| context.session_id.as_deref());
+        for (index, item) in batch.iter().enumerate() {
+            let field = |name: &str| format!("batch[{index}].{name}");
+            if item.message.trim().is_empty() {
+                return Self::invalid(format!("{} cannot be empty", field("message")));
+            }
+            match item.session_id.as_deref() {
+                Some(session_id) => {
+                    if let Err(message) = Self::validate_session_id(session_id) {
+                        return Self::invalid(format!("{}: {message}", field("session_id")));
+                    }
+                    if item.session_name.is_some() {
+                        return Self::invalid(format!(
+                            "{} is only allowed when session_id is omitted",
+                            field("session_name")
+                        ));
+                    }
+                    if item.agent_type.is_some() {
+                        return Self::invalid(format!(
+                            "{} override is not allowed when session_id is provided",
+                            field("agent_type")
+                        ));
+                    }
+                    if let Some(source_session_id) = source_session_id {
+                        if source_session_id == session_id {
+                            return Self::invalid(format!(
+                                "{} cannot send a message to the same session",
+                                field("session_id")
+                            ));
+                        }
+                    }
+                }
+                None => {
+                    if item
+                        .session_name
+                        .as_deref()
+                        .is_none_or(|value| value.trim().is_empty())
+                    {
+                        return Self::invalid(format!(
+                            "{} is required when session_id is omitted",
+                            field("session_name")
+                        ));
+                    }
+                    if item.agent_type.is_none() {
+                        return Self::invalid(format!(
+                            "{} is required when session_id is omitted",
+                            field("agent_type")
+                        ));
+                    }
+                }
+            }
+        }
+
+        let Some(context) = context else {
+            return ValidationResult::default();
+        };
+        let Some(_source_session_id) = context.session_id.as_deref() else {
+            return Self::invalid("SessionMessage requires a source session in tool context");
+        };
+        ValidationResult::default()
+    }
+
+    fn invalid(message: impl Into<String>) -> ValidationResult {
+        ValidationResult {
+            result: false,
+            message: Some(message.into()),
+            error_code: Some(400),
+            meta: None,
+        }
+    }
+
+    /// Dispatch every batch item sequentially and independently. Each item is a
+    /// standalone single-target dispatch; a failed item is recorded as an error
+    /// result and never rolls back already-succeeded items or stops later items.
+    async fn call_batch(
+        &self,
+        params: &SessionMessageInput,
+        items: &[BatchItem],
+        shared: &DispatchShared,
+        context: &ToolUseContext,
+    ) -> BitFunResult<Vec<ToolResult>> {
+        let mut results = Vec::with_capacity(items.len());
+        for item in items {
+            let item_params = SessionMessageInput {
+                workspace: params.workspace.clone(),
+                session_id: item.session_id.clone(),
+                session_name: item.session_name.clone(),
+                message: Some(item.message.clone()),
+                agent_type: item.agent_type.clone(),
+                worktree: None,
+                batch: None,
+            };
+            match self.dispatch_single(item_params, shared, context).await {
+                Ok(outcome) => {
+                    let result_text = outcome.result_text;
+                    results.push(json!({
+                        "status": "success",
+                        "target_session_id": outcome.target_session_id,
+                        "target_agent_type": outcome.target_agent_type,
+                        "target_workspace": outcome.workspace_path,
+                        "created_session_id": outcome.created_session_id,
+                        "result": result_text,
+                    }));
+                }
+                Err(error) => {
+                    warn!(
+                        "Batch SessionMessage item failed (successful items are not rolled back): session_name={:?}, session_id={:?}, error={}",
+                        item.session_name, item.session_id, error
+                    );
+                    results.push(json!({
+                        "status": "error",
+                        "session_name": item.session_name.clone(),
+                        "session_id": item.session_id.clone(),
+                        "error": error.to_string(),
+                    }));
+                }
+            }
+        }
+
+        let (succeeded, failed, summary) = Self::summarize_batch_results(&results);
+
+        Ok(vec![ToolResult::Result {
+            data: json!({
+                "success": true,
+                "total": results.len(),
+                "succeeded": succeeded,
+                "failed": failed,
+                "results": results,
+            }),
+            result_for_assistant: Some(summary),
+            image_attachments: None,
+        }])
+    }
+
+    /// Aggregate per-item outcomes into success/failed counts and the summary
+    /// text. Successful items are never rolled back; the summary tells the
+    /// caller to retry only the failed items using the per-item session ids.
+    fn summarize_batch_results(results: &[Value]) -> (usize, usize, String) {
+        let succeeded = results
+            .iter()
+            .filter(|result| result.get("status").and_then(Value::as_str) == Some("success"))
+            .count();
+        let failed = results.len() - succeeded;
+        let mut summary = format!(
+            "Batch dispatch of {} message(s): {} succeeded, {} failed. Successful items are not rolled back; retry only the failed items (skip the succeeded session ids below).",
+            results.len(),
+            succeeded,
+            failed
+        );
+        if failed > 0 {
+            summary.push_str(
+                " A failed item never rolls back earlier successes, and later items still ran.",
+            );
+        }
+        (succeeded, failed, summary)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -607,9 +814,45 @@ struct SessionMessageInput {
     workspace: Option<String>,
     session_id: Option<String>,
     session_name: Option<String>,
-    message: String,
+    /// Top-level message for single-target dispatch. Mutually exclusive with
+    /// `batch`: when a batch is present this field must be omitted or empty.
+    #[serde(default)]
+    message: Option<String>,
     agent_type: Option<SessionMessageAgentType>,
+    /// Optional worktree options for create: when present (and session_id is
+    /// omitted), a managed worktree is created together with the session via
+    /// the G2 shared core (`create_worktree_for_session`) and the session is
+    /// bound to it. `None` keeps the legacy behavior (session runs in the
+    /// project checkout). Rejected for remote workspaces and for
+    /// session_id-based sends.
+    #[serde(default)]
     worktree: Option<WorktreeSessionOptions>,
+    /// Batch dispatch: perform multiple create+send (or send-to-existing)
+    /// operations in one tool call. Every item is validated up front (the whole
+    /// batch is rejected when any item is structurally invalid), then each item
+    /// executes sequentially and independently: a failed item never rolls back
+    /// already-succeeded items and never stops later items. The top-level
+    /// session fields (session_id/session_name/agent_type) must stay empty when
+    /// a batch is used; the top-level workspace is shared by every item that
+    /// creates a new session.
+    #[serde(default)]
+    batch: Option<Vec<BatchItem>>,
+}
+
+/// One create+send (or send-to-existing-session) operation inside a batch
+/// dispatch. Fields mirror the top-level SessionMessageInput semantics, except
+/// that the workspace is shared from the top level.
+#[derive(Debug, Clone, Deserialize)]
+struct BatchItem {
+    /// Optional target session ID. Omit it to create a new session (requires
+    /// session_name and agent_type; the top-level workspace is used).
+    session_id: Option<String>,
+    /// Display name for a new session. Required when session_id is omitted.
+    session_name: Option<String>,
+    /// Message to send to the target session.
+    message: String,
+    /// Agent type for a new session. Required when session_id is omitted.
+    agent_type: Option<SessionMessageAgentType>,
 }
 
 /// Result of one create+send (or send-to-existing) dispatch. Structured so both
@@ -688,7 +931,7 @@ Allowed agent types when creating a session:
                 },
                 "message": {
                     "type": "string",
-                    "description": "Message to send to the target session."
+                    "description": "Message to send to the target session. Mutually exclusive with `batch`; when a batch is present this field must be omitted or empty (single-target requires it)."
                 },
                 "agent_type": {
                     "type": "string",
@@ -709,9 +952,37 @@ Allowed agent types when creating a session:
                         }
                     },
                     "additionalProperties": false
+                },
+                "batch": {
+                    "type": "array",
+                    "description": "Batch dispatch: perform multiple create+send (or send-to-existing) operations in one tool call. Mutually exclusive with the top-level message and session fields; the top-level workspace is shared by items that create a session. All items validate up front; each item then runs independently (a failed item never rolls back succeeded ones). Item shape: {session_id?, session_name?, message, agent_type?}.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "session_id": {
+                                "type": "string",
+                                "description": "Optional target session ID. Omit it to create a new session."
+                            },
+                            "session_name": {
+                                "type": "string",
+                                "description": "Required when session_id is omitted. Display name for the new session."
+                            },
+                            "message": {
+                                "type": "string",
+                                "description": "Message to send to the target session."
+                            },
+                            "agent_type": {
+                                "type": "string",
+                                "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
+                                "description": "Required when session_id is omitted. Agent type for the new session."
+                            }
+                        },
+                        "required": ["message"],
+                        "additionalProperties": false
+                    }
                 }
             },
-            "required": ["message"],
+            "required": [],
             "additionalProperties": false
         })
     }
@@ -737,7 +1008,14 @@ Allowed agent types when creating a session:
             }
         };
 
-        if parsed.message.trim().is_empty() {
+        // Batch mode: the whole batch is validated up front — any structurally
+        // invalid item rejects the entire batch before anything executes.
+        if let Some(batch) = parsed.batch.as_ref() {
+            return self.validate_batch(&parsed, batch, context).await;
+        }
+
+        let message = parsed.message.as_deref().unwrap_or_default();
+        if message.trim().is_empty() {
             return ValidationResult {
                 result: false,
                 message: Some("message cannot be empty".to_string()),
@@ -930,6 +1208,9 @@ Allowed agent types when creating a session:
         let params: SessionMessageInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
         let shared = self.build_dispatch_shared(context).await?;
+        if let Some(batch) = params.batch.as_ref() {
+            return self.call_batch(&params, batch, &shared, context).await;
+        }
         let outcome = self.dispatch_single(params, &shared, context).await?;
         let mut data = json!({
             "success": true,
