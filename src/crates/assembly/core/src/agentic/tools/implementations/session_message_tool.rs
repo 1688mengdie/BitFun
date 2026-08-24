@@ -13,10 +13,10 @@ use async_trait::async_trait;
 use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AcpClientMessageResult, AcpClientPort,
-    AcpClientStreamChunkSink, AgentDialogPrependedReminder, AgentDialogTurnRequest,
-    AgentSessionCreateRequest, AgentSessionListRequest, AgentSessionReplyRoute,
-    AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AgentDialogPrependedReminder,
+    AgentDialogTurnRequest, AgentSessionCreateRequest, AgentSessionListRequest,
+    AgentSessionReplyRoute, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -570,7 +570,7 @@ Allowed agent types when creating a session:
             .ok_or_else(|| BitFunError::tool("scheduler not initialized".to_string()))?;
         let runtime = CoreServiceAgentRuntime::agent_runtime_with_dialog_turns(
             coordinator.clone(),
-            scheduler,
+            scheduler.clone(),
         )
         .map_err(BitFunError::tool)?;
 
