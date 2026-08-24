@@ -647,6 +647,12 @@ impl SessionMessageTool {
                             field("agent_type")
                         ));
                     }
+                    if item.worktree.is_some() {
+                        return Self::invalid(format!(
+                            "{} is only allowed when session_id is omitted",
+                            field("worktree")
+                        ));
+                    }
                     if let Some(source_session_id) = source_session_id {
                         if source_session_id == session_id {
                             return Self::invalid(format!(
@@ -672,6 +678,34 @@ impl SessionMessageTool {
                             "{} is required when session_id is omitted",
                             field("agent_type")
                         ));
+                    }
+                    if let Some(worktree) = item.worktree.as_ref() {
+                        if worktree
+                            .base_ref
+                            .as_deref()
+                            .is_some_and(|base_ref| base_ref.trim().is_empty())
+                        {
+                            return Self::invalid(format!(
+                                "{} must not be empty when provided",
+                                field("worktree.base_ref")
+                            ));
+                        }
+                        if context.is_some_and(|context| context.is_remote()) {
+                            return Self::invalid(format!(
+                                "{} is not supported for remote workspaces",
+                                field("worktree")
+                            ));
+                        }
+                        if item
+                            .agent_type
+                            .as_ref()
+                            .is_some_and(|agent_type| agent_type.as_str().starts_with("acp__"))
+                        {
+                            return Self::invalid(format!(
+                                "{} is not supported with acp__ agent types",
+                                field("worktree")
+                            ));
+                        }
                     }
                 }
             }
@@ -762,7 +796,7 @@ impl SessionMessageTool {
                 session_name: item.session_name.clone(),
                 message: Some(item.message.clone()),
                 agent_type: item.agent_type.clone(),
-                worktree: None,
+                worktree: item.worktree.clone(),
                 batch: None,
             };
             outcomes.push(self.dispatch_single(item_params, shared, context).await);
@@ -879,6 +913,12 @@ struct BatchItem {
     message: String,
     /// Agent type for a new session. Required when session_id is omitted.
     agent_type: Option<SessionMessageAgentType>,
+    /// Per-item worktree options for a new session (only when session_id is
+    /// omitted; rejected for remote workspaces). Passthrough only — the actual
+    /// worktree creation is delegated to the G2 shared core
+    /// (`create_worktree_for_session`).
+    #[serde(default)]
+    worktree: Option<WorktreeSessionOptions>,
 }
 
 /// Result of one create+send (or send-to-existing) dispatch. Structured so both
@@ -981,7 +1021,7 @@ Allowed agent types when creating a session:
                 },
                 "batch": {
                     "type": "array",
-                    "description": "Batch dispatch: perform multiple create+send (or send-to-existing) operations in one tool call. Mutually exclusive with the top-level message and session fields; the top-level workspace is shared by items that create a session. All items validate up front; each item then runs independently (a failed item never rolls back succeeded ones). Item shape: {session_id?, session_name?, message, agent_type?}.",
+                    "description": "Batch dispatch: perform multiple create+send (or send-to-existing) operations in one tool call. Mutually exclusive with the top-level message and session fields; the top-level workspace is shared by items that create a session. All items validate up front; each item then runs independently (a failed item never rolls back succeeded ones). Item shape: {session_id?, session_name?, message, agent_type?, worktree?}.",
                     "items": {
                         "type": "object",
                         "properties": {
@@ -1001,6 +1041,21 @@ Allowed agent types when creating a session:
                                 "type": "string",
                                 "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                                 "description": "Required when session_id is omitted. Agent type for the new session."
+                            },
+                            "worktree": {
+                                "type": "object",
+                                "description": "Per-item worktree options for a new session (only when session_id is omitted; not supported for remote workspaces). Shape: {baseRef?, copyLocalChanges?}.",
+                                "properties": {
+                                    "baseRef": {
+                                        "type": "string",
+                                        "description": "Optional Git ref for the new worktree. Defaults to HEAD."
+                                    },
+                                    "copyLocalChanges": {
+                                        "type": "boolean",
+                                        "description": "Copy staged, unstaged, untracked, and .worktreeinclude-selected ignored files when the selected base equals source HEAD."
+                                    }
+                                },
+                                "additionalProperties": false
                             }
                         },
                         "required": ["message"],
@@ -1843,6 +1898,92 @@ mod tests {
         assert!(validation.result, "{:?}", validation.message);
     }
 
+    #[tokio::test]
+    async fn validate_batch_rejects_worktree_with_session_id() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_id": "worker_1",
+                            "message": "hello",
+                            "worktree": {"baseRef": "main"},
+                        },
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result, "{:?}", validation.message);
+        let message = validation.message.unwrap_or_default();
+        assert!(
+            message.contains("worktree is only allowed when session_id is omitted"),
+            "unexpected: {:?}",
+            message
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_batch_accepts_create_item_with_worktree() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                            "worktree": {"copyLocalChanges": false},
+                        },
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[tokio::test]
+    async fn validate_batch_rejects_create_item_empty_worktree_base_ref() {
+        let tool = SessionMessageTool::new();
+        let workspace = TestTempDir::new("bitfun-session-message-tool-test");
+
+        let validation = tool
+            .validate_input(
+                &json!({
+                    "workspace": workspace.as_string(),
+                    "batch": [
+                        {
+                            "session_name": "Worker Session",
+                            "message": "hi",
+                            "agent_type": "agentic",
+                            "worktree": {"baseRef": "   "},
+                        },
+                    ],
+                }),
+                Some(&session_context("source_1")),
+            )
+            .await;
+
+        assert!(!validation.result, "{:?}", validation.message);
+        let message = validation.message.unwrap_or_default();
+        assert!(
+            message.contains("worktree.base_ref must not be empty"),
+            "unexpected: {:?}",
+            message
+        );
+    }
+
     #[test]
     fn batch_item_result_maps_success_outcome() {
         let item = BatchItem {
@@ -1850,6 +1991,7 @@ mod tests {
             session_name: None,
             message: "hello".to_string(),
             agent_type: None,
+            worktree: None,
         };
         let outcome = DispatchOutcome {
             target_session_id: "worker_1".to_string(),
@@ -1881,6 +2023,7 @@ mod tests {
             session_name: None,
             message: "hi".to_string(),
             agent_type: None,
+            worktree: None,
         };
         let error = BitFunError::tool(
             "SessionMessage cannot send a message to the same session".to_string(),
@@ -1904,18 +2047,21 @@ mod tests {
             session_name: None,
             message: "hello".to_string(),
             agent_type: None,
+            worktree: None,
         };
         let failed = BatchItem {
             session_id: Some("worker_2".to_string()),
             session_name: None,
             message: "hi".to_string(),
             agent_type: None,
+            worktree: None,
         };
         let last = BatchItem {
             session_id: Some("worker_3".to_string()),
             session_name: None,
             message: "still runs".to_string(),
             agent_type: None,
+            worktree: None,
         };
 
         let first_outcome = DispatchOutcome {
