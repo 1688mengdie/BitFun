@@ -15,6 +15,7 @@ use crate::service::worktree::WorktreeService;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
+use bitfun_agent_runtime::sdk::AgentRuntime;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
     AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
@@ -270,6 +271,308 @@ impl SessionMessageTool {
             }],
         )
     }
+
+    /// Resolve the source-session identity and the shared delivery runtime once
+    /// for the whole tool call. A single-target dispatch uses it once; a batch
+    /// dispatch reuses it across every item so coordinator/scheduler are not
+    /// re-resolved per item.
+    async fn build_dispatch_shared(
+        &self,
+        context: &ToolUseContext,
+    ) -> BitFunResult<DispatchShared> {
+        let source_session_id = self.sender_session_id(context)?.to_string();
+        let source_workspace = self.sender_workspace(context)?;
+        let source_remote_connection_id = context
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.connection_id().map(ToOwned::to_owned));
+        let source_remote_ssh_host = context
+            .workspace
+            .as_ref()
+            .filter(|workspace| workspace.is_remote())
+            .map(|workspace| workspace.session_identity.hostname.clone())
+            .filter(|value| !value.trim().is_empty());
+
+        let coordinator = get_global_coordinator()
+            .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
+        let scheduler = get_global_scheduler()
+            .ok_or_else(|| BitFunError::tool("scheduler not initialized".to_string()))?;
+        let runtime = CoreServiceAgentRuntime::agent_runtime_with_dialog_turns(
+            coordinator.clone(),
+            scheduler,
+        )
+        .map_err(BitFunError::tool)?;
+
+        Ok(DispatchShared {
+            source_session_id,
+            source_workspace,
+            source_remote_connection_id,
+            source_remote_ssh_host,
+            runtime,
+        })
+    }
+
+    /// Perform one create+send (or send-to-existing) dispatch and return the
+    /// structured delivery outcome. This is the single-target path extracted
+    /// from the original inline `call_impl` so a batch dispatch can loop over
+    /// it without re-implementing create+send.
+    async fn dispatch_single(
+        &self,
+        params: SessionMessageInput,
+        shared: &DispatchShared,
+        context: &ToolUseContext,
+    ) -> BitFunResult<DispatchOutcome> {
+        let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
+        let (target_session_id, target_agent_type, created_session_id, workspace_target) =
+            if let Some(target_session_id) = params.session_id.clone() {
+                if shared.source_session_id == target_session_id {
+                    return Err(BitFunError::tool(
+                        "SessionMessage cannot send a message to the same session".to_string(),
+                    ));
+                }
+
+                let workspace_target = shared
+                    .runtime
+                    .resolve_session_workspace_binding(AgentSessionWorkspaceRequest {
+                        session_id: target_session_id.clone(),
+                    })
+                    .await
+                    .map_err(|error| {
+                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+                    })?;
+                let workspace_target = workspace_target.ok_or_else(|| {
+                    BitFunError::NotFound(format!(
+                        "Workspace for session '{}' could not be resolved",
+                        target_session_id
+                    ))
+                })?;
+                let workspace_target = self.workspace_target_from_binding(workspace_target);
+
+                if let Some(workspace) = params.workspace.as_deref() {
+                    let requested_workspace = self.resolve_workspace(workspace, context)?;
+                    let requested_target =
+                        self.workspace_target_from_context(requested_workspace.clone(), context);
+                    if !Self::same_workspace_identity(&requested_target, &workspace_target) {
+                        return Err(BitFunError::NotFound(format!(
+                            "Session '{}' not found in workspace '{}'",
+                            target_session_id, requested_target.workspace_path
+                        )));
+                    }
+                }
+
+                let visible_sessions = shared
+                    .runtime
+                    .list_sessions(AgentSessionListRequest {
+                        workspace_path: workspace_target.project_workspace_path.clone(),
+                        remote_connection_id: workspace_target.remote_connection_id.clone(),
+                        remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                    })
+                    .await
+                    .map_err(|error| {
+                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+                    })?;
+                let listed_agent_type =
+                    Self::target_agent_type_from_sessions(&visible_sessions, &target_session_id);
+                let resolved_agent_type = if listed_agent_type.is_none() {
+                    Self::target_agent_type_from_resolution(
+                        shared
+                            .runtime
+                            .resolve_session_agent_type(&target_session_id)
+                            .await
+                            .map_err(|error| {
+                                BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(
+                                    error,
+                                ))
+                            })?,
+                    )
+                } else {
+                    None
+                };
+                let target_agent_type =
+                    listed_agent_type.or(resolved_agent_type).ok_or_else(|| {
+                        BitFunError::NotFound(format!("Session '{}' not found", target_session_id))
+                    })?;
+
+                (target_session_id, target_agent_type, None, workspace_target)
+            } else {
+                let workspace = self.resolve_workspace(
+                    params.workspace.as_deref().ok_or_else(|| {
+                        BitFunError::tool(
+                            "workspace is required when session_id is omitted".to_string(),
+                        )
+                    })?,
+                    context,
+                )?;
+                let workspace_target = self.workspace_target_from_context(workspace, context);
+                let session_name = params
+                    .session_name
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or_else(|| {
+                        BitFunError::tool(
+                            "session_name is required when session_id is omitted".to_string(),
+                        )
+                    })?;
+                let agent_type = params
+                    .agent_type
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BitFunError::tool(
+                            "agent_type is required when session_id is omitted".to_string(),
+                        )
+                    })?
+                    .as_str()
+                    .to_string();
+                let created_by = self.creator_session_marker(context)?;
+                let mut metadata = serde_json::Map::new();
+                metadata.insert("createdBy".to_string(), json!(created_by));
+
+                // G2 (shared core): optional managed Git worktree. When the
+                // worktree param is present, create the worktree first (shared
+                // core in session_control_tool) and bind the new session to it.
+                // Failure = session not created + worktree rolled back.
+                if let Some(worktree) = params.worktree.as_ref() {
+                    ensure_worktree_not_remote(context)?;
+                    let request_id = context
+                        .tool_call_id
+                        .as_deref()
+                        .map(|tool_call_id| format!("session-message:{tool_call_id}:worktree"))
+                        .unwrap_or_else(|| {
+                            format!("session-message:{}:worktree", uuid::Uuid::new_v4())
+                        });
+                    created_worktree = Some(
+                        create_worktree_for_session(
+                            &request_id,
+                            &workspace_target.project_workspace_path,
+                            worktree,
+                            context,
+                        )
+                        .await?,
+                    );
+                }
+
+                let session = match shared
+                    .runtime
+                    .create_session(AgentSessionCreateRequest {
+                        session_name,
+                        agent_type: agent_type.clone(),
+                        workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.execution_target.root_path.clone())
+                                .unwrap_or_else(|| workspace_target.workspace_path.clone()),
+                        ),
+                        project_workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.project_workspace_path.clone())
+                                .unwrap_or_else(|| workspace_target.project_workspace_path.clone()),
+                        ),
+                        execution_target: created_worktree
+                            .as_ref()
+                            .map(|wt| wt.execution_target.clone())
+                            .or_else(|| workspace_target.execution_target.clone()),
+                        workspace_id: created_worktree
+                            .as_ref()
+                            .and_then(|wt| wt.tracked_workspace_id.clone())
+                            .or_else(|| workspace_target.workspace_id.clone()),
+                        remote_connection_id: workspace_target.remote_connection_id.clone(),
+                        remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                        model_id: None,
+                        metadata,
+                    })
+                    .await
+                {
+                    Ok(session) => session,
+                    Err(create_error) => {
+                        // Session creation failed -> roll back any freshly-created worktree.
+                        if let Some(worktree) = created_worktree.as_ref() {
+                            if worktree.created {
+                                if let Some(workspace_service) = get_global_workspace_service() {
+                                    if let Some(workspace_id) =
+                                        worktree.tracked_workspace_id.as_deref()
+                                    {
+                                        let _ =
+                                            workspace_service.remove_workspace(workspace_id).await;
+                                    }
+                                }
+                                if let Some(worktree_id) =
+                                    worktree.execution_target.worktree_id.as_deref()
+                                {
+                                    let _ = WorktreeService::rollback_created(
+                                        &worktree.project_workspace_path,
+                                        worktree_id,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                        return Err(BitFunError::tool(
+                            CoreServiceAgentRuntime::runtime_error_message(create_error),
+                        ));
+                    }
+                };
+
+                (
+                    session.session_id.clone(),
+                    session.agent_type.clone(),
+                    Some(session.session_id),
+                    workspace_target,
+                )
+            };
+
+        let (forwarded_message, prepended_messages) =
+            self.format_forwarded_message(&params.message);
+
+        shared
+            .runtime
+            .submit_dialog_turn(AgentDialogTurnRequest {
+                session_id: target_session_id.clone(),
+                message: forwarded_message,
+                original_message: Some(params.message.clone()),
+                turn_id: None,
+                execution: Default::default(),
+                agent_type: target_agent_type.clone(),
+                workspace_path: Some(workspace_target.workspace_path.clone()),
+                remote_connection_id: workspace_target.remote_connection_id.clone(),
+                remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                reply_route: Some(AgentSessionReplyRoute {
+                    source_session_id: shared.source_session_id.clone(),
+                    source_workspace_path: shared.source_workspace.clone(),
+                    source_remote_connection_id: shared.source_remote_connection_id.clone(),
+                    source_remote_ssh_host: shared.source_remote_ssh_host.clone(),
+                }),
+                prepended_reminders: prepended_messages,
+                attachments: Vec::new(),
+                metadata: Self::forwarded_user_input_metadata(context),
+            })
+            .await
+            .map_err(|error| {
+                BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+            })?;
+
+        let result_text = if let Some(created_session_id) = created_session_id.clone() {
+            format!(
+                "Created session '{}' and accepted the message in workspace '{}' using agent type '{}'.",
+                created_session_id, workspace_target.workspace_path, target_agent_type
+            )
+        } else {
+            format!(
+                "Message accepted for session '{}' in workspace '{}' using agent type '{}'.",
+                target_session_id, workspace_target.workspace_path, target_agent_type
+            )
+        };
+
+        Ok(DispatchOutcome {
+            target_session_id,
+            target_agent_type,
+            created_session_id,
+            workspace_path: workspace_target.workspace_path,
+            result_text,
+            created_worktree,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -307,6 +610,32 @@ struct SessionMessageInput {
     message: String,
     agent_type: Option<SessionMessageAgentType>,
     worktree: Option<WorktreeSessionOptions>,
+}
+
+/// Result of one create+send (or send-to-existing) dispatch. Structured so both
+/// the single-target path and the batch dispatcher can consume a uniform
+/// outcome instead of each re-deriving the delivery fields.
+struct DispatchOutcome {
+    target_session_id: String,
+    target_agent_type: String,
+    created_session_id: Option<String>,
+    workspace_path: String,
+    result_text: String,
+    /// Optional managed worktree created alongside a fresh session (G2 shared
+    /// core). `None` when no worktree was requested or when sending to an
+    /// existing session.
+    created_worktree: Option<SessionWorktreeCreateResult>,
+}
+
+/// Per-call context shared across a single-tool call. Built once from the tool
+/// context so a batch dispatch can reuse the resolver/scheduler and source
+/// session identity across every item instead of re-resolving them per item.
+struct DispatchShared {
+    source_session_id: String,
+    source_workspace: String,
+    source_remote_connection_id: Option<String>,
+    source_remote_ssh_host: Option<String>,
+    runtime: AgentRuntime,
 }
 
 #[async_trait]
@@ -600,281 +929,25 @@ Allowed agent types when creating a session:
     ) -> BitFunResult<Vec<ToolResult>> {
         let params: SessionMessageInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
-        let source_session_id = self.sender_session_id(context)?.to_string();
-        let source_workspace = self.sender_workspace(context)?;
-        let source_remote_connection_id = context
-            .workspace
-            .as_ref()
-            .and_then(|workspace| workspace.connection_id().map(ToOwned::to_owned));
-        let source_remote_ssh_host = context
-            .workspace
-            .as_ref()
-            .filter(|workspace| workspace.is_remote())
-            .map(|workspace| workspace.session_identity.hostname.clone())
-            .filter(|value| !value.trim().is_empty());
-
-        let coordinator = get_global_coordinator()
-            .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
-        let scheduler = get_global_scheduler()
-            .ok_or_else(|| BitFunError::tool("scheduler not initialized".to_string()))?;
-        let runtime = CoreServiceAgentRuntime::agent_runtime_with_dialog_turns(
-            coordinator.clone(),
-            scheduler,
-        )
-        .map_err(BitFunError::tool)?;
-
-        let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
-        let (target_session_id, target_agent_type, created_session_id, workspace_target) =
-            if let Some(target_session_id) = params.session_id.clone() {
-                if source_session_id == target_session_id {
-                    return Err(BitFunError::tool(
-                        "SessionMessage cannot send a message to the same session".to_string(),
-                    ));
-                }
-
-                let workspace_target = runtime
-                    .resolve_session_workspace_binding(AgentSessionWorkspaceRequest {
-                        session_id: target_session_id.clone(),
-                    })
-                    .await
-                    .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                    })?;
-                let workspace_target = workspace_target.ok_or_else(|| {
-                    BitFunError::NotFound(format!(
-                        "Workspace for session '{}' could not be resolved",
-                        target_session_id
-                    ))
-                })?;
-                let workspace_target = self.workspace_target_from_binding(workspace_target);
-
-                if let Some(workspace) = params.workspace.as_deref() {
-                    let requested_workspace = self.resolve_workspace(workspace, context)?;
-                    let requested_target =
-                        self.workspace_target_from_context(requested_workspace.clone(), context);
-                    if !Self::same_workspace_identity(&requested_target, &workspace_target) {
-                        return Err(BitFunError::NotFound(format!(
-                            "Session '{}' not found in workspace '{}'",
-                            target_session_id, requested_target.workspace_path
-                        )));
-                    }
-                }
-
-                let visible_sessions = runtime
-                    .list_sessions(AgentSessionListRequest {
-                        workspace_path: workspace_target.project_workspace_path.clone(),
-                        remote_connection_id: workspace_target.remote_connection_id.clone(),
-                        remote_ssh_host: workspace_target.remote_ssh_host.clone(),
-                    })
-                    .await
-                    .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                    })?;
-                let listed_agent_type =
-                    Self::target_agent_type_from_sessions(&visible_sessions, &target_session_id);
-                let resolved_agent_type = if listed_agent_type.is_none() {
-                    Self::target_agent_type_from_resolution(
-                        runtime
-                            .resolve_session_agent_type(&target_session_id)
-                            .await
-                            .map_err(|error| {
-                                BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(
-                                    error,
-                                ))
-                            })?,
-                    )
-                } else {
-                    None
-                };
-                let target_agent_type =
-                    listed_agent_type.or(resolved_agent_type).ok_or_else(|| {
-                        BitFunError::NotFound(format!("Session '{}' not found", target_session_id))
-                    })?;
-
-                (target_session_id, target_agent_type, None, workspace_target)
-            } else {
-                let workspace = self.resolve_workspace(
-                    params.workspace.as_deref().ok_or_else(|| {
-                        BitFunError::tool(
-                            "workspace is required when session_id is omitted".to_string(),
-                        )
-                    })?,
-                    context,
-                )?;
-                let workspace_target = self.workspace_target_from_context(workspace, context);
-                let session_name = params
-                    .session_name
-                    .clone()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or_else(|| {
-                        BitFunError::tool(
-                            "session_name is required when session_id is omitted".to_string(),
-                        )
-                    })?;
-                let agent_type = params
-                    .agent_type
-                    .as_ref()
-                    .ok_or_else(|| {
-                        BitFunError::tool(
-                            "agent_type is required when session_id is omitted".to_string(),
-                        )
-                    })?
-                    .as_str()
-                    .to_string();
-                let created_by = self.creator_session_marker(context)?;
-                let mut metadata = serde_json::Map::new();
-                metadata.insert("createdBy".to_string(), json!(created_by));
-
-                // G2: optional managed Git worktree. When the worktree param is present,
-                // create the worktree first (shared core in session_control_tool) and bind
-                // the new session to it. Failure = session not created + worktree rolled back.
-                if let Some(worktree) = params.worktree.as_ref() {
-                    ensure_worktree_not_remote(context)?;
-                    let request_id = context
-                        .tool_call_id
-                        .as_deref()
-                        .map(|tool_call_id| format!("session-message:{tool_call_id}:worktree"))
-                        .unwrap_or_else(|| {
-                            format!("session-message:{}:worktree", uuid::Uuid::new_v4())
-                        });
-                    created_worktree = Some(
-                        create_worktree_for_session(
-                            &request_id,
-                            &workspace_target.project_workspace_path,
-                            worktree,
-                            context,
-                        )
-                        .await?,
-                    );
-                }
-
-                let session = match runtime
-                    .create_session(AgentSessionCreateRequest {
-                        session_name,
-                        agent_type: agent_type.clone(),
-                        workspace_path: Some(
-                            created_worktree
-                                .as_ref()
-                                .map(|wt| wt.execution_target.root_path.clone())
-                                .unwrap_or_else(|| workspace_target.workspace_path.clone()),
-                        ),
-                        project_workspace_path: Some(
-                            created_worktree
-                                .as_ref()
-                                .map(|wt| wt.project_workspace_path.clone())
-                                .unwrap_or_else(|| workspace_target.project_workspace_path.clone()),
-                        ),
-                        execution_target: created_worktree
-                            .as_ref()
-                            .map(|wt| wt.execution_target.clone())
-                            .or_else(|| workspace_target.execution_target.clone()),
-                        workspace_id: created_worktree
-                            .as_ref()
-                            .and_then(|wt| wt.tracked_workspace_id.clone())
-                            .or_else(|| workspace_target.workspace_id.clone()),
-                        remote_connection_id: workspace_target.remote_connection_id.clone(),
-                        remote_ssh_host: workspace_target.remote_ssh_host.clone(),
-                        model_id: None,
-                        metadata,
-                    })
-                    .await
-                {
-                    Ok(session) => session,
-                    Err(create_error) => {
-                        // Session creation failed -> roll back any freshly-created worktree.
-                        if let Some(worktree) = created_worktree.as_ref() {
-                            if worktree.created {
-                                if let Some(workspace_service) = get_global_workspace_service() {
-                                    if let Some(workspace_id) =
-                                        worktree.tracked_workspace_id.as_deref()
-                                    {
-                                        let _ =
-                                            workspace_service.remove_workspace(workspace_id).await;
-                                    }
-                                }
-                                if let Some(worktree_id) =
-                                    worktree.execution_target.worktree_id.as_deref()
-                                {
-                                    let _ = WorktreeService::rollback_created(
-                                        &worktree.project_workspace_path,
-                                        worktree_id,
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        return Err(BitFunError::tool(
-                            CoreServiceAgentRuntime::runtime_error_message(create_error),
-                        ));
-                    }
-                };
-
-                (
-                    session.session_id.clone(),
-                    session.agent_type.clone(),
-                    Some(session.session_id),
-                    workspace_target,
-                )
-            };
-
-        let (forwarded_message, prepended_messages) =
-            self.format_forwarded_message(&params.message);
-
-        runtime
-            .submit_dialog_turn(AgentDialogTurnRequest {
-                session_id: target_session_id.clone(),
-                message: forwarded_message,
-                original_message: Some(params.message.clone()),
-                turn_id: None,
-                execution: Default::default(),
-                agent_type: target_agent_type.clone(),
-                workspace_path: Some(workspace_target.workspace_path.clone()),
-                remote_connection_id: workspace_target.remote_connection_id.clone(),
-                remote_ssh_host: workspace_target.remote_ssh_host.clone(),
-                policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                reply_route: Some(AgentSessionReplyRoute {
-                    source_session_id,
-                    source_workspace_path: source_workspace,
-                    source_remote_connection_id,
-                    source_remote_ssh_host,
-                }),
-                prepended_reminders: prepended_messages,
-                attachments: Vec::new(),
-                metadata: Self::forwarded_user_input_metadata(context),
-            })
-            .await
-            .map_err(|error| {
-                BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-            })?;
-
+        let shared = self.build_dispatch_shared(context).await?;
+        let outcome = self.dispatch_single(params, &shared, context).await?;
         let mut data = json!({
             "success": true,
-            "target_workspace": workspace_target.workspace_path.clone(),
-            "target_session_id": target_session_id.clone(),
-            "target_agent_type": target_agent_type.clone(),
-            "created_session_id": created_session_id.clone(),
+            "target_workspace": outcome.workspace_path.clone(),
+            "target_session_id": outcome.target_session_id.clone(),
+            "target_agent_type": outcome.target_agent_type.clone(),
+            "created_session_id": outcome.created_session_id.clone(),
         });
-        if let Some(worktree) = created_worktree.as_ref() {
+        if let Some(worktree) = outcome.created_worktree.as_ref() {
             data["worktree"] = json!({
                 "worktree_id": worktree.execution_target.worktree_id.clone(),
                 "path": worktree.execution_target.root_path.clone(),
                 "branch": worktree.branch_name.clone(),
             });
         }
-
         Ok(vec![ToolResult::Result {
             data,
-            result_for_assistant: Some(if let Some(created_session_id) = created_session_id {
-                format!(
-                    "Created session '{}' and accepted the message in workspace '{}' using agent type '{}'.",
-                    created_session_id, workspace_target.workspace_path, target_agent_type
-                )
-            } else {
-                format!(
-                    "Message accepted for session '{}' in workspace '{}' using agent type '{}'.",
-                    target_session_id, workspace_target.workspace_path, target_agent_type
-                )
-            }),
+            result_for_assistant: Some(outcome.result_text),
             image_attachments: None,
         }])
     }
