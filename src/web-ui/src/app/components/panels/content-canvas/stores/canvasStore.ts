@@ -24,6 +24,11 @@ import {
   createLayoutState,
   clampSplitRatio,
   clampAnchorSize,
+  clampGrid9Ratio,
+  GRID_MAX_DIM,
+  EDITOR_GROUP_IDS,
+  EDITOR_GROUP_COL,
+  EDITOR_GROUP_ROW,
 } from '../types';
 import { normalizePath } from '@/shared/utils/pathUtils';
 
@@ -148,6 +153,29 @@ interface CanvasStoreActions {
   
   /** Get all tabs */
   getAllTabs: () => CanvasTab[];
+
+  // ==================== Grid9 operations ====================
+
+  /** Enter grid9 mode, seeding grid9Cells from existing content and clamping counts */
+  enterGrid9: (cols: number, rows: number) => void;
+
+  /** Apply a preset grid9 template (rows×cols), resetting ratios and moving out-of-template tabs into primary */
+  applyGrid9Template: (cols: number, rows: number) => void;
+
+  /** Merge two grid9 cells: all tabs from `fromGroupId` move into `toGroupId`, source is emptied */
+  mergeGrid9Cells: (fromGroupId: EditorGroupId, toGroupId: EditorGroupId) => void;
+
+  /** Remove a blank grid9 cell: shrink the grid by one column/row and shift remaining cells */
+  removeGrid9Cell: (groupId: EditorGroupId) => void;
+
+  /** Set a grid9 column ratio, renormalising the axis to sum to 1 */
+  setGrid9ColRatio: (col: number, ratio: number) => void;
+
+  /** Set a grid9 row ratio, renormalising the axis to sum to 1 */
+  setGrid9RowRatio: (row: number, ratio: number) => void;
+
+  /** All groups (legacy + grid9 cells) that currently have renderable tabs */
+  getAllRenderableGroups: () => { id: EditorGroupId; group: EditorGroupState }[];
 }
 
 type CanvasStore = CanvasStoreState & CanvasStoreActions;
@@ -168,6 +196,17 @@ const initialState: CanvasStoreState = {
 };
 
 const getGroup = (draft: CanvasStoreState, groupId: EditorGroupId): EditorGroupState => {
+  // grid9 mode: the single grid9Cells map is the source of truth; the three
+  // legacy fields are dormant. Reading a slot that has no cell yet materialises
+  // an empty cell so callers can mutate it in place (write-through).
+  if (draft.layout.splitMode === 'grid9') {
+    let cell = draft.layout.grid9Cells[groupId];
+    if (!cell) {
+      cell = createEditorGroupState();
+      draft.layout.grid9Cells[groupId] = cell;
+    }
+    return cell;
+  }
   if (groupId === 'primary') return draft.primaryGroup;
   if (groupId === 'secondary') return draft.secondaryGroup;
   return draft.tertiaryGroup;
@@ -183,6 +222,220 @@ const ensureValidActiveTab = (group: EditorGroupState) => {
   } else if (group.activeTabId === null || !visibleTabs.find(t => t.id === group.activeTabId)) {
     group.activeTabId = visibleTabs[0]?.id || null;
   }
+};
+
+// ==================== Grid9 helpers ====================
+
+/** Clamp a grid9 dimension (columns/rows) to 1..GRID_MAX_DIM. */
+const clampGrid9Dim = (n: number): number => Math.min(GRID_MAX_DIM, Math.max(1, Math.round(n)));
+
+/**
+ * Move content from the three legacy groups into the grid9Cells map when
+ * entering grid9 mode, then clear the legacy groups (which stay dormant while
+ * grid9 is active). Content is keyed by its canonical slot id.
+ */
+const seedGrid9CellsFromLegacy = (draft: CanvasStoreState) => {
+  const moveCell = (gid: EditorGroupId, legacy: EditorGroupState) => {
+    if (legacy.tabs.length === 0) return;
+    const cell = draft.layout.grid9Cells[gid] ?? createEditorGroupState();
+    cell.tabs = [...cell.tabs, ...legacy.tabs];
+    if (legacy.activeTabId && cell.tabs.some(t => t.id === legacy.activeTabId)) {
+      cell.activeTabId = legacy.activeTabId;
+    } else if (!cell.activeTabId && cell.tabs.length > 0) {
+      cell.activeTabId = cell.tabs[0].id;
+    }
+    draft.layout.grid9Cells[gid] = cell;
+  };
+  moveCell('primary', draft.primaryGroup);
+  moveCell('secondary', draft.secondaryGroup);
+  moveCell('tertiary', draft.tertiaryGroup);
+  draft.primaryGroup = createEditorGroupState();
+  draft.secondaryGroup = createEditorGroupState();
+  draft.tertiaryGroup = createEditorGroupState();
+};
+
+/** Reset grid9 ratios to equal shares for a cols×rows template (sum === 1). */
+const resetGrid9Ratios = (layout: LayoutState, cols: number, rows: number) => {
+  layout.grid9ColRatios = Array.from({ length: cols }, () => 1 / cols);
+  layout.grid9RowRatios = Array.from({ length: rows }, () => 1 / rows);
+};
+
+/**
+ * Grow a grid9 ratio array to `targetLen` entries. The new last share gets an
+ * equal share of the axis; the existing shares are scaled proportionally so
+ * their relative proportions are preserved and the axis still sums to 1.
+ */
+const growGrid9RatiosTo = (ratios: number[], targetLen: number): number[] => {
+  let result = [...ratios];
+  while (result.length < targetLen) {
+    const weight = 1 / (result.length + 1);
+    const scale = 1 - weight;
+    result = result.map(r => r * scale);
+    result.push(weight);
+  }
+  return result;
+};
+
+/** Shrink a grid9 ratio array to `targetLen` by keeping the first entries and renormalising the sum to 1. */
+const shrinkGrid9Ratios = (ratios: number[], targetLen: number): number[] => {
+  if (targetLen <= 0) return [1];
+  const kept = ratios.slice(0, targetLen);
+  const sum = kept.reduce((a, b) => a + b, 0);
+  if (sum === 0) return Array.from({ length: targetLen }, () => 1 / targetLen);
+  return kept.map(r => r / sum);
+};
+
+/** Remove a single ratio at `idx` and renormalise the remaining entries to sum to 1. */
+const removeGrid9RatioAt = (ratios: number[], idx: number): number[] => {
+  const kept = ratios.filter((_, i) => i !== idx);
+  if (kept.length === 0) return [1];
+  const sum = kept.reduce((a, b) => a + b, 0);
+  if (sum === 0) return Array.from({ length: kept.length }, () => 1 / kept.length);
+  return kept.map(r => r / sum);
+};
+
+const cellHasVisibleTabs = (layout: LayoutState, gid: EditorGroupId): boolean => {
+  const cell = layout.grid9Cells[gid];
+  return !!cell && cell.tabs.some(t => !t.isHidden);
+};
+
+const trailingRowHasTabs = (layout: LayoutState, row: number, colsCount: number): boolean => {
+  for (let c = 0; c < colsCount; c++) {
+    if (cellHasVisibleTabs(layout, EDITOR_GROUP_IDS[row * GRID_MAX_DIM + c])) return true;
+  }
+  return false;
+};
+
+const trailingColHasTabs = (layout: LayoutState, col: number, rowsCount: number): boolean => {
+  for (let r = 0; r < rowsCount; r++) {
+    if (cellHasVisibleTabs(layout, EDITOR_GROUP_IDS[r * GRID_MAX_DIM + col])) return true;
+  }
+  return false;
+};
+
+/**
+ * Shrink trailing empty rows (then trailing empty columns) of a grid9 layout,
+ * each down to a minimum of 1, renormalising the corresponding ratio array so
+ * the axis still sums to 1. Shared by closeTab / closeAllTabs / handleDrop /
+ * removeGrid9Cell. Rows are collapsed first so a row removed by column collapse
+ * cannot leave a phantom empty column.
+ */
+const collapseTrailingGrid9 = (layout: LayoutState) => {
+  let rows = layout.grid9RowsCount;
+  while (rows > 1 && !trailingRowHasTabs(layout, rows - 1, layout.grid9ColsCount)) {
+    rows -= 1;
+  }
+  let cols = layout.grid9ColsCount;
+  while (cols > 1 && !trailingColHasTabs(layout, cols - 1, rows)) {
+    cols -= 1;
+  }
+  if (rows !== layout.grid9RowsCount) {
+    layout.grid9RowsCount = rows;
+    layout.grid9RowRatios = shrinkGrid9Ratios(layout.grid9RowRatios, rows);
+  }
+  if (cols !== layout.grid9ColsCount) {
+    layout.grid9ColsCount = cols;
+    layout.grid9ColRatios = shrinkGrid9Ratios(layout.grid9ColRatios, cols);
+  }
+};
+
+/**
+ * Keep activeGroupId pointing at a live, in-template grid9 cell; fall back to
+ * the first non-empty in-template cell, then to primary.
+ */
+const fixGrid9Active = (draft: CanvasStoreState) => {
+  const layout = draft.layout;
+  const activeCell = layout.grid9Cells[draft.activeGroupId];
+  const activeRow = EDITOR_GROUP_ROW[draft.activeGroupId];
+  const activeCol = EDITOR_GROUP_COL[draft.activeGroupId];
+  const activeEmpty = !activeCell || getVisibleCount(activeCell) === 0;
+  if (activeRow >= layout.grid9RowsCount || activeCol >= layout.grid9ColsCount || activeEmpty) {
+    const firstNonEmpty = EDITOR_GROUP_IDS.find(gid => {
+      const cell = layout.grid9Cells[gid];
+      return (
+        EDITOR_GROUP_ROW[gid] < layout.grid9RowsCount &&
+        EDITOR_GROUP_COL[gid] < layout.grid9ColsCount &&
+        !!cell &&
+        getVisibleCount(cell) > 0
+      );
+    });
+    draft.activeGroupId = firstNonEmpty ?? 'primary';
+  }
+};
+
+/**
+ * grid9 close-tab lifecycle: remove the tab from its cell (or hide a terminal),
+ * collapse trailing empty rows/columns and fix the active slot. Never enters the
+ * legacy three-field degradation matrix.
+ */
+const grid9CloseCellTab = (
+  draft: CanvasStoreState,
+  groupId: EditorGroupId,
+  tabId: string,
+  options?: { forceRemove?: boolean },
+) => {
+  const group = getGroup(draft, groupId);
+  const tabIndex = group.tabs.findIndex(t => t.id === tabId);
+  if (tabIndex === -1) return;
+
+  const tab = group.tabs[tabIndex];
+  const forceRemove = options?.forceRemove === true;
+
+  // Terminal tabs without force remove: hide instead of deleting for reactivation.
+  if (tab.content.type === 'terminal' && !forceRemove) {
+    tab.isHidden = true;
+    if (group.activeTabId === tabId) {
+      const visibleTabs = group.tabs.filter(t => !t.isHidden);
+      group.activeTabId = visibleTabs[0]?.id || null;
+    }
+    return;
+  }
+
+  if (!(tab.content.type === 'terminal' && forceRemove)) {
+    draft.closedTabs.unshift({ tab: { ...tab }, closedAt: Date.now(), groupId, index: tabIndex });
+    if (draft.closedTabs.length > draft.maxClosedTabsHistory) {
+      draft.closedTabs.pop();
+    }
+  }
+
+  group.tabs.splice(tabIndex, 1);
+  ensureValidActiveTab(group);
+  collapseTrailingGrid9(draft.layout);
+  fixGrid9Active(draft);
+};
+
+/**
+ * grid9 close-all lifecycle: keep pinned tabs in each cell, collect surviving
+ * pinned tabs into the primary cell, clear the rest and collapse to a single
+ * column. Must never drop a pinned tab from any slot.
+ */
+const grid9CloseAllCells = (draft: CanvasStoreState) => {
+  const layout = draft.layout;
+  const collected: CanvasTab[] = [];
+  for (const gid of EDITOR_GROUP_IDS) {
+    const cell = layout.grid9Cells[gid];
+    if (!cell) continue;
+    const pinned = cell.tabs.filter(t => t.state === 'pinned');
+    if (pinned.length > 0) {
+      collected.push(...pinned);
+    }
+    delete layout.grid9Cells[gid];
+  }
+  // Restore surviving pinned tabs into the legacy primary group (we drop to a
+  // single column), so none of them are lost and the canvas still renders them.
+  draft.primaryGroup =
+    collected.length > 0
+      ? { tabs: collected, activeTabId: collected[0]?.id ?? null }
+      : createEditorGroupState();
+  draft.secondaryGroup = createEditorGroupState();
+  draft.tertiaryGroup = createEditorGroupState();
+  draft.activeGroupId = 'primary';
+  draft.layout.splitMode = 'none';
+  layout.grid9Cells = {};
+  layout.grid9ColsCount = 1;
+  layout.grid9RowsCount = 1;
+  layout.grid9ColRatios = [1];
+  layout.grid9RowRatios = [1];
 };
 
 const keepPinnedTabsOnly = (group: EditorGroupState) => {
@@ -246,6 +499,13 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
       
       closeTab: (tabId, groupId, options) => {
         set((draft) => {
+          // grid9: run the dedicated lifecycle and never enter the legacy
+          // three-field degradation matrix.
+          if (draft.layout.splitMode === 'grid9') {
+            grid9CloseCellTab(draft, groupId, tabId, options);
+            return;
+          }
+
           const group = getGroup(draft, groupId);
           const tabIndex = group.tabs.findIndex(t => t.id === tabId);
           
@@ -512,6 +772,20 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
       
       closeAllTabs: (groupId) => {
         set((draft) => {
+          // grid9: run the dedicated lifecycle and never enter the legacy
+          // three-field degradation matrix.
+          if (draft.layout.splitMode === 'grid9') {
+            if (groupId) {
+              const group = getGroup(draft, groupId);
+              keepPinnedTabsOnly(group);
+              collapseTrailingGrid9(draft.layout);
+              fixGrid9Active(draft);
+            } else {
+              grid9CloseAllCells(draft);
+            }
+            return;
+          }
+
           if (groupId) {
             const group = getGroup(draft, groupId);
             keepPinnedTabsOnly(group);
@@ -795,6 +1069,27 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
         set((draft) => {
           const record = draft.closedTabs.shift();
           if (record) {
+            // grid9: if the recorded slot no longer exists (was removed/merged),
+            // restore into the primary cell instead of a dead slot.
+            if (draft.layout.splitMode === 'grid9') {
+              const gid = record.groupId;
+              const cellExists = !!draft.layout.grid9Cells[gid];
+              const insideTemplate =
+                EDITOR_GROUP_ROW[gid] < draft.layout.grid9RowsCount &&
+                EDITOR_GROUP_COL[gid] < draft.layout.grid9ColsCount;
+              const targetGid = cellExists && insideTemplate ? gid : 'primary';
+              const cell = draft.layout.grid9Cells[targetGid] ?? createEditorGroupState();
+              const insertIndex = Math.min(record.index, cell.tabs.length);
+              cell.tabs.splice(insertIndex, 0, {
+                ...record.tab,
+                lastAccessedAt: Date.now(),
+              });
+              cell.activeTabId = record.tab.id;
+              draft.layout.grid9Cells[targetGid] = cell;
+              draft.activeGroupId = targetGid;
+              return;
+            }
+
             const group = getGroup(draft, record.groupId);
             
             // Restore tab to its original position
@@ -982,12 +1277,93 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
               draft.activeGroupId = targetGroupId;
             }
           } else if (splitMode === 'grid') {
-            if (position === 'center') {
+            if (position === 'bottom' && toGroupId === 'tertiary') {
+              // Expand the 3-pane (left/right/bottom) into the grid: the dragged
+              // tab opens row 1 (rows grows to 2), keeping the existing 2
+              // columns. Rows/columns stay independent. The new cell below
+              // tertiary is row1 col1 (slot6 in row-major), computed from the
+              // grid geometry so it stays correct if the geometry changes.
+              seedGrid9CellsFromLegacy(draft);
+              draft.layout.splitMode = 'grid9';
+              draft.layout.grid9ColsCount = 2;
+              draft.layout.grid9RowsCount = 2;
+              resetGrid9Ratios(draft.layout, 2, 2);
+              const slotId = EDITOR_GROUP_IDS[1 * GRID_MAX_DIM + 1]; // slot6
+              const slotGroup = getGroup(draft, slotId);
+              slotGroup.tabs = [tab];
+              slotGroup.activeTabId = tab.id;
+              draft.activeGroupId = slotId;
+            } else if (position === 'center') {
               const targetGroup = getGroup(draft, toGroupId);
               targetGroup.tabs.unshift(tab);
               targetGroup.activeTabId = tab.id;
               draft.activeGroupId = toGroupId;
             }
+          } else if (splitMode === 'grid9') {
+            // grid9 with independent rows/columns (grid9ColsCount ×
+            // grid9RowsCount, each 1..GRID_MAX_DIM). Edge drops grow the
+            // corresponding axis; the center drop places the tab into the
+            // target slot and grows the grid if that slot is outside it.
+            const targetRow = EDITOR_GROUP_ROW[toGroupId];
+            const targetCol = EDITOR_GROUP_COL[toGroupId];
+            if (position === 'left' || position === 'right') {
+              if (draft.layout.grid9ColsCount < GRID_MAX_DIM) {
+                draft.layout.grid9ColsCount += 1;
+              }
+              draft.layout.grid9ColRatios = growGrid9RatiosTo(
+                draft.layout.grid9ColRatios,
+                draft.layout.grid9ColsCount,
+              );
+              const newCol = Math.min(draft.layout.grid9ColsCount - 1, GRID_MAX_DIM - 1);
+              const slotId = EDITOR_GROUP_IDS[targetRow * GRID_MAX_DIM + newCol];
+              const slotGroup = getGroup(draft, slotId);
+              slotGroup.tabs.unshift(tab);
+              slotGroup.activeTabId = tab.id;
+              draft.activeGroupId = slotId;
+            } else if (position === 'top' || position === 'bottom') {
+              if (draft.layout.grid9RowsCount < GRID_MAX_DIM) {
+                draft.layout.grid9RowsCount += 1;
+              }
+              draft.layout.grid9RowRatios = growGrid9RatiosTo(
+                draft.layout.grid9RowRatios,
+                draft.layout.grid9RowsCount,
+              );
+              const newRow = Math.min(draft.layout.grid9RowsCount - 1, GRID_MAX_DIM - 1);
+              const slotId = EDITOR_GROUP_IDS[newRow * GRID_MAX_DIM + targetCol];
+              const slotGroup = getGroup(draft, slotId);
+              slotGroup.tabs.unshift(tab);
+              slotGroup.activeTabId = tab.id;
+              draft.activeGroupId = slotId;
+            } else {
+              // center: place into the target slot; grow the grid if the slot is
+              // outside the current rows/cols.
+              if (targetRow >= draft.layout.grid9RowsCount) {
+                draft.layout.grid9RowsCount = targetRow + 1;
+              }
+              if (targetCol >= draft.layout.grid9ColsCount) {
+                draft.layout.grid9ColsCount = targetCol + 1;
+              }
+              draft.layout.grid9ColRatios = growGrid9RatiosTo(
+                draft.layout.grid9ColRatios,
+                draft.layout.grid9ColsCount,
+              );
+              draft.layout.grid9RowRatios = growGrid9RatiosTo(
+                draft.layout.grid9RowRatios,
+                draft.layout.grid9RowsCount,
+              );
+              const targetGroup = getGroup(draft, toGroupId);
+              targetGroup.tabs.unshift(tab);
+              targetGroup.activeTabId = tab.id;
+              draft.activeGroupId = toGroupId;
+            }
+          }
+
+          // grid9: no auto-merge/downgrade — just collapse trailing empty rows
+          // and columns and keep activeGroupId on a live cell.
+          if (draft.layout.splitMode === 'grid9') {
+            collapseTrailingGrid9(draft.layout);
+            fixGrid9Active(draft);
+            return;
           }
 
           // Auto-merge empty editor groups
@@ -1065,7 +1441,26 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
       
       setSplitMode: (mode) => {
         set((draft) => {
-          if (mode === 'none' && draft.layout.splitMode !== 'none') {
+          if (mode === 'grid9' && draft.layout.splitMode !== 'grid9') {
+            // Enter grid9: seed grid9Cells from the legacy content and clamp the
+            // active counts to 1x1 (the drop/template ops grow them from here).
+            seedGrid9CellsFromLegacy(draft);
+            draft.layout.grid9ColsCount = 1;
+            draft.layout.grid9RowsCount = 1;
+            draft.layout.grid9ColRatios = [1];
+            draft.layout.grid9RowRatios = [1];
+          } else if (mode === 'none' && draft.layout.splitMode === 'grid9') {
+            // Leave grid9: collect every grid9 cell's tabs into primary so no
+            // tab is lost, then drop back to a single column.
+            const allTabs: CanvasTab[] = [];
+            for (const gid of EDITOR_GROUP_IDS) {
+              const cell = draft.layout.grid9Cells[gid];
+              if (cell) allTabs.push(...cell.tabs);
+            }
+            draft.primaryGroup.tabs = allTabs;
+            draft.primaryGroup.activeTabId = allTabs[0]?.id ?? null;
+            draft.layout.grid9Cells = {};
+          } else if (mode === 'none' && draft.layout.splitMode !== 'none') {
             const allTabs = [
               ...draft.primaryGroup.tabs,
               ...draft.secondaryGroup.tabs,
@@ -1094,6 +1489,278 @@ const createCanvasStoreHook = () => create<CanvasStore>()(
         set((draft) => {
           draft.layout.splitRatio2 = clampSplitRatio(ratio);
         });
+      },
+
+      // ==================== Grid9 templates & operations ====================
+
+      enterGrid9: (cols, rows) => {
+        set((draft) => {
+          const wasGrid9 = draft.layout.splitMode === 'grid9';
+          if (!wasGrid9) {
+            seedGrid9CellsFromLegacy(draft);
+          }
+          const c = clampGrid9Dim(cols);
+          const r = clampGrid9Dim(rows);
+          draft.layout.splitMode = 'grid9';
+          draft.layout.grid9ColsCount = c;
+          draft.layout.grid9RowsCount = r;
+          if (draft.layout.grid9ColRatios.length !== c) {
+            draft.layout.grid9ColRatios = growGrid9RatiosTo(draft.layout.grid9ColRatios, c);
+          }
+          if (draft.layout.grid9RowRatios.length !== r) {
+            draft.layout.grid9RowRatios = growGrid9RatiosTo(draft.layout.grid9RowRatios, r);
+          }
+        });
+      },
+
+      applyGrid9Template: (cols, rows) => {
+        set((draft) => {
+          const wasGrid9 = draft.layout.splitMode === 'grid9';
+          if (!wasGrid9) {
+            seedGrid9CellsFromLegacy(draft);
+          }
+          const c = clampGrid9Dim(cols);
+          const r = clampGrid9Dim(rows);
+          draft.layout.splitMode = 'grid9';
+          draft.layout.grid9ColsCount = c;
+          draft.layout.grid9RowsCount = r;
+          // A template always tiles evenly: reset ratios to equal shares.
+          resetGrid9Ratios(draft.layout, c, r);
+
+          // Move any tabs from slots outside the new template into the primary
+          // cell (never silently dropped).
+          const orphanedTabs: CanvasTab[] = [];
+          for (const gid of EDITOR_GROUP_IDS) {
+            const row = EDITOR_GROUP_ROW[gid];
+            const col = EDITOR_GROUP_COL[gid];
+            if (row >= r || col >= c) {
+              const slot = draft.layout.grid9Cells[gid];
+              if (slot && slot.tabs.length > 0) {
+                if (slot.activeTabId && slot.tabs.some(t => t.id === slot.activeTabId)) {
+                  draft.layout.grid9Cells['primary'] = {
+                    ...(draft.layout.grid9Cells['primary'] ?? createEditorGroupState()),
+                    activeTabId: slot.activeTabId,
+                  };
+                }
+                orphanedTabs.push(...slot.tabs);
+              }
+              delete draft.layout.grid9Cells[gid];
+            }
+          }
+          if (orphanedTabs.length > 0) {
+            const primaryCell = draft.layout.grid9Cells['primary'] ?? createEditorGroupState();
+            primaryCell.tabs = [...primaryCell.tabs, ...orphanedTabs];
+            if (!primaryCell.activeTabId) {
+              primaryCell.activeTabId = primaryCell.tabs[0]?.id ?? null;
+            }
+            draft.layout.grid9Cells['primary'] = primaryCell;
+          }
+
+          // Keep activeGroupId inside the new template.
+          const activeRow = EDITOR_GROUP_ROW[draft.activeGroupId];
+          const activeCol = EDITOR_GROUP_COL[draft.activeGroupId];
+          if (
+            activeRow >= r ||
+            activeCol >= c ||
+            !draft.layout.grid9Cells[draft.activeGroupId]
+          ) {
+            draft.activeGroupId = 'primary';
+          }
+          const primaryCell = draft.layout.grid9Cells['primary'];
+          if (primaryCell && primaryCell.tabs.length > 0 && !primaryCell.activeTabId) {
+            primaryCell.activeTabId = primaryCell.tabs[0].id;
+          }
+        });
+      },
+
+      mergeGrid9Cells: (fromGroupId, toGroupId) => {
+        set((draft) => {
+          if (fromGroupId === toGroupId) return;
+          const source = draft.layout.grid9Cells[fromGroupId];
+          if (!source || source.tabs.length === 0) return;
+          const target = draft.layout.grid9Cells[toGroupId] ?? createEditorGroupState();
+          if (source.activeTabId && source.tabs.some(t => t.id === source.activeTabId)) {
+            target.activeTabId = source.activeTabId;
+          }
+          target.tabs = [...target.tabs, ...source.tabs];
+          draft.layout.grid9Cells[toGroupId] = target;
+          delete draft.layout.grid9Cells[fromGroupId];
+          draft.activeGroupId = toGroupId;
+        });
+      },
+
+      removeGrid9Cell: (groupId) => {
+        set((draft) => {
+          const layout = draft.layout;
+          if (layout.splitMode !== 'grid9') return;
+          if (EDITOR_GROUP_IDS.indexOf(groupId) < 0) return;
+          const row = EDITOR_GROUP_ROW[groupId];
+          const col = EDITOR_GROUP_COL[groupId];
+          const cols = layout.grid9ColsCount;
+          const rows = layout.grid9RowsCount;
+          // A 1x1 grid cannot shrink any further.
+          if (cols <= 1 && rows <= 1) return;
+
+          const moveTabs = (fromGid: EditorGroupId, toGid: EditorGroupId) => {
+            const from = layout.grid9Cells[fromGid];
+            if (!from || from.tabs.length === 0) return;
+            const to = layout.grid9Cells[toGid] ?? createEditorGroupState();
+            if (from.activeTabId && from.tabs.some(t => t.id === from.activeTabId)) {
+              to.activeTabId = from.activeTabId;
+            }
+            to.tabs = [...to.tabs, ...from.tabs];
+            layout.grid9Cells[toGid] = to;
+            delete layout.grid9Cells[fromGid];
+          };
+          const resetCell = (gid: EditorGroupId) => {
+            delete layout.grid9Cells[gid];
+          };
+
+          if (cols > 1) {
+            const mergeTargetCol = col > 0 ? col - 1 : 1;
+            for (let r = 0; r < rows; r++) {
+              moveTabs(
+                EDITOR_GROUP_IDS[r * GRID_MAX_DIM + col],
+                EDITOR_GROUP_IDS[r * GRID_MAX_DIM + mergeTargetCol],
+              );
+            }
+            for (let r = 0; r < rows; r++) {
+              for (let c = col === 0 ? 0 : col; c < cols - 1; c++) {
+                moveTabs(
+                  EDITOR_GROUP_IDS[r * GRID_MAX_DIM + c + 1],
+                  EDITOR_GROUP_IDS[r * GRID_MAX_DIM + c],
+                );
+              }
+              resetCell(EDITOR_GROUP_IDS[r * GRID_MAX_DIM + cols - 1]);
+            }
+            layout.grid9ColsCount = cols - 1;
+            layout.grid9ColRatios = removeGrid9RatioAt(layout.grid9ColRatios, col);
+          } else {
+            const mergeTargetRow = row > 0 ? row - 1 : 1;
+            for (let c = 0; c < cols; c++) {
+              moveTabs(
+                EDITOR_GROUP_IDS[row * GRID_MAX_DIM + c],
+                EDITOR_GROUP_IDS[mergeTargetRow * GRID_MAX_DIM + c],
+              );
+            }
+            for (let c = 0; c < cols; c++) {
+              for (let r = row === 0 ? 0 : row; r < rows - 1; r++) {
+                moveTabs(
+                  EDITOR_GROUP_IDS[(r + 1) * GRID_MAX_DIM + c],
+                  EDITOR_GROUP_IDS[r * GRID_MAX_DIM + c],
+                );
+              }
+              resetCell(EDITOR_GROUP_IDS[(rows - 1) * GRID_MAX_DIM + c]);
+            }
+            layout.grid9RowsCount = rows - 1;
+            layout.grid9RowRatios = removeGrid9RatioAt(layout.grid9RowRatios, row);
+          }
+
+          // Clear any leftover cells outside the new template (their content was
+          // already relocated), then keep activeGroupId inside the template.
+          const newCols = layout.grid9ColsCount;
+          const newRows = layout.grid9RowsCount;
+          for (const gid of EDITOR_GROUP_IDS) {
+            if (EDITOR_GROUP_ROW[gid] >= newRows || EDITOR_GROUP_COL[gid] >= newCols) {
+              const cell = layout.grid9Cells[gid];
+              if (cell && cell.tabs.length > 0) {
+                // Defensive: never drop tabs that ended up outside the template.
+                const primaryCell = layout.grid9Cells['primary'] ?? createEditorGroupState();
+                primaryCell.tabs = [...primaryCell.tabs, ...cell.tabs];
+                layout.grid9Cells['primary'] = primaryCell;
+              }
+              delete layout.grid9Cells[gid];
+            }
+          }
+
+          const activeRow = EDITOR_GROUP_ROW[draft.activeGroupId];
+          const activeCol = EDITOR_GROUP_COL[draft.activeGroupId];
+          const activeCell = layout.grid9Cells[draft.activeGroupId];
+          if (
+            activeRow >= newRows ||
+            activeCol >= newCols ||
+            !activeCell ||
+            getVisibleCount(activeCell) === 0
+          ) {
+            const firstNonEmpty = EDITOR_GROUP_IDS.find(gid => {
+              const cell = layout.grid9Cells[gid];
+              return (
+                EDITOR_GROUP_ROW[gid] < newRows &&
+                EDITOR_GROUP_COL[gid] < newCols &&
+                !!cell &&
+                getVisibleCount(cell) > 0
+              );
+            });
+            draft.activeGroupId = firstNonEmpty ?? 'primary';
+          }
+          const primaryCell = layout.grid9Cells['primary'];
+          if (primaryCell && primaryCell.tabs.length > 0 && !primaryCell.activeTabId) {
+            primaryCell.activeTabId = primaryCell.tabs[0].id;
+          }
+        });
+      },
+
+      setGrid9ColRatio: (col, ratio) => {
+        set((draft) => {
+          const ratios = draft.layout.grid9ColRatios;
+          if (col < 0 || col >= ratios.length) return;
+          const clamped = clampGrid9Ratio(ratio);
+          if (ratios.length === 1) {
+            ratios[0] = 1;
+            return;
+          }
+          const others = ratios.length - 1;
+          const sumOthers = ratios.reduce((acc, r, i) => (i === col ? acc : acc + r), 0);
+          const scale = sumOthers === 0 ? 1 / others : (1 - clamped) / sumOthers;
+          for (let i = 0; i < ratios.length; i++) {
+            if (i === col) {
+              ratios[i] = clamped;
+            } else {
+              ratios[i] *= scale;
+            }
+          }
+        });
+      },
+
+      setGrid9RowRatio: (row, ratio) => {
+        set((draft) => {
+          const ratios = draft.layout.grid9RowRatios;
+          if (row < 0 || row >= ratios.length) return;
+          const clamped = clampGrid9Ratio(ratio);
+          if (ratios.length === 1) {
+            ratios[0] = 1;
+            return;
+          }
+          const others = ratios.length - 1;
+          const sumOthers = ratios.reduce((acc, r, i) => (i === row ? acc : acc + r), 0);
+          const scale = sumOthers === 0 ? 1 / others : (1 - clamped) / sumOthers;
+          for (let i = 0; i < ratios.length; i++) {
+            if (i === row) {
+              ratios[i] = clamped;
+            } else {
+              ratios[i] *= scale;
+            }
+          }
+        });
+      },
+
+      getAllRenderableGroups: () => {
+        const state = get();
+        const groups: { id: EditorGroupId; group: EditorGroupState }[] = [];
+        const pushIfRenderable = (id: EditorGroupId, group: EditorGroupState) => {
+          if (group && getVisibleTabs(group).length > 0) groups.push({ id, group });
+        };
+        if (state.layout.splitMode === 'grid9') {
+          for (const gid of EDITOR_GROUP_IDS) {
+            const cell = state.layout.grid9Cells[gid];
+            if (cell) pushIfRenderable(gid, cell);
+          }
+        } else {
+          pushIfRenderable('primary', state.primaryGroup);
+          pushIfRenderable('secondary', state.secondaryGroup);
+          pushIfRenderable('tertiary', state.tertiaryGroup);
+        }
+        return groups;
       },
       
       setAnchorPosition: (position) => {
@@ -1321,21 +1988,32 @@ export function useCanvasStore<T>(selector?: (state: CanvasStore) => T): T | Can
 // ==================== Selector Hooks ====================
 
 /**
- * Get tabs for a specific editor group.
+ * Get tabs for a specific editor group. In grid9 mode the slot lives in the
+ * single grid9Cells map; otherwise the legacy three-field layout is used.
  */
 export const useGroupTabs = (groupId: EditorGroupId) => {
-  return useCanvasStore((state) => 
-    groupId === 'primary' ? state.primaryGroup.tabs : state.secondaryGroup.tabs
-  );
+  return useCanvasStore((state) => {
+    if (state.layout.splitMode === 'grid9') {
+      return state.layout.grid9Cells[groupId]?.tabs ?? [];
+    }
+    if (groupId === 'primary') return state.primaryGroup.tabs;
+    if (groupId === 'secondary') return state.secondaryGroup.tabs;
+    return state.tertiaryGroup.tabs;
+  });
 };
 
 /**
- * Get active tab ID for a specific editor group.
+ * Get active tab ID for a specific editor group (grid9 slot-aware).
  */
 export const useActiveTabId = (groupId: EditorGroupId) => {
-  return useCanvasStore((state) => 
-    groupId === 'primary' ? state.primaryGroup.activeTabId : state.secondaryGroup.activeTabId
-  );
+  return useCanvasStore((state) => {
+    if (state.layout.splitMode === 'grid9') {
+      return state.layout.grid9Cells[groupId]?.activeTabId ?? null;
+    }
+    if (groupId === 'primary') return state.primaryGroup.activeTabId;
+    if (groupId === 'secondary') return state.secondaryGroup.activeTabId;
+    return state.tertiaryGroup.activeTabId;
+  });
 };
 
 /**

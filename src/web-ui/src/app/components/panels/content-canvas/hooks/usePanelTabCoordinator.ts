@@ -50,6 +50,8 @@ export const usePanelTabCoordinator = (options: UsePanelTabCoordinatorOptions = 
   const {
     primaryGroup,
     secondaryGroup,
+    layout,
+    getAllRenderableGroups,
   } = useCanvasStore();
 
   const { state, toggleRightPanel, updateRightPanelWidth } = useApp();
@@ -131,10 +133,21 @@ export const usePanelTabCoordinator = (options: UsePanelTabCoordinatorOptions = 
       return;
     }
 
-    // Count visible tabs
-    const primaryVisible = primaryGroup.tabs.filter(t => !t.isHidden).length;
-    const secondaryVisible = secondaryGroup.tabs.filter(t => !t.isHidden).length;
-    const visibleCount = primaryVisible + secondaryVisible;
+    // Count visible tabs. In grid9 mode tabs live in `layout.grid9Cells` and the
+    // legacy primary/secondary groups are cleared when entering grid9, so count
+    // every renderable group there. Non-grid9 modes keep the original
+    // primary+secondary count for zero regression.
+    let visibleCount: number;
+    if (layout.splitMode === 'grid9') {
+      visibleCount = getAllRenderableGroups().reduce(
+        (sum, { group }) => sum + group.tabs.filter(t => !t.isHidden).length,
+        0,
+      );
+    } else {
+      const primaryVisible = primaryGroup.tabs.filter(t => !t.isHidden).length;
+      const secondaryVisible = secondaryGroup.tabs.filter(t => !t.isHidden).length;
+      visibleCount = primaryVisible + secondaryVisible;
+    }
     
     const isCollapsed = rightPanelCollapsedRef.current;
 
@@ -147,8 +160,10 @@ export const usePanelTabCoordinator = (options: UsePanelTabCoordinatorOptions = 
       expandPanel();
     }
   }, [
+    layout,
     primaryGroup.tabs,
     secondaryGroup.tabs,
+    getAllRenderableGroups,
     autoCollapseOnEmpty,
     autoExpandOnTabOpen,
     expandPanel,
