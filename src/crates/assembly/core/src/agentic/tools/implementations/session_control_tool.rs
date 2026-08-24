@@ -236,33 +236,54 @@ impl SessionControlTool {
             return format!("No sessions found in workspace '{}'.", workspace);
         }
 
-        let mut lines = vec![format!(
+        let mut output_lines = vec![format!(
             "Found {} session(s) in workspace '{}'",
             sessions.len(),
             workspace
         )];
-        lines.push(String::new());
+        output_lines.push(String::new());
         if let Some(current_session_id) = current_session_id {
-            lines.push(format!("Note: '{}' is your session_id", current_session_id));
-            lines.push(String::new());
+            output_lines.push(format!("Note: '{}' is your session_id", current_session_id));
+            output_lines.push(String::new());
         }
 
         if detail {
-            // --- Full tree JSON view (legacy verbose output) ---
-            // The full `sessions` array and parsed `tree` remain available in the
-            // result `data` payload for programmatic consumers.
-            lines.push("## Session Tree (JSON)".to_string());
-            lines.push("```json".to_string());
-            lines.push(build_session_tree_json(sessions, tree));
-            lines.push("```".to_string());
+            // Full tree JSON view (legacy verbose output). The full `sessions`
+            // array and parsed `tree` stay available in the `data` payload for
+            // programmatic consumers.
+            push_full_tree_section(&mut output_lines, sessions, tree);
         } else {
-            // --- Compact tree text view (default) ---
-            lines.push("## Sessions (compact)".to_string());
-            lines.push("format: [sessionId] agentType | status | display_state | name".to_string());
-            lines.extend(build_compact_tree_lines(sessions, tree, short_names));
+            // Compact tree text view (default).
+            push_compact_tree_section(&mut output_lines, sessions, tree, short_names);
         }
-        lines.join("\n")
+
+        output_lines.join("\n")
     }
+}
+
+/// Append the full-tree JSON section to the assistant-facing `list` output.
+fn push_full_tree_section(
+    lines: &mut Vec<String>,
+    sessions: &[AgentSessionSummary],
+    tree: Option<&SessionTreeManager>,
+) {
+    lines.push("## Session Tree (JSON)".to_string());
+    lines.push("```json".to_string());
+    lines.push(build_session_tree_json(sessions, tree));
+    lines.push("```".to_string());
+}
+
+/// Append the compact one-line tree section to the assistant-facing `list`
+/// output.
+fn push_compact_tree_section(
+    lines: &mut Vec<String>,
+    sessions: &[AgentSessionSummary],
+    tree: Option<&SessionTreeManager>,
+    short_names: &HashMap<String, Option<String>>,
+) {
+    lines.push("## Sessions (compact)".to_string());
+    lines.push("format: [sessionId] agentType | status | display_state | name".to_string());
+    lines.extend(build_compact_tree_lines(sessions, tree, short_names));
 }
 
 // ── SC-7 session display engines ─────────────────────────────────────
@@ -1218,21 +1239,31 @@ mod tests {
 
     // --- short_name / detail / compact output ---
 
+    fn temp_workspace() -> TestTempDir {
+        TestTempDir::new("bitfun-session-control-tool-test")
+    }
+
+    async fn validate_tool_input(
+        input: serde_json::Value,
+        context: Option<&ToolUseContext>,
+    ) -> ValidationResult {
+        SessionControlTool::new()
+            .validate_input(&input, context)
+            .await
+    }
+
     #[tokio::test]
     async fn validate_list_rejects_short_name() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "list",
-                    "workspace": workspace.as_string(),
-                    "short_name": "secretary",
-                }),
-                Some(&empty_context()),
-            )
-            .await;
+        let workspace = temp_workspace();
+        let validation = validate_tool_input(
+            json!({
+                "action": "list",
+                "workspace": workspace.as_string(),
+                "short_name": "secretary",
+            }),
+            Some(&empty_context()),
+        )
+        .await;
 
         assert!(!validation.result);
         assert_eq!(
@@ -1243,37 +1274,31 @@ mod tests {
 
     #[tokio::test]
     async fn validate_list_allows_detail_flag() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "list",
-                    "workspace": workspace.as_string(),
-                    "detail": true,
-                }),
-                Some(&empty_context()),
-            )
-            .await;
+        let workspace = temp_workspace();
+        let validation = validate_tool_input(
+            json!({
+                "action": "list",
+                "workspace": workspace.as_string(),
+                "detail": true,
+            }),
+            Some(&empty_context()),
+        )
+        .await;
 
         assert!(validation.result, "{:?}", validation.message);
     }
 
     #[tokio::test]
     async fn validate_cancel_rejects_detail_flag() {
-        let tool = SessionControlTool::new();
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "cancel",
-                    "session_id": "worker_1",
-                    "detail": true,
-                }),
-                Some(&empty_context()),
-            )
-            .await;
+        let validation = validate_tool_input(
+            json!({
+                "action": "cancel",
+                "session_id": "worker_1",
+                "detail": true,
+            }),
+            Some(&empty_context()),
+        )
+        .await;
 
         assert!(!validation.result);
         assert_eq!(
@@ -1284,42 +1309,36 @@ mod tests {
 
     #[tokio::test]
     async fn validate_create_allows_short_name() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let workspace = temp_workspace();
         let mut context = empty_context();
         context.session_id = Some("creator-1".to_string());
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "create",
-                    "workspace": workspace.as_string(),
-                    "short_name": "secretary-standing",
-                }),
-                Some(&context),
-            )
-            .await;
+        let validation = validate_tool_input(
+            json!({
+                "action": "create",
+                "workspace": workspace.as_string(),
+                "short_name": "secretary-standing",
+            }),
+            Some(&context),
+        )
+        .await;
 
         assert!(validation.result, "{:?}", validation.message);
     }
 
     #[tokio::test]
     async fn validate_create_rejects_detail_flag() {
-        let tool = SessionControlTool::new();
-        let workspace = TestTempDir::new("bitfun-session-control-tool-test");
+        let workspace = temp_workspace();
         let mut context = empty_context();
         context.session_id = Some("creator-1".to_string());
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "create",
-                    "workspace": workspace.as_string(),
-                    "detail": true,
-                }),
-                Some(&context),
-            )
-            .await;
+        let validation = validate_tool_input(
+            json!({
+                "action": "create",
+                "workspace": workspace.as_string(),
+                "detail": true,
+            }),
+            Some(&context),
+        )
+        .await;
 
         assert!(!validation.result);
         assert_eq!(
