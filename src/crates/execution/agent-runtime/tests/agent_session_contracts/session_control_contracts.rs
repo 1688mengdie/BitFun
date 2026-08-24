@@ -13,6 +13,7 @@ fn base_input(action: SessionControlAction) -> SessionControlInput {
         session_id: None,
         session_name: None,
         agent_type: None,
+        model_id: None,
     }
 }
 
@@ -114,4 +115,21 @@ fn routes_cancel_through_scheduler_only_when_requester_and_scheduler_exist() {
         resolve_session_control_cancel_route(None, true),
         SessionControlCancelRoute::CoordinatorDirect
     );
+}
+
+#[test]
+fn deserializes_model_id_field() {
+    let with_model_id: SessionControlInput = serde_json::from_value(json!({
+        "action": "create",
+        "model_id": "provider/model-x",
+    }))
+    .unwrap();
+    assert_eq!(with_model_id.model_id.as_deref(), Some("provider/model-x"));
+
+    let without_model_id: SessionControlInput =
+        serde_json::from_value(json!({
+            "action": "create",
+        }))
+        .unwrap();
+    assert_eq!(without_model_id.model_id, None);
 }

@@ -58,6 +58,7 @@ pub struct SessionControlInput {
     pub session_id: Option<String>,
     pub session_name: Option<String>,
     pub agent_type: Option<SessionControlAgentType>,
+    pub model_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
