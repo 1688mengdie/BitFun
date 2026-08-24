@@ -657,6 +657,19 @@ use std::sync::OnceLock;
 /// Global PathManager instance
 static GLOBAL_PATH_MANAGER: OnceLock<GlobalPathManagerState> = OnceLock::new();
 
+/// Test-only override so fixture tests can point `get_path_manager_arc` at a
+/// temp-root `PathManager::with_user_root_for_tests` (zero production impact —
+/// this static and the check below are `#[cfg(test)]`-gated).
+#[cfg(test)]
+static TEST_PATH_MANAGER_OVERRIDE: Mutex<Option<Arc<PathManager>>> = Mutex::new(None);
+
+/// Point the global path manager at an isolated temp-root manager for tests.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn set_test_path_manager_override(manager: Arc<PathManager>) {
+    *TEST_PATH_MANAGER_OVERRIDE.lock().unwrap() = Some(manager);
+}
+
 struct GlobalPathManagerState {
     manager: Arc<PathManager>,
     initialization_error: Option<String>,
@@ -695,6 +708,12 @@ fn init_global_path_manager() -> BitFunResult<Arc<PathManager>> {
 ///
 /// Return a shared Arc to the global PathManager instance
 pub fn get_path_manager_arc() -> Arc<PathManager> {
+    #[cfg(test)]
+    {
+        if let Some(manager) = TEST_PATH_MANAGER_OVERRIDE.lock().unwrap().as_ref() {
+            return Arc::clone(manager);
+        }
+    }
     GLOBAL_PATH_MANAGER
         .get_or_init(|| match init_global_path_manager() {
             Ok(manager) => GlobalPathManagerState::ready(manager),

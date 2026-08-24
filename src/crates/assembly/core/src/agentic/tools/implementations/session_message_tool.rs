@@ -1335,4 +1335,130 @@ mod tests {
             "missing flow-session record must be rejected"
         );
     }
+
+    // -- P7 registry fixture tests (COORD-03): seed a persistence record and
+    // verify Active / NotAcpFlow ×2 / client-mismatch branches. Uses the test
+    // path manager override so fixtures stay in a temp root (zero real-config
+    // impact).
+
+    async fn seed_session_metadata(
+        workspace: &str,
+        session_id: &str,
+        custom: Option<serde_json::Value>,
+    ) {
+        use bitfun_services_core::session::SessionMetadata;
+        let persistence = crate::agentic::persistence::PersistenceManager::new(
+            crate::infrastructure::get_path_manager_arc(),
+        )
+        .map_err(|error| panic!("persistence init: {error}"))
+        .unwrap();
+        let mut metadata = SessionMetadata::new(
+            session_id.to_string(),
+            "acp-fixture".to_string(),
+            "agentic".to_string(),
+            "default".to_string(),
+        );
+        metadata.custom_metadata = custom;
+        persistence
+            .save_session_metadata(std::path::Path::new(workspace), &metadata)
+            .await
+            .map_err(|error| panic!("save metadata: {error}"))
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn verify_acp_flow_session_registry_not_acp_custom_none_rejects() {
+        crate::infrastructure::app_paths::path_manager::set_test_path_manager_override(
+            std::sync::Arc::new(
+                crate::infrastructure::app_paths::path_manager::PathManager::with_user_root_for_tests(
+                    std::env::temp_dir().join("bitfun-acp-fixture-none"),
+                ),
+            ),
+        );
+        let ws = TestTempDir::new("bitfun-acp-fixture-none-ws");
+        let sid = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        seed_session_metadata(&ws.as_string(), sid, None).await;
+        let result =
+            SessionMessageTool::verify_acp_flow_session_registry(&ws.as_string(), sid, "codex")
+                .await;
+        assert!(
+            result.is_err(),
+            "custom None is NotAcpFlow and must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_acp_flow_session_registry_not_acp_provider_not_acp_rejects() {
+        crate::infrastructure::app_paths::path_manager::set_test_path_manager_override(
+            std::sync::Arc::new(
+                crate::infrastructure::app_paths::path_manager::PathManager::with_user_root_for_tests(
+                    std::env::temp_dir().join("bitfun-acp-fixture-provider"),
+                ),
+            ),
+        );
+        let ws = TestTempDir::new("bitfun-acp-fixture-provider-ws");
+        let sid = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        seed_session_metadata(
+            &ws.as_string(),
+            sid,
+            Some(serde_json::json!({ "provider": "internal", "acpClientId": "codex" })),
+        )
+        .await;
+        let result =
+            SessionMessageTool::verify_acp_flow_session_registry(&ws.as_string(), sid, "codex")
+                .await;
+        assert!(
+            result.is_err(),
+            "non-acp provider is NotAcpFlow and must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_acp_flow_session_registry_active_client_match_succeeds() {
+        crate::infrastructure::app_paths::path_manager::set_test_path_manager_override(
+            std::sync::Arc::new(
+                crate::infrastructure::app_paths::path_manager::PathManager::with_user_root_for_tests(
+                    std::env::temp_dir().join("bitfun-acp-fixture-active"),
+                ),
+            ),
+        );
+        let ws = TestTempDir::new("bitfun-acp-fixture-active-ws");
+        let sid = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        seed_session_metadata(
+            &ws.as_string(),
+            sid,
+            Some(serde_json::json!({ "provider": "acp", "acpClientId": "codex" })),
+        )
+        .await;
+        let result =
+            SessionMessageTool::verify_acp_flow_session_registry(&ws.as_string(), sid, "codex")
+                .await;
+        assert!(
+            result.is_ok(),
+            "provider=acp + client match must route (Active)"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_acp_flow_session_registry_client_mismatch_rejects() {
+        crate::infrastructure::app_paths::path_manager::set_test_path_manager_override(
+            std::sync::Arc::new(
+                crate::infrastructure::app_paths::path_manager::PathManager::with_user_root_for_tests(
+                    std::env::temp_dir().join("bitfun-acp-fixture-mismatch"),
+                ),
+            ),
+        );
+        let ws = TestTempDir::new("bitfun-acp-fixture-mismatch-ws");
+        let sid = "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+        seed_session_metadata(
+            &ws.as_string(),
+            sid,
+            Some(serde_json::json!({ "provider": "acp", "acpClientId": "codebuddy" })),
+        )
+        .await;
+        let result =
+            SessionMessageTool::verify_acp_flow_session_registry(&ws.as_string(), sid, "codex")
+                .await;
+        assert!(result.is_err(), "client mismatch must be rejected");
+    }
 }
