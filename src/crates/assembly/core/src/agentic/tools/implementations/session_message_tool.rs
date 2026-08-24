@@ -1285,4 +1285,54 @@ mod tests {
             Some("workspace is required when session_id is omitted")
         );
     }
+
+    // -- ACP registry survival validation (COORD-03) --
+
+    #[test]
+    fn acp_client_id_from_agent_type_recognizes_acp_target() {
+        assert_eq!(
+            SessionMessageTool::acp_client_id_from_agent_type("acp__codex"),
+            Some("codex")
+        );
+        assert_eq!(
+            SessionMessageTool::acp_client_id_from_agent_type("acp__"),
+            None
+        );
+        assert_eq!(
+            SessionMessageTool::acp_client_id_from_agent_type("agentic"),
+            None
+        );
+    }
+
+    #[test]
+    fn acp_flow_client_id_from_session_id_recognizes_flow_shapes() {
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id(
+                "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+            ),
+            Some("codex")
+        );
+        assert_eq!(
+            SessionMessageTool::acp_flow_client_id_from_session_id("worker_1"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_acp_flow_session_registry_missing_rejects() {
+        // No persisted record in an empty workspace -> the flow-session registry
+        // reports Missing -> the target is rejected (a recycled/missing flow
+        // session is never routed to an external ACP agent).
+        let workspace = TestTempDir::new("bitfun-acp-registry-missing");
+        let result = SessionMessageTool::verify_acp_flow_session_registry(
+            &workspace.as_string(),
+            "acp_codex_7f0e1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b",
+            "codex",
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "missing flow-session record must be rejected"
+        );
+    }
 }
