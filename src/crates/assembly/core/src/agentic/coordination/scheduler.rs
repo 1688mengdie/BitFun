@@ -14,6 +14,9 @@ use super::coordinator::{
     session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
     HiddenSubagentExecutionRequest, SubagentResult,
 };
+use super::plan_todo_binding::{
+    auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
+};
 use super::turn_outcome::TurnOutcome;
 use super::turn_settlement::TurnSettlementRegistration;
 use crate::agentic::core::{InternalReminderKind, Message, SessionState};
@@ -1990,6 +1993,21 @@ impl DialogScheduler {
 
         res.map_err(SchedulerSubmitError::Core)?;
 
+        // Plan-todo binding auto-mark (best-effort): when an agent-session
+        // execution turn carries a planFile/todoId binding, mark the todo
+        // in_progress. Only execution turns (reply_route.is_some()) can carry
+        // a binding; reply turns have reply_route = None and never trigger
+        // this hook. Failures only warn; they never fail the turn.
+        if queued_turn.reply_route.is_some() {
+            auto_mark_todo_in_progress_if_bound(
+                queued_turn.user_message_metadata.as_ref(),
+                queued_turn.workspace_path.as_deref(),
+                queued_turn.remote_connection_id.as_deref(),
+                queued_turn.remote_ssh_host.as_deref(),
+            )
+            .await;
+        }
+
         // Standard scheduler submissions resolve and persist their turn ID
         // before entering the coordinator. Reading SessionState here races a
         // very fast terminal transition and can incorrectly turn an accepted,
@@ -2296,6 +2314,24 @@ impl DialogScheduler {
                         AgentSessionReplyAction::Forward(plan) => {
                             self.forward_agent_session_reply(&session_id, plan).await;
                         }
+                    }
+
+                    // Plan-todo binding auto-mark (best-effort): only when the
+                    // finished turn is an agent-session execution turn bound to
+                    // a plan todo (reply_route.is_some()) AND it completed
+                    // normally. Failed/Cancelled outcomes are intentionally left
+                    // untouched (kept pending for the commander to adjudicate).
+                    // Reply turns have reply_route = None and never trigger this
+                    // hook. Failures only warn; they never affect the outcome.
+                    if active_turn.reply_route().is_some() {
+                        auto_mark_todo_completed_if_bound(
+                            active_turn.user_message_metadata(),
+                            active_turn.workspace_path(),
+                            active_turn.remote_connection_id(),
+                            active_turn.remote_ssh_host(),
+                            &outcome,
+                        )
+                        .await;
                     }
                 }
             }
