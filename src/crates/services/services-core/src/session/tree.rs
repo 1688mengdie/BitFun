@@ -210,10 +210,7 @@ impl SessionTreeManager {
         for session in sessions {
             if let Some(ref relationship) = session.relationship {
                 if let Some(ref parent_id) = relationship.parent_session_id {
-                    let depth = self
-                        .get_depth(parent_id)
-                        .map(|d| d + 1)
-                        .unwrap_or(1);
+                    let depth = self.get_depth(parent_id).map(|d| d + 1).unwrap_or(1);
                     if let Err(e) = self.register_child(parent_id, &session.session_id, depth) {
                         log::warn!(
                             "Failed to register child session {} under {} in tree during load: {:?}",
@@ -336,7 +333,10 @@ mod tests {
         mgr.register_child("A", "B", 1).unwrap();
         mgr.register_child("B", "C", 2).unwrap();
         let result = mgr.register_child("C", "A", 3);
-        assert!(matches!(result, Err(SessionTreeError::CycleDetected { .. })));
+        assert!(matches!(
+            result,
+            Err(SessionTreeError::CycleDetected { .. })
+        ));
     }
 
     #[test]

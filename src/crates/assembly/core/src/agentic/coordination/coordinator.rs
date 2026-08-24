@@ -1195,6 +1195,11 @@ impl ConversationCoordinator {
         &self.session_tree
     }
 
+    /// Borrow the session manager.
+    pub fn session_manager(&self) -> &Arc<SessionManager> {
+        &self.session_manager
+    }
+
     pub(crate) async fn resolve_workspace_id_for_config(config: &SessionConfig) -> Option<String> {
         let explicit = config
             .workspace_id
