@@ -60,4 +60,11 @@
       color: var(--bf-appearance-token-color-text-secondary);
     }
   }
+
+  // Grid9-specific hint under the primary "no content" message
+  &__hint {
+    margin-top: 8px;
+    font-size: 13px;
+    color: var(--bf-appearance-token-color-text-muted);
+  }
 }

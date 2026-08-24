@@ -12,12 +12,15 @@ import { dismissibleLayerManager } from '@/infrastructure/services/DismissibleLa
 import { useShortcut } from '@/infrastructure/hooks/useShortcut';
 import { activeEditTargetService } from '@/tools/editor/services/ActiveEditTargetService';
 import { useCanvasStore } from '../stores';
-import type { EditorGroupId } from '../types';
+import type { EditorGroupId, EditorGroupState } from '../types';
 
 interface UseKeyboardShortcutsOptions {
   enabled?: boolean;
   handleCloseWithDirtyCheck?: (tabId: string, groupId: EditorGroupId) => Promise<boolean>;
 }
+
+/** Fallback for an un-materialised grid9 cell (avoids deref of undefined). */
+const EMPTY_GROUP: EditorGroupState = { tabs: [], activeTabId: null };
 
 export const useKeyboardShortcuts = (options: UseKeyboardShortcutsOptions = {}) => {
   const { enabled = true, handleCloseWithDirtyCheck } = options;
@@ -32,14 +35,21 @@ export const useKeyboardShortcuts = (options: UseKeyboardShortcutsOptions = {}) 
     switchToTab,
     reopenClosedTab,
     setSplitMode,
+    enterGrid9,
     setAnchorPosition,
     toggleMaximize,
     toggleMissionControl,
   } = useCanvasStore();
 
+  // Slot-aware active group resolver. In grid9 mode the active slot is a cell in
+  // `layout.grid9Cells`; the three legacy fields are dormant then. This is what
+  // makes Ctrl+W / Ctrl+1..9 target the correct grid9 cell (slot4..slot16).
   const getActiveGroup = useCallback(() => {
+    if (layout.splitMode === 'grid9') {
+      return layout.grid9Cells[activeGroupId] ?? EMPTY_GROUP;
+    }
     return activeGroupId === 'primary' ? primaryGroup : secondaryGroup;
-  }, [activeGroupId, primaryGroup, secondaryGroup]);
+  }, [activeGroupId, layout.splitMode, layout.grid9Cells, primaryGroup, secondaryGroup]);
 
   const getVisibleTabs = useCallback(() => {
     return getActiveGroup().tabs.filter((t) => !t.isHidden);
@@ -77,6 +87,31 @@ export const useKeyboardShortcuts = (options: UseKeyboardShortcutsOptions = {}) 
     { key: '\\', ctrl: true, shift: true, scope: 'canvas' },
     () => setSplitMode(layout.splitMode === 'vertical' ? 'none' : 'vertical'),
     { enabled, description: 'keyboard.shortcuts.canvas.splitVertical' }
+  );
+
+  // grid9 grid: mod+Shift+9 — toggle grid9 mode. Entering routes to
+  // `enterGrid9` on the store (the grid9 cell model); exiting collects every
+  // cell's tabs back into the primary column via `setSplitMode('none')`.
+  // Registered in BOTH canvas and chat scopes so it fires whether focus is in
+  // the auxiliary canvas or the center chat pane.
+  const toggleGrid9 = useCallback(() => {
+    if (layout.splitMode === 'grid9') {
+      setSplitMode('none');
+      return;
+    }
+    enterGrid9(3, 3);
+  }, [layout.splitMode, setSplitMode, enterGrid9]);
+  useShortcut(
+    'canvas.splitGrid9',
+    { key: '9', ctrl: true, shift: true, scope: 'canvas' },
+    toggleGrid9,
+    { enabled, description: 'keyboard.shortcuts.canvas.splitGrid9' }
+  );
+  useShortcut(
+    'canvas.splitGrid9.chat',
+    { key: '9', ctrl: true, shift: true, scope: 'chat' },
+    toggleGrid9,
+    { enabled, description: 'keyboard.shortcuts.canvas.splitGrid9' }
   );
 
   // Anchor zone: mod+`

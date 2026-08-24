@@ -8,9 +8,15 @@ import { EditorArea } from './editor-area';
 import { AnchorZone } from './anchor-zone';
 import { MissionControl } from './mission-control';
 import { EmptyState } from './empty-state';
-import { useCanvasStore } from './stores';
+import {
+  useCanvasStore,
+  useAgentCanvasStore,
+  useProjectCanvasStore,
+  useGitCanvasStore,
+  useBottomTerminalCanvasStore,
+} from './stores';
 import { useTabLifecycle, useKeyboardShortcuts, usePanelTabCoordinator } from './hooks';
-import type { AnchorPosition } from './types';
+import type { AnchorPosition, EditorGroupState, Grid9Slot } from './types';
 import { TAB_EVENTS } from './types';
 import { selectActiveBtwSessionTab } from '@/flow_chat/services/btwSessionPane';
 import { openMainSession } from '@/flow_chat/services/sessionActivation';
@@ -41,6 +47,8 @@ export interface ContentCanvasProps {
   onCollapsePanel?: () => void;
   /** Suspend terminal fit/PTY resize while the hosting panel is animating. */
   terminalResizeSuspended?: boolean;
+  /** Optional grid9 slot info threaded to the TabBar (primary group only). */
+  grid9Slot?: Grid9Slot;
 }
 
 export const ContentCanvas: React.FC<ContentCanvasProps> = ({
@@ -55,6 +63,7 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   onExpandPanel,
   onCollapsePanel,
   terminalResizeSuspended = false,
+  grid9Slot,
 }) => {
   // Store state — fine-grained selectors so unrelated store changes
   // (drag state, closed-tab history, ...) do not re-render the whole canvas.
@@ -112,13 +121,25 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   }, [activeBtwSessionData?.parentSessionId, activeBtwSessionData?.workspacePath, activeBtwSessionTab?.id, mode, workspacePath]);
 
   // Keep the editor area mounted for hidden terminal tabs. Closing a terminal
-  // tab backgrounds it without destroying the xterm instance.
+  // tab backgrounds it without destroying the xterm instance. Slot-aware: in
+  // grid9 mode tabs live in `layout.grid9Cells`, so count every renderable
+  // group (legacy + grid9 cells) via getAllRenderableGroups(), not just the
+  // three hard-coded fields.
   const hasRenderableTabs = useMemo(() => {
-    const groups = [primaryGroup, secondaryGroup, tertiaryGroup];
-    return groups.some(group =>
-      group.tabs.some(tab => !tab.isHidden || tab.content.type === 'terminal')
-    );
-  }, [primaryGroup, secondaryGroup, tertiaryGroup]);
+    let store = useAgentCanvasStore;
+    if (mode === 'project') store = useProjectCanvasStore;
+    else if (mode === 'git') store = useGitCanvasStore;
+    else if (mode === 'bottom-terminal') store = useBottomTerminalCanvasStore;
+    const state = store.getState();
+    // Any group (legacy or grid9 cell) with visible tabs counts as renderable.
+    if (state.getAllRenderableGroups().length > 0) return true;
+    // Keep hidden terminal tabs mounted (keep-alive) so reopening a terminal
+    // reuses the xterm buffer instead of replaying history.
+    const groups: EditorGroupState[] = state.layout.splitMode === 'grid9'
+      ? Object.values(state.layout.grid9Cells).filter((g): g is EditorGroupState => !!g)
+      : [state.primaryGroup, state.secondaryGroup, state.tertiaryGroup];
+    return groups.some(group => group.tabs.some(tab => tab.content.type === 'terminal'));
+  }, [mode, layout, primaryGroup, secondaryGroup, tertiaryGroup]);
 
   // Handle anchor close
   const handleAnchorClose = useCallback(() => {
@@ -149,7 +170,7 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
   const renderContent = () => {
     // Show empty state when there are no visible tabs and no terminal keep-alive tabs.
     if (!hasRenderableTabs) {
-      return <EmptyState onClose={disablePopOut ? undefined : collapsePanel} />;
+      return <EmptyState onClose={disablePopOut ? undefined : collapsePanel} grid9Hint={layout.splitMode === 'grid9'} />;
     }
 
     return (
@@ -165,6 +186,7 @@ export const ContentCanvas: React.FC<ContentCanvasProps> = ({
             onTabCloseAllWithDirtyCheck={handleCloseAllWithDirtyCheck}
             disablePopOut={disablePopOut}
             terminalResizeSuspended={terminalResizeSuspended}
+            grid9Slot={grid9Slot}
           />
         </div>
 

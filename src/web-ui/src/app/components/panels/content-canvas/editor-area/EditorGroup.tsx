@@ -18,6 +18,7 @@ import {
 import type { 
   EditorGroupId, 
   EditorGroupState, 
+  Grid9Slot,
   TabDragPayload,
   DropPosition,
   PanelContent,
@@ -42,6 +43,13 @@ export interface EditorGroupProps {
   onDragEnd: () => void;
   onReorderTab: (tabId: string, newIndex: number) => void;
   onDrop: (position: DropPosition) => void;
+  /** Optional grid template toggle/menu info (primary group only), threaded to
+   *  the TabBar. C3 types it through; C4 renders the menu. */
+  grid9Slot?: Grid9Slot;
+  /** Merge this grid9 cell's tabs into a neighbour (free split/merge). */
+  gridMerge?: () => void;
+  /** Remove this blank grid9 cell (shrink + re-tile remaining cells). */
+  gridRemove?: () => void;
   onGroupFocus: () => void;
   onContentChange: (tabId: string, content: PanelContent) => void;
   onDirtyStateChange: (tabId: string, isDirty: boolean) => void;
@@ -70,6 +78,9 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
   onDragEnd,
   onReorderTab,
   onDrop,
+  grid9Slot,
+  gridMerge,
+  gridRemove,
   onGroupFocus,
   onContentChange,
   onDirtyStateChange,
@@ -221,6 +232,9 @@ export const EditorGroup: React.FC<EditorGroupProps> = ({
         onOpenMissionControl={onOpenMissionControl}
         onCloseAllTabs={onCloseAllTabs}
         onTabPopOut={disablePopOut ? undefined : handleTabPopOut}
+        grid9Slot={grid9Slot}
+        gridMerge={gridMerge}
+        gridRemove={gridRemove}
       />
 
       <DropZone

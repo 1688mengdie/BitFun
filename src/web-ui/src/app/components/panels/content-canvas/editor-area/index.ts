@@ -13,3 +13,6 @@ export type { SplitHandleProps } from './SplitHandle';
 
 export { DropZone } from './DropZone';
 export type { DropZoneProps } from './DropZone';
+
+// Grid9 prop types shared with the TabBar (primary group template menu).
+export type { Grid9Slot, Grid9Template } from '../types';

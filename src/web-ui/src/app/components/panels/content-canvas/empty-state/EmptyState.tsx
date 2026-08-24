@@ -11,9 +11,11 @@ import './EmptyState.scss';
 
 export interface EmptyStateProps {
   onClose?: () => void;
+  /** When true (canvas empty in grid9 mode) show an additional grid9 hint line. */
+  grid9Hint?: boolean;
 }
 
-export const EmptyState: React.FC<EmptyStateProps> = ({ onClose }) => {
+export const EmptyState: React.FC<EmptyStateProps> = ({ onClose, grid9Hint }) => {
   const { t } = useTranslation('components');
 
   const handleClose = useCallback((e: React.MouseEvent) => {
@@ -39,6 +41,7 @@ export const EmptyState: React.FC<EmptyStateProps> = ({ onClose }) => {
         {/* Message */}
         <div className="canvas-empty-state__message">
           <p>{t('canvas.noContentOpen')}</p>
+          {grid9Hint && <p className="canvas-empty-state__hint">{t('canvas.grid9EmptyHint')}</p>}
         </div>
       </div>
     </div>
