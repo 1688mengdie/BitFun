@@ -1,6 +1,7 @@
 use super::util::normalize_path;
 use crate::agentic::coordination::{
-    get_global_coordinator, get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
+    PLAN_FILE_METADATA_KEY, TODO_ID_METADATA_KEY, get_global_coordinator, get_global_scheduler,
+    DialogSubmissionPolicy, DialogTriggerSource,
 };
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
@@ -300,6 +301,15 @@ struct SessionMessageInput {
     session_name: Option<String>,
     message: String,
     agent_type: Option<SessionMessageAgentType>,
+    /// Optional plan-todo binding: when creating a new session, the dispatched
+    /// turn carries planFile/todoId in the forwarded metadata so the scheduler
+    /// auto-marks the plan todo (in_progress at turn start, completed when the
+    /// turn finishes with a Completed outcome). Only allowed when session_id is
+    /// omitted; both fields must be provided together.
+    #[serde(default)]
+    plan_file: Option<String>,
+    #[serde(default)]
+    todo_id: Option<String>,
 }
 
 #[async_trait]
@@ -358,6 +368,14 @@ Allowed agent types when creating a session:
                     "type": "string",
                     "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                     "description": "Required when session_id is omitted. Not allowed when sending to an existing session."
+                },
+                "plan_file": {
+                    "type": "string",
+                    "description": "Optional plan-todo binding for a created session (only when session_id is omitted, and requires todo_id): the plan file name or absolute path whose todo is auto-marked in_progress when the dispatched turn starts and completed when it finishes with a Completed outcome."
+                },
+                "todo_id": {
+                    "type": "string",
+                    "description": "Optional todo id within plan_file for a created session (only when session_id is omitted, and requires plan_file)."
                 }
             },
             "required": ["message"],
@@ -417,6 +435,18 @@ Allowed agent types when creating a session:
                     };
                 }
 
+                if parsed.plan_file.is_some() || parsed.todo_id.is_some() {
+                    return ValidationResult {
+                        result: false,
+                        message: Some(
+                            "plan_file/todo_id binding is only allowed when session_id is omitted"
+                                .to_string(),
+                        ),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+
                 if parsed.agent_type.is_some() {
                     return ValidationResult {
                         result: false,
@@ -437,6 +467,17 @@ Allowed agent types when creating a session:
                 }
             }
             None => {
+                if parsed.plan_file.is_some() != parsed.todo_id.is_some() {
+                    return ValidationResult {
+                        result: false,
+                        message: Some(
+                            "plan_file and todo_id must be provided together".to_string(),
+                        ),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+
                 if parsed
                     .session_name
                     .as_deref()
@@ -660,6 +701,14 @@ Allowed agent types when creating a session:
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
+                // Persistent copy of the plan-todo binding on the created
+                // session record (the turn-channel copy is injected at submit).
+                if let Some(plan_file) = params.plan_file.as_deref() {
+                    metadata.insert(PLAN_FILE_METADATA_KEY.to_string(), json!(plan_file));
+                }
+                if let Some(todo_id) = params.todo_id.as_deref() {
+                    metadata.insert(TODO_ID_METADATA_KEY.to_string(), json!(todo_id));
+                }
                 let session = runtime
                     .create_session(AgentSessionCreateRequest {
                         session_name,
@@ -691,6 +740,16 @@ Allowed agent types when creating a session:
         let (forwarded_message, prepended_messages) =
             self.format_forwarded_message(&params.message);
 
+        let mut forwarded_metadata = Self::forwarded_user_input_metadata(context);
+        // Turn-channel copy of the plan-todo binding so the scheduler can read
+        // it from the queued turn and auto-mark the plan todo.
+        if let Some(plan_file) = params.plan_file.as_deref() {
+            forwarded_metadata.insert(PLAN_FILE_METADATA_KEY.to_string(), json!(plan_file));
+        }
+        if let Some(todo_id) = params.todo_id.as_deref() {
+            forwarded_metadata.insert(TODO_ID_METADATA_KEY.to_string(), json!(todo_id));
+        }
+
         runtime
             .submit_dialog_turn(AgentDialogTurnRequest {
                 session_id: target_session_id.clone(),
@@ -711,7 +770,7 @@ Allowed agent types when creating a session:
                 }),
                 prepended_reminders: prepended_messages,
                 attachments: Vec::new(),
-                metadata: Self::forwarded_user_input_metadata(context),
+                metadata: forwarded_metadata,
             })
             .await
             .map_err(|error| {
