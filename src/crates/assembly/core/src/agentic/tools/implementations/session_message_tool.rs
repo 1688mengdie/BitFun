@@ -695,6 +695,52 @@ impl SessionMessageTool {
         }
     }
 
+    /// Map a single batch item's dispatch outcome to its result payload. A
+    /// failed item is recorded as an `error` result (never rolled back, never
+    /// stops later items); a successful item keeps its delivery fields. Kept
+    /// pure so the batch dispatch semantics can be verified by unit tests
+    /// without a live agent runtime.
+    fn batch_item_result(item: &BatchItem, outcome: BitFunResult<DispatchOutcome>) -> Value {
+        match outcome {
+            Ok(outcome) => json!({
+                "status": "success",
+                "target_session_id": outcome.target_session_id,
+                "target_agent_type": outcome.target_agent_type,
+                "target_workspace": outcome.workspace_path,
+                "created_session_id": outcome.created_session_id,
+                "result": outcome.result_text,
+            }),
+            Err(error) => {
+                warn!(
+                    "Batch SessionMessage item failed (successful items are not rolled back): session_name={:?}, session_id={:?}, error={}",
+                    item.session_name, item.session_id, error
+                );
+                json!({
+                    "status": "error",
+                    "session_name": item.session_name.clone(),
+                    "session_id": item.session_id.clone(),
+                    "error": error.to_string(),
+                })
+            }
+        }
+    }
+
+    /// Materialize one result per batch item from its dispatch outcome. Every
+    /// item yields exactly one entry, so a failure never stops later items and
+    /// the batch summary reflects the true total. Keeping this a pure step lets
+    /// the "per-item independent, no rollback, no stop" semantics be tested
+    /// without driving the real create+send runtime.
+    fn batch_results(
+        items: &[BatchItem],
+        outcomes: impl IntoIterator<Item = BitFunResult<DispatchOutcome>>,
+    ) -> Vec<Value> {
+        items
+            .iter()
+            .zip(outcomes)
+            .map(|(item, outcome)| Self::batch_item_result(item, outcome))
+            .collect()
+    }
+
     /// Dispatch every batch item sequentially and independently. Each item is a
     /// standalone single-target dispatch; a failed item is recorded as an error
     /// result and never rolls back already-succeeded items or stops later items.
@@ -705,7 +751,10 @@ impl SessionMessageTool {
         shared: &DispatchShared,
         context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
-        let mut results = Vec::with_capacity(items.len());
+        // Dispatch each item sequentially and independently, then materialize
+        // exactly one result per item so a failure never rolls back earlier
+        // successes or stops later items.
+        let mut outcomes = Vec::with_capacity(items.len());
         for item in items {
             let item_params = SessionMessageInput {
                 workspace: params.workspace.clone(),
@@ -716,32 +765,9 @@ impl SessionMessageTool {
                 worktree: None,
                 batch: None,
             };
-            match self.dispatch_single(item_params, shared, context).await {
-                Ok(outcome) => {
-                    let result_text = outcome.result_text;
-                    results.push(json!({
-                        "status": "success",
-                        "target_session_id": outcome.target_session_id,
-                        "target_agent_type": outcome.target_agent_type,
-                        "target_workspace": outcome.workspace_path,
-                        "created_session_id": outcome.created_session_id,
-                        "result": result_text,
-                    }));
-                }
-                Err(error) => {
-                    warn!(
-                        "Batch SessionMessage item failed (successful items are not rolled back): session_name={:?}, session_id={:?}, error={}",
-                        item.session_name, item.session_id, error
-                    );
-                    results.push(json!({
-                        "status": "error",
-                        "session_name": item.session_name.clone(),
-                        "session_id": item.session_id.clone(),
-                        "error": error.to_string(),
-                    }));
-                }
-            }
+            outcomes.push(self.dispatch_single(item_params, shared, context).await);
         }
+        let results = Self::batch_results(items, outcomes);
 
         let (succeeded, failed, summary) = Self::summarize_batch_results(&results);
 
@@ -1815,5 +1841,148 @@ mod tests {
             .await;
 
         assert!(validation.result, "{:?}", validation.message);
+    }
+
+    #[test]
+    fn batch_item_result_maps_success_outcome() {
+        let item = BatchItem {
+            session_id: Some("worker_1".to_string()),
+            session_name: None,
+            message: "hello".to_string(),
+            agent_type: None,
+        };
+        let outcome = DispatchOutcome {
+            target_session_id: "worker_1".to_string(),
+            target_agent_type: "agentic".to_string(),
+            created_session_id: None,
+            workspace_path: "/repo".to_string(),
+            result_text: "Message accepted for session 'worker_1' in workspace '/repo' using agent type 'agentic'."
+                .to_string(),
+            created_worktree: None,
+        };
+
+        let result = SessionMessageTool::batch_item_result(&item, Ok(outcome));
+
+        assert_eq!(result["status"].as_str(), Some("success"));
+        assert_eq!(result["target_session_id"].as_str(), Some("worker_1"));
+        assert_eq!(result["target_agent_type"].as_str(), Some("agentic"));
+        assert_eq!(result["target_workspace"].as_str(), Some("/repo"));
+        assert!(result["created_session_id"].is_null());
+        assert_eq!(
+            result["result"].as_str(),
+            Some("Message accepted for session 'worker_1' in workspace '/repo' using agent type 'agentic'.")
+        );
+    }
+
+    #[test]
+    fn batch_item_result_maps_failure_outcome() {
+        let item = BatchItem {
+            session_id: Some("worker_2".to_string()),
+            session_name: None,
+            message: "hi".to_string(),
+            agent_type: None,
+        };
+        let error = BitFunError::tool(
+            "SessionMessage cannot send a message to the same session".to_string(),
+        );
+        let expected_error = error.to_string();
+
+        let result = SessionMessageTool::batch_item_result(&item, Err(error));
+
+        assert_eq!(result["status"].as_str(), Some("error"));
+        assert_eq!(result["session_id"].as_str(), Some("worker_2"));
+        assert_eq!(result["session_name"].as_str(), None);
+        assert_eq!(result["error"].as_str(), Some(expected_error.as_str()));
+    }
+
+    #[test]
+    fn batch_results_keeps_successes_and_records_failure_in_order() {
+        // A failure in the middle must not roll back the earlier success and
+        // must not stop the later success: every item yields exactly one entry.
+        let first = BatchItem {
+            session_id: Some("worker_1".to_string()),
+            session_name: None,
+            message: "hello".to_string(),
+            agent_type: None,
+        };
+        let failed = BatchItem {
+            session_id: Some("worker_2".to_string()),
+            session_name: None,
+            message: "hi".to_string(),
+            agent_type: None,
+        };
+        let last = BatchItem {
+            session_id: Some("worker_3".to_string()),
+            session_name: None,
+            message: "still runs".to_string(),
+            agent_type: None,
+        };
+
+        let first_outcome = DispatchOutcome {
+            target_session_id: "worker_1".to_string(),
+            target_agent_type: "agentic".to_string(),
+            created_session_id: None,
+            workspace_path: "/repo".to_string(),
+            result_text: "Message accepted for session 'worker_1' in workspace '/repo' using agent type 'agentic'."
+                .to_string(),
+            created_worktree: None,
+        };
+        let last_outcome = DispatchOutcome {
+            target_session_id: "worker_3".to_string(),
+            target_agent_type: "agentic".to_string(),
+            created_session_id: None,
+            workspace_path: "/repo".to_string(),
+            result_text: "Message accepted for session 'worker_3' in workspace '/repo' using agent type 'agentic'."
+                .to_string(),
+            created_worktree: None,
+        };
+        let failure = BitFunError::tool("Session 'worker_2' not found".to_string());
+        let expected_error = failure.to_string();
+
+        let results = SessionMessageTool::batch_results(
+            &[first, failed, last],
+            vec![Ok(first_outcome), Err(failure), Ok(last_outcome)],
+        );
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0]["status"].as_str(), Some("success"));
+        assert_eq!(results[0]["target_session_id"].as_str(), Some("worker_1"));
+        assert_eq!(results[1]["status"].as_str(), Some("error"));
+        assert_eq!(results[1]["session_id"].as_str(), Some("worker_2"));
+        assert_eq!(results[1]["error"].as_str(), Some(expected_error.as_str()));
+        assert_eq!(results[2]["status"].as_str(), Some("success"));
+        assert_eq!(results[2]["target_session_id"].as_str(), Some("worker_3"));
+    }
+
+    #[test]
+    fn summarize_batch_results_counts_and_mentions_failed_items() {
+        let results = vec![
+            json!({"status": "success"}),
+            json!({"status": "error"}),
+            json!({"status": "success"}),
+        ];
+
+        let (succeeded, failed, summary) = SessionMessageTool::summarize_batch_results(&results);
+
+        assert_eq!(succeeded, 2);
+        assert_eq!(failed, 1);
+        assert!(summary.starts_with(
+            "Batch dispatch of 3 message(s): 2 succeeded, 1 failed. Successful items are not rolled back; retry only the failed items"
+        ));
+        assert!(summary.contains("A failed item never rolls back earlier successes, and later items still ran."));
+    }
+
+    #[test]
+    fn summarize_batch_results_all_success_omits_failure_note() {
+        let results = vec![json!({"status": "success"}), json!({"status": "success"})];
+
+        let (succeeded, failed, summary) = SessionMessageTool::summarize_batch_results(&results);
+
+        assert_eq!(succeeded, 2);
+        assert_eq!(failed, 0);
+        assert!(summary.starts_with(
+            "Batch dispatch of 2 message(s): 2 succeeded, 0 failed. Successful items are not rolled back; retry only the failed items"
+        ));
+        assert!(!summary.contains("A failed item never rolls back earlier successes"));
     }
 }
