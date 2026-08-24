@@ -670,6 +670,14 @@ pub(crate) fn set_test_path_manager_override(manager: Arc<PathManager>) {
     *TEST_PATH_MANAGER_OVERRIDE.lock().unwrap() = Some(manager);
 }
 
+/// Clear the test path manager override so it does not leak into other tests in
+/// the same binary (a lingering override would change path resolution globally).
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn clear_test_path_manager_override() {
+    *TEST_PATH_MANAGER_OVERRIDE.lock().unwrap() = None;
+}
+
 struct GlobalPathManagerState {
     manager: Arc<PathManager>,
     initialization_error: Option<String>,

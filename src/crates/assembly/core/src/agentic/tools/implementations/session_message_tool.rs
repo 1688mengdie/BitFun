@@ -12,10 +12,10 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AcpClientBitfunMessageRequest, AcpClientMessageRequest, ACP_TOOL_PREFIX,
-    AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
-    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
+    AcpClientBitfunMessageRequest, AcpClientMessageRequest, AgentDialogPrependedReminder,
+    AgentDialogTurnRequest, AgentSessionCreateRequest, AgentSessionListRequest,
+    AgentSessionReplyRoute, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest, ACP_TOOL_PREFIX,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -280,14 +280,12 @@ impl SessionMessageTool {
     ) -> BitFunResult<()> {
         use crate::agentic::persistence::PersistenceManager;
         use crate::infrastructure::get_path_manager_arc;
-        use crate::service::remote_ssh::workspace_state::get_effective_session_path;
         use bitfun_core_types::{SESSION_PROVIDER_ACP, SESSION_PROVIDER_METADATA_KEY};
 
-        let storage_path = get_effective_session_path(workspace_path, None, None).await;
         let persistence = PersistenceManager::new(get_path_manager_arc())
             .map_err(|error| BitFunError::tool(error.to_string()))?;
         let Some(metadata) = persistence
-            .load_session_metadata(&storage_path, session_id)
+            .load_session_metadata(std::path::Path::new(workspace_path), session_id)
             .await
             .map_err(|error| BitFunError::tool(error.to_string()))?
         else {
