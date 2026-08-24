@@ -11,10 +11,12 @@ use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
-    AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
-    AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
-    AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
+    AgentDialogPrependedReminder, AgentDialogSteerRequest, AgentDialogTurnPort,
+    AgentDialogTurnRequest, AgentSessionCreateRequest, AgentSessionListRequest,
+    AgentSessionReplyRoute, AgentSessionSummary, AgentSessionWorkspaceBinding,
+    AgentSessionWorkspaceRequest,
 };
+use log::{info, warn};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -305,13 +307,11 @@ struct SessionMessageInput {
     /// the UserSteering channel instead of starting a new turn. Falls back to
     /// normal delivery when the target session is not processing.
     #[serde(default)]
-    #[allow(dead_code)]
     urgent: bool,
 }
 
 /// Delivery decision for an urgent message against a target session.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 enum UrgentDelivery {
     /// Target session is processing a turn; steer into the running turn.
     Steer { turn_id: String },
@@ -319,7 +319,6 @@ enum UrgentDelivery {
     NormalSubmit,
 }
 
-#[allow(dead_code)]
 fn resolve_urgent_delivery(processing_turn_id: Option<String>) -> UrgentDelivery {
     match processing_turn_id {
         Some(turn_id) => UrgentDelivery::Steer { turn_id },
@@ -336,7 +335,6 @@ fn resolve_urgent_delivery(processing_turn_id: Option<String>) -> UrgentDelivery
 /// Every other case uses the normal submission channel. When steering is
 /// attempted but rejected, the caller falls back to the normal channel, so one
 /// of the two channels always delivers the message.
-#[allow(dead_code)]
 fn should_attempt_steering(
     urgent: bool,
     created_session_id: Option<&str>,
@@ -604,7 +602,7 @@ Allowed agent types when creating a session:
             .ok_or_else(|| BitFunError::tool("scheduler not initialized".to_string()))?;
         let runtime = CoreServiceAgentRuntime::agent_runtime_with_dialog_turns(
             coordinator.clone(),
-            scheduler,
+            scheduler.clone(),
         )
         .map_err(BitFunError::tool)?;
 
@@ -739,32 +737,116 @@ Allowed agent types when creating a session:
         let (forwarded_message, prepended_messages) =
             self.format_forwarded_message(&params.message);
 
-        runtime
-            .submit_dialog_turn(AgentDialogTurnRequest {
-                session_id: target_session_id.clone(),
-                message: forwarded_message,
-                original_message: Some(params.message.clone()),
-                turn_id: None,
-                execution: Default::default(),
-                agent_type: target_agent_type.clone(),
-                workspace_path: Some(workspace_target.workspace_path.clone()),
-                remote_connection_id: workspace_target.remote_connection_id.clone(),
-                remote_ssh_host: workspace_target.remote_ssh_host.clone(),
-                policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
-                reply_route: Some(AgentSessionReplyRoute {
-                    source_session_id,
-                    source_workspace_path: source_workspace,
-                    source_remote_connection_id,
-                    source_remote_ssh_host,
-                }),
-                prepended_reminders: prepended_messages,
-                attachments: Vec::new(),
-                metadata: Self::forwarded_user_input_metadata(context),
-            })
-            .await
-            .map_err(|error| {
-                BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-            })?;
+        // Urgent delivery: when the target session is currently processing a turn,
+        // inject the message into that running turn via the UserSteering channel
+        // instead of starting a new turn. Honest fallback: when the target session
+        // is not processing, or the steering is rejected (the turn ended between
+        // the state query and the submit), deliver through the normal submission
+        // path so the message is never dropped.
+        let mut steering_turn_id: Option<String> = None;
+        // The base `SessionMessageInput` carries no plan-todo binding fields, so
+        // the steering gate never sees a binding and only narrows on `urgent` plus
+        // the "target session already exists" criterion.
+        let has_plan_todo_binding = false;
+        if should_attempt_steering(
+            params.urgent,
+            created_session_id.as_deref(),
+            has_plan_todo_binding,
+        ) {
+            match resolve_urgent_delivery(scheduler.current_processing_turn_id(&target_session_id))
+            {
+                UrgentDelivery::Steer { turn_id } => {
+                    // Reuse the native `AgentDialogSteerRequest` struct; the sender
+                    // identity reminder is baked into `content` (the native struct has
+                    // no `prepended_reminders` field) so the target agent still sees
+                    // it originates from another agent. `display_content` stays the
+                    // clean user-visible message.
+                    let mut steering_content = forwarded_message.clone();
+                    for reminder in &prepended_messages {
+                        steering_content = format!("{}\n{}", reminder.text, steering_content);
+                    }
+                    match scheduler
+                        .steer_dialog_turn(AgentDialogSteerRequest {
+                            session_id: target_session_id.clone(),
+                            turn_id: turn_id.clone(),
+                            content: steering_content,
+                            display_content: Some(params.message.clone()),
+                            attachments: Vec::new(),
+                            metadata: serde_json::Map::new(),
+                        })
+                        .await
+                    {
+                        Ok(_outcome) => {
+                            steering_turn_id = Some(turn_id.clone());
+                            info!(
+                                "Urgent SessionMessage steered into running turn: source_session_id={}, target_session_id={}, turn_id={}",
+                                source_session_id, target_session_id, turn_id
+                            );
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Urgent SessionMessage steering rejected, falling back to normal submit: target_session_id={}, turn_id={}, error={}",
+                                target_session_id, turn_id, error
+                            );
+                        }
+                    }
+                }
+                UrgentDelivery::NormalSubmit => {}
+            }
+        }
+
+        if steering_turn_id.is_none() {
+            runtime
+                .submit_dialog_turn(AgentDialogTurnRequest {
+                    session_id: target_session_id.clone(),
+                    message: forwarded_message,
+                    original_message: Some(params.message.clone()),
+                    turn_id: None,
+                    execution: Default::default(),
+                    agent_type: target_agent_type.clone(),
+                    workspace_path: Some(workspace_target.workspace_path.clone()),
+                    remote_connection_id: workspace_target.remote_connection_id.clone(),
+                    remote_ssh_host: workspace_target.remote_ssh_host.clone(),
+                    policy: DialogSubmissionPolicy::for_source(DialogTriggerSource::AgentSession),
+                    reply_route: Some(AgentSessionReplyRoute {
+                        source_session_id,
+                        source_workspace_path: source_workspace,
+                        source_remote_connection_id,
+                        source_remote_ssh_host,
+                    }),
+                    prepended_reminders: prepended_messages,
+                    attachments: Vec::new(),
+                    metadata: Self::forwarded_user_input_metadata(context),
+                })
+                .await
+                .map_err(|error| {
+                    BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+                })?;
+        }
+
+        let urgent_fell_back =
+            params.urgent && steering_turn_id.is_none() && created_session_id.is_none();
+        let mut result_text = if let Some(steered_turn_id) = steering_turn_id.as_ref() {
+            format!(
+                "Urgent message injected into the running turn '{}' of session '{}' in workspace '{}' using agent type '{}'.",
+                steered_turn_id, target_session_id, workspace_target.workspace_path, target_agent_type
+            )
+        } else if let Some(created_session_id) = created_session_id.as_ref() {
+            format!(
+                "Created session '{}' and accepted the message in workspace '{}' using agent type '{}'.",
+                created_session_id, workspace_target.workspace_path, target_agent_type
+            )
+        } else {
+            format!(
+                "Message accepted for session '{}' in workspace '{}' using agent type '{}'.",
+                target_session_id, workspace_target.workspace_path, target_agent_type
+            )
+        };
+        if urgent_fell_back {
+            result_text.push_str(
+                " Steering into the running turn was not possible (the target session was idle, its turn had just ended, the queue was congested, or the message carries a plan-todo binding that the steering channel cannot carry), so the urgent message was delivered as a normal submission instead of a mid-turn correction.",
+            );
+        }
 
         Ok(vec![ToolResult::Result {
             data: json!({
@@ -773,18 +855,9 @@ Allowed agent types when creating a session:
                 "target_session_id": target_session_id.clone(),
                 "target_agent_type": target_agent_type.clone(),
                 "created_session_id": created_session_id.clone(),
+                "delivery": if steering_turn_id.is_some() { "steered" } else { "submitted" },
             }),
-            result_for_assistant: Some(if let Some(created_session_id) = created_session_id {
-                format!(
-                    "Created session '{}' and accepted the message in workspace '{}' using agent type '{}'.",
-                    created_session_id, workspace_target.workspace_path, target_agent_type
-                )
-            } else {
-                format!(
-                    "Message accepted for session '{}' in workspace '{}' using agent type '{}'.",
-                    target_session_id, workspace_target.workspace_path, target_agent_type
-                )
-            }),
+            result_for_assistant: Some(result_text),
             image_attachments: None,
         }])
     }
