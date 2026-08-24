@@ -25,6 +25,10 @@ use std::path::Path;
 /// SessionMessage tool - send a message to another session via the dialog scheduler
 pub struct SessionMessageTool;
 
+/// Background ACP direct-delivery window (seconds). The tool returns immediately
+/// and the external ACP turn runs asynchronously under this cap.
+const ACP_DIRECT_TIMEOUT_SECONDS: u64 = 1800;
+
 #[derive(Debug, Clone)]
 struct SessionMessageWorkspaceTarget {
     workspace_path: String,
@@ -667,6 +671,15 @@ Allowed agent types when creating a session:
                     })?
                     .as_str()
                     .to_string();
+                // worktree is not supported with acp__ agent types: the external
+                // ACP process runs in its own workspace, not a managed worktree.
+                if Self::acp_client_id_from_agent_type(&agent_type).is_some()
+                    && workspace_target.execution_target.is_some()
+                {
+                    return Err(BitFunError::tool(
+                        "worktree is not supported with acp__ agent types".to_string(),
+                    ));
+                }
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
@@ -705,44 +718,76 @@ Allowed agent types when creating a session:
         let acp_target_via_agent = Self::acp_client_id_from_agent_type(&target_agent_type);
         let acp_target_via_flow = Self::acp_flow_client_id_from_session_id(&target_session_id);
         if acp_target_via_agent.is_some() || acp_target_via_flow.is_some() {
-            let coordinator = get_global_coordinator()
-                .ok_or_else(|| BitFunError::tool("coordinator not initialized".to_string()))?;
             let port = coordinator.acp_client_port().ok_or_else(|| {
                 BitFunError::tool(
                     "ACP client port is not available; the desktop host did not inject it"
                         .to_string(),
                 )
             })?;
-            // Streamed chunks are not consumed here (the reply is routed back
-            // out-of-band); the port still accumulates and returns the full text.
             let (chunk_tx, _chunk_rx) = tokio::sync::mpsc::unbounded_channel();
-            let delivery = if let Some(client_id) = acp_target_via_agent {
-                port.send_message_to_bitfun_session_stream(
-                    AcpClientBitfunMessageRequest {
-                        client_id: client_id.to_owned(),
-                        bitfun_session_id: target_session_id.clone(),
-                        message: params.message.clone(),
-                        workspace_path: Some(workspace_target.workspace_path.clone()),
-                        timeout_seconds: None,
-                    },
-                    chunk_tx,
-                )
-                .await
-            } else {
-                port.send_message_stream(
-                    AcpClientMessageRequest {
-                        session_id: target_session_id.clone(),
-                        message: params.message.clone(),
-                        workspace_path: Some(workspace_target.workspace_path.clone()),
-                        timeout_seconds: None,
-                    },
-                    chunk_tx,
-                )
-                .await
-            };
-            delivery.map_err(|error| {
-                BitFunError::tool(format!("ACP direct delivery failed: {error}"))
-            })?;
+            let target_session_for_delivery = target_session_id.clone();
+            let user_input = params.message.clone();
+            let target_workspace = workspace_target.workspace_path.clone();
+            let target_agent_type_for_delivery = target_agent_type.clone();
+            let sender_session_id = source_session_id.clone();
+            let sender_workspace = source_workspace.clone();
+            let sender_conn = source_remote_connection_id.clone();
+            let sender_ssh = source_remote_ssh_host.clone();
+            let spawn_client_id = acp_target_via_agent.map(ToOwned::to_owned);
+            let port_for_spawn = port.clone();
+            let scheduler_for_spawn = scheduler.clone();
+            // Deliver asynchronously so the tool returns immediately; once the
+            // external ACP turn completes, the full reply is routed back to the
+            // sender session (K20: response must not be dropped).
+            tokio::spawn(async move {
+                let delivery = if let Some(client_id) = spawn_client_id {
+                    port_for_spawn
+                        .send_message_to_bitfun_session_stream(
+                            AcpClientBitfunMessageRequest {
+                                client_id,
+                                bitfun_session_id: target_session_for_delivery.clone(),
+                                message: user_input,
+                                workspace_path: Some(target_workspace.clone()),
+                                timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+                            },
+                            chunk_tx,
+                        )
+                        .await
+                } else {
+                    port_for_spawn
+                        .send_message_stream(
+                            AcpClientMessageRequest {
+                                session_id: target_session_for_delivery.clone(),
+                                message: user_input,
+                                workspace_path: Some(target_workspace.clone()),
+                                timeout_seconds: Some(ACP_DIRECT_TIMEOUT_SECONDS),
+                            },
+                            chunk_tx,
+                        )
+                        .await
+                };
+                if let Ok(result) = delivery {
+                    let notice = format!(
+                        "External ACP session '{}' responded: {}",
+                        target_session_for_delivery, result.response
+                    );
+                    let _ = scheduler_for_spawn
+                        .deliver_background_result(
+                            sender_session_id,
+                            target_agent_type_for_delivery,
+                            Some(sender_workspace),
+                            sender_conn,
+                            sender_ssh,
+                            notice,
+                            Some(format!(
+                                "External ACP session '{}' responded; the full reply is delivered back.",
+                                target_session_for_delivery
+                            )),
+                            None,
+                        )
+                        .await;
+                }
+            });
             let result_for_assistant = format!(
                 "Message accepted for external ACP session '{}' in workspace '{}' using agent type '{}'.",
                 target_session_id, workspace_target.workspace_path, target_agent_type

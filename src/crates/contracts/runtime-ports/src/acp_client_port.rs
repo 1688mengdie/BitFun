@@ -147,7 +147,8 @@ pub fn acp_backend_error(message: impl Into<String>) -> PortError {
 ///
 /// Single authoritative implementation (d3-P2-2): the desktop `AcpClientPort`,
 /// `SessionMessage` direct-path tool and the Task ACP flow branch all share
-/// this guard so the flow-session判定 can never drift between layers.
+/// this guard so the flow-session classification can never drift between
+/// layers.
 pub fn looks_like_uuid(segment: &str) -> bool {
     segment.len() == 36
         && segment.bytes().enumerate().all(|(index, byte)| {

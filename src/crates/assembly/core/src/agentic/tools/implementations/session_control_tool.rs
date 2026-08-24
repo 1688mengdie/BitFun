@@ -10,7 +10,6 @@ use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler}
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
-use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -24,6 +23,7 @@ use bitfun_agent_runtime::session_control::{
     SessionControlAction, SessionControlCancelRoute, SessionControlInput,
     SessionControlValidationContext, SessionControlValidationResult,
 };
+use bitfun_agent_tools::ACP_TOOL_PREFIX;
 use bitfun_core_types::SessionExecutionTarget;
 use bitfun_runtime_ports::{
     AcpClientCreateRequest, AcpClientCreateResult, AcpClientPort, AgentSessionCreateRequest,
@@ -382,10 +382,7 @@ Arguments:
         })
     }
 
-    async fn input_schema_for_model_with_context(
-        &self,
-        context: Option<&ToolUseContext>,
-    ) -> Value {
+    async fn input_schema_for_model_with_context(&self, context: Option<&ToolUseContext>) -> Value {
         let agent_type_ids = get_available_agent_type_ids_for_creation(context).await;
         let agent_type_enum: Vec<&str> = agent_type_ids.iter().map(String::as_str).collect();
         let mut schema = self.input_schema();
@@ -1001,14 +998,16 @@ mod tests {
             &self,
             _request: bitfun_runtime_ports::AcpClientMessageRequest,
             _chunk_sink: AcpClientStreamChunkSink,
-        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult>
+        {
             unimplemented!()
         }
         async fn send_message_to_bitfun_session_stream(
             &self,
             _request: bitfun_runtime_ports::AcpClientBitfunMessageRequest,
             _chunk_sink: AcpClientStreamChunkSink,
-        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult> {
+        ) -> bitfun_runtime_ports::PortResult<bitfun_runtime_ports::AcpClientMessageResult>
+        {
             unimplemented!()
         }
     }

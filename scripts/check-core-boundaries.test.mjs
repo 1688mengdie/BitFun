@@ -265,6 +265,7 @@ test('portable contract crates expose only capability-local feature slices', asy
     new Set(Object.keys(runtimePortFeatures)),
     new Set([
       'default',
+      'acp-client',
       'agent-api',
       'git-port',
       'permission',
@@ -285,6 +286,7 @@ test('portable contract crates expose only capability-local feature slices', asy
   assert.deepEqual(new Set(runtimePortFeatures['workspace-ports']), new Set(['dep:anyhow', 'dep:tokio-util']));
   assert.deepEqual(runtimePortFeatures['terminal-port'], ['dep:tokio']);
   assert.deepEqual(runtimePortFeatures['remote-exec-port'], ['dep:tokio']);
+  assert.deepEqual(runtimePortFeatures['acp-client'], ['dep:tokio']);
   assert.deepEqual(
     new Set(runtimePortFeatures['tool-runtime-handles']),
     new Set([
