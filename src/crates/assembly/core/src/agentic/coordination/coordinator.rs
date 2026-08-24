@@ -789,7 +789,7 @@ struct SessionExecutionLease {
 
 struct ManualCompactionTask {
     turn_id: String,
-    completion: oneshot::Receiver<BitFunResult<()>>,
+    completion: oneshot::Receiver<BitFunResult<ContextCompactionOutcome>>,
 }
 
 struct ManualCompactionControlGuard {
@@ -5451,7 +5451,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         remote_exec_port: Option<Arc<dyn RemoteExecPort>>,
         cancellation_token: CancellationToken,
         commit_gate: Arc<ManualCompactionCommitGate>,
-    ) -> BitFunResult<()> {
+    ) -> BitFunResult<ContextCompactionOutcome> {
         let manual_workspace_services = Self::build_workspace_services(&manual_workspace).await;
         let manual_execution_context = ExecutionContext {
             session_id: session_id.clone(),
@@ -5516,7 +5516,8 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     &outcome,
                     context_window,
                 )
-                .await
+                .await?;
+                Ok(outcome)
             }
             Err(err @ BitFunError::Cancelled(_)) => {
                 let error_text = err.to_string();
@@ -5584,6 +5585,17 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     /// task used by Agent Runtime callers, then await its terminal result for
     /// the existing Desktop compatibility API.
     pub async fn compact_session_manually(&self, session_id: String) -> BitFunResult<()> {
+        self.compact_session_with_outcome(session_id)
+            .await
+            .map(|_| ())
+    }
+
+    /// Compact the active session context and return the compaction outcome
+    /// (tokens/ratio/summary) so tool callers can surface the applied result.
+    pub async fn compact_session_with_outcome(
+        &self,
+        session_id: String,
+    ) -> BitFunResult<ContextCompactionOutcome> {
         let task = self.start_manual_compaction_task(session_id, None).await?;
         task.completion.await.map_err(|_| {
             BitFunError::Service(format!(

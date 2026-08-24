@@ -11,6 +11,7 @@ pub enum SessionControlAction {
     Cancel,
     Delete,
     List,
+    Compact,
     Rename,
 }
 
@@ -21,6 +22,7 @@ impl SessionControlAction {
             Self::Cancel => "cancel",
             Self::Delete => "delete",
             Self::List => "list",
+            Self::Compact => "compact",
             Self::Rename => "rename",
         }
     }
@@ -183,7 +185,13 @@ fn validate_mutating_action_target(
         return invalid(message);
     }
 
-    if context.current_session_id == Some(session_id) && context.has_workspace_root {
+    // Guard only depends on session-binding equivalence: if the target is the
+    // current session it is refused. `compact` is the sole exception (it may
+    // compress the current session and resident subagent workstations).
+    if !matches!(action, SessionControlAction::Compact)
+        && context.current_session_id == Some(session_id)
+        && context.has_workspace_root
+    {
         return invalid(format!(
             "cannot {} the current session from SessionControl",
             action.as_str()
@@ -226,6 +234,7 @@ pub fn validate_session_control_input(
         }
         SessionControlAction::Cancel
         | SessionControlAction::Delete
+        | SessionControlAction::Compact
         | SessionControlAction::Rename => {
             return validate_mutating_action_target(&input.action, input, context);
         }
@@ -266,6 +275,7 @@ pub fn render_session_control_tool_use_message(input: &Value) -> String {
         "create" => format!("Create session in {workspace}"),
         "cancel" => format!("Cancel active turn for session {session_id}"),
         "delete" => format!("Delete session {session_id}"),
+        "compact" => format!("Compact session {session_id}"),
         "rename" => format!("Rename session {session_id}"),
         "list" => format!("List sessions in {workspace}"),
         _ => format!("Manage sessions in {workspace}"),
@@ -442,5 +452,79 @@ mod tests {
         assert!(message.contains("worker_1"));
         assert!(message.contains("new-title"));
         assert!(message.contains("/ws"));
+    }
+
+    #[test]
+    fn compact_action_parses_payload_session_id() {
+        let input: SessionControlInput = serde_json::from_value(json!({
+            "action": "compact",
+            "session_id": "worker_1",
+        }))
+        .expect("compact payload must parse");
+        assert_eq!(input.action, SessionControlAction::Compact);
+        assert_eq!(input.session_id.as_deref(), Some("worker_1"));
+        assert_eq!(SessionControlAction::Compact.as_str(), "compact");
+    }
+
+    #[test]
+    fn compact_validation_requires_session_id() {
+        let input = SessionControlInput {
+            action: SessionControlAction::Compact,
+            workspace: None,
+            session_id: None,
+            session_name: None,
+            agent_type: None,
+        };
+        let result = validate_session_control_input(&input, context(None));
+        assert!(!result.result);
+        assert!(result
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("session_id is required"));
+    }
+
+    #[test]
+    fn compact_validation_rejects_non_mutating_fields() {
+        let input = SessionControlInput {
+            action: SessionControlAction::Compact,
+            workspace: None,
+            session_id: Some("worker_1".to_string()),
+            session_name: Some("should not be allowed".to_string()),
+            agent_type: None,
+        };
+        let result = validate_session_control_input(&input, context(None));
+        assert!(!result.result);
+        assert_eq!(
+            result.message.as_deref(),
+            Some("session_name is only allowed for create")
+        );
+    }
+
+    #[test]
+    fn compact_validation_allows_current_session() {
+        let input = SessionControlInput {
+            action: SessionControlAction::Compact,
+            workspace: None,
+            session_id: Some("self_1".to_string()),
+            session_name: None,
+            agent_type: None,
+        };
+        let result = validate_session_control_input(&input, context(Some("self_1")));
+        assert!(
+            result.result,
+            "compact of the current session must be allowed: {:?}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn compact_render_mentions_session() {
+        let rendered = render_session_control_tool_use_message(&json!({
+            "action": "compact",
+            "session_id": "worker_1",
+        }));
+        assert!(rendered.contains("Compact session"));
+        assert!(rendered.contains("worker_1"));
     }
 }
