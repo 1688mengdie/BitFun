@@ -29,6 +29,7 @@ use bitfun_runtime_ports::{
     AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
     AgentSubmissionSource, AgentTurnCancellationRequest,
 };
+use bitfun_services_core::session::merge_session_custom_metadata;
 use bitfun_services_core::session::tree::SessionTreeManager;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -687,17 +688,6 @@ Arguments:
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
-                // Persist the optional compact short name alongside the creator
-                // marker so the compact `list` output can surface it without
-                // pulling the full session name into the model context.
-                if let Some(short_name) = params
-                    .short_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    metadata.insert("shortName".to_string(), json!(short_name));
-                }
                 let session = runtime
                     .create_session(AgentSessionCreateRequest {
                         session_name,
@@ -718,6 +708,40 @@ Arguments:
                 let created_session_id = session.session_id.clone();
                 let created_session_name = session.session_name.clone();
                 let created_agent_type = session.agent_type.clone();
+
+                // Persist the optional compact short name directly into the
+                // session `custom_metadata` (best-effort). The `create_session`
+                // wire `request.metadata` is NOT persisted as-is (only
+                // `created_by` is extracted), so the short name must be merged
+                // into the stored `SessionMetadata` via the upstream util.
+                if let Some(short_name) = params
+                    .short_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToOwned::to_owned)
+                {
+                    if let Err(e) = coordinator
+                        .session_manager()
+                        .update_session_metadata(
+                            &PathBuf::from(&workspace.project_workspace),
+                            &created_session_id,
+                            |metadata| {
+                                merge_session_custom_metadata(
+                                    metadata,
+                                    serde_json::json!({ "shortName": short_name }),
+                                );
+                            },
+                        )
+                        .await
+                    {
+                        log::warn!(
+                            "SessionControl create: failed to persist short name for {}: {:?}",
+                            created_session_id,
+                            e
+                        );
+                    }
+                }
                 let result_for_assistant = session_control_created_result_message(
                     &created_session_id,
                     &workspace.display_workspace,
@@ -1005,15 +1029,19 @@ Arguments:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agentic::persistence::PersistenceManager;
     use crate::agentic::tools::framework::ToolUseContext;
     use crate::agentic::WorkspaceBinding;
+    use crate::infrastructure::PathManager;
     use bitfun_core_types::{
         SessionExecutionTarget, SessionExecutionTargetKind, WorktreeLifecycle,
     };
+    use bitfun_services_core::session::SessionMetadata;
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use uuid::Uuid;
 
     fn empty_context() -> ToolUseContext {
@@ -1438,5 +1466,58 @@ mod tests {
         assert!(output.contains("## Session Tree (JSON)"));
         assert!(output.contains("\"sessionName\": \"Session root\""));
         assert!(output.contains("\"sessionId\": \"root\""));
+    }
+
+    #[tokio::test]
+    async fn short_name_round_trips_through_persisted_session_metadata() {
+        // B-T-3: prove the create→persist→list link the SC-7 short name relies
+        // on. A short name merged into a session's `custom_metadata` via
+        // `merge_session_custom_metadata` is actually readable back through the
+        // same persisted-metadata path the `list` action uses.
+        let root = std::env::temp_dir().join(format!("bitfun-g3-shortname-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(root.join("sessions")).unwrap();
+        let path_manager = Arc::new(PathManager::with_user_root_for_tests(root.clone()));
+        let persistence =
+            Arc::new(PersistenceManager::new(path_manager).expect("persistence manager"));
+
+        let ws_path = root.join("workspace");
+        std::fs::create_dir_all(&ws_path).unwrap();
+
+        let mut metadata = SessionMetadata::new(
+            "session-1".to_string(),
+            "Session".to_string(),
+            "agentic".to_string(),
+            "model".to_string(),
+        );
+        metadata.project_workspace_path = Some(ws_path.to_string_lossy().to_string());
+        persistence
+            .save_session_metadata(&ws_path, &metadata)
+            .await
+            .unwrap();
+
+        persistence
+            .update_session_metadata(&ws_path, "session-1", |metadata| {
+                merge_session_custom_metadata(metadata, json!({ "shortName": "秘书·常驻" }));
+            })
+            .await
+            .unwrap();
+
+        let listed = persistence
+            .list_session_metadata_including_internal(&ws_path)
+            .await
+            .unwrap();
+        let found = listed
+            .iter()
+            .find(|m| m.session_id == "session-1")
+            .expect("session should be listed");
+        let short_name = found
+            .custom_metadata
+            .as_ref()
+            .and_then(|custom| custom.get("shortName"))
+            .and_then(|value| value.as_str());
+        assert_eq!(short_name, Some("秘书·常驻"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
