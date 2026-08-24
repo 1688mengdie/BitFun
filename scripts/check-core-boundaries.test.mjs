@@ -349,7 +349,7 @@ test('runtime-ports async dependencies stay behind their exact port owners', () 
   );
   assert.deepEqual(
     ownersByDependency.get('tokio'),
-    new Set(['remote-exec-port', 'terminal-port']),
+    new Set(['acp-client', 'remote-exec-port', 'terminal-port']),
   );
 });
 
@@ -481,6 +481,7 @@ function pathDependency(repoCratePath, options = {}) {
 
 const RUNTIME_PORT_FEATURE_PROFILES = {
   default: [],
+  'acp-client': ['dep:tokio'],
   'agent-api': ['dep:bitfun-core-types'],
   'git-port': [],
   permission: ['dep:bitfun-product-domains'],

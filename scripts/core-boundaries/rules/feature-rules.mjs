@@ -110,7 +110,7 @@ export const optionalDependencyFeatureOwnerRules = [
       { depName: 'anyhow', ownerFeatures: ['workspace-ports'] },
       { depName: 'bitfun-core-types', ownerFeatures: ['agent-api', 'ts'] },
       { depName: 'bitfun-product-domains', ownerFeatures: ['permission', 'ts'] },
-      { depName: 'tokio', ownerFeatures: ['remote-exec-port', 'terminal-port'] },
+      { depName: 'tokio', ownerFeatures: ['acp-client', 'remote-exec-port', 'terminal-port'] },
       { depName: 'tokio-util', ownerFeatures: ['workspace-ports'] },
       { depName: 'ts-rs', ownerFeatures: ['ts'] },
     ],
@@ -358,6 +358,7 @@ export const capabilityContractDependencyRules = [
     manifestPath: 'src/crates/contracts/runtime-ports/Cargo.toml',
     featureProfiles: {
       default: [],
+      'acp-client': ['dep:tokio'],
       'agent-api': ['dep:bitfun-core-types'],
       'git-port': [],
       permission: ['dep:bitfun-product-domains'],
@@ -403,7 +404,7 @@ export const capabilityContractDependencyRules = [
         capabilityEdge(['agent-api', 'git-port', 'permission', 'plugin-runtime', 'workspace-ports']),
       ])],
       ['bitfun-core', capabilityConsumer(
-        [capabilityEdge(['permission', 'workspace-ports'])],
+        [capabilityEdge(['acp-client', 'permission', 'workspace-ports'])],
         [
           capabilityForwarder('agent-runtime', 'agent-api'),
           capabilityForwarder('agent-runtime', 'git-port'),

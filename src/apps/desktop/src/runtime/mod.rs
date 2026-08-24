@@ -9,6 +9,7 @@ use bitfun_core::service::token_usage::TokenUsageService;
 use bitfun_core::service::workspace::WorkspaceService;
 use tokio::sync::RwLock;
 
+mod acp_client_port;
 mod session_application;
 mod session_host_effects;
 
@@ -41,13 +42,14 @@ impl DesktopRuntimeContext {
         session_event_journal: Arc<SessionEventJournal>,
     ) -> Result<Self, String> {
         // Inject the ACP client port so SessionControl/SessionMessage can reach
-        // the real external ACP client end-to-end (reuse the thin
-        // `AcpClientPortAdapter` wrapper over `AcpClientService`, no duplicated
-        // ACP-domain logic, no "ACP client port is not available").
+        // the real external ACP client end-to-end. The desktop host is the
+        // legitimate `runtime-ports` consumer (the ACP client feature domain is
+        // not), so the adapter lives here and delegates to `AcpClientService`.
         if let Some(acp_client_service) = acp_client_service.clone() {
-            coordinator.set_acp_client_port(Arc::new(
-                bitfun_acp::client::AcpClientPortAdapter::new(acp_client_service),
-            ));
+            coordinator.set_acp_client_port(Arc::new(acp_client_port::DesktopAcpClientPort::new(
+                Some(acp_client_service),
+                Some(coordinator.clone()),
+            )));
         }
         let host_effects = Arc::new(ProductionDesktopSessionHostEffects::new(acp_client_service));
         let session_application = DesktopSessionApplication::build(
