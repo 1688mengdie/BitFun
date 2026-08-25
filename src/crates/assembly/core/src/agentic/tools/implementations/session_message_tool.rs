@@ -9,7 +9,7 @@ use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
-use bitfun_core_types::SessionExecutionTarget;
+use bitfun_core_types::{SessionExecutionTarget, SessionExecutionTargetRequest};
 use bitfun_runtime_ports::{
     AgentDialogPrependedReminder, AgentDialogTurnRequest, AgentSessionCreateRequest,
     AgentSessionListRequest, AgentSessionReplyRoute, AgentSessionSummary,
@@ -300,6 +300,37 @@ struct SessionMessageInput {
     session_name: Option<String>,
     message: String,
     agent_type: Option<SessionMessageAgentType>,
+    /// Optional worktree options for a created session (only when `session_id`
+    /// is omitted; not supported for remote workspaces): creates a managed Git
+    /// worktree together with the session and binds the session to it.
+    /// Wire shape stays `{ baseRef?, copyLocalChanges? }` (no `kind` tag).
+    #[serde(default, deserialize_with = "deserialize_worktree_request")]
+    worktree: Option<SessionExecutionTargetRequest>,
+}
+
+/// Free-form wire shape for the create-worktree options, kept distinct from
+/// [`SessionExecutionTargetRequest`] so the public `{ baseRef?, copyLocalChanges? }`
+/// contract is preserved while storing the upstream execution-target request.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeRequestWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_ref: Option<String>,
+    #[serde(default)]
+    copy_local_changes: bool,
+}
+
+fn deserialize_worktree_request<'de, D>(
+    deserializer: D,
+) -> Result<Option<SessionExecutionTargetRequest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let wire = Option::<WorktreeRequestWire>::deserialize(deserializer)?;
+    Ok(wire.map(|value| SessionExecutionTargetRequest::NewManagedWorktree {
+        base_ref: value.base_ref,
+        copy_local_changes: value.copy_local_changes,
+    }))
 }
 
 #[async_trait]
@@ -358,6 +389,21 @@ Allowed agent types when creating a session:
                     "type": "string",
                     "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                     "description": "Required when session_id is omitted. Not allowed when sending to an existing session."
+                },
+                "worktree": {
+                    "type": "object",
+                    "description": "Optional worktree options for a created session (only when session_id is omitted; not supported for remote workspaces): creates a managed Git worktree together with the session and binds the session to it. Shape: {baseRef?, copyLocalChanges?}.",
+                    "properties": {
+                        "baseRef": {
+                            "type": "string",
+                            "description": "Optional Git ref for the new worktree. Defaults to HEAD."
+                        },
+                        "copyLocalChanges": {
+                            "type": "boolean",
+                            "description": "Copy staged, unstaged, untracked, and .worktreeinclude-selected ignored files when the selected base equals source HEAD."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "required": ["message"],
@@ -429,6 +475,17 @@ Allowed agent types when creating a session:
                     };
                 }
 
+                if parsed.worktree.is_some() {
+                    return ValidationResult {
+                        result: false,
+                        message: Some(
+                            "worktree is only allowed when session_id is omitted".to_string(),
+                        ),
+                        error_code: Some(400),
+                        meta: None,
+                    };
+                }
+
                 if let Some(workspace) = parsed.workspace.as_deref() {
                     let workspace_validation = self.validate_workspace_shape(workspace, context);
                     if !workspace_validation.result {
@@ -476,6 +533,49 @@ Allowed agent types when creating a session:
                 let workspace_validation = self.validate_workspace_shape(workspace, context);
                 if !workspace_validation.result {
                     return workspace_validation;
+                }
+
+                if let Some(worktree) = parsed.worktree.as_ref() {
+                    let base_ref = match worktree {
+                        SessionExecutionTargetRequest::NewManagedWorktree { base_ref, .. } => {
+                            base_ref.as_deref()
+                        }
+                        _ => None,
+                    };
+                    if base_ref.is_some_and(|base_ref| base_ref.trim().is_empty()) {
+                        return ValidationResult {
+                            result: false,
+                            message: Some(
+                                "worktree.base_ref must not be empty when provided".to_string(),
+                            ),
+                            error_code: Some(400),
+                            meta: None,
+                        };
+                    }
+                    if context.is_some_and(|ctx| ctx.is_remote()) {
+                        return ValidationResult {
+                            result: false,
+                            message: Some(
+                                "worktree is not supported for remote workspaces".to_string(),
+                            ),
+                            error_code: Some(400),
+                            meta: None,
+                        };
+                    }
+                    if parsed
+                        .agent_type
+                        .as_ref()
+                        .is_some_and(|agent_type| agent_type.as_str().starts_with("acp__"))
+                    {
+                        return ValidationResult {
+                            result: false,
+                            message: Some(
+                                "worktree is not supported with acp__ agent types".to_string(),
+                            ),
+                            error_code: Some(400),
+                            meta: None,
+                        };
+                    }
                 }
             }
         }

@@ -319,6 +319,21 @@ Arguments:
                     "type": "string",
                     "enum": ["agentic", "Plan", "Cowork", "DeepResearch"],
                     "description": "Optional agent type when creating a session. Defaults to agentic."
+                },
+                "worktree": {
+                    "type": "object",
+                    "description": "Optional worktree options for create: creates a managed Git worktree together with the session and binds the session to it (only for create; not supported for remote workspaces). Shape: {baseRef?, copyLocalChanges?}.",
+                    "properties": {
+                        "baseRef": {
+                            "type": "string",
+                            "description": "Optional Git ref for the new worktree. Defaults to HEAD."
+                        },
+                        "copyLocalChanges": {
+                            "type": "boolean",
+                            "description": "Copy staged, unstaged, untracked, and .worktreeinclude-selected ignored files when the selected base equals source HEAD."
+                        }
+                    },
+                    "additionalProperties": false
                 }
             },
             "required": ["action"],
