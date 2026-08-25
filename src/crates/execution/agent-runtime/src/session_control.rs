@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 
+use bitfun_core_types::SessionExecutionTargetRequest;
+
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionControlAction {
@@ -58,6 +60,45 @@ pub struct SessionControlInput {
     pub session_id: Option<String>,
     pub session_name: Option<String>,
     pub agent_type: Option<SessionControlAgentType>,
+    /// Optional worktree options for `create`: when present, a managed Git
+    /// worktree is created together with the session (via `WorktreeService`)
+    /// and the session is bound to it. `None` keeps the legacy behavior
+    /// (session runs in the project checkout). Only allowed for `create` and
+    /// rejected for remote workspaces.
+    ///
+    /// The wire shape stays `{ baseRef?, copyLocalChanges? }` (no `kind` tag):
+    /// the portable decision layer maps it onto the upstream
+    /// [`SessionExecutionTargetRequest::NewManagedWorktree`] variant so the
+    /// public create/send contract is unchanged.
+    #[serde(default, deserialize_with = "deserialize_worktree_request")]
+    pub worktree: Option<SessionExecutionTargetRequest>,
+}
+
+/// Free-form wire shape for the create-worktree options.
+///
+/// Kept distinct from [`SessionExecutionTargetRequest`] so the portable
+/// decision layer can keep the public `{ baseRef?, copyLocalChanges? }`
+/// contract while still storing the upstream execution-target request.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorktreeRequestWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base_ref: Option<String>,
+    #[serde(default)]
+    copy_local_changes: bool,
+}
+
+fn deserialize_worktree_request<'de, D>(
+    deserializer: D,
+) -> Result<Option<SessionExecutionTargetRequest>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let wire = Option::<WorktreeRequestWire>::deserialize(deserializer)?;
+    Ok(wire.map(|value| SessionExecutionTargetRequest::NewManagedWorktree {
+        base_ref: value.base_ref,
+        copy_local_changes: value.copy_local_changes,
+    }))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -162,6 +203,9 @@ fn validate_mutating_action_target(
     if input.session_name.is_some() {
         return invalid("session_name is only allowed for create");
     }
+    if input.worktree.is_some() {
+        return invalid("worktree is only allowed for create");
+    }
 
     let Some(session_id) = input.session_id.as_deref() else {
         return invalid(format!("session_id is required for {}", action.as_str()));
@@ -207,6 +251,27 @@ pub fn validate_session_control_input(
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for create");
             }
+            if let Some(worktree) = input.worktree.as_ref() {
+                let base_ref = match worktree {
+                    SessionExecutionTargetRequest::NewManagedWorktree { base_ref, .. } => {
+                        base_ref.as_deref()
+                    }
+                    _ => None,
+                };
+                if base_ref.is_some_and(|base_ref| base_ref.trim().is_empty()) {
+                    return invalid("worktree.base_ref must not be empty when provided");
+                }
+                // worktree and ACP real sessions (`agent_type` = `acp__<client>`) are mutually
+                // exclusive: ACP sessions are external-process records that do not carry a local
+                // worktree execution_target, so carrying both would silently orphan the worktree.
+                if input
+                    .agent_type
+                    .as_ref()
+                    .is_some_and(|agent_type| agent_type.as_str().starts_with("acp__"))
+                {
+                    return invalid("worktree is not supported with acp__ agent types");
+                }
+            }
             if context.current_session_id.is_none() {
                 return invalid("create requires a creator session in tool context");
             }
@@ -223,6 +288,9 @@ pub fn validate_session_control_input(
             }
             if input.session_name.is_some() {
                 return invalid("session_name is only allowed for create");
+            }
+            if input.worktree.is_some() {
+                return invalid("worktree is only allowed for create");
             }
             if input.session_id.is_some() {
                 return invalid("session_id is not allowed for list");
