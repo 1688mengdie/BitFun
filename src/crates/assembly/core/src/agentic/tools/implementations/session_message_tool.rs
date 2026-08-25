@@ -1,3 +1,6 @@
+use super::session_control_tool::{
+    create_worktree_for_session, ensure_worktree_not_remote, SessionWorktreeCreateResult,
+};
 use super::util::normalize_path;
 use crate::agentic::coordination::{
     get_global_coordinator, get_global_scheduler, DialogSubmissionPolicy, DialogTriggerSource,
@@ -6,6 +9,8 @@ use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
+use crate::service::workspace::get_global_workspace_service;
+use crate::service::worktree::WorktreeService;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -760,25 +765,88 @@ Allowed agent types when creating a session:
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
-                let session = runtime
+                // W9: reject remote workspaces (same semantics as SessionControl create).
+                let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
+                if let Some(worktree_options) = params.worktree.as_ref() {
+                    ensure_worktree_not_remote(context)?;
+                    let request_id = context
+                        .tool_call_id
+                        .as_deref()
+                        .map(|tool_call_id| format!("session-message:{tool_call_id}:worktree"))
+                        .unwrap_or_else(|| {
+                            format!("session-message:{}:worktree", uuid::Uuid::new_v4())
+                        });
+                    created_worktree = Some(
+                        create_worktree_for_session(
+                            &request_id,
+                            &workspace_target.project_workspace_path,
+                            worktree_options,
+                            context,
+                        )
+                        .await?,
+                    );
+                }
+                let session = match runtime
                     .create_session(AgentSessionCreateRequest {
                         session_name,
                         agent_type: agent_type.clone(),
-                        workspace_path: Some(workspace_target.workspace_path.clone()),
-                        project_workspace_path: Some(
-                            workspace_target.project_workspace_path.clone(),
+                        workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.execution_target.root_path.clone())
+                                .unwrap_or_else(|| workspace_target.workspace_path.clone()),
                         ),
-                        execution_target: workspace_target.execution_target.clone(),
-                        workspace_id: workspace_target.workspace_id.clone(),
+                        project_workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.project_workspace_path.clone())
+                                .unwrap_or_else(|| workspace_target.project_workspace_path.clone()),
+                        ),
+                        execution_target: created_worktree
+                            .as_ref()
+                            .map(|wt| wt.execution_target.clone())
+                            .or_else(|| workspace_target.execution_target.clone()),
+                        workspace_id: created_worktree
+                            .as_ref()
+                            .and_then(|wt| wt.tracked_workspace_id.clone())
+                            .or_else(|| workspace_target.workspace_id.clone()),
                         remote_connection_id: workspace_target.remote_connection_id.clone(),
                         remote_ssh_host: workspace_target.remote_ssh_host.clone(),
                         model_id: None,
                         metadata,
                     })
                     .await
-                    .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                    })?;
+                {
+                    Ok(session) => session,
+                    Err(create_error) => {
+                        // Session create failed -> roll back the worktree we created (only if created this time).
+                        if let Some(worktree) = created_worktree.as_ref() {
+                            if worktree.created {
+                                if let Some(workspace_service) = get_global_workspace_service() {
+                                    if let Some(workspace_id) =
+                                        worktree.tracked_workspace_id.as_deref()
+                                    {
+                                        let _ = workspace_service
+                                            .remove_workspace(workspace_id)
+                                            .await;
+                                    }
+                                }
+                                if let Some(worktree_id) =
+                                    worktree.execution_target.worktree_id.as_deref()
+                                {
+                                    let _ = WorktreeService::rollback_created(
+                                        &worktree.project_workspace_path,
+                                        worktree_id,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                        return Err(BitFunError::tool(
+                            CoreServiceAgentRuntime::runtime_error_message(create_error),
+                        ));
+                    }
+                };
 
                 (
                     session.session_id.clone(),

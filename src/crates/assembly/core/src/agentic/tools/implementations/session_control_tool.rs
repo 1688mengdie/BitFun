@@ -9,6 +9,13 @@ use crate::agentic::coordination::{get_global_coordinator, get_global_scheduler}
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
+use crate::service::git::GitService;
+use crate::service::workspace::{
+    get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions,
+};
+use crate::service::worktree::{
+    WorktreeCreateBranchRequest, WorktreeCreateRequest, WorktreeService,
+};
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
@@ -22,13 +29,14 @@ use bitfun_agent_runtime::session_control::{
     SessionControlAction, SessionControlCancelRoute, SessionControlInput,
     SessionControlValidationContext, SessionControlValidationResult,
 };
-use bitfun_core_types::SessionExecutionTarget;
+use bitfun_core_types::{SessionExecutionTarget, SessionExecutionTargetRequest};
 use bitfun_runtime_ports::{
     AgentSessionCreateRequest, AgentSessionDeleteRequest, AgentSessionListRequest,
     AgentSessionSummary, AgentSessionWorkspaceBinding, AgentSessionWorkspaceRequest,
     AgentSubmissionSource, AgentTurnCancellationRequest,
 };
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// SessionControl tool - create, cancel, delete, or list persisted sessions
@@ -44,6 +52,19 @@ struct SessionControlWorkspaceTarget {
     workspace_id: Option<String>,
     remote_connection_id: Option<String>,
     remote_ssh_host: Option<String>,
+}
+
+/// Result of creating a managed worktree for a `SessionControl` / `SessionMessage`
+/// create call. Shared by both tools so the worktree can be bound to the new session
+/// and rolled back (zero orphans) if any later step fails. `created=false` means the
+/// `request_id` was already used (idempotent replay): the existing worktree is reused.
+#[derive(Debug, Clone)]
+pub(crate) struct SessionWorktreeCreateResult {
+    pub execution_target: SessionExecutionTarget,
+    pub tracked_workspace_id: Option<String>,
+    pub created: bool,
+    pub branch_name: Option<String>,
+    pub project_workspace_path: String,
 }
 
 impl Default for SessionControlTool {
@@ -257,6 +278,211 @@ impl SessionControlTool {
     }
 }
 
+// ── Session↔worktree shared core (W4/W5/W8/W9) ──────────────────
+//
+// These are file-level free functions shared by the SessionControl and
+// SessionMessage tools (SessionMessage reuses them via
+// `use super::session_control_tool::...`).
+
+/// W9: reject remote SSH workspaces (managed worktrees are not supported there).
+pub(crate) fn ensure_worktree_not_remote(context: &ToolUseContext) -> BitFunResult<()> {
+    if context.is_remote() {
+        return Err(BitFunError::tool(
+            "Managed worktrees are not supported for remote SSH workspaces yet".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// W8 auto-naming: worktree branch `task/<N>` (incremented from existing `task/*`).
+/// Stable `task/` prefix; the index is the max existing `task/<n>` branch + 1.
+/// Concurrency is covered by the WorktreeService repo-level lock + receipt idempotency.
+async fn next_task_branch_name(project_workspace_path: &str) -> BitFunResult<String> {
+    let branches = GitService::get_branches(project_workspace_path, false)
+        .await
+        .map_err(|error| BitFunError::tool(format!("Failed to list branches: {error}")))?;
+    let max_task_index = branches
+        .iter()
+        .filter_map(|branch| {
+            branch
+                .name
+                .strip_prefix("task/")
+                .and_then(|suffix| suffix.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0);
+    Ok(format!("task/{}", max_task_index + 1))
+}
+
+/// W8: sanitize a `task/<N>` branch name into a valid git branch name (git
+/// check-ref-format rules + length cap). Auto-naming is already valid; this is
+/// defensive sanitization (does not trust any input).
+fn sanitize_task_branch_name(branch: &str) -> String {
+    let sanitized: String = branch
+        .split('/')
+        .map(|segment| {
+            segment
+                .chars()
+                .filter(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+                })
+                .collect::<String>()
+        })
+        .map(|segment| segment.trim_matches('.').to_string())
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/");
+    if sanitized.is_empty() {
+        "task/1".to_string()
+    } else {
+        sanitized
+    }
+}
+
+/// Create a managed worktree and auto-name its branch for a new session (W4/W5 shared core).
+///
+/// Chain (aligned with the upstream `worktree_tool` create_session; no bare git
+/// calls — everything goes through `WorktreeService`):
+/// 1. `WorktreeService::create` (worktree add + registry + idempotent receipt) — continue only on success;
+/// 2. `track_workspace_activity` registers the workspace;
+/// 3. Auto-name the `task/<N>` branch and `create_branch` (bind it to the worktree);
+/// 4. Return `execution_target` + tracked workspace id. Any step failure is rolled
+///    back (worktree remove + workspace unregister), leaving no orphan.
+pub(crate) async fn create_worktree_for_session(
+    request_id: &str,
+    project_workspace_path: &str,
+    worktree_options: &SessionExecutionTargetRequest,
+    context: &ToolUseContext,
+) -> BitFunResult<SessionWorktreeCreateResult> {
+    let source_workspace_path = context
+        .workspace_root()
+        .ok_or_else(|| BitFunError::tool("Current execution workspace is unavailable".to_string()))?
+        .to_string_lossy()
+        .to_string();
+    let (base_ref, copy_local_changes) = match worktree_options {
+        SessionExecutionTargetRequest::NewManagedWorktree {
+            base_ref,
+            copy_local_changes,
+        } => (base_ref.clone(), *copy_local_changes),
+        _ => (None, false),
+    };
+
+    let created = WorktreeService::create(WorktreeCreateRequest {
+        request_id: request_id.to_string(),
+        project_workspace_path: project_workspace_path.to_string(),
+        source_workspace_path: Some(source_workspace_path),
+        base_ref,
+        copy_local_changes,
+        claimed_by: None,
+    })
+    .await
+    .map_err(|error| BitFunError::tool(error.to_string()))?;
+
+    let worktree_id = created
+        .execution_target
+        .worktree_id
+        .clone()
+        .ok_or_else(|| BitFunError::tool("Created worktree is missing its worktree_id".to_string()))?;
+
+    // track workspace (aligned with worktree_tool create_session). A failure rolls the new worktree back.
+    let workspace_service = get_global_workspace_service()
+        .ok_or_else(|| BitFunError::tool("Workspace service is not initialized".to_string()))?;
+    let tracked_workspace = match workspace_service
+        .track_workspace_activity(
+            PathBuf::from(&created.execution_target.root_path),
+            WorkspaceCreateOptions::default(),
+            WorkspaceActivityMode::RefreshMetadata,
+        )
+        .await
+    {
+        Ok(workspace) => workspace,
+        Err(track_error) => {
+            return Err(cleanup_failed_worktree_create(
+                project_workspace_path,
+                &created.execution_target,
+                created.created,
+                None,
+                format!("Failed to register worktree workspace: {track_error}"),
+            )
+            .await);
+        }
+    };
+
+    // Auto-name the task/<N> branch (idempotent replay created=false may already have a branch).
+    let branch_name = sanitize_task_branch_name(&next_task_branch_name(project_workspace_path).await?);
+    if created.created && created.execution_target.branch.is_none() {
+        let branch_request_id = format!("{request_id}:branch");
+        if let Err(branch_error) = WorktreeService::create_branch(WorktreeCreateBranchRequest {
+            request_id: branch_request_id,
+            project_workspace_path: project_workspace_path.to_string(),
+            worktree_id: worktree_id.clone(),
+            branch: branch_name.clone(),
+        })
+        .await
+        {
+            return Err(cleanup_failed_worktree_create(
+                project_workspace_path,
+                &created.execution_target,
+                created.created,
+                Some(&tracked_workspace.id),
+                format!("Failed to create worktree branch: {branch_error}"),
+            )
+            .await);
+        }
+    }
+
+    Ok(SessionWorktreeCreateResult {
+        execution_target: created.execution_target,
+        tracked_workspace_id: Some(tracked_workspace.id),
+        created: created.created,
+        branch_name: Some(branch_name),
+        project_workspace_path: project_workspace_path.to_string(),
+    })
+}
+
+/// Roll back a just-created worktree (W4/W5 failure path).
+///
+/// Aligned with upstream worktree_tool::cleanup_failed_fresh_create: unregister
+/// the workspace + `WorktreeService::rollback_created` (using the project path).
+/// Only rolls back when the worktree was actually created this time (created=true);
+/// an idempotent replay (created=false) is not rolled back again.
+async fn cleanup_failed_worktree_create(
+    project_workspace_path: &str,
+    execution_target: &SessionExecutionTarget,
+    created: bool,
+    tracked_workspace_id: Option<&str>,
+    failure: impl Into<String>,
+) -> BitFunError {
+    let failure = failure.into();
+    let mut rollback_issues = Vec::new();
+    if let Some(workspace_id) = tracked_workspace_id {
+        if let Some(workspace_service) = get_global_workspace_service() {
+            if let Err(remove_error) = workspace_service.remove_workspace(workspace_id).await {
+                rollback_issues.push(format!(
+                    "workspace registration could not be removed: {remove_error}"
+                ));
+            }
+        }
+    }
+    if created {
+        if let Some(worktree_id) = execution_target.worktree_id.as_deref() {
+            if let Err(rollback_error) =
+                WorktreeService::rollback_created(project_workspace_path, worktree_id).await
+            {
+                rollback_issues.push(format!("worktree could not be removed: {rollback_error}"));
+            }
+        }
+    }
+    if rollback_issues.is_empty() {
+        BitFunError::tool(failure)
+    } else {
+        BitFunError::tool(format!(
+            "rollback_incomplete: {failure}; {}",
+            rollback_issues.join("; ")
+        ))
+    }
+}
+
 #[async_trait]
 impl Tool for SessionControlTool {
     fn name(&self) -> &str {
@@ -397,26 +623,95 @@ Arguments:
                 let session_name =
                     session_control_session_name_or_default(params.session_name.as_deref());
                 let agent_type = session_control_agent_type_or_default(params.agent_type.as_ref());
+                // W4: worktree param present -> create the managed worktree first (WorktreeService
+                // chain; the session is only created after it succeeds) and point the session
+                // execution_target at it. Failure = no session + worktree rollback, zero orphan.
+                let mut created_worktree: Option<SessionWorktreeCreateResult> = None;
+                if let Some(worktree_options) = params.worktree.as_ref() {
+                    // W9: reject remote SSH workspaces before creating the worktree
+                    // (same semantics as SessionMessage create and the reference guard).
+                    ensure_worktree_not_remote(context)?;
+                    let request_id = context
+                        .tool_call_id
+                        .as_deref()
+                        .map(|tool_call_id| format!("session-control:{tool_call_id}:worktree"))
+                        .unwrap_or_else(|| {
+                            format!("session-control:{}:worktree", uuid::Uuid::new_v4())
+                        });
+                    created_worktree = Some(
+                        create_worktree_for_session(
+                            &request_id,
+                            &workspace.project_workspace,
+                            worktree_options,
+                            context,
+                        )
+                        .await?,
+                    );
+                }
                 let created_by = self.creator_session_marker(context)?;
                 let mut metadata = serde_json::Map::new();
                 metadata.insert("createdBy".to_string(), json!(created_by));
-                let session = runtime
+                let session = match runtime
                     .create_session(AgentSessionCreateRequest {
                         session_name,
                         agent_type,
-                        workspace_path: Some(workspace.display_workspace.clone()),
-                        project_workspace_path: Some(workspace.project_workspace.clone()),
-                        execution_target: workspace.execution_target.clone(),
-                        workspace_id: workspace.workspace_id.clone(),
+                        workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.execution_target.root_path.clone())
+                                .unwrap_or_else(|| workspace.display_workspace.clone()),
+                        ),
+                        project_workspace_path: Some(
+                            created_worktree
+                                .as_ref()
+                                .map(|wt| wt.project_workspace_path.clone())
+                                .unwrap_or_else(|| workspace.project_workspace.clone()),
+                        ),
+                        execution_target: created_worktree
+                            .as_ref()
+                            .map(|wt| wt.execution_target.clone())
+                            .or_else(|| workspace.execution_target.clone()),
+                        workspace_id: created_worktree
+                            .as_ref()
+                            .and_then(|wt| wt.tracked_workspace_id.clone())
+                            .or_else(|| workspace.workspace_id.clone()),
                         remote_connection_id: workspace.remote_connection_id.clone(),
                         remote_ssh_host: workspace.remote_ssh_host.clone(),
                         model_id: None,
                         metadata,
                     })
                     .await
-                    .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                    })?;
+                {
+                    Ok(session) => session,
+                    Err(create_error) => {
+                        // Session create failed -> roll back the worktree we created (only if created this time).
+                        if let Some(worktree) = created_worktree.as_ref() {
+                            if worktree.created {
+                                if let Some(workspace_service) = get_global_workspace_service() {
+                                    if let Some(workspace_id) =
+                                        worktree.tracked_workspace_id.as_deref()
+                                    {
+                                        let _ = workspace_service
+                                            .remove_workspace(workspace_id)
+                                            .await;
+                                    }
+                                }
+                                if let Some(worktree_id) =
+                                    worktree.execution_target.worktree_id.as_deref()
+                                {
+                                    let _ = WorktreeService::rollback_created(
+                                        &worktree.project_workspace_path,
+                                        worktree_id,
+                                    )
+                                    .await;
+                                }
+                            }
+                        }
+                        return Err(BitFunError::tool(
+                            CoreServiceAgentRuntime::runtime_error_message(create_error),
+                        ));
+                    }
+                };
                 let created_session_id = session.session_id.clone();
                 let created_session_name = session.session_name.clone();
                 let created_agent_type = session.agent_type.clone();
@@ -425,18 +720,34 @@ Arguments:
                     &workspace.display_workspace,
                     &created_agent_type,
                 );
+                let worktree_payload = created_worktree.as_ref().map(|worktree| {
+                    json!({
+                        "worktree_id": worktree.execution_target.worktree_id,
+                        "path": worktree.execution_target.root_path,
+                        "branch": worktree.branch_name,
+                    })
+                });
+                let mut data = serde_json::Map::new();
+                data.insert("success".to_string(), json!(true));
+                data.insert("action".to_string(), json!("create"));
+                data.insert(
+                    "workspace".to_string(),
+                    json!(workspace.display_workspace.clone()),
+                );
+                data.insert(
+                    "session".to_string(),
+                    json!({
+                        "session_id": created_session_id,
+                        "session_name": created_session_name,
+                        "agent_type": created_agent_type,
+                    }),
+                );
+                if let Some(worktree_payload) = worktree_payload {
+                    data.insert("worktree".to_string(), worktree_payload);
+                }
 
                 Ok(vec![ToolResult::Result {
-                    data: json!({
-                        "success": true,
-                        "action": "create",
-                        "workspace": workspace.display_workspace.clone(),
-                        "session": {
-                            "session_id": created_session_id,
-                            "session_name": created_session_name,
-                            "agent_type": created_agent_type,
-                        }
-                    }),
+                    data: Value::Object(data),
                     result_for_assistant: Some(result_for_assistant),
                     image_attachments: None,
                 }])
