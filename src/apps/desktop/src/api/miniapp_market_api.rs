@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
@@ -589,9 +589,7 @@ pub async fn miniapp_market_capture_window(
         return Err("The BitFun window is too small to capture a review screenshot.".to_string());
     }
 
-    let capture_dir = app
-        .path()
-        .app_cache_dir()
+    let capture_dir = crate::app_cache_dir(&app)
         .map_err(|error| format!("Could not resolve the private cache directory: {error}"))?
         .join("miniapp-market-captures");
     tokio::fs::create_dir_all(&capture_dir)
@@ -674,10 +672,8 @@ pub async fn miniapp_market_submit_installed(
 }
 
 async fn remove_owned_capture_files(app: &AppHandle, paths: &[String]) {
-    let Ok(capture_dir) = app
-        .path()
-        .app_cache_dir()
-        .map(|path| path.join("miniapp-market-captures"))
+    let Ok(capture_dir) =
+        crate::app_cache_dir(app).map(|path| path.join("miniapp-market-captures"))
     else {
         return;
     };

@@ -606,6 +606,12 @@ pub fn create_main_window(
             }
         });
 
+    // Route the WebView2 user-data (EBWebView) root onto the unified config
+    // root so frontend localStorage/IndexedDB/cache stays off %LOCALAPPDATA%.
+    if let Some(root) = crate::config_root_env() {
+        builder = builder.data_directory(root.join("local_data"));
+    }
+
     // Keep HTML5 drag-and-drop working inside the webview for desktop UI drag targets.
     builder = builder.disable_drag_drop_handler();
 
@@ -914,6 +920,10 @@ pub async fn show_agent_companion_desktop_pet(app: tauri::AppHandle) -> Result<(
                 );
             }
         });
+
+    if let Some(root) = crate::config_root_env() {
+        builder = builder.data_directory(root.join("local_data"));
+    }
 
     builder = builder.disable_drag_drop_handler();
 

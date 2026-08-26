@@ -133,7 +133,7 @@ mod windows {
 
     pub(super) fn install(window: &tauri::WebviewWindow) {
         let app = window.app_handle().clone();
-        let state_path = match app.path().app_data_dir() {
+        let state_path = match crate::app_data_dir(&app) {
             Ok(directory) => directory.join(RECOVERY_STATE_FILE),
             Err(error) => {
                 log::warn!("Failed to resolve WebView recovery state path: {}", error);
