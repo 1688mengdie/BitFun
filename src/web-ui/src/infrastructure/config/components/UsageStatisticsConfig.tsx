@@ -431,7 +431,6 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
   const rateFor = (value: number | null): number => (
     PAD_TOP + plotHeight - (value ?? 0) * plotHeight
   );
-  );
 
   const xTickIndexes = useMemo(() => {
     if (points.length <= 6) return points.map((_, index) => index);
@@ -444,26 +443,6 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
 
   const hovered = hoverIndex !== null ? points[hoverIndex] : null;
   const hoveredHitRate = hovered ? cacheHitRateForTrend(hovered) : null;
-
-  // Synthesized idle buckets sit at 0% to keep ordinary idle stretches
-  // continuous. Active buckets without cache telemetry remain real gaps so
-  // the chart does not claim that an unsupported provider had a 0% hit rate.
-  const hitRateSegments: Array<Array<{ x: number; y: number }>> = [];
-  {
-    let current: Array<{ x: number; y: number }> = [];
-    points.forEach((point, index) => {
-      const rate = cacheHitRateForTrend(point);
-      if (rate === null) {
-        if (current.length > 0) {
-          hitRateSegments.push(current);
-          current = [];
-        }
-        return;
-      }
-      current.push({ x: xFor(index), y: rateFor(rate) });
-    });
-    if (current.length > 0) hitRateSegments.push(current);
-  }
 
   return (
     <div className="bitfun-usage-stats__trend">
@@ -608,8 +587,7 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
                 {
                   label: t('trend.legend.cacheHitRate'),
                   // #2534 semantics: tooltip mirrors the rendered line, where
-                  // buckets without telemetry plot at 0% (idle) or are broken
-                  // as gaps (active) by hitRateSegments below.
+                  // buckets without telemetry plot at 0%.
                   value: hoveredHitRate ?? 0,
                   color: SERIES_COLORS.cacheHitRate,
                   isRate: true,
