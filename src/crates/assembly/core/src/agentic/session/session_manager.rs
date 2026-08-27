@@ -1138,7 +1138,10 @@ impl SessionManager {
                 // with an explicit interrupt marker. Processing sessions are
                 // therefore never idle-evicted: they keep their in-memory
                 // presence (and the disk evidence stays crash-leftover-only).
-                if !Self::should_persist_session_with_transient_ids(session, transient_session_ids)
+                // Upstream 2a75d37ea: skip eviction unless the session is Idle
+                // right now (the removal re-check is `cleanup_candidate_matches_session`).
+                if !matches!(session.state, SessionState::Idle)
+                    || !Self::should_persist_session_with_transient_ids(session, transient_session_ids)
                     || !Self::is_session_expired(session, now, timeout)
                     || matches!(session.state, SessionState::Processing { .. })
                 {
@@ -1159,7 +1162,8 @@ impl SessionManager {
         now: SystemTime,
         timeout: Duration,
     ) -> bool {
-        Self::same_session_version(session, candidate.updated_at, candidate.last_activity_at)
+        matches!(session.state, SessionState::Idle)
+            && Self::same_session_version(session, candidate.updated_at, candidate.last_activity_at)
             && Self::is_session_expired(session, now, timeout)
     }
 
@@ -11477,7 +11481,7 @@ mod tests {
     }
 
     #[test]
-    fn idle_eviction_only_selects_sessions_that_can_be_restored() {
+    fn idle_eviction_only_selects_expired_idle_sessions_that_can_be_restored() {
         let now = SystemTime::now();
         let expired_at = now - Duration::from_secs(120);
         let mut durable = Session::new(
@@ -11492,11 +11496,23 @@ mod tests {
             SessionConfig::default(),
         );
         transient.last_activity_at = expired_at;
+        let mut processing = Session::new(
+            "Processing".to_string(),
+            "agentic".to_string(),
+            SessionConfig::default(),
+        );
+        processing.last_activity_at = expired_at;
+        processing.state = SessionState::Processing {
+            current_turn_id: "active-turn".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
         let durable_id = durable.session_id.clone();
         let transient_id = transient.session_id.clone();
+        let processing_id = processing.session_id.clone();
         let sessions = DashMap::new();
         sessions.insert(durable_id.clone(), durable);
         sessions.insert(transient_id.clone(), transient);
+        sessions.insert(processing_id.clone(), processing);
         let transient_session_ids = DashMap::new();
         transient_session_ids.insert(transient_id.clone(), ());
 
@@ -11515,6 +11531,7 @@ mod tests {
             [durable_id.as_str()]
         );
         assert!(sessions.contains_key(&transient_id));
+        assert!(sessions.contains_key(&processing_id));
 
         assert!(SessionManager::collect_expired_session_candidates(
             &sessions,
@@ -11525,7 +11542,6 @@ mod tests {
         .is_empty());
     }
 
-    #[test]
     fn idle_eviction_never_selects_a_processing_session_as_a_candidate() {
         // R-WF-11 复审⑤ P1-1: an in-memory `Processing` session is a live turn.
         // A long turn with no phase refresh (idle timeout exceeded) must NOT be
@@ -11645,6 +11661,67 @@ mod tests {
             !matches!(persisted.state, SessionState::Processing { .. }),
             "the pre-eviction save must not have written Processing for a live session"
         );
+    }
+
+    #[test]
+    fn idle_eviction_rechecks_state_before_removing_candidate() {
+        // Upstream 2a75d37ea: a candidate collected while Idle must be
+        // re-checked at removal time — a session that became Processing in
+        // between must survive both the snapshot lookup and remove_if.
+        let now = SystemTime::now();
+        let expired_at = now - Duration::from_secs(120);
+        let mut session = Session::new(
+            "Becomes active".to_string(),
+            "agentic".to_string(),
+            SessionConfig::default(),
+        );
+        session.last_activity_at = expired_at;
+        let session_id = session.session_id.clone();
+        let sessions = DashMap::new();
+        sessions.insert(session_id.clone(), session);
+        let transient_session_ids = DashMap::new();
+        let candidate = SessionManager::collect_expired_session_candidates(
+            &sessions,
+            &transient_session_ids,
+            now,
+            Duration::from_secs(60),
+        )
+        .into_iter()
+        .next()
+        .expect("expired Idle Session should be selected");
+
+        sessions
+            .get_mut(&session_id)
+            .expect("selected Session")
+            .state = SessionState::Processing {
+            current_turn_id: "active-turn".to_string(),
+            phase: ProcessingPhase::Thinking,
+        };
+
+        assert!(SessionManager::cleanup_snapshot_for_candidate(
+            &sessions,
+            &candidate,
+            now,
+            Duration::from_secs(60),
+        )
+        .is_none());
+        assert!(sessions
+            .remove_if(&session_id, |_, session| {
+                SessionManager::cleanup_candidate_matches_session(
+                    session,
+                    &candidate,
+                    now,
+                    Duration::from_secs(60),
+                )
+            })
+            .is_none());
+        assert!(matches!(
+            sessions
+                .get(&session_id)
+                .expect("active Session retained")
+                .state,
+            SessionState::Processing { .. }
+        ));
     }
 
     #[test]

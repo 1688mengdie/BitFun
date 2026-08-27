@@ -3218,8 +3218,9 @@ impl ExecutionEngine {
         let mut model_summary = None;
 
         for attempt in 0..max_overflow_attempts {
-            let Some(plan) = self.context_compressor.plan_compression(
+            let Some(plan) = self.context_compressor.plan_compression_for_turn(
                 session_id,
+                dialog_turn_id,
                 runtime_messages,
                 context_window,
                 recent_target,
