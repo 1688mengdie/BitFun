@@ -1,4 +1,5 @@
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -334,6 +335,7 @@ fn process_matches_action(_pid: u32, _action: &str, _job_id: &str) -> bool {
     false
 }
 
+#[cfg(any(unix, test))]
 fn arguments_match_action(args: &[String], action: &str, job_id: &str) -> bool {
     args.windows(4).any(|window| {
         window[0] == "dispatch"

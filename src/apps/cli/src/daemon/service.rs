@@ -85,6 +85,7 @@ fn render_launch_agent(executable: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn run_command(program: &str, args: &[&str]) -> Result<std::process::Output> {
     std::process::Command::new(program)
         .args(args)
