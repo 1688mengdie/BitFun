@@ -323,7 +323,7 @@ test('keeps Rust CI independent, restore-only on PRs, and target-focused', () =>
   const verifyMetadata = rustJob.steps.find(
     (step) => step.name === 'Verify committed Cargo metadata',
   );
-  assert.equal(verifyMetadata?.run, 'cargo metadata --locked --no-deps');
+  assert.equal(verifyMetadata?.run, 'cargo metadata --locked --no-deps --format-version 1');
   assert.ok(
     rustJob.steps.indexOf(verifyMetadata) < rustJob.steps.indexOf(checkCompilation),
     'CI must validate the committed Cargo.lock before the workspace check',
@@ -407,7 +407,7 @@ test('gates fast checks and PR packaging behind one fail-closed build decision',
       `${stepName} must run for code changes and skip documentation-only changes`,
     );
   }
-  const releaseMetadata = 'cargo metadata --locked --no-deps';
+  const releaseMetadata = 'cargo metadata --locked --no-deps --format-version 1';
   assert.equal(
     frontendJob.steps.find((step) => step.name === 'Verify committed release metadata')?.run,
     releaseMetadata,
