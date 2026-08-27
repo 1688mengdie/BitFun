@@ -69,9 +69,7 @@ bitfun-agent-content = { path = "../agent-content", optional = true }
 
 # Agent runtime owner contracts
 bitfun-agent-runtime = { path = "../../execution/agent-runtime", optional = true }
-
-# Harness workflow contracts
-bitfun-harness = { path = "../../execution/harness", optional = true }
+bitfun-agent-workflows = { path = "../../execution/agent-workflows", optional = true }
 
 # Product capability pack contracts
 bitfun-product-capabilities = { path = "../product-capabilities", optional = true }
@@ -217,7 +215,6 @@ agent-runtime = [
     "bitfun-runtime-ports/tool-runtime-handles",
     "bitfun-runtime-ports/workspace-ports",
     "dep:base64",
-    "dep:bitfun-harness",
     "dep:dashmap",
     "dep:filetime",
     "dep:flate2",
@@ -249,6 +246,10 @@ agent-runtime = [
     "tool-packs",
     "tools-basic",
     "tools-agent-control",
+    # SessionControl create-with-worktree path (U-15/U-23 lesson: feature-combo
+    # completeness — the tool body unconditionally references
+    # service::worktree + service::git, so the agent-runtime facade must pull them).
+    "git",
     "tokio/io-util",
     "tokio/macros",
     "tokio/rt",
@@ -310,7 +311,7 @@ web-tools = [
     "tool-runtime/web-readable",
 ]
 deep-research = [
-    "bitfun-agent-runtime?/deep-research",
+    "dep:bitfun-agent-workflows",
     "bitfun-services-integrations/deep-research",
 ]
 script-tool-runtime = [

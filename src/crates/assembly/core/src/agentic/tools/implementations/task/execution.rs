@@ -1012,6 +1012,7 @@ impl TaskTool {
                             message: output_text
                                 .clone()
                                 .unwrap_or_else(|| "ACP subagent task failed".to_string()),
+                            output_schema: None,
                             original_message: None,
                             turn_id: None,
                             execution: Default::default(),

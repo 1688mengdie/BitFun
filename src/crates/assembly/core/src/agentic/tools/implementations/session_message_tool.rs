@@ -16,6 +16,7 @@ use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::agentic::tools::workspace_paths::posix_style_path_is_absolute;
+#[cfg(feature = "workspace-runtime")]
 use crate::service::workspace::get_global_workspace_service;
 use crate::service::worktree::WorktreeService;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
@@ -2700,6 +2701,7 @@ impl SessionMessageTool {
                 .submit_dialog_turn(AgentDialogTurnRequest {
                     session_id: target_session_id.clone(),
                     message: forwarded_message,
+                    output_schema: None,
                     original_message: Some(message.clone()),
                     turn_id: None,
                     execution: Default::default(),

@@ -4,8 +4,10 @@ import type {
   SessionCloseParams,
   SessionCreateParams,
   SessionCreateResult,
+  SessionResumeParams,
 } from "./internal/wire/index.js";
 import type { JsonRpcConnection } from "./internal/json-rpc.js";
+import { normalizeInput } from "./internal/input.js";
 import { withTimeout } from "./internal/deadline.js";
 import { isConnectionUnusableError, SdkError } from "./errors.js";
 import { Query } from "./query.js";
@@ -70,6 +72,21 @@ export class Sessions {
     this.#onSession(session);
     return session;
   }
+
+  async resume(sessionId: string): Promise<Session> {
+    this.#ensureClientOpen();
+    if (sessionId.trim().length === 0) {
+      throw new Error("sessionId must not be empty");
+    }
+    const params: SessionResumeParams = { sessionId };
+    const resumed = await this.#connection.request<SessionCreateResult>(
+      "session/resume",
+      params,
+    );
+    const session = Session.create(this.#connection, resumed, this.#onQuery);
+    this.#onSession(session);
+    return session;
+  }
 }
 
 export class Session {
@@ -113,8 +130,11 @@ export class Session {
 
   async startTurn(input: TurnInput): Promise<Query> {
     this.#ensureOpen();
+    const normalized = normalizeInput(input.prompt);
     const params: QueryStartParams = {
-      prompt: input.prompt,
+      prompt: normalized.prompt,
+      images: normalized.images,
+      outputSchema: input.outputSchema,
       sessionId: this.id,
     };
     const started = await this.#connection.request<QueryStartResult>(

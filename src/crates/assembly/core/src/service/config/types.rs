@@ -625,7 +625,7 @@ pub enum ModelCategory {
 pub struct DefaultModelsConfig {
     /// Primary model ID (for complex tasks).
     pub primary: Option<String>,
-    /// Fast model ID (for simple tasks).
+    /// Fast model ID (for simple tasks). When unset, selection falls back to primary.
     pub fast: Option<String>,
     /// Search model.
     pub search: Option<String>,
@@ -943,6 +943,7 @@ pub struct AIConfig {
     pub browser_control_auto_connect_on_startup: bool,
 
     /// Maximum number of rounds per dialog turn before soft-pausing.
+    /// Zero disables the fixed round limit.
     #[serde(default = "default_max_rounds")]
     pub max_rounds: usize,
 
@@ -2625,6 +2626,10 @@ pub fn default_legion_deploy_frequency_per_hour() -> usize {
 /// P0 积分止损：搜索工具疯狗连续两轮近 500 次工具轮 + 凌晨 2000 条空请求，
 /// 原 200 上限导致工具轮无限续轮。收缩至 50 后正常任务（开局工具 1-5 轮 +
 /// 消化 1-2 轮）远低于此值，行为零变化。
+///
+/// 上游语义融合（4c68f1c2b "honor configured max rounds"）：`0` 表示关闭固定
+/// 轮数上限（reached_fixed_model_round_limit: max_rounds>0 才生效）；本地默认
+/// 保持主人定标 50（有限上限），显式设 0 时同样获得无限制语义。
 pub const DEFAULT_MAX_ROUNDS: usize = 50;
 
 fn default_max_rounds() -> usize {
@@ -4025,6 +4030,19 @@ mod tests {
             .expect("legacy config should deserialize with permission defaults");
 
         assert_eq!(config.tool_permissions, ToolPermissionConfig::default());
+    }
+
+    #[test]
+    fn missing_max_rounds_defaults_to_unlimited_and_explicit_limits_survive() {
+        let defaulted: GlobalConfig = serde_json::from_value(serde_json::json!({}))
+            .expect("legacy global config should deserialize");
+        assert_eq!(defaulted.ai.max_rounds, 0);
+
+        let limited: GlobalConfig = serde_json::from_value(serde_json::json!({
+            "ai": { "max_rounds": 37 }
+        }))
+        .expect("explicit max rounds should deserialize");
+        assert_eq!(limited.ai.max_rounds, 37);
     }
 
     #[test]

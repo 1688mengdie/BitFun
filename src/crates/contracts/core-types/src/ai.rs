@@ -660,6 +660,8 @@ pub struct ModelRequestContext {
     /// header injection (e.g. CodeBuddy `X-Conversation-Request-ID`): stable
     /// for every request of the same user turn, changes per new user turn.
     pub conversation_request_id: Option<String>,
+    /// JSON Schema requested for this turn's final model output.
+    pub output_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -884,6 +886,7 @@ mod model_request_context_tests {
             prompt_cache_route_key: Some("route-1".to_string()),
             session_id: Some("sess-abc-123".to_string()),
             conversation_request_id: Some("turn-abc-123".to_string()),
+            output_schema: None,
         };
         assert_eq!(ctx.session_id.as_deref(), Some("sess-abc-123"));
         assert_eq!(ctx.prompt_cache_route_key.as_deref(), Some("route-1"));
@@ -896,6 +899,7 @@ mod model_request_context_tests {
             prompt_cache_route_key: None,
             session_id: Some("session-42".to_string()),
             conversation_request_id: None,
+            output_schema: None,
         };
         let cloned = ctx.clone();
         assert_eq!(cloned.session_id, ctx.session_id);

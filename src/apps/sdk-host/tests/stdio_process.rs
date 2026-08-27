@@ -16,23 +16,25 @@ async fn standalone_sdk_host_negotiates_and_shuts_down_without_cli() {
         std::fs::create_dir_all(path).expect("SDK Host fixture directory");
     }
 
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_bitfun-sdk-host"))
-        .current_dir(&workspace)
-        .env_remove("BITFUN_USER_ROOT")
-        .env_remove("BITFUN_HOME")
-        .env("BITFUN_E2E_STORAGE_GUARD", "1")
-        .env("BITFUN_E2E_USER_ROOT", &user_root)
-        .env("BITFUN_E2E_HOME", &home_root)
-        .env("APPDATA", &config_root)
-        .env("XDG_CONFIG_HOME", &config_root)
-        .env("HOME", &home_root)
-        .env("USERPROFILE", &home_root)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .expect("start standalone Agent SDK Host");
+    let mut child = bitfun_services_core::process_manager::create_tokio_command(env!(
+        "CARGO_BIN_EXE_bitfun-sdk-host"
+    ))
+    .current_dir(&workspace)
+    .env_remove("BITFUN_USER_ROOT")
+    .env_remove("BITFUN_HOME")
+    .env("BITFUN_E2E_STORAGE_GUARD", "1")
+    .env("BITFUN_E2E_USER_ROOT", &user_root)
+    .env("BITFUN_E2E_HOME", &home_root)
+    .env("APPDATA", &config_root)
+    .env("XDG_CONFIG_HOME", &config_root)
+    .env("HOME", &home_root)
+    .env("USERPROFILE", &home_root)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true)
+    .spawn()
+    .expect("start standalone Agent SDK Host");
 
     let mut stdin = child.stdin.take().expect("SDK Host stdin");
     let mut stdout = BufReader::new(child.stdout.take().expect("SDK Host stdout"));
@@ -43,9 +45,12 @@ async fn standalone_sdk_host_negotiates_and_shuts_down_without_cli() {
         1,
         "initialize",
         json!({
-            "protocolVersion": 2,
+            "protocolVersion": 6,
             "clientInfo": { "name": "standalone-process-fixture", "version": "0.1.0" },
-            "capabilities": { "serverNotifications": true },
+            "capabilities": {
+                "serverNotifications": true,
+                "permissionResponses": true
+            },
             "model": {
                 "provider": "openai",
                 "model": "fixture-model",
@@ -57,7 +62,7 @@ async fn standalone_sdk_host_negotiates_and_shuts_down_without_cli() {
     .await;
     let initialized = read_response(&mut stdout, "initialize").await;
     assert_eq!(initialized["id"], 1);
-    assert_eq!(initialized["result"]["protocolVersion"], 2);
+    assert_eq!(initialized["result"]["protocolVersion"], 6);
     assert!(initialized["result"]["modelId"]
         .as_str()
         .is_some_and(|model_id| model_id.starts_with("sdk:openai:")));
