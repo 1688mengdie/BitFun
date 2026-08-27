@@ -201,7 +201,7 @@ describe('UsageStatisticsConfig', () => {
     expect(container.textContent).toContain('95.00%');
   });
 
-  it('keeps idle hit-rate points continuous but splits active telemetry gaps', async () => {
+  it('keeps idle hit-rate points continuous and plots active telemetry gaps at zero', async () => {
     const idlePoint = {
       ...SAMPLE_STATS.trend[0],
       bucket: '2026-08-16T12:00:00.000Z',
@@ -229,8 +229,16 @@ describe('UsageStatisticsConfig', () => {
 
     await render();
 
-    expect(container.querySelectorAll('[data-cache-hit-rate-segment="line"]')).toHaveLength(1);
-    expect(container.querySelectorAll('[data-cache-hit-rate-segment="point"]')).toHaveLength(1);
+    // Continuous-line semantics (adopted-from #2534, cf. 3adf7be0b): one
+    // dashed hit-rate polyline spanning every bucket, no per-segment markers.
+    // Note: #2534's original commit (ab8a543a4) asserted
+    // data-cache-hit-rate-segment attributes that its own chart never rendered;
+    // the adopted baseline renders a single continuous polyline instead.
+    expect(container.querySelectorAll('.bitfun-usage-stats__trend-svg > polyline')).toHaveLength(4);
+    const hitRateLine = container.querySelector(
+      '.bitfun-usage-stats__trend-svg > polyline[stroke-dasharray="4 4"]',
+    );
+    expect(hitRateLine).not.toBeNull();
 
     const hoverCapture = container.querySelector(
       '.bitfun-usage-stats__trend-svg > rect[fill="transparent"]',
@@ -246,8 +254,12 @@ describe('UsageStatisticsConfig', () => {
         clientX: 300,
       }));
     });
+    // Adopted contract (#2534 continuous-line semantics, cf. 3adf7be0b):
+    // the tooltip mirrors the rendered line, so a hover over an active
+    // telemetry gap resolves to 0% rather than the pre-adoption '–'
+    // placeholder (same stale superset as the removed segment assertions).
     let tooltipRows = container.querySelectorAll('.bitfun-usage-stats__trend-tooltip-row');
-    expect(tooltipRows[tooltipRows.length - 1]?.textContent).toContain('–');
+    expect(tooltipRows[tooltipRows.length - 1]?.textContent).toContain('0.00%');
 
     await act(async () => {
       hoverCapture.dispatchEvent(new MouseEvent('mousemove', {
