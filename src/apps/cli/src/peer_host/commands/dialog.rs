@@ -234,14 +234,10 @@ pub(crate) async fn cancel_dialog_turn(
 /// This reaches the Core-owned coordinator via the same compatibility surface
 /// the Desktop `cancel_tool` Tauri command uses — one level finer than
 /// `cancel_dialog_turn`.
-pub(crate) async fn cancel_tool(
-    state: &PeerHostState,
-    args: &Value,
-) -> Result<Value, String> {
+pub(crate) async fn cancel_tool(state: &PeerHostState, args: &Value) -> Result<Value, String> {
     let request = request_value(args);
     let tool_use_id = get_string(request, "toolUseId")?;
-    let reason = optional_string(request, "reason")
-        .unwrap_or_else(|| "User cancelled".to_string());
+    let reason = optional_string(request, "reason").unwrap_or_else(|| "User cancelled".to_string());
     state
         .compatibility
         .cancel_tool(&tool_use_id, reason)

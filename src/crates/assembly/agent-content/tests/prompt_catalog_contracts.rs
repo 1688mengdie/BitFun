@@ -82,6 +82,10 @@ const CATALOG_PROMPT_SOURCES: &[(&str, &[u8])] = &[
         include_bytes!("../prompts/agents/legion_mode.md"),
     ),
     (
+        "minimal-harness-v1",
+        include_bytes!("../prompts/agents/minimal-harness-v1.md"),
+    ),
+    (
         "multitask_mode_first_entry_reminder",
         include_bytes!("../prompts/agents/multitask_mode_first_entry_reminder.md"),
     ),

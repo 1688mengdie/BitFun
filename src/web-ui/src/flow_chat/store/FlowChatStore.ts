@@ -430,6 +430,7 @@ function sameDispatchTargetIdentity(
 
 const VALID_AGENT_TYPES = new Set([
   'agentic',
+  'minimal',
   'Multitask',
   'debug',
   'Plan',
