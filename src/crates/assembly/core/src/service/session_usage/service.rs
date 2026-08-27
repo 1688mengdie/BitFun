@@ -2922,7 +2922,6 @@ mod tests {
             output_tokens,
             cached_tokens,
             cached_tokens_available: false,
-            cache_write_tokens: 0,
             total_tokens: input_tokens + output_tokens,
             token_details: None,
             is_subagent: false,
