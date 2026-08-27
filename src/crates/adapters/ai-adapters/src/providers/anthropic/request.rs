@@ -1,13 +1,13 @@
 use super::AnthropicMessageConverter;
 use crate::client::quirks::{
-    is_deepseek_reasoning_effort_model, is_deepseek_url, is_glm_52_reasoning_effort_model,
-    is_zhipuai_url, normalize_deepseek_reasoning_effort, normalize_glm_52_reasoning_effort,
-    should_append_tool_stream,
+    anthropic_usage_semantics_for_url, is_deepseek_reasoning_effort_model, is_deepseek_url,
+    is_glm_52_reasoning_effort_model, is_zhipuai_url, normalize_deepseek_reasoning_effort,
+    normalize_glm_52_reasoning_effort, should_append_tool_stream,
 };
 use crate::client::sse::execute_sse_request;
 use crate::client::{AIClient, StreamResponse};
 use crate::providers::shared;
-use crate::stream::handle_anthropic_stream;
+use crate::stream::{handle_anthropic_stream_with_usage_semantics};
 use crate::trace::ModelExchangeTraceConfig;
 use crate::types::{
     Message, ModelRequestContext, ReasoningPresetAction, ReasoningPresetDescriptor, ToolDefinition,
@@ -484,6 +484,9 @@ pub(crate) async fn send_stream(
     let inline_think_in_text = client.config.inline_think_in_text;
     let idle_timeout = client.stream_options.idle_timeout;
     let ttft_timeout = client.stream_options.ttft_timeout;
+    // Resolved before the closure moves `url`: usage semantics are fixed per
+    // endpoint (native vs non-native anthropic-wire backends).
+    let usage_semantics = anthropic_usage_semantics_for_url(&url);
 
     execute_sse_request(
         "Anthropic Streaming API",
@@ -494,13 +497,14 @@ pub(crate) async fn send_stream(
         trace,
         || apply_headers(client, client.client.post(&url), &url),
         move |response, tx, tx_raw, remaining_ttft_timeout| {
-            handle_anthropic_stream(
+            handle_anthropic_stream_with_usage_semantics(
                 response,
                 tx,
                 tx_raw,
                 inline_think_in_text,
                 remaining_ttft_timeout,
                 idle_timeout,
+                usage_semantics,
             )
         },
     )

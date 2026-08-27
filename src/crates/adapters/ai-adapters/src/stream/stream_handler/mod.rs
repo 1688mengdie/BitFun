@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::stream::types::unified::UnifiedResponse;
 
 pub use anthropic::handle_anthropic_stream;
+pub use anthropic::handle_anthropic_stream_with_usage_semantics;
 pub use gemini::handle_gemini_stream;
 pub use openai::{handle_openai_stream, handle_qoder_stream};
 pub use responses::handle_responses_stream;

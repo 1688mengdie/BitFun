@@ -701,6 +701,8 @@ mod tests {
     fn structured_output_context() -> ModelRequestContext {
         ModelRequestContext {
             prompt_cache_route_key: None,
+            session_id: None,
+            conversation_request_id: None,
             output_schema: Some(json!({
                 "type": "object",
                 "properties": { "summary": { "type": "string" } }
