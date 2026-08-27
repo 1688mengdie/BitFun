@@ -153,6 +153,19 @@ impl Default for ExecutionEngineConfig {
     }
 }
 
+impl ExecutionEngineConfig {
+    pub fn from_ai_config(ai_config: &crate::service::config::types::AIConfig) -> Self {
+        Self {
+            max_rounds: ai_config.max_rounds,
+            ..Self::default()
+        }
+    }
+}
+
+fn reached_fixed_model_round_limit(max_rounds: usize, completed_rounds: usize) -> bool {
+    max_rounds > 0 && completed_rounds >= max_rounds
+}
+
 #[derive(Debug, Clone)]
 pub struct ContextCompactionOutcome {
     pub compression_id: String,
@@ -576,6 +589,7 @@ impl ExecutionEngine {
         prompt_cache_lineage_id: &str,
         session_id: &str,
         dialog_turn_id: &str,
+        context: &HashMap<String, String>,
     ) -> ModelRequestContext {
         ModelRequestContext {
             prompt_cache_route_key: Some(prompt_cache_lineage_id.to_string()),
@@ -583,6 +597,9 @@ impl ExecutionEngine {
             // Turn-level stable request-group ID: one user prompt -> one
             // value across every request of the turn (including retries).
             conversation_request_id: Some(dialog_turn_id.to_string()),
+            output_schema: context
+                .get(bitfun_runtime_ports::OUTPUT_SCHEMA_CONTEXT_KEY)
+                .and_then(|schema| serde_json::from_str(schema).ok()),
         }
     }
 
@@ -3404,6 +3421,7 @@ impl ExecutionEngine {
             session.effective_prompt_cache_lineage_id(),
             &session.session_id,
             &context.dialog_turn_id,
+            &context.context,
         );
 
         let primary_model_facts = Self::resolve_primary_model_context(
@@ -4545,6 +4563,7 @@ impl ExecutionEngine {
             session.effective_prompt_cache_lineage_id(),
             &session.session_id,
             &context.dialog_turn_id,
+            &context.context,
         );
 
         // Primary model vision capability (tools + system prompt appendix; also used below for API message stripping).
@@ -4843,7 +4862,7 @@ impl ExecutionEngine {
 
         // Loop to execute model rounds
         loop {
-            if completed_rounds >= self.config.max_rounds {
+            if reached_fixed_model_round_limit(self.config.max_rounds, completed_rounds) {
                 warn!(
                     "Reached max rounds limit: {}, stopping execution",
                     self.config.max_rounds
@@ -6344,7 +6363,7 @@ impl ExecutionEngine {
         // dialog success) so other agents and failed turns are unaffected.
         #[cfg(feature = "deep-research")]
         {
-            if bitfun_agent_runtime::deep_research::should_post_process_research_report(
+            if bitfun_agent_workflows::deep_research::should_post_process_research_report(
                 &agent_type,
                 success,
             ) {
@@ -6495,8 +6514,9 @@ impl ExecutionEngine {
 mod tests {
     use super::{
         activate_conditional_instructions_after_round, ensure_primary_session_goal_tools,
-        manual_compaction_terminal_error, resolve_round_permission_mode, ContextHealthSnapshot,
-        ExecutionEngine, RoundResult, TurnPromptScaffold,
+        manual_compaction_terminal_error, reached_fixed_model_round_limit,
+        resolve_round_permission_mode, ContextHealthSnapshot, ExecutionEngine,
+        ExecutionEngineConfig, RoundResult, TurnPromptScaffold,
     };
     use crate::agentic::agents::{
         PrependedPromptReminders, PromptBuilderContext, UserContextPolicy,
@@ -6540,6 +6560,30 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tokio::sync::RwLock as TokioRwLock;
+
+    #[test]
+    fn zero_max_rounds_disables_the_fixed_round_limit() {
+        assert!(!reached_fixed_model_round_limit(0, 0));
+        assert!(!reached_fixed_model_round_limit(0, 10_000));
+    }
+
+    #[test]
+    fn positive_max_rounds_stops_at_the_configured_limit() {
+        assert!(!reached_fixed_model_round_limit(200, 199));
+        assert!(reached_fixed_model_round_limit(200, 200));
+        assert!(reached_fixed_model_round_limit(200, 201));
+    }
+
+    #[test]
+    fn max_rounds_execution_config_projects_the_global_ai_limit() {
+        let mut ai_config = AIConfig::default();
+        ai_config.max_rounds = 37;
+
+        assert_eq!(
+            ExecutionEngineConfig::from_ai_config(&ai_config).max_rounds,
+            37
+        );
+    }
 
     #[test]
     fn recovered_execution_starts_after_existing_model_rounds() {
@@ -8913,10 +8957,13 @@ mod tests {
 
     #[test]
     fn provider_prompt_cache_route_key_depends_only_on_lineage() {
-        let first = ExecutionEngine::model_request_context("session-1", "sid-a", "turn-1");
-        let same_lineage = ExecutionEngine::model_request_context("session-1", "sid-a", "turn-2");
+        let context = HashMap::new();
+        let first =
+            ExecutionEngine::model_request_context("session-1", "sid-a", "turn-1", &context);
+        let same_lineage =
+            ExecutionEngine::model_request_context("session-1", "sid-a", "turn-2", &context);
         let changed_lineage =
-            ExecutionEngine::model_request_context("session-2", "sid-b", "turn-3");
+            ExecutionEngine::model_request_context("session-2", "sid-b", "turn-3", &context);
 
         assert_eq!(first.prompt_cache_route_key.as_deref(), Some("session-1"));
         assert_eq!(first.session_id.as_deref(), Some("sid-a"));
@@ -8928,6 +8975,24 @@ mod tests {
             first.prompt_cache_route_key,
             changed_lineage.prompt_cache_route_key
         );
+    }
+
+    #[test]
+    fn model_request_context_reads_one_turn_output_schema() {
+        let schema = json!({
+            "type": "object",
+            "properties": { "summary": { "type": "string" } }
+        });
+        let mut context = HashMap::new();
+        context.insert(
+            bitfun_runtime_ports::OUTPUT_SCHEMA_CONTEXT_KEY.to_string(),
+            schema.to_string(),
+        );
+
+        let request_context =
+            ExecutionEngine::model_request_context("session-1", "sid-a", "turn-1", &context);
+
+        assert_eq!(request_context.output_schema, Some(schema));
     }
 
     fn command_result(tool_name: &str, success: bool, exit_code: Option<i32>) -> Message {

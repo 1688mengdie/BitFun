@@ -118,6 +118,13 @@ impl AgentSessionClosePort for MinimalOwner {
     ) -> PortResult<bool> {
         Ok(false)
     }
+
+    async fn unload_persisted_session(
+        &self,
+        _request: AgentTransientSessionDiscardRequest,
+    ) -> PortResult<bool> {
+        Ok(false)
+    }
 }
 
 #[async_trait]
@@ -175,6 +182,13 @@ impl AgentSessionClosePort for BlockingCreateOwner {
         self.deleted.fetch_add(1, Ordering::AcqRel);
         Ok(true)
     }
+
+    async fn unload_persisted_session(
+        &self,
+        request: AgentTransientSessionDiscardRequest,
+    ) -> PortResult<bool> {
+        self.discard_transient_session(request).await
+    }
 }
 
 #[async_trait]
@@ -222,7 +236,7 @@ async fn stdio_transport_serves_initialize_and_shutdown_without_non_protocol_std
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"shutdown\",\"params\":{}}\n"
             )
             .as_bytes(),
@@ -238,7 +252,7 @@ async fn stdio_transport_serves_initialize_and_shutdown_without_non_protocol_std
         serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
 
     assert_eq!(initialized["id"], 1);
-    assert_eq!(initialized["result"]["protocolVersion"], 2);
+    assert_eq!(initialized["result"]["protocolVersion"], 6);
     assert_eq!(initialized["result"]["modelId"], "sdk:openai:transport");
     assert_eq!(shutdown["id"], 2);
     assert_eq!(shutdown["result"]["accepted"], true);
@@ -272,7 +286,7 @@ async fn stdio_transport_executes_json_rpc_notifications_without_replying() {
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"method\":\"shutdown\",\"params\":{}}\n"
             )
             .as_bytes(),
@@ -372,7 +386,7 @@ async fn transport_accepts_input_while_an_owner_call_is_pending_and_bounds_reque
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/create\",\"params\":{}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"session/create\",\"params\":{}}\n"
             )
@@ -444,7 +458,7 @@ async fn shutdown_remains_available_when_the_data_request_budget_is_exhausted() 
     ));
     client_write
         .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
         )
         .await
         .unwrap();
@@ -466,7 +480,24 @@ async fn shutdown_remains_available_when_the_data_request_budget_is_exhausted() 
     .expect("blocking data request must start");
 
     client_write
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"shutdown\",\"params\":{}}\n")
+        .write_all(
+            b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"permission/respond\",\"params\":{\"queryId\":\"missing-query\",\"sessionId\":\"missing-session\",\"turnId\":\"missing-turn\",\"operationId\":\"missing-operation\",\"requestId\":\"missing-permission\",\"decision\":\"reject\"}}\n",
+        )
+        .await
+        .unwrap();
+    let permission_response: serde_json::Value = serde_json::from_str(
+        &timeout(Duration::from_secs(1), lines.next_line())
+            .await
+            .expect("permission response must use control capacity")
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(permission_response["id"], 3);
+    assert_eq!(permission_response["error"]["data"]["code"], "not_found");
+
+    client_write
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":{}}\n")
         .await
         .unwrap();
     client_write.shutdown().await.unwrap();
@@ -479,7 +510,7 @@ async fn shutdown_remains_available_when_the_data_request_budget_is_exhausted() 
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(shutdown["id"], 3);
+    assert_eq!(shutdown["id"], 4);
     assert_eq!(shutdown["result"]["accepted"], true);
     task.await.unwrap().unwrap();
 }
@@ -507,9 +538,9 @@ async fn duplicate_initialize_does_not_abort_an_in_flight_request() {
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/create\",\"params\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n"
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n"
             )
             .as_bytes(),
         )
@@ -567,7 +598,7 @@ async fn connection_eof_cleans_a_session_created_after_its_request_is_aborted() 
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/create\",\"params\":{}}\n"
             )
             .as_bytes(),
@@ -589,7 +620,7 @@ async fn connection_eof_cleans_a_session_created_after_its_request_is_aborted() 
     client_write.shutdown().await.unwrap();
     timeout(Duration::from_secs(1), &mut task)
         .await
-        .expect("transient Session cleanup must stay within the Host deadline")
+        .expect("Session cleanup must stay within the Host deadline")
         .unwrap()
         .unwrap();
     assert_eq!(owner.deleted.load(Ordering::Acquire), 1);
@@ -601,7 +632,7 @@ async fn connection_eof_cleans_a_session_created_after_its_request_is_aborted() 
 }
 
 #[tokio::test]
-async fn explicit_shutdown_bounds_request_drain_and_transient_cleanup_together() {
+async fn explicit_shutdown_bounds_request_drain_and_session_cleanup_together() {
     let owner = Arc::new(BlockingCreateOwner::new());
     let runtime = AgentRuntimeBuilder::new()
         .with_submission_port(owner.clone())
@@ -626,7 +657,7 @@ async fn explicit_shutdown_bounds_request_drain_and_transient_cleanup_together()
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/create\",\"params\":{}}\n"
             )
             .as_bytes(),
@@ -654,7 +685,7 @@ async fn explicit_shutdown_bounds_request_drain_and_transient_cleanup_together()
     assert_eq!(shutdown["id"], 3);
     timeout(Duration::from_secs(1), &mut task)
         .await
-        .expect("request drain and transient cleanup must share one total deadline")
+        .expect("request drain and Session cleanup must share one total deadline")
         .unwrap()
         .unwrap();
     assert_eq!(owner.deleted.load(Ordering::Acquire), 1);
@@ -682,9 +713,9 @@ async fn requests_before_a_successful_initialize_cannot_cross_the_handshake() {
     client_write
         .write_all(
             concat!(
-                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":999,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+                "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":999,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"session/create\",\"params\":{}}\n",
-                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n"
+                "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n"
             )
             .as_bytes(),
         )
@@ -703,7 +734,7 @@ async fn requests_before_a_successful_initialize_cannot_cross_the_handshake() {
     assert_eq!(pre_initialize["id"], 2);
     assert_eq!(pre_initialize["error"]["data"]["code"], "not_initialized");
     assert_eq!(initialized["id"], 3);
-    assert_eq!(initialized["result"]["protocolVersion"], 2);
+    assert_eq!(initialized["result"]["protocolVersion"], 6);
     assert_eq!(initialized["result"]["modelId"], "sdk:openai:transport");
 
     client_write
@@ -744,7 +775,7 @@ async fn blocked_output_times_out_and_ends_the_connection() {
     ));
     client_write
         .write_all(
-            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":2,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
+            b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":6,\"clientInfo\":{\"name\":\"fixture\",\"version\":\"0.1\"},\"capabilities\":{\"serverNotifications\":true,\"permissionResponses\":true},\"model\":{\"provider\":\"openai\",\"model\":\"fixture-model\",\"apiKey\":\"fixture-secret\"}}}\n",
         )
         .await
         .unwrap();

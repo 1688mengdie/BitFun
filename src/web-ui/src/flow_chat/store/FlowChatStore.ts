@@ -102,6 +102,7 @@ import { resolveThreadGoalUserMessageDisplay } from '../utils/threadGoalDisplay'
 import { cleanRemoteUserInput } from '../utils/userInputText';
 import { useBackgroundSubagentActivityStore } from './backgroundSubagentActivityStore';
 import { clearRuntimeStatusState } from './runtimeStatusStore';
+import { askUserQuestionDraftStore } from './askUserQuestionDraftStore';
 import { sessionComposerStore } from './sessionComposerStore';
 import { completeSessionMutationReconciliation } from './sessionMutationStore';
 import { recordHistorySessionDiagnosticEvent } from '../services/historySessionDiagnostics';
@@ -429,6 +430,7 @@ function sameDispatchTargetIdentity(
 
 const VALID_AGENT_TYPES = new Set([
   'agentic',
+  'minimal',
   'Multitask',
   'debug',
   'Plan',
@@ -5424,6 +5426,7 @@ config: {
       closeBtwSessionInAuxPane(id);
     }
     sessionComposerStore.getState().removeDrafts(Array.from(allRemovedIds));
+    askUserQuestionDraftStore.getState().removeSessionDrafts(Array.from(allRemovedIds));
     this.pendingRemoveSessionOptions.delete(sessionId);
     // Backend-confirmed deletions must not be hidden by the metadata request
     // dedupe caches: an in-flight or recently-completed list/page request
@@ -5669,6 +5672,7 @@ config: {
       : [];
     this.surfaceContainers.delete(surfaceId);
     sessionComposerStore.getState().removeSurfaceDrafts(surfaceId);
+    askUserQuestionDraftStore.getState().removeSurfaceDrafts(surfaceId);
     this.forgetSurfaceMetadataRequests(surfaceId);
 
     for (const [requestKey, request] of this.fullHistoryHydrationRequests) {
@@ -8076,6 +8080,7 @@ config: {
         ? restored.interactionSnapshot.userQuestions
         : undefined;
     let applied = false;
+    let pendingQuestionSnapshotApplied = false;
 
     this.setState(prev => {
       if (
@@ -8169,6 +8174,7 @@ config: {
           turnsChanged = true;
         }
         if (questionReconciliation.revisionApplied && pendingUserQuestions) {
+          pendingQuestionSnapshotApplied = true;
           this.userQuestionSnapshotRevisions.set(
             sessionId,
             pendingUserQuestions.revision,
@@ -8237,6 +8243,14 @@ config: {
         sessions: newSessions,
       };
     });
+
+    if (pendingQuestionSnapshotApplied && pendingUserQuestions) {
+      askUserQuestionDraftStore.getState().reconcilePendingTools(
+        scope.surfaceId,
+        sessionId,
+        pendingUserQuestions.questions.map(question => question.toolId),
+      );
+    }
 
     if (applied) {
       this.seedSessionHistoryLoadedRanges(sessionId, 'initial-tail');
@@ -8393,7 +8407,9 @@ config: {
     sessionId: string,
     pendingUserQuestions: PendingUserQuestionSnapshot | undefined,
   ): boolean {
+    const surfaceId = getActiveSurfaceId();
     let applied = false;
+    let pendingQuestionSnapshotApplied = false;
     this.setState(prev => {
       const session = prev.sessions.get(sessionId);
       if (!session) {
@@ -8406,6 +8422,7 @@ config: {
         previousRevision,
       );
       if (reconciliation.revisionApplied && pendingUserQuestions) {
+        pendingQuestionSnapshotApplied = true;
         this.userQuestionSnapshotRevisions.set(sessionId, pendingUserQuestions.revision);
       }
       if (!reconciliation.changed) {
@@ -8420,6 +8437,13 @@ config: {
       applied = true;
       return { ...prev, sessions };
     });
+    if (pendingQuestionSnapshotApplied && pendingUserQuestions) {
+      askUserQuestionDraftStore.getState().reconcilePendingTools(
+        surfaceId,
+        sessionId,
+        pendingUserQuestions.questions.map(question => question.toolId),
+      );
+    }
     return applied;
   }
 

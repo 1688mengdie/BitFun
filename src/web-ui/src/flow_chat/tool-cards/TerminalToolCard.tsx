@@ -22,13 +22,16 @@ import { BaseToolCard, ToolCardHeader } from './BaseToolCard';
 import { DotMatrixLoader, IconButton } from '../../component-library';
 import { LazyTerminalOutputRenderer } from '@/tools/terminal/components/LazyTerminalOutputRenderer';
 import { createLogger } from '@/shared/utils/logger';
+import { notificationService } from '@/shared/notification-system';
 import { useToolCardHeightContract } from './useToolCardHeightContract';
 import { useToolCardCompletionGracePeriod } from './useToolCardCompletionGracePeriod';
-import { getTerminalViewState, type TerminalViewState } from './terminalToolCardState';
+import { getTerminalViewState, resolveCanCancelTool, type TerminalViewState } from './terminalToolCardState';
 import { ToolTimeoutIndicator } from './ToolTimeoutIndicator';
 import { ToolCardCopyAction, ToolCardHeaderActions } from './ToolCardHeaderActions';
 import { CopyableTextPreview } from '../components/CopyableTextPreview';
 import { formatSessionViewPreviewText } from '../utils/sessionViewPreview';
+import { api } from '@/infrastructure/api/service-api/ApiClient';
+import { usePeerDeviceModeOptional } from '@/infrastructure/peer-device/peerDeviceContextState';
 import './TerminalToolCard.scss';
 
 const log = createLogger('TerminalToolCard');
@@ -245,6 +248,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
   isLastItem,
 }) => {
   const { t } = useTranslation('flow-chat');
+  const peerDevice = usePeerDeviceModeOptional();
   const toolCall = toolItem.toolCall;
   const toolResult = toolItem.toolResult;
   const command = toolCall?.input?.command;
@@ -390,6 +394,18 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     [command],
   );
 
+  // The Interrupt button is only meaningful if the current host can actually
+  // cancel a running tool. Resolution is centralized in resolveCanCancelTool so
+  // the same rule (local → true; cancelTool true/false; null resolved by
+  // hostKind — old Desktop supports it, old CLI doesn't) is unit-testable and
+  // stays consistent with the tool-catalog host-kind resolution. See PR #2428
+  // round 5 #1.
+  const peerActive = Boolean(peerDevice?.peerMode.active);
+  const canCancelTool = resolveCanCancelTool(
+    peerActive,
+    peerDevice?.currentPeerCapabilities ?? null,
+  );
+
   const viewState = useMemo(() => {
     return getTerminalViewState({
       status,
@@ -398,8 +414,10 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
       interruptRequested,
       showConfirmButtons,
       wasInterrupted: parsedResult.wasInterrupted,
+      canCancelTool,
     });
   }, [
+    canCancelTool,
     isParamsStreaming,
     interruptRequested,
     liveOutput,
@@ -420,8 +438,7 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     setInterruptRequested(true);
 
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('cancel_tool', {
+      await api.invoke('cancel_tool', {
         request: {
           toolUseId,
           reason: 'User cancelled',
@@ -430,8 +447,13 @@ export const TerminalToolCard: React.FC<TerminalToolCardProps> = ({
     } catch (error) {
       setInterruptRequested(false);
       log.error('Failed to send cancel signal', { toolUseId, error });
+      // Surface the failure to the user instead of silently restoring the
+      // button: a "not supported on ... peer host" error (or a transport
+      // failure) means the target command keeps running and the click did
+      // nothing visible. See PR #2428 round 5 #1.
+      notificationService.error(t('toolCards.terminal.interruptFailed'));
     }
-  }, [interruptRequested, toolCall?.id]);
+  }, [interruptRequested, t, toolCall?.id]);
 
   const handleOpenInPanel = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();

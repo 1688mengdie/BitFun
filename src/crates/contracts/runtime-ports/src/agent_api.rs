@@ -1,5 +1,9 @@
 use super::*;
 
+/// Reserved turn metadata/context key used to carry a provider-neutral JSON
+/// output schema through persistence and interrupted-turn recovery.
+pub const OUTPUT_SCHEMA_CONTEXT_KEY: &str = "bitfun_output_schema";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "camelCase")]
@@ -598,6 +602,8 @@ pub enum AgentDialogTurnExecution {
 pub struct AgentDialogTurnRequest {
     pub session_id: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1548,11 +1554,10 @@ pub trait AgentWorkspaceReferencePort: Send + Sync {
     ) -> PortResult<Vec<AgentWorkspaceReference>>;
 }
 
-/// Deadline-bearing request for discarding a connection-scoped transient
-/// Session. This is separate from [`AgentSessionDeleteRequest`] so adding Host
-/// cleanup policy cannot break the established Rust Session-management API.
+/// Deadline-bearing request for releasing a loaded Session from one runtime.
+/// The lifecycle method decides whether persisted storage is preserved.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AgentTransientSessionDiscardRequest {
+pub struct AgentSessionReleaseRequest {
     pub workspace_path: String,
     pub session_id: String,
     pub remote_connection_id: Option<String>,
@@ -1560,7 +1565,10 @@ pub struct AgentTransientSessionDiscardRequest {
     pub wait_timeout_ms: u64,
 }
 
-/// Runtime lifecycle owner for connection-scoped Session cleanup.
+/// Compatibility name for callers that only discard transient Sessions.
+pub type AgentTransientSessionDiscardRequest = AgentSessionReleaseRequest;
+
+/// Runtime lifecycle owner for releasing loaded Sessions.
 #[async_trait::async_trait]
 pub trait AgentSessionClosePort: Send + Sync {
     /// Quiesces and discards only a loaded transient Session owned by the
@@ -1568,12 +1576,25 @@ pub trait AgentSessionClosePort: Send + Sync {
     /// remove persisted Session storage through this operation.
     async fn discard_transient_session(
         &self,
-        request: AgentTransientSessionDiscardRequest,
+        request: AgentSessionReleaseRequest,
     ) -> PortResult<bool> {
         let _ = request;
         Err(PortError::new(
             PortErrorKind::NotAvailable,
             "transient session discard is not supported by this provider",
+        ))
+    }
+
+    /// Quiesces and unloads a durable Session while preserving its persisted
+    /// state so another runtime can restore it later.
+    async fn unload_persisted_session(
+        &self,
+        request: AgentSessionReleaseRequest,
+    ) -> PortResult<bool> {
+        let _ = request;
+        Err(PortError::new(
+            PortErrorKind::NotAvailable,
+            "persisted session unload is not supported by this provider",
         ))
     }
 }
@@ -2994,6 +3015,7 @@ mod tests {
         let request = AgentDialogTurnRequest {
             session_id: "session_1".to_string(),
             message: "hello".to_string(),
+            output_schema: Some(serde_json::json!({ "type": "object" })),
             original_message: Some("raw hello".to_string()),
             turn_id: Some("turn_1".to_string()),
             execution: Default::default(),
@@ -3027,6 +3049,7 @@ mod tests {
 
         assert_eq!(json["sessionId"], "session_1");
         assert_eq!(json["message"], "hello");
+        assert_eq!(json["outputSchema"]["type"], "object");
         assert_eq!(json["originalMessage"], "raw hello");
         assert_eq!(json["turnId"], "turn_1");
         assert_eq!(json["agentType"], "agentic");

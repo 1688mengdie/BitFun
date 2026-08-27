@@ -140,7 +140,7 @@ use bitfun_runtime_ports::{
     PermissionMode, PermissionModeLayers, PermissionRuntimeCeiling, RemoteExecPort,
     ResolvedPermissionMode, SessionStoragePathRequest, SessionStoragePathResolution,
     SessionStorePort, SubagentContextMode, TerminalPort, ThreadGoal, ThreadGoalContinuationPlan,
-    ThreadGoalStatus,
+    ThreadGoalStatus, OUTPUT_SCHEMA_CONTEXT_KEY,
 };
 use bitfun_services_core::filesystem::{FileSearchOptions, FileSystemService, FileTreeNode};
 use bitfun_services_core::session::tree::SessionTreeManager;
@@ -1982,6 +1982,19 @@ impl ConversationCoordinator {
             Some(value) if value.is_object() => value,
             Some(value) => serde_json::json!({ "raw_metadata": value }),
             None => serde_json::json!({}),
+        }
+    }
+
+    fn copy_output_schema_context(
+        context: &mut HashMap<String, String>,
+        metadata: Option<&serde_json::Value>,
+    ) {
+        if let Some(schema) = metadata
+            .and_then(serde_json::Value::as_object)
+            .and_then(|metadata| metadata.get(OUTPUT_SCHEMA_CONTEXT_KEY))
+            .filter(|schema| schema.is_object())
+        {
+            context.insert(OUTPUT_SCHEMA_CONTEXT_KEY.to_string(), schema.to_string());
         }
     }
 
@@ -7179,6 +7192,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             // still wins via the branch above.
             context_vars.insert(AUTO_APPROVE_ASK_CONTEXT_KEY.to_string(), "true".to_string());
         }
+        Self::copy_output_schema_context(&mut context_vars, user_message_metadata.as_ref());
         if needs_computer_links_for_source(submission_policy.trigger_source) {
             context_vars.insert(
                 TOOL_CONTEXT_REMOTE_FILE_DELIVERY_KEY.to_string(),
@@ -7723,6 +7737,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                 auto_approve_ask.to_string(),
             );
         }
+        Self::copy_output_schema_context(&mut context_vars, plan.user_message_metadata.as_ref());
 
         let execution_context = ExecutionContext {
             session_id: plan.session_id.clone(),
@@ -14227,6 +14242,13 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         self.session_manager
             .update_session_title(session_id, &normalized)
             .await?;
+
+        self.emit_event(AgenticEvent::SessionTitleGenerated {
+            session_id: session_id.to_string(),
+            title: normalized.clone(),
+            method: "manual".to_string(),
+        })
+        .await;
 
         Ok(normalized)
     }

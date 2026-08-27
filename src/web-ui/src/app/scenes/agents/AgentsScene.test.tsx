@@ -133,6 +133,7 @@ function mockAgentsList(overrides: Record<string, unknown> = {}) {
     filteredAgents: [],
     loading: false,
     availableTools: [],
+    toolCatalogStatus: 'available',
     getModeProfile: () => null,
     getAgentSkills: () => [],
     getModeManageableSubagents: () => [],
@@ -594,7 +595,54 @@ describeWithJsdom('AgentsScene', () => {
     expect(summary?.textContent).not.toContain('mcp__github__list_issues');
   });
 
-  // 鈹€鈹€ Batch B: AgentsScene zone/action layout (P1-1/P1-2/P1-3/P1-4/P1-7) 鈹€鈹€
+  it('surfaces an unsupported tool catalog in the tools tab instead of an empty list', async () => {
+    // When the host can't answer get_all_tools_info the tools tab must say so
+    // and disable editing, rather than rendering as "no tools". See PR #2428
+    // round 5 #2.
+    const mode = {
+      key: 'mode::custom-mode',
+      id: 'custom-mode',
+      name: 'Custom mode',
+      description: 'General coding mode.',
+      isReadonly: false,
+      isReview: false,
+      toolCount: 1,
+      defaultTools: ['Read'],
+      defaultEnabled: true,
+      effectiveEnabled: true,
+      source: 'user',
+      agentKind: 'mode' as const,
+      capabilities: [],
+    };
+    mockAgentsList({
+      allAgents: [mode],
+      filteredAgents: [mode],
+      availableTools: [],
+      toolCatalogStatus: 'unsupported',
+      getModeConfig: () => ({
+        profile_id: 'custom-mode',
+        enabled_tools: ['Read'],
+        default_tools: ['Read'],
+      }),
+    });
+    const { default: AgentsScene } = await import('./AgentsScene');
+
+    await act(async () => {
+      root.render(<AgentsScene />);
+    });
+    await act(async () => {
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === mode.name)
+        ?.click();
+    });
+
+    const status = container.querySelector('[data-testid="agent-detail-tools-catalog-status"]');
+    expect(status?.textContent).toContain('agentsOverview.toolsUnsupported');
+    // The tool summary picker must not render — the catalog is not available.
+    expect(container.querySelector('[data-testid="agent-detail-tool-summary"]')).toBeNull();
+  });
+
+  // ── Batch B: AgentsScene zone/action layout (P1-1/P1-2/P1-3/P1-4/P1-7) ──
 
   it('orders agents-zone tools with the primary create-agent action first', async () => {
     const { default: AgentsScene } = await import('./AgentsScene');
@@ -686,6 +734,7 @@ describeWithJsdom('AgentsScene', () => {
       filteredAgents: [subagent],
     });
     const { default: AgentsScene } = await import('./AgentsScene');
+
     await act(async () => {
       root.render(<AgentsScene />);
     });

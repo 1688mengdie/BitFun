@@ -660,6 +660,8 @@ pub struct ModelRequestContext {
     /// header injection (e.g. CodeBuddy `X-Conversation-Request-ID`): stable
     /// for every request of the same user turn, changes per new user turn.
     pub conversation_request_id: Option<String>,
+    /// JSON Schema requested for this turn's final model output.
+    pub output_schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
