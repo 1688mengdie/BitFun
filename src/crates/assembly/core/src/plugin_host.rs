@@ -646,9 +646,14 @@ fn plugin_config_fingerprint(
 }
 
 fn comparable_instance_directory(directory: &str) -> String {
-    let mut comparable = directory.replace('\\', "/");
     #[cfg(windows)]
-    comparable.make_ascii_lowercase();
+    let comparable = {
+        let mut comparable = directory.replace('\\', "/");
+        comparable.make_ascii_lowercase();
+        comparable
+    };
+    #[cfg(not(windows))]
+    let comparable = directory.replace('\\', "/");
     comparable
 }
 
