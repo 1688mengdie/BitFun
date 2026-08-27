@@ -575,7 +575,6 @@ pub fn create_main_window(
         _ => "other",
     };
 
-    #[allow(unused_mut)]
     let mut builder = tauri::WebviewWindowBuilder::new(app_handle, "main", main_url)
         .title("BitFun")
         .inner_size(
