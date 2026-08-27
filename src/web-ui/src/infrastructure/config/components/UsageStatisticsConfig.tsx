@@ -425,8 +425,11 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
   const yFor = (value: number): number => (
     PAD_TOP + plotHeight - (value / maxTokens) * plotHeight
   );
-  const rateFor = (value: number): number => (
-    PAD_TOP + plotHeight - value * plotHeight
+  // Buckets without cache telemetry (idle hours, or the provider never
+  // reported cached tokens) plot at 0% so the dashed line stays continuous,
+  // matching the token series which also sit at zero for those buckets.
+  const rateFor = (value: number | null): number => (
+    PAD_TOP + plotHeight - (value ?? 0) * plotHeight
   );
 
   const xTickIndexes = useMemo(() => {
@@ -440,26 +443,6 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
 
   const hovered = hoverIndex !== null ? points[hoverIndex] : null;
   const hoveredHitRate = hovered ? cacheHitRateForTrend(hovered) : null;
-
-  // Synthesized idle buckets sit at 0% to keep ordinary idle stretches
-  // continuous. Active buckets without cache telemetry remain real gaps so
-  // the chart does not claim that an unsupported provider had a 0% hit rate.
-  const hitRateSegments: Array<Array<{ x: number; y: number }>> = [];
-  {
-    let current: Array<{ x: number; y: number }> = [];
-    points.forEach((point, index) => {
-      const rate = cacheHitRateForTrend(point);
-      if (rate === null) {
-        if (current.length > 0) {
-          hitRateSegments.push(current);
-          current = [];
-        }
-        return;
-      }
-      current.push({ x: xFor(index), y: rateFor(rate) });
-    });
-    if (current.length > 0) hitRateSegments.push(current);
-  }
 
   return (
     <div className="bitfun-usage-stats__trend">
@@ -520,31 +503,20 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
           />
         ))}
 
-        {/* Cache hit rate (right axis, dashed). */}
-        {hitRateSegments.map((segment, segmentIndex) =>
-          segment.length === 1 ? (
-            <circle
-              key={`rate-segment-${segmentIndex}`}
-              cx={segment[0].x}
-              cy={segment[0].y}
-              r="2.5"
-              fill={SERIES_COLORS.cacheHitRate}
-              data-cache-hit-rate-segment="point"
-            />
-          ) : (
-            <polyline
-              key={`rate-segment-${segmentIndex}`}
-              points={segment.map(point => `${point.x},${point.y}`).join(' ')}
-              fill="none"
-              stroke={SERIES_COLORS.cacheHitRate}
-              strokeWidth="2"
-              strokeDasharray="4 4"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              data-cache-hit-rate-segment="line"
-            />
-          ),
-        )}
+        {/* Cache hit rate (right axis, dashed). Buckets without telemetry
+            plot at 0% so the line stays continuous like the token series.
+            Adopted-from GCWing/BitFun#2534 (continuous-line semantics). */}
+        <polyline
+          points={points
+            .map((point, index) => `${xFor(index)},${rateFor(point.cacheHitRate)}`)
+            .join(' ')}
+          fill="none"
+          stroke={SERIES_COLORS.cacheHitRate}
+          strokeWidth="2"
+          strokeDasharray="4 4"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
 
         {/* Hover capture */}
         <rect
@@ -583,16 +555,16 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
                 strokeWidth="1"
               />
             ))}
-            {hoveredHitRate !== null && (
-              <circle
-                cx={xFor(hoverIndex)}
-                cy={rateFor(hoveredHitRate)}
-                r="3.5"
-                fill={SERIES_COLORS.cacheHitRate}
-                stroke="var(--bf-appearance-token-element-bg-soft)"
-                strokeWidth="1"
-              />
-            )}
+            {/* #2534 semantics: unconditionally render the hit-rate hover dot;
+                buckets without telemetry resolve to 0% via rateFor. */}
+            <circle
+              cx={xFor(hoverIndex)}
+              cy={rateFor(hoveredHitRate)}
+              r="3.5"
+              fill={SERIES_COLORS.cacheHitRate}
+              stroke="var(--bf-appearance-token-element-bg-soft)"
+              strokeWidth="1"
+            />
             <g className="bitfun-usage-stats__trend-tooltip">
               <rect
                 x={Math.min(Math.max(xFor(hoverIndex) - 92, PAD_LEFT), CHART_WIDTH - PAD_RIGHT - 184)}
@@ -614,7 +586,9 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
                 { label: t('trend.legend.cacheRead'), value: hovered.cacheReadTokens, color: SERIES_COLORS.cacheRead },
                 {
                   label: t('trend.legend.cacheHitRate'),
-                  value: hoveredHitRate,
+                  // #2534 semantics: tooltip mirrors the rendered line, where
+                  // buckets without telemetry plot at 0%.
+                  value: hoveredHitRate ?? 0,
                   color: SERIES_COLORS.cacheHitRate,
                   isRate: true,
                 },
