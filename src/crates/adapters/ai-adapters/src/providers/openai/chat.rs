@@ -475,6 +475,7 @@ mod tests {
             prompt_cache_route_key: Some("route-1".to_string()),
             session_id: Some("sess-abc".to_string()),
             conversation_request_id: Some("turn-xyz".to_string()),
+            output_schema: None,
         }
     }
 

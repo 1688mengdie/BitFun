@@ -11,6 +11,7 @@ use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
 use crate::service::git::GitService;
+#[cfg(feature = "workspace-runtime")]
 use crate::service::workspace::{
     get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions,
 };
@@ -146,31 +147,13 @@ impl SessionControlTool {
         runtime: &AgentRuntime,
     ) -> BitFunResult<SessionControlWorkspaceTarget> {
         match action {
-            SessionControlAction::Rename => {
-                // Rename resolves the target session's own binding; an
-                // explicit workspace param is not part of the rename contract.
-                let session_id = session_id.ok_or_else(|| {
-                    BitFunError::tool("session_id is required for rename".to_string())
-                })?;
-                if let Some(binding) = runtime
-                    .resolve_session_workspace_binding(AgentSessionWorkspaceRequest {
-                        session_id: session_id.to_string(),
-                    })
-                    .await
-                    .map_err(|error| {
-                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
-                    })?
-                {
-                    return Ok(Self::workspace_target_from_binding(binding));
-                }
-                Err(BitFunError::NotFound(format!(
-                    "Workspace for session '{}' could not be resolved",
-                    session_id
-                )))
-            }
             SessionControlAction::Cancel
             | SessionControlAction::Delete
-            | SessionControlAction::Compact => {
+            | SessionControlAction::Compact
+            | SessionControlAction::Rename => {
+                // Rename/Compact resolve the target session's own binding like
+                // cancel/delete do; an explicit workspace param is not part of
+                // these action contracts.
                 let session_id = session_id.ok_or_else(|| {
                     BitFunError::tool(format!("session_id is required for {}", action.as_str()))
                 })?;
@@ -2132,11 +2115,6 @@ Arguments:
                         ))
                     })?;
 
-                let result_for_assistant = session_control_renamed_result_message(
-                    session_id,
-                    &workspace.display_workspace,
-                    session_name,
-                );
                 Ok(vec![ToolResult::Result {
                     data: json!({
                         "success": true,
@@ -2145,7 +2123,11 @@ Arguments:
                         "session_id": session_id,
                         "session_name": session_name,
                     }),
-                    result_for_assistant: Some(result_for_assistant),
+                    result_for_assistant: Some(session_control_renamed_result_message(
+                        session_id,
+                        &workspace.display_workspace,
+                        session_name,
+                    )),
                     image_attachments: None,
                 }])
             }

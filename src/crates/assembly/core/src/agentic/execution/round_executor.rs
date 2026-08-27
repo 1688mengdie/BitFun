@@ -305,7 +305,8 @@ impl RoundExecutor {
         #[cfg(not(feature = "subscription-auth"))]
         {
             let _ = context;
-            Ok(false)
+            #[allow(clippy::needless_return)]
+            return Ok(false);
         }
         #[cfg(feature = "subscription-auth")]
         {

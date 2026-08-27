@@ -300,7 +300,9 @@ const AssistantDefaultsPage: React.FC = () => {
           const defaultsMatch = modeConf.default_tools.every((name) => modeConf.enabled_tools.includes(name))
             && modeConf.enabled_tools.every((name) => modeConf.default_tools.includes(name));
           if (defaultsMatch) {
-            const selectable = tools.filter((tool) => isUserSelectableToolName(tool.name));
+            // `tools` here refers to the selectable tool list; use the memoized
+            // user-selectable set (identical semantics to the original intent).
+            const selectable = userSelectableTools;
             const enabledSet = new Set(modeConf.enabled_tools);
             let changed = false;
             for (const tool of selectable) {

@@ -34,6 +34,62 @@ pub mod tray;
 mod webview_recovery;
 mod window_state_support;
 
+// ---------------------------------------------------------------------------
+// Unified config root (`BITFUN_CONFIG_ROOT`) helpers.
+//
+// When `BITFUN_CONFIG_ROOT` is set, the Tauri-level directories that would
+// otherwise be derived from the app identifier (`app_data_dir`,
+// `app_cache_dir`, `local_data_dir`) are routed onto the unified root so a
+// custom instance never touches the official baseline (`%APPDATA%`,
+// `%LOCALAPPDATA%`). When the env var is unset, every helper falls back to
+// Tauri's identifier-derived defaults, so behaviour is unchanged (no
+// regression). identifier isolation is already provided by the `.dev` bundle
+// suffix used by the dev config (`tauri.dev.conf.json`).
+// ---------------------------------------------------------------------------
+
+/// Resolve the unified config root (`BITFUN_CONFIG_ROOT`), if set and non-empty.
+pub(crate) fn config_root_env() -> Option<std::path::PathBuf> {
+    std::env::var_os("BITFUN_CONFIG_ROOT")
+        .filter(|value| !value.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// Best-effort creation of the config-root derived storage directories.
+/// Only creates directories when a config root is configured.
+pub(crate) fn ensure_config_root_dirs() {
+    if let Some(root) = config_root_env() {
+        for sub in [
+            "user",
+            "home",
+            "skills",
+            "app_data",
+            "app_cache",
+            "local_data",
+        ] {
+            let _ = std::fs::create_dir_all(root.join(sub));
+        }
+    }
+}
+
+/// `app_data_dir` replacement: `<config_root>/app_data`, or Tauri's default when
+/// no config root is configured.
+pub(crate) fn app_data_dir<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<std::path::PathBuf> {
+    Ok(config_root_env()
+        .map(|root| root.join("app_data"))
+        .unwrap_or(app.path().app_data_dir()?))
+}
+
+/// `app_cache_dir` replacement: `<config_root>/app_cache`, or Tauri's default.
+pub(crate) fn app_cache_dir<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> tauri::Result<std::path::PathBuf> {
+    Ok(config_root_env()
+        .map(|root| root.join("app_cache"))
+        .unwrap_or(app.path().app_cache_dir()?))
+}
+
 use bitfun_agent_runtime::sdk::{attach_session_event_cursor, SessionEventJournal};
 use bitfun_core::agentic::tools::computer_use_capability::set_computer_use_desktop_available;
 use bitfun_core::agentic::tools::computer_use_host::ComputerUseHostRef;
@@ -936,6 +992,9 @@ pub async fn run() {
         })
         .setup(move |app| {
             let setup_started = Instant::now();
+            // Ensure the config-root derived storage directories exist before the
+            // first webview populates its WebView2 user-data root.
+            ensure_config_root_dirs();
             startup_trace.record_phase("tauri_setup_start", "native_setup");
             #[cfg(target_os = "macos")]
             {

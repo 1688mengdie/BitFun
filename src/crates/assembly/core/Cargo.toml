@@ -250,6 +250,10 @@ agent-runtime = [
     "tool-packs",
     "tools-basic",
     "tools-agent-control",
+    # SessionControl create-with-worktree path (U-15/U-23 lesson: feature-combo
+    # completeness — the tool body unconditionally references
+    # service::worktree + service::git, so the agent-runtime facade must pull them).
+    "git",
     "tokio/io-util",
     "tokio/macros",
     "tokio/rt",

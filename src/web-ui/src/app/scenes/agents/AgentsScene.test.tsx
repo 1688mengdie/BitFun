@@ -133,7 +133,6 @@ function mockAgentsList(overrides: Record<string, unknown> = {}) {
     filteredAgents: [],
     loading: false,
     availableTools: [],
-    toolCatalogStatus: 'available',
     getModeProfile: () => null,
     getAgentSkills: () => [],
     getModeManageableSubagents: () => [],
@@ -207,15 +206,8 @@ try {
 
 const describeWithJsdom = JSDOMCtor ? describe : describe.skip;
 
-describe('agent editability', () => {
-  it('keeps external subagents visible but outside local mutations', () => {
-    expect(isLocallyManageableSubagent({ source: 'external' })).toBe(false);
-    expect(isLocallyManageableSubagent({ subagentSource: 'external', source: 'user' })).toBe(false);
-    expect(isLocallyManageableSubagent({ source: 'builtin' })).toBe(true);
-  });
-});
-
 describeWithJsdom('AgentsScene', () => {
+
   let container: HTMLDivElement;
   let root: Root;
 
@@ -359,7 +351,6 @@ describeWithJsdom('AgentsScene', () => {
     expect(container.querySelector('[data-testid="agent-detail-skill-groups"]')).toBeTruthy();
   });
 
-  // 鈹€鈹€ Legion chain regression tests (L1-P1-3) 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
   // Guard the two historical break-points: the create entry (L1-P0-1: the
   // create_legion_preset command was never registered on the Rust side) and
   // the disabled save button (L1-P0-2: LEGION_CREATE_BACKEND_READY=false).

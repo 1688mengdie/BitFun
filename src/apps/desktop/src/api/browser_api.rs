@@ -155,6 +155,12 @@ pub async fn browser_webview_create(
         builder
     };
 
+    let mut builder = builder;
+    // Route the WebView2 user-data (EBWebView) root onto the unified config root.
+    if let Some(root) = crate::config_root_env() {
+        builder = builder.data_directory(root.join("local_data"));
+    }
+
     let webview = window
         .add_child(
             builder,

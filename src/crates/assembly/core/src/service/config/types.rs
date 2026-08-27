@@ -2628,7 +2628,8 @@ pub fn default_legion_deploy_frequency_per_hour() -> usize {
 /// 消化 1-2 轮）远低于此值，行为零变化。
 ///
 /// 上游语义融合（4c68f1c2b "honor configured max rounds"）：`0` 表示关闭固定
-/// 轮数上限；本地默认保持主人定标 50，显式设 0 时同样获得无限制语义。
+/// 轮数上限（reached_fixed_model_round_limit: max_rounds>0 才生效）；本地默认
+/// 保持主人定标 50（有限上限），显式设 0 时同样获得无限制语义。
 pub const DEFAULT_MAX_ROUNDS: usize = 50;
 
 fn default_max_rounds() -> usize {

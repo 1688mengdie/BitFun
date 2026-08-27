@@ -54,9 +54,7 @@ fn file_url_for_export_html<R: tauri::Runtime>(
     app: &AppHandle<R>,
     html: &str,
 ) -> Result<(tauri::Url, PathBuf), String> {
-    let cache_dir = app
-        .path()
-        .app_cache_dir()
+    let cache_dir = crate::app_cache_dir(app)
         .map_err(|error| format!("Failed to resolve app cache dir: {error}"))?;
     let export_dir = cache_dir.join("miniapp-slide-export");
     std::fs::create_dir_all(&export_dir)
@@ -89,7 +87,13 @@ fn ensure_export_host_window<R: tauri::Runtime>(
     let blank = "about:blank"
         .parse::<tauri::Url>()
         .map_err(|error| format!("Invalid blank URL: {error}"))?;
-    let window = WebviewWindowBuilder::new(app, EXPORT_HOST_LABEL, WebviewUrl::External(blank))
+    let mut export_builder =
+        WebviewWindowBuilder::new(app, EXPORT_HOST_LABEL, WebviewUrl::External(blank));
+    // Route the WebView2 user-data (EBWebView) root onto the unified config root.
+    if let Some(root) = crate::config_root_env() {
+        export_builder = export_builder.data_directory(root.join("local_data"));
+    }
+    let window = export_builder
         .visible(false)
         .inner_size(width as f64, height as f64)
         .decorations(false)

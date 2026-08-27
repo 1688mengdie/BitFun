@@ -210,6 +210,15 @@ fn validate_mutating_action_target(
     if input.session_name.is_some() && !matches!(action, SessionControlAction::Rename) {
         return invalid("session_name is only allowed for create");
     }
+    // `rename` requires a non-empty new title (upstream 4c68f1c2b rename action).
+    if matches!(action, SessionControlAction::Rename) {
+        let Some(session_name) = input.session_name.as_deref() else {
+            return invalid("session_name is required for rename");
+        };
+        if session_name.trim().is_empty() {
+            return invalid("session_name must not be empty for rename");
+        }
+    }
     if input.short_name.is_some() {
         return invalid("short_name is only allowed for create");
     }

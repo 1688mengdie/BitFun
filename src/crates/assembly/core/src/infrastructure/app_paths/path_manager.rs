@@ -118,6 +118,21 @@ impl PathManager {
             .filter(|path| !path.as_os_str().is_empty())
     }
 
+    /// Resolve the unified configuration root (`BITFUN_CONFIG_ROOT`).
+    ///
+    /// When set, every storage layer is derived from this root so a custom
+    /// instance keeps all user data / config / runtime artifacts isolated from
+    /// the official baseline and from other instances:
+    ///   - user_root -> `<root>/user`
+    ///   - bitfun_home -> `<root>/home`
+    ///   - user_skills_dir -> `<root>/skills`
+    ///   - temp fallback -> `<root>/user`
+    ///
+    /// When unset, the legacy default layout is used unchanged (no regression).
+    fn config_root() -> Option<PathBuf> {
+        Self::env_path("BITFUN_CONFIG_ROOT")
+    }
+
     fn env_flag_enabled(name: &str) -> bool {
         matches!(
             env::var(name).ok().as_deref(),
@@ -150,6 +165,10 @@ impl PathManager {
     /// - macOS: ~/Library/Application Support/bitfun/
     /// - Linux: ~/.config/bitfun/
     fn get_user_config_root() -> BitFunResult<PathBuf> {
+        if let Some(root) = Self::config_root() {
+            return Ok(root.join("user"));
+        }
+
         if let Some(path) =
             Self::env_path("BITFUN_USER_ROOT").or_else(|| Self::env_path("BITFUN_E2E_USER_ROOT"))
         {
@@ -163,7 +182,9 @@ impl PathManager {
     }
 
     fn get_bitfun_home_override() -> Option<PathBuf> {
-        Self::env_path("BITFUN_HOME").or_else(|| Self::env_path("BITFUN_E2E_HOME"))
+        Self::config_root()
+            .map(|root| root.join("home"))
+            .or_else(|| Self::env_path("BITFUN_HOME").or_else(|| Self::env_path("BITFUN_E2E_HOME")))
     }
 
     /// Get assistant home root directory: ~/.bitfun/
@@ -297,7 +318,16 @@ impl PathManager {
     /// - Windows: C:\Users\xxx\AppData\Roaming\BitFun\skills\
     /// - macOS: ~/Library/Application Support/BitFun/skills/
     /// - Linux: ~/.local/share/BitFun/skills/
+    ///
+    /// When `BITFUN_CONFIG_ROOT` is set this is derived from the unified root
+    /// (`<root>/skills`) instead of the hardcoded `BitFun/skills` under the OS
+    /// data dir, which is the primary leak that previously escaped
+    /// `user_root`/`bitfun_home` redirection.
     pub fn user_skills_dir(&self) -> PathBuf {
+        if let Some(root) = Self::config_root() {
+            return root.join("skills");
+        }
+
         if cfg!(target_os = "windows") {
             dirs::data_dir()
                 .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"))
@@ -696,7 +726,9 @@ impl Default for PathManager {
                     e
                 );
                 Self {
-                    user_root: std::env::temp_dir().join("bitfun"),
+                    user_root: Self::config_root()
+                        .map(|root| root.join("user"))
+                        .unwrap_or_else(|| std::env::temp_dir().join("bitfun")),
                     bitfun_home_override: Self::get_bitfun_home_override(),
                     project_runtime_slug_cache: Arc::new(Mutex::new(HashMap::new())),
                 }
@@ -989,6 +1021,36 @@ mod tests {
         assert_eq!(pm.user_data_dir(), user_root.join("data"));
         assert_eq!(pm.logs_dir(), user_root.join("config").join("logs"));
         assert_eq!(pm.bitfun_home_dir(), home_root);
+    }
+
+    #[test]
+    fn config_root_derives_user_home_skills_and_temp_layers() {
+        let _guard = ENV_LOCK.lock().expect("env lock poisoned");
+        let _env_guard = EnvVarGuard::capture([
+            "BITFUN_CONFIG_ROOT",
+            "BITFUN_USER_ROOT",
+            "BITFUN_E2E_USER_ROOT",
+            "BITFUN_HOME",
+            "BITFUN_E2E_HOME",
+        ]);
+        let root = std::env::temp_dir().join("bitfun-config-root-test");
+
+        std::env::remove_var("BITFUN_USER_ROOT");
+        std::env::remove_var("BITFUN_E2E_USER_ROOT");
+        std::env::remove_var("BITFUN_HOME");
+        std::env::remove_var("BITFUN_E2E_HOME");
+        std::env::set_var("BITFUN_CONFIG_ROOT", &root);
+
+        let pm = PathManager::new().expect("path manager should honor config root");
+        // Layer 1: user_root and bitfun_home (and their child dirs) all live on the root.
+        assert_eq!(pm.user_config_dir(), root.join("user").join("config"));
+        assert_eq!(pm.user_data_dir(), root.join("user").join("data"));
+        assert_eq!(pm.logs_dir(), root.join("user").join("config").join("logs"));
+        assert_eq!(pm.bitfun_home_dir(), root.join("home"));
+        assert_eq!(pm.projects_root(), root.join("home").join("projects"));
+        // Layer 1 skills: the hardcoded `BitFun/skills` leak is now derived from the root.
+        assert_eq!(pm.user_skills_dir(), root.join("skills"));
+        assert_eq!(pm.builtin_skills_dir(), root.join("skills").join(".system"));
     }
 
     #[test]

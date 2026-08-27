@@ -1676,7 +1676,8 @@ impl ConversationCoordinator {
                 binding = binding.with_project_root_path(PathBuf::from(project_workspace_path));
             }
             binding = binding.with_execution_target(config.execution_target.clone());
-            Some(binding)
+            #[allow(clippy::needless_return)]
+            return Some(binding);
         }
 
         #[cfg(feature = "remote-workspace")]
@@ -13859,6 +13860,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
                         message: follow_up_message,
+                        output_schema: None,
                         original_message: None,
                         turn_id: None,
                         execution: Default::default(),
@@ -13873,7 +13875,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         prepended_reminders: Vec::new(),
                         attachments: Vec::new(),
                         metadata: serde_json::Map::new(),
-                        output_schema: None,
                     })
                     .await;
 
@@ -14037,6 +14038,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     .submit_dialog_turn(AgentDialogTurnRequest {
                         session_id: subagent_parent_info_for_emit.session_id.clone(),
                         message: follow_up_message,
+                        output_schema: None,
                         original_message: None,
                         turn_id: None,
                         execution: Default::default(),
@@ -14051,7 +14053,6 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         prepended_reminders: Vec::new(),
                         attachments: Vec::new(),
                         metadata: serde_json::Map::new(),
-                        output_schema: None,
                     })
                     .await;
             }

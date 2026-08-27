@@ -2315,6 +2315,7 @@ async fn workspace_instruction_digest(
     if external_sources {
         let loaded =
             crate::instruction_sources::load_local_user_instruction_files(workspace_root).await;
+
         let mut names: BTreeMap<String, String> = BTreeMap::new();
         for file in loaded.files {
             names.insert(file.name.clone(), file.content.clone());
