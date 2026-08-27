@@ -54,19 +54,51 @@ impl Usage {
     }
 }
 
-impl From<Usage> for UnifiedTokenUsage {
-    fn from(value: Usage) -> Self {
-        let cache_read = value.cache_read_input_tokens;
-        let cache_creation = value.cache_creation_input_tokens;
+/// How the wire's `input_tokens` field should be interpreted when folding a
+/// provider usage block into the unified token usage.
+///
+/// - `Native`: real Anthropic semantics — `input_tokens` counts only the
+///   uncached portion and is disjoint from `cache_read_input_tokens` /
+///   `cache_creation_input_tokens`, so the three must be summed to obtain the
+///   total-context "input tokens" metric.
+/// - `NonNative`: backend that merely speaks the Anthropic wire format (e.g.
+///   Zhipu/GLM behind an Anthropic-compatible gateway). These backends report
+///   `input_tokens` as the FULL prompt (already including cached tokens), so
+///   adding cache components again would double-count input. Their hit-rate
+///   denominator is simply `input_tokens` as reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnthropicUsageSemantics {
+    #[default]
+    Native,
+    NonNative,
+}
 
-        // prompt_token_count = total context tokens occupied (industry-standard
-        // "input tokens" metric). For Anthropic this is the three disjoint
-        // components summed; for other providers the API reports this directly.
-        let prompt_token_count =
-            value.input_tokens.unwrap_or(0) + cache_read.unwrap_or(0) + cache_creation.unwrap_or(0);
-        let candidates_token_count = value.output_tokens.unwrap_or(0);
+impl Usage {
+    /// Fold this usage into a [`UnifiedTokenUsage`] under the given
+    /// interpretation of `input_tokens`. See [`AnthropicUsageSemantics`].
+    pub fn into_unified(self, semantics: AnthropicUsageSemantics) -> UnifiedTokenUsage {
+        let cache_read = self.cache_read_input_tokens;
+        let cache_creation = self.cache_creation_input_tokens;
 
-        Self {
+        let prompt_token_count = match semantics {
+            AnthropicUsageSemantics::Native => {
+                // prompt_token_count = total context tokens occupied
+                // (industry-standard "input tokens" metric). For native
+                // Anthropic the three fields are disjoint and must be summed.
+                self.input_tokens.unwrap_or(0)
+                    + cache_read.unwrap_or(0)
+                    + cache_creation.unwrap_or(0)
+            }
+            AnthropicUsageSemantics::NonNative => {
+                // The wire field already covers fresh + cached prompt tokens;
+                // keep it verbatim so the downstream hit rate denominator is
+                // the full prompt rather than an inflated sum.
+                self.input_tokens.unwrap_or(0)
+            }
+        };
+        let candidates_token_count = self.output_tokens.unwrap_or(0);
+
+        UnifiedTokenUsage {
             prompt_token_count,
             candidates_token_count,
             total_token_count: prompt_token_count + candidates_token_count,
@@ -77,6 +109,12 @@ impl From<Usage> for UnifiedTokenUsage {
             cached_content_token_count: cache_read,
             cache_creation_token_count: cache_creation,
         }
+    }
+}
+
+impl From<Usage> for UnifiedTokenUsage {
+    fn from(value: Usage) -> Self {
+        value.into_unified(AnthropicUsageSemantics::Native)
     }
 }
 
@@ -92,23 +130,29 @@ pub struct MessageDeltaDelta {
     pub stop_sequence: Option<String>,
 }
 
-impl From<MessageDelta> for UnifiedResponse {
-    fn from(value: MessageDelta) -> Self {
-        Self {
+impl MessageDelta {
+    pub fn into_unified_response(self, semantics: AnthropicUsageSemantics) -> UnifiedResponse {
+        UnifiedResponse {
             text: None,
             reasoning_content: None,
             thinking_signature: None,
             tool_call: None,
-            usage: value.usage.map(UnifiedTokenUsage::from),
-            tool_call_completion: value
+            usage: self.usage.map(|usage| usage.into_unified(semantics)),
+            tool_call_completion: self
                 .delta
                 .stop_reason
                 .as_deref()
                 .map(map_anthropic_stop_reason),
-            finish_reason: value.delta.stop_reason,
+            finish_reason: self.delta.stop_reason,
             provider_metadata: None,
             model_response_replay: None,
         }
+    }
+}
+
+impl From<MessageDelta> for UnifiedResponse {
+    fn from(value: MessageDelta) -> Self {
+        value.into_unified_response(AnthropicUsageSemantics::Native)
     }
 }
 
@@ -263,6 +307,54 @@ mod tests {
         // Hit rate computed by downstream:
         //   30 / 150 == 20% (correct: only reads count as hits)
         // Pre-fix this would have been wrongly 50/150 == 33%.
+    }
+
+    #[test]
+    fn non_native_backend_keeps_input_verbatim() {
+        // Non-native backends speaking the Anthropic wire format (e.g. Zhipu
+        // GLM behind an Anthropic-compatible gateway) report `input_tokens` as
+        // the FULL prompt — already including cached tokens. Adding the cache
+        // components again would double-count input and halve the displayed
+        // hit rate.
+        let raw = r#"{
+            "input_tokens": 254638,
+            "output_tokens": 924,
+            "cache_read_input_tokens": 126848,
+            "cache_creation_input_tokens": null
+        }"#;
+        let usage: Usage = serde_json::from_str(raw).expect("valid non-native usage");
+        let unified =
+            usage.into_unified(AnthropicUsageSemantics::NonNative);
+
+        // prompt stays verbatim: fresh 127790 + cached 126848 = 254638.
+        assert_eq!(unified.prompt_token_count, 254_638);
+        assert_eq!(unified.candidates_token_count, 924);
+        assert_eq!(unified.total_token_count, 255_562);
+
+        // Numerator semantics unchanged: reads only, writes separate.
+        assert_eq!(unified.cached_content_token_count, Some(126_848));
+        assert_eq!(unified.cache_creation_token_count, None);
+
+        // Downstream hit rate = 126848 / 254638 ≈ 49.8% — matches the vendor's
+        // own cached/total view of this sample instead of the inflated 99.7%
+        // double-counted reading.
+    }
+
+    #[test]
+    fn native_semantics_preserved_by_default_ctor_and_explicit_flag() {
+        let raw = r#"{
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_read_input_tokens": 30,
+            "cache_creation_input_tokens": 20
+        }"#;
+        let usage: Usage = serde_json::from_str(raw).expect("valid anthropic usage");
+
+        let via_from: UnifiedTokenUsage = usage.clone().into();
+        assert_eq!(via_from.prompt_token_count, 150);
+
+        let via_flag = usage.into_unified(AnthropicUsageSemantics::Native);
+        assert_eq!(via_flag.prompt_token_count, 150);
     }
 
     #[test]

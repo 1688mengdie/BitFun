@@ -2,8 +2,8 @@ use super::inline_think::InlineThinkParser;
 use super::stream_stats::StreamStats;
 use super::{next_stream_item, StreamTimeoutController, StreamTimeoutStage, TimedStreamItem};
 use crate::stream::types::anthropic::{
-    AnthropicSSEError, ContentBlock, ContentBlockDelta, ContentBlockStart, MessageDelta,
-    MessageStart, Usage,
+    AnthropicUsageSemantics, AnthropicSSEError, ContentBlock, ContentBlockDelta,
+    ContentBlockStart, MessageDelta, MessageStart, Usage,
 };
 use crate::stream::types::unified::UnifiedResponse;
 use anyhow::{anyhow, Result};
@@ -22,6 +22,12 @@ const AI_STREAM_RESPONSE_TARGET: &str = "ai::anthropic_stream_response";
 /// * `response` - HTTP response
 /// * `tx_event` - parsed event sender
 /// * `tx_raw_sse` - optional raw SSE sender (collect raw data for diagnostics)
+/// * `inline_think_in_text` - parse `<think>` tags inside text deltas
+/// * `ttft_timeout` / `idle_timeout` - stream timeouts
+/// * `usage_semantics` - how the wire's `input_tokens` should be folded; see
+///   [`AnthropicUsageSemantics`]. Native Anthropic reports disjoint
+///   input/cache components; non-native backends speaking the same wire format
+///   report `input_tokens` as the full prompt already.
 pub async fn handle_anthropic_stream(
     response: Response,
     tx_event: mpsc::UnboundedSender<Result<UnifiedResponse>>,
@@ -29,6 +35,27 @@ pub async fn handle_anthropic_stream(
     inline_think_in_text: bool,
     ttft_timeout: Option<Duration>,
     idle_timeout: Option<Duration>,
+) {
+    handle_anthropic_stream_with_usage_semantics(
+        response,
+        tx_event,
+        tx_raw_sse,
+        inline_think_in_text,
+        ttft_timeout,
+        idle_timeout,
+        AnthropicUsageSemantics::Native,
+    )
+    .await;
+}
+
+pub async fn handle_anthropic_stream_with_usage_semantics(
+    response: Response,
+    tx_event: mpsc::UnboundedSender<Result<UnifiedResponse>>,
+    tx_raw_sse: Option<mpsc::UnboundedSender<String>>,
+    inline_think_in_text: bool,
+    ttft_timeout: Option<Duration>,
+    idle_timeout: Option<Duration>,
+    usage_semantics: AnthropicUsageSemantics,
 ) {
     let mut stream = response.bytes_stream().eventsource();
     let mut usage = Usage::default();
@@ -198,7 +225,8 @@ pub async fn handle_anthropic_stream(
                 } else {
                     Some(usage.clone())
                 };
-                let unified_response = UnifiedResponse::from(message_delta);
+                let unified_response = message_delta
+                    .into_unified_response(usage_semantics);
                 if unified_response.finish_reason.is_some() {
                     received_finish_reason = true;
                 }

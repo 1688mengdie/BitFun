@@ -2,6 +2,7 @@ mod stream_handler;
 pub mod types;
 
 pub use stream_handler::handle_anthropic_stream;
+pub use stream_handler::handle_anthropic_stream_with_usage_semantics;
 pub use stream_handler::handle_gemini_stream;
 pub use stream_handler::handle_responses_stream;
 pub use stream_handler::{handle_openai_stream, handle_qoder_stream};
