@@ -235,6 +235,10 @@ agent-runtime = [
     "bitfun-services-core/session-git",
     "bitfun-services-core/token-usage-statistics",
     "filesystem",
+    # Local fork (U-23/K18): session_control_tool references service::git /
+    # service::worktree unconditionally, which upstream only builds under the
+    # `git` feature. Mirror B1 dev fix so the agent-runtime facade compiles.
+    "git",
     "local-storage",
     "process-runtime",
     "terminal",

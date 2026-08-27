@@ -155,6 +155,7 @@ pub(crate) fn apply_implicit_thread_goal_policy(
     tools
 }
 
+#[allow(clippy::too_many_arguments)]
 fn stored_agent_profile_from_tool_selection(
     agent_id: &str,
     enabled_tools: Vec<String>,

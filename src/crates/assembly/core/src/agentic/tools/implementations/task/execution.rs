@@ -1026,6 +1026,7 @@ impl TaskTool {
                             prepended_reminders: Vec::new(),
                             attachments: Vec::new(),
                             metadata: serde_json::Map::new(),
+                            output_schema: None,
                         })
                         .await
                     {

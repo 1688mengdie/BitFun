@@ -2718,6 +2718,7 @@ impl SessionMessageTool {
                     prepended_reminders: prepended_messages,
                     attachments: Vec::new(),
                     metadata: forwarded_metadata,
+                    output_schema: None,
                 })
                 .await
                 .map_err(|error| {

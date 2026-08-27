@@ -146,8 +146,7 @@ impl AgentRegistry {
                     resolved_tools.clone(),
                     &registered_tool_names,
                 );
-                let allowed_tools =
-                    merge_dynamic_mcp_tools(allowed_tools, &registered_tool_names);
+                let allowed_tools = merge_dynamic_mcp_tools(allowed_tools, &registered_tool_names);
                 // R-WF-16: globally disabled tools (including dynamic MCP tools)
                 // must never be admitted even when merged into the visible set.
                 let allowed_tools = crate::agentic::tools::implementations::tools::mode_overrides::filter_globally_disabled_tools(

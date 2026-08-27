@@ -2083,6 +2083,8 @@ impl ExecutionEngine {
             scope_key = format!("{scope_key}|remote:{connection}");
         }
         let external_sources = crate::service::config::external_instruction_sources_enabled();
+        #[cfg(not(feature = "external-sources"))]
+        let _ = external_sources;
         scope_key = format!(
             "{scope_key}|extsrc:{}",
             if external_sources { "on" } else { "off" }
@@ -2272,8 +2274,9 @@ impl ExecutionEngine {
 /// fresh content is re-read on the miss path.
 async fn workspace_instruction_digest(
     workspace_root: &std::path::Path,
-    external_sources: bool,
+    #[cfg_attr(not(feature = "external-sources"), allow(unused_variables))] external_sources: bool,
 ) -> String {
+    #[cfg(feature = "external-sources")]
     use std::collections::BTreeMap;
 
     let mut digest_input = String::new();
@@ -2308,6 +2311,7 @@ async fn workspace_instruction_digest(
     // User-level external instruction sources (~/.claude/CLAUDE.md, OpenCode
     // AGENTS.md, Codex AGENTS.md, rules/) — only when the master switch is on,
     // mirroring the render path in service::instruction_context.
+    #[cfg(feature = "external-sources")]
     if external_sources {
         let loaded =
             crate::instruction_sources::load_local_user_instruction_files(workspace_root).await;

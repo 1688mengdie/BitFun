@@ -305,7 +305,7 @@ impl RoundExecutor {
         #[cfg(not(feature = "subscription-auth"))]
         {
             let _ = context;
-            return Ok(false);
+            Ok(false)
         }
         #[cfg(feature = "subscription-auth")]
         {

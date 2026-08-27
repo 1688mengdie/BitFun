@@ -1676,7 +1676,7 @@ impl ConversationCoordinator {
                 binding = binding.with_project_root_path(PathBuf::from(project_workspace_path));
             }
             binding = binding.with_execution_target(config.execution_target.clone());
-            return Some(binding);
+            Some(binding)
         }
 
         #[cfg(feature = "remote-workspace")]
@@ -13873,6 +13873,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         prepended_reminders: Vec::new(),
                         attachments: Vec::new(),
                         metadata: serde_json::Map::new(),
+                        output_schema: None,
                     })
                     .await;
 
@@ -14050,6 +14051,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                         prepended_reminders: Vec::new(),
                         attachments: Vec::new(),
                         metadata: serde_json::Map::new(),
+                        output_schema: None,
                     })
                     .await;
             }

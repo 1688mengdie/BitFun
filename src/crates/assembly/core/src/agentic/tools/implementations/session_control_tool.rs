@@ -146,10 +146,31 @@ impl SessionControlTool {
         runtime: &AgentRuntime,
     ) -> BitFunResult<SessionControlWorkspaceTarget> {
         match action {
+            SessionControlAction::Rename => {
+                // Rename resolves the target session's own binding; an
+                // explicit workspace param is not part of the rename contract.
+                let session_id = session_id.ok_or_else(|| {
+                    BitFunError::tool("session_id is required for rename".to_string())
+                })?;
+                if let Some(binding) = runtime
+                    .resolve_session_workspace_binding(AgentSessionWorkspaceRequest {
+                        session_id: session_id.to_string(),
+                    })
+                    .await
+                    .map_err(|error| {
+                        BitFunError::tool(CoreServiceAgentRuntime::runtime_error_message(error))
+                    })?
+                {
+                    return Ok(Self::workspace_target_from_binding(binding));
+                }
+                Err(BitFunError::NotFound(format!(
+                    "Workspace for session '{}' could not be resolved",
+                    session_id
+                )))
+            }
             SessionControlAction::Cancel
             | SessionControlAction::Delete
-            | SessionControlAction::Compact
-            | SessionControlAction::Rename => {
+            | SessionControlAction::Compact => {
                 let session_id = session_id.ok_or_else(|| {
                     BitFunError::tool(format!("session_id is required for {}", action.as_str()))
                 })?;
@@ -2085,6 +2106,7 @@ Arguments:
                     .resolve_effective_workspace(
                         SessionControlAction::Rename,
                         Some(session_id),
+                        None,
                         context,
                         &runtime,
                     )
@@ -2400,74 +2422,6 @@ Arguments:
                         "Compacted session '{session_id}' in workspace '{}'.",
                         workspace.display_workspace
                     )),
-                    image_attachments: None,
-                }])
-            }
-            SessionControlAction::Rename => {
-                let session_id = params.session_id.as_deref().ok_or_else(|| {
-                    BitFunError::tool("session_id is required for rename".to_string())
-                })?;
-                validate_session_id(session_id).map_err(BitFunError::tool)?;
-                let session_name = params
-                    .session_name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .ok_or_else(|| {
-                        BitFunError::tool(
-                            "session_name is required and must not be empty for rename".to_string(),
-                        )
-                    })?;
-                let workspace = self
-                    .resolve_effective_workspace(
-                        SessionControlAction::Rename,
-                        Some(session_id),
-                        None,
-                        context,
-                        &runtime,
-                    )
-                    .await?;
-                if self.current_workspace_session(context, &workspace.display_workspace)
-                    == Some(session_id)
-                {
-                    return Err(BitFunError::tool(
-                        "cannot rename the current session from SessionControl".to_string(),
-                    ));
-                }
-
-                // 复用前端 renameChatSessionTitle 同一条重命名通道
-                // （AgentSessionManagementPort::rename_session），保证标题持久化
-                // 行为与桌面/前端一致。
-                runtime
-                    .rename_session(bitfun_runtime_ports::AgentSessionRenameRequest {
-                        workspace_path: workspace.display_workspace.clone(),
-                        session_id: session_id.to_string(),
-                        session_name: session_name.to_string(),
-                        remote_connection_id: workspace.remote_connection_id.clone(),
-                        remote_ssh_host: workspace.remote_ssh_host.clone(),
-                    })
-                    .await
-                    .map_err(|error| {
-                        BitFunError::tool(format!(
-                            "cannot rename session '{session_id}': {}",
-                            CoreServiceAgentRuntime::runtime_error_message(error)
-                        ))
-                    })?;
-
-                let result_for_assistant = session_control_renamed_result_message(
-                    session_id,
-                    &workspace.display_workspace,
-                    session_name,
-                );
-                Ok(vec![ToolResult::Result {
-                    data: json!({
-                        "success": true,
-                        "action": "rename",
-                        "workspace": workspace.display_workspace.clone(),
-                        "session_id": session_id,
-                        "session_name": session_name,
-                    }),
-                    result_for_assistant: Some(result_for_assistant),
                     image_attachments: None,
                 }])
             }
