@@ -9,6 +9,7 @@ import { MermaidService } from '../../../tools/mermaid-editor/services/MermaidSe
 import { mermaidAppearanceAdapter } from '@/infrastructure/appearance/adapters/MermaidAppearanceAdapter';
 import { Loader2, AlertCircle, Code2, Copy, Check } from 'lucide-react';
 import { createLogger } from '@/shared/utils/logger';
+import { sanitizeMermaidSvg } from './sanitizeMermaidSvg';
 import './MermaidBlock.scss';
 
 const log = createLogger('MermaidBlock');
@@ -206,7 +207,7 @@ export const MermaidBlock: React.FC<MermaidBlockProps> = ({
               className="mermaid-block__diagram"
               data-bf-component="mermaid-block"
               data-bf-part="diagram"
-              dangerouslySetInnerHTML={{ __html: svgContent }}
+              dangerouslySetInnerHTML={{ __html: sanitizeMermaidSvg(svgContent) }}
             />
             
             <div data-bf-component="mermaid-block" data-bf-part="actions" className="mermaid-block__actions">
