@@ -622,13 +622,24 @@ fn strip_terminal_sequences(input: &str) -> String {
     output
 }
 
+/// Cursor-position report the harness sends back when the CLI asks for its
+/// cursor position (CSI 6n device status report). Row and column are 1-based;
+/// the exact value only needs to be a well-formed CPR because the CLI clears
+/// the screen and every draw emits explicit cursor movement afterwards.
+const CURSOR_POSITION_REPORT: &[u8] = b"\x1b[1;1R";
+/// The DSR query the CLI emits (`ESC [ 6 n`).
+const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+/// Bytes kept from the end of a scanned chunk so a query split across read
+/// chunk boundaries is still reassembled and answered on the next chunk.
+const SPLIT_QUERY_CARRYOVER: usize = CURSOR_POSITION_QUERY.len() - 1;
+
 fn captured_output(captured: &Arc<Mutex<Vec<u8>>>) -> String {
     String::from_utf8_lossy(&captured.lock().expect("lock captured PTY output")).into_owned()
 }
 
 struct PtyProcess {
     master: Option<Box<dyn portable_pty::MasterPty + Send>>,
-    writer: Option<Box<dyn Write + Send>>,
+    writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     captured: Arc<Mutex<Vec<u8>>>,
     reader_thread: Option<thread::JoinHandle<()>>,
@@ -644,11 +655,15 @@ impl PtyProcess {
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
-        let writer = pair.master.take_writer().expect("take PTY writer");
+        let writer = Arc::new(Mutex::new(
+            pair.master.take_writer().expect("take PTY writer"),
+        ));
         let captured = Arc::new(Mutex::new(Vec::new()));
         let reader_capture = Arc::clone(&captured);
+        let reader_writer = Arc::clone(&writer);
         let reader_thread = thread::spawn(move || {
             let mut chunk = [0_u8; 4096];
+            let mut pending: Vec<u8> = Vec::new();
             while let Ok(read) = reader.read(&mut chunk) {
                 if read == 0 {
                     break;
@@ -657,6 +672,27 @@ impl PtyProcess {
                     .lock()
                     .expect("lock captured PTY output")
                     .extend_from_slice(&chunk[..read]);
+                // The CLI asks the terminal for its cursor position (CSI 6n) when
+                // ratatui snapshots it around a screen clear. No terminal emulator
+                // is attached to this PTY, so the harness answers on its behalf;
+                // otherwise crossterm blocks for two seconds and the startup draw
+                // fails with a cursor read timeout on unix.
+                pending.extend_from_slice(&chunk[..read]);
+                while let Some(offset) = find_subsequence(&pending, CURSOR_POSITION_QUERY) {
+                    let consumed = offset + CURSOR_POSITION_QUERY.len();
+                    pending.drain(..consumed);
+                    let mut reply_writer = reader_writer
+                        .lock()
+                        .expect("lock PTY writer for cursor reply");
+                    reply_writer
+                        .write_all(CURSOR_POSITION_REPORT)
+                        .expect("write cursor position report");
+                    reply_writer.flush().expect("flush cursor position report");
+                }
+                if pending.len() > SPLIT_QUERY_CARRYOVER {
+                    let keep_from = pending.len() - SPLIT_QUERY_CARRYOVER;
+                    pending.drain(..keep_from);
+                }
             }
         });
 
@@ -730,7 +766,8 @@ impl PtyProcess {
     }
 
     fn write(&mut self, bytes: &[u8]) {
-        let writer = self.writer.as_mut().expect("PTY writer");
+        let writer = self.writer.as_ref().expect("PTY writer");
+        let mut writer = writer.lock().expect("lock PTY writer");
         writer.write_all(bytes).expect("write terminal input");
         writer.flush().expect("flush terminal input");
     }
@@ -774,6 +811,13 @@ impl PtyProcess {
         }
         self.close_io();
     }
+}
+
+/// Returns the offset of the first occurrence of `needle` in `haystack`.
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 impl Drop for PtyProcess {
