@@ -126,7 +126,7 @@ jobs:
           cache-on-failure: ${{ inputs.cache_write && github.event_name != 'pull_request' }}
 
       - name: Verify committed Cargo metadata
-        run: cargo metadata --locked --no-deps
+        run: cargo metadata --locked --no-deps --format-version 1
 
       - name: Patch build version
         shell: bash
@@ -143,7 +143,7 @@ jobs:
           node scripts/set-build-version.mjs --version "$ASSET_VERSION"
 
       - name: Verify projected Cargo metadata
-        run: cargo metadata --locked --no-deps
+        run: cargo metadata --locked --no-deps --format-version 1
 
       - name: Build CLI and Relay Server
         shell: bash

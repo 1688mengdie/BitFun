@@ -158,7 +158,7 @@ jobs:
           cache-on-failure: ${{ inputs.cache_write && github.event_name != 'pull_request' }}
 
       - name: Verify committed Cargo metadata
-        run: cargo metadata --locked --no-deps
+        run: cargo metadata --locked --no-deps --format-version 1
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -204,7 +204,7 @@ jobs:
           echo "Cargo.toml version:   $(grep 'x-release-please-version' Cargo.toml)"
 
       - name: Verify projected Cargo metadata
-        run: cargo metadata --locked --no-deps
+        run: cargo metadata --locked --no-deps --format-version 1
 
       - name: Run Windows CLI terminal contracts
         if: runner.os == 'Windows'

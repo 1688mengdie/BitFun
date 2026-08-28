@@ -702,7 +702,7 @@ test('nightly validates generated inputs and projected lockfiles before packagin
       metadataIndex < buildIndex,
     'nightly must verify the projected lockfile before nested locked build hooks run',
   );
-  const expectedMetadata = 'cargo metadata --locked --no-deps';
+  const expectedMetadata = 'cargo metadata --locked --no-deps --format-version 1';
   assert.equal(steps[committedMetadataIndex].run, expectedMetadata);
   assert.equal(steps[metadataIndex].run, expectedMetadata);
   assert.equal(steps[installerI18nIndex].if, "runner.os == 'Windows'");
@@ -798,8 +798,8 @@ test('Linux binary packaging uses the shared locked version projection contract'
   );
   assert.match(steps[patchIndex].run, /node scripts\/set-build-version\.mjs/);
   assert.doesNotMatch(steps[patchIndex].run, /sed -i/);
-  assert.equal(steps[committedIndex].run, 'cargo metadata --locked --no-deps');
-  assert.equal(steps[projectedIndex].run, 'cargo metadata --locked --no-deps');
+  assert.equal(steps[committedIndex].run, 'cargo metadata --locked --no-deps --format-version 1');
+  assert.equal(steps[projectedIndex].run, 'cargo metadata --locked --no-deps --format-version 1');
   assert.match(steps[buildIndex].run, /cargo build --locked --release/);
   const rustCache = steps.find((step) =>
     step.uses?.startsWith('swatinem/rust-cache@'));
