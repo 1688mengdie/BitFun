@@ -12,7 +12,7 @@
 
 use super::coordinator::{
     background_subagent_follow_up_message_with_limit, configured_background_follow_up_text_limit,
-    session_storage_workspace_locator, ConversationCoordinator, DialogTriggerSource,
+    session_storage_workspace_locator, ConversationCoordinator,
     HiddenSubagentExecutionRequest, SubagentResult, SubagentResultStatus,
     BACKGROUND_FOLLOW_UP_TEXT_LIMIT,
 };
@@ -77,7 +77,7 @@ use bitfun_runtime_ports::{
 };
 pub use bitfun_runtime_ports::{
     AgentSessionReplyRoute, DialogQueuePriority, DialogSteerOutcome, DialogSubmissionPolicy,
-    DialogSubmitOutcome,
+    DialogTriggerSource, DialogSubmitOutcome,
 };
 
 /// Resolve the configured goal idle-wakeup delay
