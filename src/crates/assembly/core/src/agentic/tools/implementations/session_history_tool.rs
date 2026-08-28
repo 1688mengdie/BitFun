@@ -1,6 +1,9 @@
 use crate::agentic::tools::framework::{
     Tool, ToolExposure, ToolRenderOptions, ToolResult, ToolUseContext, ValidationResult,
 };
+use crate::agentic::tools::implementations::session_control_tool::{
+    resolve_session_read_authorization, SessionHistoryAuthOptions,
+};
 use crate::service::session::SessionTranscriptExportOptions;
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -218,12 +221,18 @@ Examples:
     async fn call_impl(
         &self,
         input: &Value,
-        _context: &ToolUseContext,
+        context: &ToolUseContext,
     ) -> BitFunResult<Vec<ToolResult>> {
         let params: SessionHistoryInput = serde_json::from_value(input.clone())
             .map_err(|e| BitFunError::tool(format!("Invalid input: {}", e)))?;
 
         let session_id = self.resolve_session_id(&params.session_id)?;
+        let caller_session_id = context.session_id.as_ref().ok_or_else(|| {
+            BitFunError::tool(
+                "cannot export a session transcript without a caller session in tool context"
+                    .to_string(),
+            )
+        })?;
         let (display_workspace, session_storage_dir) =
             CoreServiceAgentRuntime::resolve_session_workspace_paths(&session_id)
                 .await
@@ -238,6 +247,31 @@ Examples:
             crate::agentic::coordination::get_global_coordinator().ok_or_else(|| {
                 BitFunError::service("Core coordinator is unavailable for SessionHistory export")
             })?;
+        // Resolve the caller's own storage directory before authorizing. The
+        // caller session is always running, so its workspace binding should
+        // resolve; a failure is treated as a rejection (fail-closed) instead of
+        // falling back to a logical workspace root that could mismatch the
+        // target storage directory.
+        let caller_storage_dir =
+            CoreServiceAgentRuntime::resolve_session_workspace_paths(caller_session_id)
+                .await
+                .map(|(_, storage_dir)| storage_dir)
+                .ok_or_else(|| {
+                    BitFunError::tool(format!(
+                        "cannot export history of session '{}': caller session '{}' workspace could not be resolved",
+                        session_id, caller_session_id
+                    ))
+                })?;
+        resolve_session_read_authorization(
+            coordinator.get_session_manager(),
+            caller_session_id,
+            &caller_storage_dir,
+            &session_id,
+            &session_storage_dir,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await?;
         let transcript = coordinator
             .export_visible_persisted_session_transcript(
                 &session_storage_dir,

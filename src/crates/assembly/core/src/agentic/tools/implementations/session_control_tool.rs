@@ -694,6 +694,143 @@ Arguments:
     }
 }
 
+/// Options for the SessionHistory export authorization gate.
+///
+/// `allow_owner_bypass` lets the owner session (a top-level session with no
+/// creator, i.e. `created_by.is_none()`) export any transcript, mirroring the
+/// owner semantics of session deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionHistoryAuthOptions {
+    pub allow_owner_bypass: bool,
+}
+
+impl SessionHistoryAuthOptions {
+    pub(crate) const fn read() -> Self {
+        Self {
+            allow_owner_bypass: true,
+        }
+    }
+}
+
+/// Authorize a SessionHistory transcript export against the caller session.
+///
+/// Decision chain (fail-closed — `Err` rejects the export):
+/// 1. Same-workspace check: the caller and the target must share the same
+///    session storage directory; cross-workspace exports are always rejected.
+/// 2. Owner bypass: a top-level caller session (`created_by.is_none()`) may
+///    export any transcript in its workspace when allowed by the options.
+/// 3. Creator match: the target metadata `created_by` marker names the caller
+///    (`session-<caller_session_id>`).
+/// 4. In-tree ancestry: the caller is an ancestor of the target or the target
+///    is an ancestor of the caller (either direction inside one session tree).
+///    The chain is resolved from persisted session metadata
+///    (`relationship.parent_session_id`) with cycle protection, so a corrupt
+///    lineage cannot hang or bypass the gate.
+fn same_session_storage_dir(a: &std::path::Path, b: &std::path::Path) -> bool {
+    let canonical =
+        |path: &std::path::Path| dunce::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical(a) == canonical(b)
+}
+
+#[allow(clippy::too_many_arguments)] // full authorization context; kept flat for call-site clarity
+pub(crate) async fn resolve_session_read_authorization(
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    caller_session_id: &str,
+    caller_workspace_path: &std::path::Path,
+    target_session_id: &str,
+    target_workspace_path: &std::path::Path,
+    action_label: &str,
+    options: SessionHistoryAuthOptions,
+) -> BitFunResult<()> {
+    // Same-workspace containment: exporting a transcript from another
+    // workspace is rejected regardless of any other relationship.
+    if !same_session_storage_dir(caller_workspace_path, target_workspace_path) {
+        return Err(BitFunError::tool(format!(
+            "cannot {action_label} session '{target_session_id}': caller session '{caller_session_id}' belongs to a different workspace"
+        )));
+    }
+
+    // Owner bypass: a top-level session (no creator) is the workspace owner.
+    let caller_is_owner = options.allow_owner_bypass
+        && session_manager
+            .get_session(caller_session_id)
+            .is_some_and(|session| session.created_by.is_none());
+
+    // Creator match: the target was created by the caller session.
+    let created_by_match = session_manager
+        .load_session_metadata(target_workspace_path, target_session_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|metadata| metadata.created_by)
+        .is_some_and(|creator| creator == session_control_creator_marker(caller_session_id));
+
+    if caller_is_owner || created_by_match {
+        return Ok(());
+    }
+
+    // In-tree ancestry, both directions: ancestors may read descendants and
+    // descendants may read ancestors. Walk the persisted parent chain from
+    // each side with cycle protection (an empty or corrupt chain must not
+    // bypass the gate — fail-closed below).
+    let target_ancestors = collect_session_ancestor_chain(
+        session_manager,
+        target_workspace_path,
+        target_session_id,
+    )
+    .await;
+    if target_ancestors.iter().any(|id| id == caller_session_id) {
+        return Ok(());
+    }
+    let caller_ancestors = collect_session_ancestor_chain(
+        session_manager,
+        caller_workspace_path,
+        caller_session_id,
+    )
+    .await;
+    if caller_ancestors.iter().any(|id| id == target_session_id) {
+        return Ok(());
+    }
+
+    Err(BitFunError::tool(format!(
+        "session '{caller_session_id}' is not authorized to {action_label} session '{target_session_id}': not the owner, not the creator, and not in the same session tree (ancestor/descendant)"
+    )))
+}
+
+/// Collect the ancestor chain of a session from persisted session metadata
+/// (`relationship.parent_session_id`), nearest first. Cycle protection stops
+/// the walk on a corrupt lineage chain instead of hanging.
+async fn collect_session_ancestor_chain(
+    session_manager: &crate::agentic::session::session_manager::SessionManager,
+    workspace_path: &std::path::Path,
+    session_id: &str,
+) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(session_id.to_string());
+    let mut current = session_id.to_string();
+    loop {
+        let metadata = session_manager
+            .load_session_metadata(workspace_path, &current)
+            .await
+            .ok()
+            .flatten();
+        match metadata.and_then(|m| m.relationship.and_then(|r| r.parent_session_id)) {
+            Some(parent_id) => {
+                if !visited.insert(parent_id.clone()) {
+                    // Cycle detected; stop walking to avoid hanging on a
+                    // corrupt lineage chain.
+                    break;
+                }
+                ancestors.push(parent_id.clone());
+                current = parent_id;
+            }
+            None => break,
+        }
+    }
+    ancestors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -806,6 +943,368 @@ mod tests {
             validation.message.as_deref(),
             Some("session_id is required for cancel")
         );
+    }
+
+    // ---------------------------------------------------------------------
+    // SessionHistory read authorization gate
+    // (resolve_session_read_authorization) — attacker matrix:
+    // unrelated reject / owner bypass / created_by allow / ancestor->descendant
+    // allow / descendant->ancestor allow / sibling reject / cross-workspace
+    // reject / missing-metadata reject / fail-closed on unknown sessions.
+    // ---------------------------------------------------------------------
+
+    fn read_authz_session_manager()
+    -> std::sync::Arc<crate::agentic::session::session_manager::SessionManager> {
+        use crate::agentic::persistence::PersistenceManager;
+        use crate::agentic::session::session_manager::{SessionManager, SessionManagerConfig};
+        use crate::agentic::session::{PromptCachePolicy, SessionContextStore};
+        use crate::infrastructure::app_paths::path_manager::PathManager;
+        use std::sync::Arc;
+        let user_root =
+            std::env::temp_dir().join(format!("bitfun-read-authz-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&user_root).expect("test user root");
+        let path_manager = PathManager::with_user_root_for_tests(user_root);
+        let persistence =
+            PersistenceManager::new(Arc::new(path_manager)).expect("persistence manager");
+        Arc::new(SessionManager::new(
+            Arc::new(SessionContextStore::new()),
+            Arc::new(persistence),
+            SessionManagerConfig {
+                max_active_sessions: 100,
+                session_idle_timeout: Duration::from_secs(3600),
+                auto_save_interval: Duration::from_secs(300),
+                // Persistence stays enabled so the read-authorization gate can
+                // exercise its persisted-metadata paths (created_by, parent
+                // chain) through the same store used in production.
+                enable_persistence: true,
+                prompt_cache_policy: PromptCachePolicy::default(),
+            },
+        ))
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_unrelated_caller_without_metadata() {
+        // Attacker matrix A: not the owner, no created_by, no tree relation ->
+        // reject. The caller session exists but is not top-level (created_by is
+        // set), so only the creator/ancestor paths could authorize and both
+        // are absent.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-unrelated");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let mut caller = crate::agentic::core::SessionConfig::default();
+        caller.workspace_path = Some(workspace_string.clone());
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("caller-1".to_string()),
+                "Caller".to_string(),
+                "agentic".to_string(),
+                caller,
+                Some(session_control_creator_marker("another-root")),
+            )
+            .await
+            .expect("create caller session");
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("unrelated caller without metadata must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_created_by_match_allows_caller() {
+        // Attacker matrix C: created_by == session-<caller> -> allow.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-created-by");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let target_id = "target-1";
+        let metadata = crate::service::session::SessionMetadata::new(
+            target_id.to_string(),
+            "target".to_string(),
+            "agentic".to_string(),
+            "auto".to_string(),
+        );
+        let mut created_metadata = metadata.clone();
+        created_metadata.created_by = Some(session_control_creator_marker("caller-1"));
+        session_manager
+            .save_session_metadata(workspace_path, &created_metadata)
+            .await
+            .expect("save metadata");
+
+        resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            target_id,
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("creator should be authorized to read");
+    }
+
+    #[tokio::test]
+    async fn read_authz_ancestor_allows_caller_to_read_descendant() {
+        // Attacker matrix D: ancestor may export the descendant (persisted
+        // parent chain relationship).
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-ancestor");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        register_persisted_parent(&session_manager, workspace_path, "caller-1", "child-1")
+            .await;
+
+        resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "child-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("ancestor should be authorized to read descendant");
+    }
+
+    #[tokio::test]
+    async fn read_authz_descendant_allows_caller_to_read_ancestor() {
+        // Attacker matrix E: descendant may export the ancestor (read is
+        // bidirectional inside one session tree).
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-descendant");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        register_persisted_parent(&session_manager, workspace_path, "root-1", "caller-1")
+            .await;
+
+        resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "root-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("descendant should be authorized to read ancestor");
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_sibling_without_creator_link() {
+        // Attacker matrix F: siblings under one parent (no ancestor/descendant
+        // relation, not owner/creator) -> reject.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-sibling");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        register_persisted_parent(&session_manager, workspace_path, "root-1", "caller-1")
+            .await;
+        register_persisted_parent(&session_manager, workspace_path, "root-1", "target-1")
+            .await;
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("sibling sessions must not read each other");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_rejects_cross_workspace() {
+        // Attacker matrix G: caller and target live in different workspaces ->
+        // always reject. Cross-workspace export is the core isolation
+        // boundary.
+        let session_manager = read_authz_session_manager();
+        let caller_ws = TestTempDir::new("bitfun-read-authz-caller-ws");
+        let target_ws = TestTempDir::new("bitfun-read-authz-target-ws");
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            "read-authz-cross-ws",
+            std::path::Path::new(&caller_ws.as_string()),
+            "target-1",
+            std::path::Path::new(&target_ws.as_string()),
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("cross-workspace export must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("belongs to a different workspace"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_owner_bypass_allows_any_target_in_workspace() {
+        // Owner bypass: a top-level caller (created_by = None) may export any
+        // transcript within its own workspace.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-owner");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let mut caller = crate::agentic::core::SessionConfig::default();
+        caller.workspace_path = Some(workspace_string.clone());
+        session_manager
+            .create_session_with_id(
+                Some("caller-1".to_string()),
+                "Caller".to_string(),
+                "agentic".to_string(),
+                caller,
+            )
+            .await
+            .expect("create caller session");
+
+        resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "any-target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect("owner should be authorized to read any target in its workspace");
+    }
+
+    #[tokio::test]
+    async fn read_authz_owner_bypass_disabled_keeps_gate_closed() {
+        // With allow_owner_bypass = false the owner exemption is not applied
+        // and the gate stays closed for an unrelated caller.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-no-bypass");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let mut caller = crate::agentic::core::SessionConfig::default();
+        caller.workspace_path = Some(workspace_string.clone());
+        session_manager
+            .create_session_with_id(
+                Some("caller-1".to_string()),
+                "Caller".to_string(),
+                "agentic".to_string(),
+                caller,
+            )
+            .await
+            .expect("create caller session");
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions {
+                allow_owner_bypass: false,
+            },
+        )
+        .await
+        .expect_err("owner bypass disabled must keep the gate closed");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_authz_missing_metadata_fails_closed() {
+        // Fail-closed: without metadata (no created_by, no parent chain) the
+        // unrelated caller is rejected — an empty chain cannot be abused to
+        // bypass the gate.
+        let session_manager = read_authz_session_manager();
+        let workspace = TestTempDir::new("bitfun-read-authz-fail-closed");
+        let workspace_string = workspace.as_string();
+        let workspace_path = std::path::Path::new(&workspace_string);
+        let mut caller = crate::agentic::core::SessionConfig::default();
+        caller.workspace_path = Some(workspace_string.clone());
+        session_manager
+            .create_session_with_id_and_creator(
+                Some("caller-1".to_string()),
+                "Caller".to_string(),
+                "agentic".to_string(),
+                caller,
+                Some(session_control_creator_marker("someone-else")),
+            )
+            .await
+            .expect("create caller session");
+
+        let error = resolve_session_read_authorization(
+            &session_manager,
+            "caller-1",
+            workspace_path,
+            "target-1",
+            workspace_path,
+            "export history of",
+            SessionHistoryAuthOptions::read(),
+        )
+        .await
+        .expect_err("missing target metadata must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("not authorized to export history of"),
+            "{error}"
+        );
+    }
+
+    /// Persist a parent->child relationship so the ancestor chain walk can
+    /// resolve it from session metadata.
+    async fn register_persisted_parent(
+        session_manager: &std::sync::Arc<
+            crate::agentic::session::session_manager::SessionManager,
+        >,
+        workspace_path: &std::path::Path,
+        parent_id: &str,
+        child_id: &str,
+    ) {
+        let metadata = crate::service::session::SessionMetadata::new(
+            child_id.to_string(),
+            child_id.to_string(),
+            "agentic".to_string(),
+            "auto".to_string(),
+        );
+        let mut child_metadata = metadata;
+        child_metadata.relationship = Some(crate::service::session::SessionRelationship {
+            parent_session_id: Some(parent_id.to_string()),
+            ..Default::default()
+        });
+        session_manager
+            .save_session_metadata(workspace_path, &child_metadata)
+            .await
+            .expect("save child metadata");
     }
 
     #[tokio::test]
