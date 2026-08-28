@@ -659,6 +659,32 @@ Arguments:
                         &runtime,
                     )
                     .await?;
+                // Cross-workspace listing requires authorization: the caller
+                // may list the workspace it currently belongs to, but an
+                // explicit `workspace` argument pointing elsewhere is only
+                // allowed for the owner (a top-level session with no creator).
+                // This prevents a delegated session from silently enumerating
+                // other workspaces' session summaries.
+                if let Some(caller_session_id) = context.session_id.as_deref() {
+                    let current_workspace = context
+                        .workspace_root()
+                        .map(|path| normalize_path(path.to_string_lossy().as_ref()));
+                    let explicit_workspace = normalize_path(&workspace.project_workspace);
+                    let is_cross_workspace = current_workspace
+                        .as_ref()
+                        .is_none_or(|current| *current != explicit_workspace);
+                    if is_cross_workspace
+                        && !coordinator
+                            .get_session_manager()
+                            .get_session(caller_session_id)
+                            .is_some_and(|session| session.created_by.is_none())
+                    {
+                        return Err(BitFunError::tool(format!(
+                            "cannot list sessions in workspace '{}': caller session '{caller_session_id}' does not belong to that workspace and is not the owner",
+                            workspace.display_workspace
+                        )));
+                    }
+                }
                 let sessions = runtime
                     .list_sessions(AgentSessionListRequest {
                         workspace_path: workspace.project_workspace.clone(),
@@ -1305,6 +1331,71 @@ mod tests {
             .save_session_metadata(workspace_path, &child_metadata)
             .await
             .expect("save child metadata");
+    }
+
+    // ---------------------------------------------------------------------
+    // Cross-workspace list authorization (SessionControl list)
+    // Owner (top-level session, created_by = None) may list another
+    // workspace; delegated sessions may only list their own workspace.
+    // ---------------------------------------------------------------------
+
+    fn normalized(value: &str) -> String {
+        normalize_path(value)
+    }
+
+    fn list_gate_current_workspace_matches(
+        current: Option<&str>,
+        explicit: &str,
+    ) -> bool {
+        current.is_some_and(|current| normalized(current) == normalized(explicit))
+    }
+
+    fn list_gate_rejected(
+        caller_created_by: Option<&str>,
+        current_workspace: Option<&str>,
+        explicit_workspace: &str,
+    ) -> bool {
+        let is_cross_workspace = !list_gate_current_workspace_matches(
+            current_workspace,
+            explicit_workspace,
+        );
+        let caller_is_owner = caller_created_by.is_none();
+        is_cross_workspace && !caller_is_owner
+    }
+
+    #[test]
+    fn list_gate_allows_own_workspace_listing() {
+        // A delegated session listing its own workspace passes the gate.
+        assert!(list_gate_current_workspace_matches(Some("/repo"), "/repo/"));
+        assert!(!list_gate_rejected(
+            Some(session_control_creator_marker("root-1").as_str()),
+            Some("/repo"),
+            "/repo"
+        ));
+    }
+
+    #[test]
+    fn list_gate_rejects_delegated_cross_workspace_listing() {
+        // Attacker matrix: a delegated session (created_by set) listing a
+        // workspace it does not belong to is rejected.
+        assert!(list_gate_rejected(
+            Some(session_control_creator_marker("root-1").as_str()),
+            Some("/other-workspace"),
+            "/repo"
+        ));
+        // No workspace binding at all also counts as cross-workspace.
+        assert!(list_gate_rejected(
+            Some(session_control_creator_marker("root-1").as_str()),
+            None,
+            "/repo"
+        ));
+    }
+
+    #[test]
+    fn list_gate_allows_owner_cross_workspace_listing() {
+        // Owner semantics: a top-level session (created_by = None) may list
+        // any workspace.
+        assert!(!list_gate_rejected(None, Some("/other-workspace"), "/repo"));
     }
 
     #[tokio::test]
