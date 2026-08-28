@@ -32,7 +32,7 @@ use super::{
     coordination_store::{BackgroundTaskRecord, BackgroundTaskRegistration, CoordinationStore},
     scheduler::{
         abort_thread_goal_continuation_for_session, clear_thread_goal_continuation_abort,
-        get_global_scheduler, DialogSubmissionPolicy, HiddenSubagentQueueCancelHandle,
+        get_global_scheduler, HiddenSubagentQueueCancelHandle,
     },
     turn_outcome::TurnOutcome,
     turn_settlement::TurnSettlementTracker,
@@ -899,7 +899,7 @@ impl HiddenSubagentExecutionRequest {
     }
 }
 
-pub use bitfun_runtime_ports::DialogTriggerSource;
+pub use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssistantBootstrapSkipReason {
@@ -6508,12 +6508,11 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
                     primary_agent_binding.route_owner,
                 )
                 .await?;
-            // The binding update mutated the stored session. Refresh the local
-            // snapshot so the later `TurnAdmissionSessionFacts::from_session`
-            // matches the session that `start_..._if_session_matches` re-reads;
-            // otherwise admission fails with "Session execution settings
-            // changed during turn admission" whenever the submitted agent type
-            // differs from the stored one (upstream turn-admission refactor).
+            // The manager owns a different Session clone. Keep this turn's
+            // admission snapshot aligned with the binding changed above.
+            // (Local fork: re-read the manager-owned Session instead of patching
+            // the local clone, so the snapshot also carries any other
+            // manager-side mutations, e.g. persisted metadata normalization.)
             session = self
                 .session_manager
                 .get_session(&session_id)
@@ -16919,7 +16918,7 @@ mod tests {
     use crate::agentic::session::{
         compression::{CompressionConfig, ContextCompressor},
         PromptCachePolicy, SessionContextStore, SessionManager, SessionManagerConfig,
-        SystemPromptCacheIdentity, UserContextCacheIdentity,
+        SystemPromptCacheIdentity, UserContextCacheIdentity, TEST_MODEL_RESOLUTION_AI_CONFIG,
     };
     use crate::agentic::skill_agent_snapshot::SkillSnapshotEntry;
     use crate::agentic::tools::framework::{
@@ -20236,6 +20235,66 @@ mod tests {
                 });
             assert_eq!(session.agent_type, agent_type);
         }
+    }
+
+    #[tokio::test]
+    async fn review_fixer_turn_is_admitted_after_updating_a_deep_review_session_binding() {
+        let (coordinator, session_manager) = test_coordinator();
+        let workspace = tempfile::tempdir().expect("review workspace");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let session = session_manager
+            .create_session(
+                "Deep review remediation".to_string(),
+                "DeepReview".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace_path.clone()),
+                    model_id: Some("review-model".to_string()),
+                    enable_tools: true,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("DeepReview session should be created");
+        let ai_config = AIConfig {
+            models: vec![AIModelConfig {
+                id: "review-model".to_string(),
+                name: "Review model".to_string(),
+                provider: "openai".to_string(),
+                model_name: "test-model".to_string(),
+                enabled: true,
+                ..AIModelConfig::default()
+            }],
+            ..AIConfig::default()
+        };
+        let fix_turn_id = "review-fix-turn";
+        TEST_MODEL_RESOLUTION_AI_CONFIG
+            .scope(
+                ai_config,
+                coordinator.start_dialog_turn(
+                    session.session_id.clone(),
+                    "fix selected findings".to_string(),
+                    Some("fix selected findings".to_string()),
+                    Some(fix_turn_id.to_string()),
+                    "ReviewFixer".to_string(),
+                    Some(workspace_path),
+                    None,
+                    None,
+                    DialogSubmissionPolicy::for_source(DialogTriggerSource::DesktopApi),
+                    None,
+                ),
+            )
+            .await
+            .expect("ReviewFixer turn should pass admission after the intentional binding update");
+
+        let updated = session_manager
+            .get_session(&session.session_id)
+            .expect("review session should remain loaded");
+        assert_eq!(updated.agent_type, "ReviewFixer");
+        assert_eq!(session_manager.get_turn_count(&session.session_id), 1);
+
+        let _ = coordinator
+            .cancel_dialog_turn(&session.session_id, fix_turn_id)
+            .await;
     }
 
     #[tokio::test]
