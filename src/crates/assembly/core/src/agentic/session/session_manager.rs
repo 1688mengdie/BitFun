@@ -1180,7 +1180,6 @@ impl SessionManager {
         Ok(session_storage_path)
     }
 
-    #[allow(dead_code)]
     fn session_workspace_path(&self, session_id: &str) -> Option<PathBuf> {
         self.sessions
             .get(session_id)
@@ -2713,9 +2712,16 @@ impl SessionManager {
         kind: SessionKind,
         transient: bool,
     ) -> BitFunResult<Session> {
-        let _workspace_path = Self::session_workspace_from_config(&config).ok_or_else(|| {
+        let workspace_root = Self::session_workspace_from_config(&config).ok_or_else(|| {
             BitFunError::Validation("Session workspace_path is required".to_string())
         })?;
+        // Captured before `config` is moved into the Session, so the persistence
+        // branch below can choose the local raw-root vs remote mirror path.
+        let config_is_remote = config.remote_connection_id.is_some()
+            || config
+                .remote_ssh_host
+                .as_deref()
+                .is_some_and(|host| !host.is_empty());
 
         let session_storage_path = self
             .effective_storage_path_for_config(&config)
@@ -2800,9 +2806,24 @@ impl SessionManager {
         // Persist before publishing runtime state. Cancellation or timeout while
         // this await is in progress cannot leave a writable in-memory Session.
         if persist {
+            // Unify the create write chain with the persist / read chains on the
+            // raw workspace root so `PersistenceManager` resolves the sessions
+            // directory from one source every time (see
+            // metadata_workspace_path_for_update). For local workspaces this
+            // avoids re-entering `project_sessions_dir` through its
+            // is_resolved_sessions_dir branch, which can diverge under CI
+            // tempdir canonicalize volatility. Remote workspaces keep the
+            // mirror-resolved `session_storage_path` because
+            // `config.workspace_path` there is a POSIX path that must be mapped
+            // through the SSH mirror.
+            let create_workspace_path = if config_is_remote {
+                &session_storage_path
+            } else {
+                &workspace_root
+            };
             if let Err(error) = self
                 .persistence_manager
-                .create_session_if_absent(&session_storage_path, &session)
+                .create_session_if_absent(create_workspace_path, &session)
                 .await
             {
                 self.release_failed_session_storage_path_claim(
@@ -6736,14 +6757,42 @@ impl SessionManager {
             )));
         }
 
-        self.effective_session_storage_path(session_id)
-            .await
-            .ok_or_else(|| {
+        // For local workspaces, hand the *raw* workspace root to the persistence
+        // layer instead of an already-resolved sessions_dir. The read chain
+        // (`load_session_metadata(workspace.path(), ...)`) feeds the raw
+        // workspace root, so `project_sessions_dir(root)` is the single source
+        // of truth for both chains. Feeding an already-resolved `sessions_dir`
+        // re-enters `project_sessions_dir` through its is_resolved_sessions_dir
+        // branch, which depends on `dunce::canonicalize` and can diverge from
+        // the raw-root branch on tempdirs under CI /tmp, making create/persist
+        // and the read chain land on different directories. Remote workspaces
+        // keep the mirror-resolved path because their `config.workspace_path`
+        // is a POSIX path that must be mapped through the SSH mirror.
+        let is_remote = self.sessions.get(session_id).is_some_and(|session| {
+            session.config.remote_connection_id.is_some()
+                || session
+                    .config
+                    .remote_ssh_host
+                    .as_deref()
+                    .is_some_and(|host| !host.is_empty())
+        });
+        if is_remote {
+            self.effective_session_storage_path(session_id)
+                .await
+                .ok_or_else(|| {
+                    BitFunError::Validation(format!(
+                        "Session workspace_path is missing: {}",
+                        session_id
+                    ))
+                })
+        } else {
+            self.session_workspace_path(session_id).ok_or_else(|| {
                 BitFunError::Validation(format!(
                     "Session workspace_path is missing: {}",
                     session_id
                 ))
             })
+        }
     }
 
     async fn ensure_session_metadata_persisted(
