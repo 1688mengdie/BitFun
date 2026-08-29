@@ -222,7 +222,7 @@ pub(crate) fn build_request_body_with_context(
 /// - `X-Private-Data`: model-optimization switch, always `"false"` (主人定标:
 ///   enableModelOptimization 必须关, never configurable).
 /// - `X-IDE-Version`/`X-Product-Version`: default to the official CodeBuddy
-///   CLI version 2.137.1; a configured `custom_headers` value overrides it so
+///   CLI version 2.141.0; a configured `custom_headers` value overrides it so
 ///   the version follows the channel (CLI vs Workbuddy vs desktop).
 ///
 /// Request-unique IDs (`X-Request-ID`/`X-Conversation-Message-ID`) are
@@ -256,14 +256,14 @@ fn codebuddy_fingerprint_headers(
     headers.push(("X-Product", "SaaS".to_string()));
     // Official CLI client info (codebuddy.js module 33387 + clientInfoProvider):
     // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType/ideName
-    // both fall back to platform; version = CLI package version 2.137.1.
+    // both fall back to platform; version = CLI package version 2.141.0.
     headers.push(("X-IDE-Type", "CLI".to_string()));
     headers.push(("X-IDE-Name", "CLI".to_string()));
     // Version follows the channel: default to the official CodeBuddy CLI
     // version, overridable per model entry via `custom_headers` (e.g.
     // Workbuddy 2.115.0 or a desktop version).
     let ide_version =
-        configured_header(client, "X-IDE-Version").unwrap_or_else(|| "2.137.1".to_string());
+        configured_header(client, "X-IDE-Version").unwrap_or_else(|| "2.141.0".to_string());
     headers.push(("X-IDE-Version", ide_version.clone()));
     headers.push(("X-Product-Version", ide_version));
     // Model-optimization switch: 主人定标 enableModelOptimization 必须关,
@@ -574,9 +574,9 @@ mod tests {
         assert_eq!(get("X-IDE-Type"), "CLI");
         assert_eq!(get("X-IDE-Name"), "CLI");
         // Official CodeBuddy CLI version (package.json of
-        // @tencent-ai/codebuddy-code 2.137.1), NOT BitFun's own version.
-        assert_eq!(get("X-IDE-Version"), "2.137.1");
-        assert_eq!(get("X-Product-Version"), "2.137.1");
+        // @tencent-ai/codebuddy-code 2.141.0), NOT BitFun's own version.
+        assert_eq!(get("X-IDE-Version"), "2.141.0");
+        assert_eq!(get("X-Product-Version"), "2.141.0");
         // Model-optimization switch defaults to "false" (official default).
         assert_eq!(get("X-Private-Data"), "false");
         assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
