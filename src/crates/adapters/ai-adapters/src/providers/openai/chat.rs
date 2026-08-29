@@ -270,8 +270,34 @@ fn codebuddy_fingerprint_headers(
     // always send "false" — never configurable, never "true".
     headers.push(("X-Private-Data", "false".to_string()));
     headers.push(("X-Requested-With", "XMLHttpRequest".to_string()));
+    // Identity headers resolved by the subscription auth layer (`X-User-Id`,
+    // `X-Enterprise-Id`, `X-Tenant-Id`, `X-Department-Info`, `X-Userinfo`,
+    // `X-Domain`). The official CLI injects them into every inference request
+    // via `runIdentityHeaders()`; without them the gateway sees an anonymous
+    // client (recon CB-DIAG-R3 §4.1 #7-#9). Emitted after the fixed headers so
+    // they are appended last, matching the official assembly order.
+    if let Some(custom_headers) = client.config.custom_headers.as_ref() {
+        for name in CODEBUDDY_IDENTITY_HEADER_NAMES {
+            if let Some(value) = custom_headers.get(*name) {
+                headers.push((*name, value.clone()));
+            }
+        }
+    }
     headers
 }
+
+/// Identity header names produced by the subscription auth layer
+/// (`subscription_auth::codebuddy::resolve`) and consumed here for the
+/// inference request. `custom_headers` is the transport the factory uses to
+/// carry resolved credentials onto the runtime `AIConfig` (client_factory.rs).
+const CODEBUDDY_IDENTITY_HEADER_NAMES: &[&str] = &[
+    "X-User-Id",
+    "X-Userinfo",
+    "X-Enterprise-Id",
+    "X-Tenant-Id",
+    "X-Department-Info",
+    "X-Domain",
+];
 
 /// Reads a CodeBuddy fingerprint header override from the model entry's
 /// `custom_headers` (app.json `ai.models[].custom_headers`), so fingerprint
@@ -445,6 +471,7 @@ async fn send_qoder_signed_stream(
 mod tests {
     use super::*;
     use crate::types::AIConfig;
+    use base64::Engine as _;
 
     #[test]
     fn generate_hex32_produces_32_char_hex() {
@@ -580,6 +607,11 @@ mod tests {
         // Model-optimization switch defaults to "false" (official default).
         assert_eq!(get("X-Private-Data"), "false");
         assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
+        // Identity headers come only from the subscription auth layer; with a
+        // bare custom_headers config they stay absent.
+        assert!(headers.iter().all(|(n, _)| *n != "X-User-Id"));
+        assert!(headers.iter().all(|(n, _)| *n != "X-Userinfo"));
+        assert!(headers.iter().all(|(n, _)| *n != "X-Domain"));
         // No duplicate header names.
         let mut sorted = names.clone();
         sorted.sort_unstable();
@@ -613,6 +645,54 @@ mod tests {
         assert_eq!(get("X-Product-Version"), "2.115.0");
         // X-Agent-Purpose is injected only when configured.
         assert_eq!(get("X-Agent-Purpose"), "person_agent");
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_include_identity_headers_from_auth_layer() {
+        // E3: the subscription auth layer resolves identity headers
+        // (X-User-Id etc.) and the factory carries them on custom_headers; the
+        // fingerprint layer must append them to the inference request.
+        let mut client = test_client();
+        client.config.custom_headers = Some(
+            [
+                ("X-User-Id".to_string(), "u-123".to_string()),
+                (
+                    "X-Userinfo".to_string(),
+                    base64::engine::general_purpose::STANDARD
+                        .encode(r#"{"uin":"u-123","owner_uin":"ent-9"}"#),
+                ),
+                ("X-Enterprise-Id".to_string(), "ent-9".to_string()),
+                ("X-Tenant-Id".to_string(), "ent-9".to_string()),
+                ("X-Domain".to_string(), "copilot.tencent.com".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        assert_eq!(get("X-User-Id"), "u-123");
+        assert_eq!(
+            get("X-Userinfo"),
+            base64::engine::general_purpose::STANDARD
+                .encode(r#"{"uin":"u-123","owner_uin":"ent-9"}"#)
+        );
+        assert_eq!(get("X-Enterprise-Id"), "ent-9");
+        assert_eq!(get("X-Tenant-Id"), "ent-9");
+        assert_eq!(get("X-Domain"), "copilot.tencent.com");
+        // Department header absent when the auth layer did not produce one.
+        assert!(headers.iter().all(|(n, _)| *n != "X-Department-Info"));
+        // No duplicate header names once identity headers are appended.
+        let mut sorted = headers.iter().map(|(n, _)| *n).collect::<Vec<_>>();
+        sorted.sort_unstable();
+        let mut deduped = sorted.clone();
+        deduped.dedup();
+        assert_eq!(sorted, deduped, "header names must not repeat");
     }
 
     #[test]

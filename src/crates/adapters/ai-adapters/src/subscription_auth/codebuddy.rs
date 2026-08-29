@@ -11,6 +11,8 @@
 use super::store::{self, StoredCredential};
 use super::{ResolvedCredential, StartedLogin, SubscriptionHttpOptions};
 use anyhow::{anyhow, Context, Result};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -425,6 +427,9 @@ async fn refresh(refresh_token: &str, options: &SubscriptionHttpOptions) -> Resu
 /// account's `enterpriseId` (same value), `X-Department-Info` is the account's
 /// `departmentFullName`, and `X-Domain` is the product domain. Conditional
 /// headers are only emitted when the corresponding account metadata exists.
+/// `X-Userinfo` mirrors the CLI `runIdentityHeaders`: a base64 JSON payload of
+/// the identity attributes, emitted only when a `uid` exists together with at
+/// least one identity source (enterprise id, id source, or auth method).
 pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<ResolvedCredential> {
     let (access, _account_id, expires) = ensure_fresh(options).await?;
     let mut headers = HashMap::new();
@@ -460,6 +465,43 @@ pub(crate) async fn resolve(options: &SubscriptionHttpOptions) -> Result<Resolve
         .and_then(|value| value.as_str())
     {
         headers.insert("X-Department-Info".to_string(), department.to_string());
+    }
+    // X-Userinfo: base64 JSON of the identity attributes, mirroring the CLI
+    // `runIdentityHeaders` — emitted only when a uid exists together with at
+    // least one identity source (enterprise id, id source, or auth method).
+    if let Some(uid) = metadata_map
+        .as_ref()
+        .and_then(|map| map.get("uid"))
+        .and_then(|value| value.as_str())
+    {
+        let enterprise_id = metadata_map
+            .as_ref()
+            .and_then(|map| map.get("enterprise_id"))
+            .and_then(|value| value.as_str());
+        let id_source = metadata_map
+            .as_ref()
+            .and_then(|map| map.get("id_source"))
+            .and_then(|value| value.as_str());
+        let auth_method = metadata_map
+            .as_ref()
+            .and_then(|map| map.get("auth_method"))
+            .and_then(|value| value.as_str());
+        if enterprise_id.is_some() || id_source.is_some() || auth_method.is_some() {
+            let mut userinfo = serde_json::json!({ "uin": uid });
+            if let Some(enterprise_id) = enterprise_id {
+                userinfo["owner_uin"] = serde_json::Value::String(enterprise_id.to_string());
+            }
+            if let Some(id_source) = id_source {
+                userinfo["id_source"] = serde_json::Value::String(id_source.to_string());
+            }
+            if let Some(auth_method) = auth_method {
+                userinfo["token_source"] = serde_json::Value::String(auth_method.to_string());
+            }
+            headers.insert(
+                "X-Userinfo".to_string(),
+                BASE64_STANDARD.encode(userinfo.to_string()),
+            );
+        }
     }
     // X-Domain: always the codebuddy product domain.
     headers.insert("X-Domain".to_string(), DOMAIN.to_string());
@@ -858,6 +900,18 @@ mod tests {
             assert_eq!(resolved.extra_headers["X-Tenant-Id"], "ent-9");
             assert_eq!(resolved.extra_headers["X-Domain"], DOMAIN);
             assert_eq!(resolved.extra_headers["X-Department-Info"], "R&D");
+            let userinfo = resolved
+                .extra_headers
+                .get("X-Userinfo")
+                .expect("userinfo present when uid and enterprise id exist");
+            let decoded = BASE64_STANDARD
+                .decode(userinfo)
+                .expect("userinfo must be base64");
+            let payload: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+            assert_eq!(
+                payload,
+                serde_json::json!({ "uin": "u-123", "owner_uin": "ent-9" })
+            );
             assert_eq!(
                 resolved.request_url.as_deref(),
                 Some("https://copilot.tencent.com/v2/chat/completions")
@@ -898,6 +952,9 @@ mod tests {
             assert!(!resolved.extra_headers.contains_key("X-Enterprise-Id"));
             assert!(!resolved.extra_headers.contains_key("X-Tenant-Id"));
             assert!(!resolved.extra_headers.contains_key("X-Department-Info"));
+            // uid without any identity source (no enterprise id / id source /
+            // auth method) must not produce an X-Userinfo header.
+            assert!(!resolved.extra_headers.contains_key("X-Userinfo"));
             assert_eq!(resolved.extra_headers["X-Domain"], DOMAIN);
         });
     }
