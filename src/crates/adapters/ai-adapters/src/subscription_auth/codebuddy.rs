@@ -14,7 +14,9 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -647,6 +649,11 @@ pub(crate) async fn list_models(
         .and_then(|m| m.get("enterprise_id"))
         .and_then(|v| v.as_str())
         .map(String::from);
+    let department = metadata_map
+        .as_ref()
+        .and_then(|m| m.get("department_full_name"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
     let domain = DOMAIN.to_string();
 
     let client = http_client(options)?;
@@ -654,7 +661,16 @@ pub(crate) async fn list_models(
     // 3. Try the enterprise endpoint (unless in backoff or missing enterprise_id).
     if let Some(eid) = &enterprise_id {
         if !is_in_backoff() {
-            match fetch_enterprise_models(&client, &access, &uid, eid, &domain).await {
+            match fetch_enterprise_models(
+                &client,
+                &access,
+                &uid,
+                eid,
+                &domain,
+                department.as_deref(),
+            )
+            .await
+            {
                 Ok(models) if !models.is_empty() => {
                     log::info!(
                         "codebuddy loaded {} models from enterprise endpoint",
@@ -683,7 +699,16 @@ pub(crate) async fn list_models(
     }
 
     // 4. Try /v3/config.
-    match fetch_v3_models(&client, &access, &uid, &enterprise_id, &domain).await {
+    match fetch_v3_models(
+        &client,
+        &access,
+        &uid,
+        &enterprise_id,
+        &domain,
+        department.as_deref(),
+    )
+    .await
+    {
         Ok(models) if !models.is_empty() => {
             let source = if enterprise_id.is_some() {
                 "enterprise fallback"
@@ -779,26 +804,27 @@ async fn load_auth_for_models(
 
 /// `GET /console/enterprises/{eid}/config/models` — the enterprise-level model
 /// list, filtered by the account's subscription. Mirrors the official
-/// `ModelsProductProvider`.
+/// `ModelsProductProvider`. The `domain` parameter is kept for call-site
+/// symmetry with `fetch_v3_models`; the domain now rides the shared
+/// `X-Domain` header built by `build_models_headers`.
 async fn fetch_enterprise_models(
     client: &reqwest::Client,
     access: &str,
     uid: &Option<String>,
     enterprise_id: &str,
     domain: &str,
+    department: Option<&str>,
 ) -> Result<Vec<crate::types::RemoteModelInfo>> {
+    let _ = domain;
     let url = format!("{API_BASE_URL}/console/enterprises/{enterprise_id}/config/models");
-    let mut builder = client.get(&url).bearer_auth(access);
-    if let Some(uid) = uid {
-        builder = builder.header("X-User-Id", uid);
+    let mut builder = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    for (name, value) in
+        build_models_headers(access, uid, &Some(enterprise_id.to_string()), department)
+    {
+        builder = builder.header(name, value);
     }
-    builder = builder
-        .header("X-Enterprise-Id", enterprise_id)
-        .header("X-Tenant-Id", enterprise_id)
-        .header("X-Domain", domain);
 
     let resp = builder
-        .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
         .context("call codebuddy enterprise models endpoint")?;
@@ -816,28 +842,33 @@ async fn fetch_enterprise_models(
 }
 
 /// `GET /v3/config` — global product configuration. When authenticated the
-/// response includes `data.models.data`; without auth `models` is `null`.
+/// response includes the model list; without auth `models` is `null`.
+///
+/// The request is a full disguise of the official CLI cloud-product fetch
+/// (recon CB-DIAG-R3 log:1056 + dist fetchFromRemote): full header set
+/// (Authorization/X-API-Key/User-Agent/X-Product/X-Request-ID/X-User-Id plus
+/// conditional identity headers and `Connection: close`), `timeout 5s`, and
+/// the same `/v3/config` URL. The `repos` query parameter carries workspace
+/// git remote URLs in the CLI; BitFun has no equivalent git-collection
+/// semantics here, so it stays absent rather than fabricating data (owner
+/// order: values must be real, never invented).
 async fn fetch_v3_models(
     client: &reqwest::Client,
     access: &str,
     uid: &Option<String>,
     enterprise_id: &Option<String>,
     domain: &str,
+    department: Option<&str>,
 ) -> Result<Vec<crate::types::RemoteModelInfo>> {
+    // The domain rides the shared X-Domain header from build_models_headers.
+    let _ = domain;
     let url = format!("{API_BASE_URL}/v3/config");
-    let mut builder = client.get(&url).bearer_auth(access);
-    if let Some(uid) = uid {
-        builder = builder.header("X-User-Id", uid);
+    let mut builder = client.get(&url).timeout(std::time::Duration::from_secs(5));
+    for (name, value) in build_models_headers(access, uid, enterprise_id, department) {
+        builder = builder.header(name, value);
     }
-    if let Some(eid) = enterprise_id {
-        builder = builder
-            .header("X-Enterprise-Id", eid)
-            .header("X-Tenant-Id", eid);
-    }
-    builder = builder.header("X-Domain", domain);
 
     let resp = builder
-        .timeout(std::time::Duration::from_secs(5))
         .send()
         .await
         .context("call codebuddy /v3/config endpoint")?;
@@ -875,6 +906,92 @@ fn map_model_entries(entries: Vec<CodeBuddyModelEntry>) -> Vec<crate::types::Rem
 /// model list.
 pub(crate) fn suggested() -> (&'static str, &'static str, &'static str) {
     ("openai", API_BASE_URL, "glm-5.2")
+}
+
+// ---------------------------------------------------------------------------
+// Full CLI-parity request disguise for the /v3/config model chain
+// ---------------------------------------------------------------------------
+
+/// `X-Product` value sent by the official CLI (deploymentType default,
+/// recon CB-DIAG-R3 log:1056 `x-product":"SaaS"`).
+const X_PRODUCT_VALUE: &str = "SaaS";
+
+/// Per-request 32-hex request id generator, mirroring the official CLI's
+/// `X-Request-ID` (three CLI samples all differ: log:1056/:1680/:2881). Uses a
+/// monotonic counter + timestamp hashed with SHA-256, same mechanism as the
+/// inference chain's `generate_hex32`.
+static HEX32_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn generate_hex32() -> String {
+    let count = HEX32_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let time_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let mut hasher = Sha256::new();
+    hasher.update(count.to_le_bytes());
+    hasher.update(time_nanos.to_le_bytes());
+    let hash = hasher.finalize();
+    hex::encode(&hash[..16])
+}
+
+/// Resolves `X-User-Id` the way the official CLI does
+/// (`getUserId`: `process.env.ACC_USER_ID ?? anonymous_<key tail 8>`,
+/// dist/codebuddy.js hit@7984687): signed-in OAuth accounts send
+/// `metadata.uid`; API-key/anonymous sessions send `anonymous_` plus the last
+/// 8 characters of the key (CLI sample `anonymous_jXue8bfk`).
+fn resolve_x_user_id(uid: Option<&str>, access: &str) -> String {
+    match uid {
+        Some(uid) => uid.to_string(),
+        None => {
+            let tail: String = access
+                .chars()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            format!("anonymous_{tail}")
+        }
+    }
+}
+
+/// Builds the full CodeBuddy CLI-parity header set for the models endpoints.
+///
+/// Field-by-field provenance (execution doc M2): `Authorization` +
+/// `X-API-Key` carry the stored credential (OAuth access token or `ck_` API
+/// key); `User-Agent` comes from the shared `user_agent_for_base_url`
+/// override; `X-Product`/`X-Request-ID`/`X-User-Id` mirror the CLI samples in
+/// recon CB-DIAG-R3 log:1056; conditional identity headers follow the stored
+/// account metadata exactly like `resolve()`. `Connection: close` matches the
+/// CLI `fetchFromRemote` header set (dist hit@17795248).
+fn build_models_headers(
+    access: &str,
+    uid: &Option<String>,
+    enterprise_id: &Option<String>,
+    department: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut headers: Vec<(&'static str, String)> = Vec::new();
+    headers.push(("Authorization", format!("Bearer {access}")));
+    headers.push(("X-API-Key", access.to_string()));
+    headers.push((
+        "User-Agent",
+        crate::client::http::user_agent_for_base_url(API_BASE_URL),
+    ));
+    headers.push(("X-Product", X_PRODUCT_VALUE.to_string()));
+    headers.push(("X-Request-ID", generate_hex32()));
+    headers.push(("X-User-Id", resolve_x_user_id(uid.as_deref(), access)));
+    if let Some(eid) = enterprise_id {
+        headers.push(("X-Enterprise-Id", eid.clone()));
+        headers.push(("X-Tenant-Id", eid.clone()));
+    }
+    if let Some(department) = department {
+        headers.push(("X-Department-Info", department.to_string()));
+    }
+    headers.push(("X-Domain", DOMAIN.to_string()));
+    headers.push(("Connection", "close".to_string()));
+    headers
 }
 
 #[cfg(test)]
@@ -1205,8 +1322,10 @@ mod tests {
             let models = super::list_models(&SubscriptionHttpOptions::default())
                 .await
                 .expect("list_models must not fail");
-            // Owner order 2026-08-29: dynamic failure returns an empty list,
-            // never the stale static models.
+            // The request now targets the real copilot.tencent.com host from a
+            // test sandbox; reqwest's connect timeout makes it fail cleanly
+            // without reaching the gateway (owner order 2026-08-29: empty
+            // list, no static fallback, nothing sent beyond the TCP attempt).
             assert!(
                 models.is_empty(),
                 "should return an empty list when enterprise_id is missing and both dynamic endpoints fail; got {:?}",
@@ -1402,5 +1521,309 @@ mod tests {
             assert_eq!(access, "ck-test-placeholder-key");
             assert_eq!(metadata_map, None);
         });
+    }
+
+    // -- Full CLI-parity disguise tests (R-ID M4, TcpListener captures) ------
+
+    /// Extracts a header value (case-insensitive) from a captured raw request.
+    fn captured_header<'a>(request: &'a str, name: &str) -> Option<&'a str> {
+        request.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim().eq_ignore_ascii_case(name).then(|| value.trim())
+        })
+    }
+
+    /// Parses the request line's query string into repeated-key pairs.
+    fn captured_query_pairs(request: &str) -> Vec<(String, String)> {
+        let target = request.lines().next().unwrap_or_default();
+        let query = target.split_whitespace().nth(1).unwrap_or_default();
+        let (_, query) = query.split_once('?').unwrap_or(("", ""));
+        query
+            .split('&')
+            .filter(|pair| !pair.is_empty())
+            .map(|pair| {
+                let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+                (k.to_string(), v.to_string())
+            })
+            .collect()
+    }
+
+    /// Captures the raw /v3/config request the models chain builds, issued
+    /// against a local throwaway listener. The server task is spawned first,
+    /// the client request is issued second, and the capture is joined last
+    /// (execution doc CB-MODELS-DYN-0829 order discipline). The request is
+    /// driven through the same `build_models_headers` assembly point that
+    /// `fetch_v3_models` uses, so what the gateway would receive is exactly
+    /// what gets asserted.
+    async fn capture_models_request() -> (String, Vec<crate::types::RemoteModelInfo>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let capture = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&buf).to_string();
+            let body = r#"{"code":0,"msg":"OK","data":{"models":{"data":[{"id":"glm-5.2","name":"GLM-5.2"}]}}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+
+        // Load the stored credential/metadata exactly like list_models does.
+        let snapshot = store::load_entry_with_revision(STORE_KEY).await.unwrap();
+        let entry = snapshot.credential.expect("credential stored");
+        let (access, metadata) = match &entry {
+            StoredCredential::Api { key, metadata } => (key.clone(), metadata.clone()),
+            StoredCredential::Oauth {
+                access, metadata, ..
+            } => (access.clone(), metadata.clone()),
+        };
+        let metadata_map = metadata.and_then(|v| v.as_object().cloned());
+        let uid = metadata_map
+            .as_ref()
+            .and_then(|m| m.get("uid"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let enterprise_id = metadata_map
+            .as_ref()
+            .and_then(|m| m.get("enterprise_id"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        let department = metadata_map
+            .as_ref()
+            .and_then(|m| m.get("department_full_name"))
+            .and_then(|v| v.as_str())
+            .map(String::from);
+
+        // Issue the same assembled request against the local listener.
+        let client = http_client(&SubscriptionHttpOptions::default()).unwrap();
+        let mut builder = client
+            .get(format!("http://{addr}/v3/config"))
+            .timeout(std::time::Duration::from_secs(5));
+        for (name, value) in
+            build_models_headers(&access, &uid, &enterprise_id, department.as_deref())
+        {
+            builder = builder.header(name, value);
+        }
+        let resp = builder.send().await.expect("local capture request");
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        assert!(status.is_success(), "capture response must succeed");
+        let payload: V3ConfigResponse =
+            serde_json::from_str(&body).expect("capture payload parses");
+        let models = map_model_entries(payload.data.models.map(|m| m.data).unwrap_or_default());
+        let request = capture.await.unwrap();
+        (request, models)
+    }
+
+    #[tokio::test]
+    async fn v3_config_request_carries_full_cli_disguise_headers() {
+        reset_model_cache();
+        let guard = super::super::tests::test_lock();
+        let _guard = guard.lock().await;
+        store::set_store_path_for_test(
+            std::env::temp_dir()
+                .join(format!("bitfun-cb-full-disguise-{}", uuid::Uuid::new_v4()))
+                .join("subscription_auth.json"),
+        );
+        store::upsert(
+            STORE_KEY,
+            StoredCredential::Oauth {
+                refresh: "r".to_string(),
+                access: "oauth-access-token".to_string(),
+                expires: now_ms() + 3_600_000,
+                account_id: Some("u-123".to_string()),
+                metadata: Some(serde_json::json!({
+                    "uid": "u-123",
+                    "enterprise_id": "ent-9",
+                    "department_full_name": "R&D"
+                })),
+            },
+        )
+        .await
+        .unwrap();
+        let (request, models) = capture_models_request().await;
+
+        // Field-by-field CLI parity (log:1056 sample + M1/M2 tables).
+        assert_eq!(
+            captured_header(&request, "Authorization"),
+            Some("Bearer oauth-access-token"),
+            "authorization must carry the stored credential: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-API-Key"),
+            Some("oauth-access-token"),
+            "x-api-key must carry the same credential value: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "User-Agent"),
+            Some("CLI/2.141.0 CodeBuddy/2.141.0"),
+            "user-agent must be the official CLI identity: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Product"),
+            Some("SaaS"),
+            "x-product must be the CLI deploymentType default: {request}"
+        );
+        let request_id = captured_header(&request, "X-Request-ID")
+            .expect("x-request-id must be present")
+            .to_string();
+        assert_eq!(
+            request_id.len(),
+            32,
+            "x-request-id must be 32 hex chars: {request_id}"
+        );
+        assert!(
+            request_id.chars().all(|c| c.is_ascii_hexdigit()),
+            "x-request-id must be hex: {request_id}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-User-Id"),
+            Some("u-123"),
+            "x-user-id must carry the account uid: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Enterprise-Id"),
+            Some("ent-9"),
+            "x-enterprise-id must carry the enterprise id: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Tenant-Id"),
+            Some("ent-9"),
+            "x-tenant-id must equal the enterprise id: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Department-Info"),
+            Some("R&D"),
+            "x-department-info must carry the department: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Domain"),
+            Some("copilot.tencent.com"),
+            "x-domain must be the product domain: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "Connection"),
+            Some("close"),
+            "connection must be close like the CLI fetchFromRemote: {request}"
+        );
+        assert!(
+            request.starts_with("GET /v3/config?") || request.starts_with("GET /v3/config "),
+            "must hit /v3/config: {request}"
+        );
+        // Behavior: the response payload maps into the model list.
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "glm-5.2");
+        reset_model_cache();
+    }
+
+    #[tokio::test]
+    async fn v3_config_request_anonymous_api_key_sends_full_header_set() {
+        reset_model_cache();
+        let guard = super::super::tests::test_lock();
+        let _guard = guard.lock().await;
+        store::set_store_path_for_test(
+            std::env::temp_dir()
+                .join(format!("bitfun-cb-anon-disguise-{}", uuid::Uuid::new_v4()))
+                .join("subscription_auth.json"),
+        );
+        store::upsert(
+            STORE_KEY,
+            StoredCredential::Api {
+                key: "ck_key_tail8_abcdefgh".to_string(),
+                metadata: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (request, _models) = capture_models_request().await;
+
+        // metadata=None must not degrade the header set (Type-Contract).
+        assert_eq!(
+            captured_header(&request, "Authorization"),
+            Some("Bearer ck_key_tail8_abcdefgh"),
+            "api key must ride Authorization: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-API-Key"),
+            Some("ck_key_tail8_abcdefgh"),
+            "x-api-key must be the stored ck_ key: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "User-Agent"),
+            Some("CLI/2.141.0 CodeBuddy/2.141.0"),
+            "user-agent must be the official CLI identity: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "X-Product"),
+            Some("SaaS"),
+            "x-product must be present for Api credentials: {request}"
+        );
+        assert!(
+            captured_header(&request, "X-Request-ID").is_some(),
+            "x-request-id must be present: {request}"
+        );
+        // CLI getUserId: anonymous_<key tail 8> (dist hit@7984687).
+        assert_eq!(
+            captured_header(&request, "X-User-Id"),
+            Some("anonymous_abcdefgh"),
+            "x-user-id must be anonymous_<key tail 8>: {request}"
+        );
+        assert_eq!(
+            captured_header(&request, "Connection"),
+            Some("close"),
+            "connection must be close: {request}"
+        );
+        assert!(
+            !request.to_ascii_lowercase().contains("x-enterprise-id"),
+            "no enterprise id header without metadata: {request}"
+        );
+        reset_model_cache();
+    }
+
+    #[tokio::test]
+    async fn v3_config_request_repos_stays_absent_without_git_semantics() {
+        reset_model_cache();
+        let guard = super::super::tests::test_lock();
+        let _guard = guard.lock().await;
+        store::set_store_path_for_test(
+            std::env::temp_dir()
+                .join(format!("bitfun-cb-repos-absent-{}", uuid::Uuid::new_v4()))
+                .join("subscription_auth.json"),
+        );
+        store::upsert(
+            STORE_KEY,
+            StoredCredential::Api {
+                key: "ck-test-placeholder-key".to_string(),
+                metadata: None,
+            },
+        )
+        .await
+        .unwrap();
+        let (request, _models) = capture_models_request().await;
+
+        // The CLI sends repos=<git remote url> pairs collected from the
+        // workspace; BitFun has no git-collection semantics here and must not
+        // fabricate URLs, so no repos parameter may appear (M1 #7).
+        let pairs = captured_query_pairs(&request);
+        assert!(
+            !pairs.iter().any(|(k, _)| k == "repos"),
+            "repos must stay absent instead of fabricated: {request}"
+        );
+        reset_model_cache();
     }
 }
