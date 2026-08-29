@@ -204,14 +204,58 @@ fn wait_for_process_group_exit(process_group: i32) -> bool {
 
 #[cfg(unix)]
 fn process_group_alive(process_group: i32) -> bool {
-    // SAFETY: signal 0 performs liveness/permission checking only.
-    if unsafe { libc::kill(-process_group, 0) } == 0 {
-        return true;
+    // macOS: kill(-pgid, 0) returns ESRCH for an orphaned process group whose
+    // only remaining members are TERM-resistant children, while Linux keeps
+    // reporting the group as alive while any member lives. Enumerate the group
+    // with pgrep instead and require at least one live member, judged with the
+    // same process-state semantics as process_alive; a failed or empty query
+    // means the group disappeared during the check. (Apple's ps -g is a no-op
+    // unless the unix2003 compatibility mode is active, so pgrep -g is the
+    // reliable PGID probe on macOS.)
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("pgrep")
+            .args(["-g", &process_group.to_string()])
+            .output();
+        let Ok(output) = output else {
+            return false;
+        };
+        if !output.status.success() {
+            // pgrep exits 1 when no processes matched: a vanished or empty
+            // process group is not alive.
+            return false;
+        }
+        // pgrep lists PIDs; a zombie still matches, so cross-check each
+        // candidate with ps and require at least one live member.
+        return String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .any(|member_pid| {
+                let state = Command::new("ps")
+                    .args(["-p", &member_pid.to_string(), "-o", "stat="])
+                    .output();
+                match state {
+                    Ok(output) if output.status.success() => {
+                        macos_process_state_allows_escalation(&String::from_utf8_lossy(
+                            &output.stdout,
+                        ))
+                    }
+                    _ => false,
+                }
+            });
     }
-    matches!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::EPERM)
-    )
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // SAFETY: signal 0 performs liveness/permission checking only.
+        if unsafe { libc::kill(-process_group, 0) } == 0 {
+            return true;
+        }
+        matches!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::EPERM)
+        )
+    }
 }
 
 #[cfg(any(test, target_os = "macos"))]
