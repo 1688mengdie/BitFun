@@ -50,6 +50,35 @@ pub(crate) fn apply_headers(client: &AIClient, builder: RequestBuilder) -> Reque
     })
 }
 
+/// Diagnostic helper: extracts the headers already applied to a request
+/// builder so the CodeBuddy gateway log can show the complete header face
+/// (shared transport headers plus closure additions) in one place. Returns
+/// raw values; the caller masks credential-bearing names before logging.
+/// Falls back to an empty vec when the builder cannot be cloned (e.g. a
+/// non-repeatable body has already been attached).
+pub(crate) fn log_header_face(builder: &RequestBuilder) -> Vec<(String, String)> {
+    let request = match builder
+        .try_clone()
+        .and_then(|snapshot| snapshot.build().ok())
+    {
+        Some(request) => request,
+        None => return Vec::new(),
+    };
+    request
+        .headers()
+        .iter()
+        .map(|(name, value)| match value.to_str() {
+            Ok(text) => (name.as_str().to_string(), text.to_string()),
+            // Non-UTF-8 header values are logged as their byte length
+            // instead of raw bytes.
+            Err(_) => (
+                name.as_str().to_string(),
+                format!("<{} non-utf8 bytes>", value.len()),
+            ),
+        })
+        .collect()
+}
+
 pub(crate) fn compile_chat_reasoning_action(
     preset: &ReasoningPresetDescriptor,
     action: &ReasoningPresetAction,

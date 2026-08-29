@@ -308,6 +308,86 @@ fn configured_header(client: &AIClient, name: &str) -> Option<String> {
         .and_then(|headers| headers.get(name).cloned())
 }
 
+/// Credential-bearing header names whose values must never reach the logs in
+/// full; the log line keeps the first 8 characters and masks the rest.
+const CODEBUDDY_SECRET_HEADER_NAMES: &[&str] = &[
+    "Authorization",
+    "X-API-Key",
+    "X-Refresh-Token",
+    "X-Verification-Code",
+];
+
+/// True when this header carries a credential value that must be masked.
+fn is_secret_header_name(name: &str) -> bool {
+    CODEBUDDY_SECRET_HEADER_NAMES
+        .iter()
+        .any(|secret| secret.eq_ignore_ascii_case(name))
+}
+
+/// Masks a credential header value: keeps the first 8 characters, replaces
+/// everything beyond them with `***`. Values of 8 characters or fewer (and
+/// empty values) are masked entirely so no full credential ever leaks.
+fn mask_secret_header_value(name: &str, value: &str) -> String {
+    if !is_secret_header_name(name) {
+        return value.to_string();
+    }
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= 8 {
+        return "***".to_string();
+    }
+    let prefix: String = chars[..8].iter().collect();
+    format!("{prefix}***")
+}
+
+#[cfg(test)]
+mod mask_header_tests {
+    use super::{is_secret_header_name, mask_secret_header_value};
+
+    #[test]
+    fn codebuddy_mask_keeps_first_eight_chars_and_masks_rest() {
+        assert_eq!(
+            mask_secret_header_value("Authorization", "Bearer abcdefghSECRET"),
+            "Bearer a***"
+        );
+        assert_eq!(
+            mask_secret_header_value("X-API-Key", "ck_abcdefghSECRET"),
+            "ck_abcde***"
+        );
+    }
+
+    #[test]
+    fn codebuddy_mask_hides_short_values_completely() {
+        // A value of 8 characters or fewer must not keep its prefix: keeping
+        // it would leak the full credential. A longer value keeps exactly the
+        // first 8 characters per the masking rule.
+        assert_eq!(mask_secret_header_value("X-API-Key", "ck_12345"), "***");
+        assert_eq!(
+            mask_secret_header_value("X-API-Key", "ck_12345678"),
+            "ck_12345***"
+        );
+        assert_eq!(mask_secret_header_value("Authorization", ""), "***");
+    }
+
+    #[test]
+    fn codebuddy_mask_matches_names_case_insensitively() {
+        assert!(is_secret_header_name("authorization"));
+        assert!(is_secret_header_name("x-api-key"));
+        assert_eq!(
+            mask_secret_header_value("x-api-key", "ck_abcdefghSECRET"),
+            "ck_abcde***"
+        );
+    }
+
+    #[test]
+    fn codebuddy_mask_leaves_non_secret_values_untouched() {
+        assert_eq!(mask_secret_header_value("X-IDE-Name", ""), "");
+        assert_eq!(
+            mask_secret_header_value("X-Conversation-ID", "sess-abc"),
+            "sess-abc"
+        );
+    }
+}
+
 pub(crate) async fn send_stream(
     client: &AIClient,
     messages: Vec<Message>,
@@ -367,13 +447,31 @@ pub(crate) async fn send_stream(
         move || {
             let mut builder = common::apply_headers(client, client.client.post(&header_url));
             if header_url.contains("copilot.tencent.com") {
-                for (name, value) in codebuddy_fingerprint_headers(client, request_context.as_ref())
-                {
-                    builder = builder.header(name, value);
+                let fingerprint = codebuddy_fingerprint_headers(client, request_context.as_ref());
+                for (name, value) in &fingerprint {
+                    builder = builder.header(*name, value);
                 }
                 let req_id = generate_hex32();
                 builder = builder.header("X-Request-ID", req_id.clone());
-                builder = builder.header("X-Conversation-Message-ID", req_id);
+                builder = builder.header("X-Conversation-Message-ID", req_id.clone());
+                // Diagnostic header log (recon CB-DIAG-R4 gap #6): the final
+                // assembled header set was never observed at runtime. Log the
+                // complete header face — shared transport headers plus this
+                // closure's fingerprint/request-id additions — with credential
+                // values masked, only for the CodeBuddy gateway domain.
+                let mut logged: Vec<(String, String)> = common::log_header_face(&builder);
+                for (name, value) in &fingerprint {
+                    logged.push(((*name).to_string(), value.clone()));
+                }
+                logged.push(("X-Request-ID".to_string(), req_id.clone()));
+                logged.push(("X-Conversation-Message-ID".to_string(), req_id));
+                for (name, value) in &logged {
+                    debug!(
+                        "CodeBuddy request header: {}={}",
+                        name,
+                        mask_secret_header_value(name, value)
+                    );
+                }
             }
             builder
         },
