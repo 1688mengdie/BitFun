@@ -369,6 +369,56 @@ describe('interrupted turn lifecycle', () => {
       SessionExecutionState.FINISHING,
     );
   });
+
+  it('settles the state machine when completion arrives for a non-latest turn', async () => {
+    // The machine is PROCESSING for turn-1 while dialogTurns already contains
+    // a newer optimistic follow-up turn-2. Gating settlement on
+    // eventOwnsLatestSessionTurn would drop the completion event and leave the
+    // machine in PROCESSING forever; completion must settle unconditionally.
+    vi.useFakeTimers();
+    const turn1: DialogTurn = {
+      id: 'turn-1',
+      sessionId: 'session-1',
+      agentType: 'agentic',
+      userMessage: { id: 'user-1', content: 'first', timestamp: 1 },
+      modelRounds: [],
+      status: 'processing',
+      startTime: 1,
+    };
+    const turn2: DialogTurn = {
+      id: 'turn-2',
+      sessionId: 'session-1',
+      agentType: 'agentic',
+      userMessage: { id: 'user-2', content: 'follow-up', timestamp: 2 },
+      modelRounds: [],
+      status: 'processing',
+      startTime: 2,
+    };
+    createSessionWithTurn(turn1);
+    FlowChatStore.getInstance().setState(state => {
+      const sessions = new Map(state.sessions);
+      sessions.set('session-1', { ...sessions.get('session-1')!, dialogTurns: [turn1, turn2] });
+      return { ...state, sessions };
+    });
+    await stateMachineManager.transition('session-1', SessionExecutionEvent.START, {
+      taskId: 'session-1',
+      dialogTurnId: 'turn-1',
+    });
+    const context = createFlowChatContext();
+
+    handleDialogTurnComplete(context, {
+      sessionId: 'session-1',
+      turnId: 'turn-1',
+      success: true,
+      finishReason: 'complete',
+    }, vi.fn());
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(stateMachineManager.getCurrentState('session-1')).toBe(SessionExecutionState.IDLE);
+    expect(FlowChatStore.getInstance().getState().sessions
+      .get('session-1')!.dialogTurns[0]).toMatchObject({ id: 'turn-1', status: 'completed' });
+    vi.useRealTimers();
+  });
 });
 
 describe('resolveDialogTurnDisplayContent', () => {

@@ -185,9 +185,13 @@ function eventOwnsLatestSessionTurn(
   sessionId: string,
   turnId: string,
 ): boolean {
-  if (session.dialogTurns.at(-1)?.id !== turnId) return false;
   const machine = stateMachineManager.get(sessionId);
   const currentTurnId = machine?.getContext().currentDialogTurnId;
+  // Prefer the state machine's current turn id: an optimistically created
+  // follow-up turn can make dialogTurns.at(-1) differ from the turn that is
+  // actually completing, and its completion event must not be dropped.
+  if (currentTurnId && currentTurnId === turnId) return true;
+  if (session.dialogTurns.at(-1)?.id !== turnId) return false;
   return !currentTurnId || currentTurnId === turnId;
 }
 
@@ -2645,7 +2649,14 @@ export function handleDialogTurnComplete(
   reconcileBackgroundSubagentSession(sessionId);
 
   const currentState = stateMachineManager.getCurrentState(sessionId);
-  if (ownsSessionSettlement && currentState === SessionExecutionState.PROCESSING) {
+  // A DialogTurnCompleted event means a turn of this session finished
+  // normally, so settle unconditionally while the machine is PROCESSING.
+  // Gating on eventOwnsLatestSessionTurn drops the event when an optimistic
+  // follow-up turn exists, leaving the machine in PROCESSING forever. The
+  // backend emits Completed only once, right after the turn ends and before
+  // any new turn starts, so a late completion for an old turn cannot break a
+  // newer one (Cancelled events arrive late and have their own handler).
+  if (currentState === SessionExecutionState.PROCESSING) {
     void stateMachineManager
       .transition(sessionId, SessionExecutionEvent.BACKEND_STREAM_COMPLETED)
       .catch(error => {
@@ -2655,9 +2666,10 @@ export function handleDialogTurnComplete(
     log.debug('Skipping BACKEND_STREAM_COMPLETED transition', { currentState, sessionId, turnId });
   }
 
-  if (ownsSessionSettlement) {
-    beginTurnCompletion(context, sessionId, turnId, partialRecoveryReason);
-  }
+  // Settle unconditionally once the completion event arrives; finalize is
+  // idempotent about the machine's FINISHING_SETTLED and the UI turn update
+  // already happened above.
+  beginTurnCompletion(context, sessionId, turnId, partialRecoveryReason);
 }
 
 function normalizeDialogErrorDetail(event: any): AiErrorDetail {
@@ -2745,14 +2757,15 @@ function handleDialogTurnFailed(context: FlowChatContext, event: any): void {
   reconcileBackgroundSubagentSession(sessionId);
   
   const currentState = stateMachineManager.getCurrentState(sessionId);
+  // Settle the failure with a single FINISHING_SETTLED transition. The old
+  // ERROR_OCCURRED→RESET pair cleared context.currentDialogTurnId, which made
+  // later ownership checks lose track of the turn and left the machine in
+  // PROCESSING forever.
   if (ownsSessionSettlement && isStreamingExecutionState(currentState)) {
-    stateMachineManager.transition(sessionId, SessionExecutionEvent.ERROR_OCCURRED, {
+    stateMachineManager.transition(sessionId, SessionExecutionEvent.FINISHING_SETTLED, {
       error: error || 'Execution failed'
     }).catch(err => {
-      log.error('State machine transition failed on error occurred', { sessionId, error: err });
-    });
-    stateMachineManager.transition(sessionId, SessionExecutionEvent.RESET).catch(err => {
-      log.error('State machine transition failed on reset', { sessionId, error: err });
+      log.error('State machine transition failed on error settled', { sessionId, error: err });
     });
   }
   
