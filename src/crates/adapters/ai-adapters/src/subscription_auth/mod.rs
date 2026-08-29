@@ -295,6 +295,12 @@ fn validate_session_id(session_id: &str) -> Result<()> {
 /// same explicit proxy configuration from the host. Keep environment proxy
 /// discovery disabled to match the main AI client, which is controlled by
 /// `ai.proxy`.
+///
+/// The CodeBuddy Tencent gateway rejects subscription requests whose
+/// User-Agent does not carry the official CLI identity (`check ua, get coding
+/// copilot version error`), so the CodeBuddy client reuses the same
+/// `user_agent_for_base_url` override as the inference chain. Other providers
+/// keep the reqwest default.
 pub(crate) fn build_http_client(
     options: &SubscriptionHttpOptions,
     provider: &str,
@@ -303,6 +309,12 @@ pub(crate) fn build_http_client(
         .tls_backend_rustls()
         .timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(options.skip_ssl_verify);
+
+    if provider == "CodeBuddy" {
+        builder = builder.user_agent(crate::client::http::user_agent_for_base_url(
+            codebuddy::API_BASE_URL,
+        ));
+    }
 
     if options.skip_ssl_verify {
         log::warn!(
@@ -660,9 +672,10 @@ pub async fn start_login_with_options(
 }
 
 /// Logs in with a Personal Access Token, supported by providers whose gateways
-/// exchange a PAT for a short-lived job token (currently Qoder). The exchange
-/// happens synchronously and the resulting credential is persisted, so the
-/// account is immediately connected on success.
+/// exchange a PAT for a short-lived job token (currently Qoder). CodeBuddy
+/// accepts an API key directly through this channel and stores it as an `Api`
+/// credential without a network exchange. The credential is persisted
+/// synchronously, so the account is immediately connected on success.
 pub async fn start_pat_login(provider: SubscriptionProvider, pat: String) -> Result<()> {
     start_pat_login_with_options(provider, pat, SubscriptionHttpOptions::default()).await
 }
@@ -678,6 +691,13 @@ pub async fn start_pat_login_with_options(
             let guard = store_lock(provider).lock().await;
             let expected_revision = store::credential_revision(provider.key()).await?;
             let result = qoder::pat_login(&pat, expected_revision, &options).await;
+            drop(guard);
+            result
+        }
+        SubscriptionProvider::CodeBuddy => {
+            let guard = store_lock(provider).lock().await;
+            let expected_revision = store::credential_revision(provider.key()).await?;
+            let result = codebuddy::api_key_login(&pat, expected_revision).await;
             drop(guard);
             result
         }
@@ -954,6 +974,90 @@ mod tests {
         &LOCK
     }
 
+    /// Captures the raw request bytes the subscription client sends to a local
+    /// throwaway listener, then answers with a minimal 200 response so the
+    /// reqwest `send()` completes. The capture and the client request must run
+    /// concurrently: the server task is spawned first and awaited after the
+    /// response arrives.
+    async fn capture_subscription_request(
+        listener: tokio::net::TcpListener,
+    ) -> tokio::task::JoinHandle<String> {
+        tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("capture listener must accept the client connection");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 1024];
+            // Read until the header terminator shows up. A single short read
+            // may only carry part of the header block, so keep looping.
+            loop {
+                let n = socket
+                    .read(&mut chunk)
+                    .await
+                    .expect("capture listener must read the request headers");
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&buf).to_string();
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .expect("capture listener must answer the client request");
+            request
+        })
+    }
+
+    /// Extracts the User-Agent header value from a raw HTTP request captured
+    /// by a local listener. Header names are case-insensitive per RFC 9110.
+    fn request_user_agent(request: &str) -> Option<String> {
+        request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            if name.trim().eq_ignore_ascii_case("User-Agent") {
+                Some(value.trim().to_string())
+            } else {
+                None
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn codebuddy_subscription_client_sends_official_cli_user_agent() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = build_http_client(&SubscriptionHttpOptions::default(), "CodeBuddy").unwrap();
+        let capture = capture_subscription_request(listener).await;
+        client.get(format!("http://{addr}/")).send().await.unwrap();
+        let request = capture.await.unwrap();
+        assert_eq!(
+            request_user_agent(&request).as_deref(),
+            Some("CLI/2.141.0 CodeBuddy/2.141.0"),
+            "CodeBuddy subscription client must send the official CLI User-Agent; got: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn other_providers_keep_subscription_client_user_agent_unchanged() {
+        for provider in ["Codex", "Antigravity", "OpenCode", "Qoder"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let client = build_http_client(&SubscriptionHttpOptions::default(), provider).unwrap();
+            let capture = capture_subscription_request(listener).await;
+            client.get(format!("http://{addr}/")).send().await.unwrap();
+            let request = capture.await.unwrap();
+            assert!(
+                request_user_agent(&request).as_deref() != Some("CLI/2.141.0 CodeBuddy/2.141.0"),
+                "{provider} subscription client must keep its existing User-Agent; got: {request}"
+            );
+        }
+    }
+
     fn temp_store_path() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("bitfun-subauth-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -1001,6 +1105,24 @@ mod tests {
         assert_eq!(SubscriptionProvider::ALL.len(), 5);
         assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::CodeBuddy));
         assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::Qoder));
+    }
+
+    #[tokio::test]
+    async fn codebuddy_pat_command_stores_api_credential() {
+        let _guard = test_lock().lock().await;
+        store::set_store_path_for_test(temp_store_path());
+        start_pat_login_with_options(
+            SubscriptionProvider::CodeBuddy,
+            "ck-test-placeholder-key".to_string(),
+            SubscriptionHttpOptions::default(),
+        )
+        .await
+        .expect("CodeBuddy API key login must be supported");
+        let entry = store::load_entry(SubscriptionProvider::CodeBuddy.key())
+            .await
+            .unwrap()
+            .expect("credential stored after CodeBuddy key login");
+        assert!(matches!(entry, StoredCredential::Api { .. }));
     }
 
     #[tokio::test]

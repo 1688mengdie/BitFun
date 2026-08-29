@@ -1381,9 +1381,17 @@ const AIModelConfig: React.FC = () => {
       await aiApi.startSubscriptionPatLogin(provider, pat);
       await refreshSubscriptionAccounts();
       setPatInputs(prev => ({ ...prev, [provider]: '' }));
-      notification.success(t('subscriptionAuth.patLoginSuccess'));
+      notification.success(
+        provider === 'codebuddy'
+          ? t('subscriptionAuth.codebuddyApiKeyLoginSuccess')
+          : t('subscriptionAuth.patLoginSuccess'),
+      );
     } catch (e) {
-      notification.error(t('subscriptionAuth.patLoginFailed', { error: String(e) }));
+      notification.error(
+        provider === 'codebuddy'
+          ? t('subscriptionAuth.codebuddyApiKeyLoginFailed', { error: String(e) })
+          : t('subscriptionAuth.patLoginFailed', { error: String(e) }),
+      );
     } finally {
       setPatLoggingIn(null);
     }
@@ -3315,7 +3323,7 @@ const AIModelConfig: React.FC = () => {
                         </Button>
                       ) : (
                         <>
-                          {account.provider !== 'qoder' && (
+                          {!['qoder', 'codebuddy'].includes(account.provider) && (
                             <Button
                               size="small"
                               variant="primary"
@@ -3326,11 +3334,15 @@ const AIModelConfig: React.FC = () => {
                               {t('subscriptionAuth.login')}
                             </Button>
                           )}
-                          {account.provider === 'qoder' && (
+                          {['qoder', 'codebuddy'].includes(account.provider) && (
                             <>
                               <Input
                                 type="password"
-                                placeholder={t('subscriptionAuth.patPlaceholder')}
+                                placeholder={
+                                  account.provider === 'codebuddy'
+                                    ? t('subscriptionAuth.codebuddyApiKeyPlaceholder')
+                                    : t('subscriptionAuth.patPlaceholder')
+                                }
                                 value={patInputs[account.provider] || ''}
                                 disabled={anyLoginInProgress}
                                 inputSize="small"
@@ -3347,7 +3359,9 @@ const AIModelConfig: React.FC = () => {
                                 disabled={anyLoginInProgress}
                                 onClick={() => void handlePatLogin(account.provider)}
                               >
-                                {t('subscriptionAuth.patLogin')}
+                                {account.provider === 'codebuddy'
+                                  ? t('subscriptionAuth.codebuddyApiKeyLogin')
+                                  : t('subscriptionAuth.patLogin')}
                               </Button>
                             </>
                           )}

@@ -19,7 +19,10 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-const API_BASE_URL: &str = "https://copilot.tencent.com";
+/// Product endpoint base URL. Also feeds the official CLI User-Agent for the
+/// subscription HTTP client (see `build_http_client`); kept `pub(crate)` as the
+/// single source of truth for the CodeBuddy gateway identity.
+pub(crate) const API_BASE_URL: &str = "https://copilot.tencent.com";
 /// OpenAI-compatible inference endpoint. The official CodeBuddy desktop client
 /// appends `/v2` to its product endpoint, so the chat-completions route lives
 /// under `/v2/chat/completions` (not `/chat/completions`).
@@ -269,6 +272,30 @@ async fn persist_tokens(
     Ok(())
 }
 
+/// Logs in with a direct API key (`ck_`-prefixed) and stores it as an `Api`
+/// credential. No network exchange happens: the gateway accepts the key as a
+/// bearer token. `metadata` stays `None`; `resolve` already treats absent
+/// metadata as "skip all identity headers", which the CLI proved is accepted
+/// anonymously.
+pub(crate) async fn api_key_login(key: &str, expected_revision: u64) -> Result<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(anyhow!("CodeBuddy API key must not be empty"));
+    }
+    let outcome = store::upsert_if_revision(
+        STORE_KEY,
+        expected_revision,
+        StoredCredential::Api {
+            key: key.to_string(),
+            metadata: None,
+        },
+    )
+    .await?;
+    super::require_current_store_revision(super::SubscriptionProvider::CodeBuddy, outcome)?;
+    log::info!("codebuddy subscription API key saved");
+    Ok(())
+}
+
 /// Starts the private auth API login flow. The browser URL is returned
 /// immediately; the runner polls for the token in the background.
 pub(crate) async fn begin_login(
@@ -300,7 +327,7 @@ pub(crate) async fn begin_login(
                     }
                     Err(e) => {
                         log::warn!(
-                            "codebuddy fetch_account failed: {}; storing empty metadata — enterprise endpoint will be skipped, falling back to /v3/config or static",
+                            "codebuddy fetch_account failed: {}; storing empty metadata — enterprise endpoint will be skipped, falling back to /v3/config",
                             e
                         );
                         Ok((tokens, AuthAccountData {
@@ -333,6 +360,11 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, Opti
     let entry = snapshot
         .credential
         .ok_or_else(|| anyhow!("CodeBuddy is not connected; sign in first"))?;
+    // Api credentials (direct API key login) have no refresh semantics: the
+    // key never expires, so no refresh endpoint is ever called.
+    if let StoredCredential::Api { key, .. } = &entry {
+        return Ok((key.clone(), None, i64::MAX));
+    }
     let StoredCredential::Oauth {
         refresh: refresh_token,
         access,
@@ -583,8 +615,13 @@ struct CodeBuddyModelEntry {
     supports_reasoning: bool,
 }
 
-/// Fetches the live CodeBuddy model catalog through the three-level fallback
-/// chain: enterprise endpoint → /v3/config → static catalog.
+/// Fetches the live CodeBuddy model catalog through the two-level dynamic
+/// chain: enterprise endpoint → /v3/config.
+///
+/// There is no static fallback at runtime: when both dynamic endpoints fail,
+/// an empty list is returned so the UI shows no models rather than stale
+/// names (owner order 2026-08-29; the hardcoded catalog is no-feature build
+/// only).
 ///
 /// Results are cached in memory for [`MODELS_CACHE_TTL`] (6 min). On HTTP
 /// failure the enterprise endpoint enters exponential backoff (30 s → 300 s);
@@ -641,7 +678,7 @@ pub(crate) async fn list_models(
     } else {
         // enterprise_id is missing — log warning and skip directly to /v3/config
         log::warn!(
-            "codebuddy enterprise_id not found in metadata; skipping enterprise endpoint and falling back to /v3/config (authenticated) or static catalog"
+            "codebuddy enterprise_id not found in metadata; skipping enterprise endpoint and falling back to /v3/config (authenticated)"
         );
     }
 
@@ -662,20 +699,21 @@ pub(crate) async fn list_models(
             return Ok(models);
         }
         Ok(_) => {
-            log::warn!("codebuddy /v3/config returned no models; falling back to static catalog");
+            log::warn!("codebuddy /v3/config returned no models");
         }
         Err(e) => {
-            log::warn!("codebuddy /v3/config failed: {e}; falling back to static catalog");
+            log::warn!("codebuddy /v3/config failed: {e}");
         }
     }
 
-    // 5. Static fallback — never fails.
-    let static_models = crate::providers::openai::common::static_codebuddy_models();
+    // 5. Both dynamic endpoints failed. Owner order 2026-08-29: a stale
+    // hardcoded list must not masquerade as a fallback, so return an empty
+    // list and let the UI show no models (chat still works via the
+    // configured model_name, which bypasses the catalog).
     log::warn!(
-        "codebuddy using static model catalog ({} models) — enterprise_id missing or all endpoints failed",
-        static_models.len()
+        "codebuddy dynamic model catalog unavailable (enterprise/v3/config both failed); returning empty list, UI shows none rather than stale names"
     );
-    Ok(static_models)
+    Ok(Vec::new())
 }
 
 /// Reads the cached model list if it exists and has not expired.
@@ -727,13 +765,15 @@ async fn load_auth_for_models(
     let entry = snapshot
         .credential
         .ok_or_else(|| anyhow!("CodeBuddy is not connected; sign in first"))?;
-    let StoredCredential::Oauth {
-        access, metadata, ..
-    } = entry
-    else {
-        return Err(anyhow!("CodeBuddy credential is not an OAuth login"));
+    let metadata = match &entry {
+        StoredCredential::Oauth { metadata, .. } => metadata.clone(),
+        StoredCredential::Api { metadata, .. } => metadata.clone(),
     };
     let metadata_map = metadata.and_then(|v| v.as_object().cloned());
+    let access = match entry {
+        StoredCredential::Oauth { access, .. } => access,
+        StoredCredential::Api { key, .. } => key,
+    };
     Ok((access, metadata_map))
 }
 
@@ -962,7 +1002,9 @@ mod tests {
     // -- Dynamic model list tests -------------------------------------------
 
     /// Helper: clear the module-level model cache and backoff state so that
-    /// each test starts from a clean slate.
+    /// each test starts from a clean slate. Tests that trigger HTTP calls must
+    /// additionally hold `super::super::tests::test_lock()` so concurrent
+    /// captures cannot interleave.
     fn reset_model_cache() {
         if let Ok(mut g) = super::MODELS_CACHE.lock() {
             *g = None;
@@ -1092,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    fn no_enterprise_id_falls_back_to_static() {
+    fn no_enterprise_id_dynamic_failure_returns_empty_list() {
         reset_model_cache();
         let _guard = super::super::tests::test_lock().blocking_lock();
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -1115,13 +1157,14 @@ mod tests {
             .await
             .unwrap();
             // No enterprise_id → enterprise endpoint skipped → /v3/config will
-            // fail (no real network) → static fallback.
+            // fail (no real network) → owner order 2026-08-29: empty list, no
+            // static fallback.
             let models = super::list_models(&SubscriptionHttpOptions::default())
                 .await
                 .expect("list_models must not fail");
             assert!(
-                models.iter().any(|m| m.id == "glm-5.2"),
-                "static fallback must include glm-5.2; got {:?}",
+                models.is_empty(),
+                "dynamic failure must return an empty list (stale static catalog removed); got {:?}",
                 models.iter().map(|m| &m.id).collect::<Vec<_>>()
             );
         });
@@ -1162,10 +1205,12 @@ mod tests {
             let models = super::list_models(&SubscriptionHttpOptions::default())
                 .await
                 .expect("list_models must not fail");
-            // Verify we get static fallback
+            // Owner order 2026-08-29: dynamic failure returns an empty list,
+            // never the stale static models.
             assert!(
-                models.iter().any(|m| m.id == "glm-5.2"),
-                "should fall back to static models when enterprise_id is missing"
+                models.is_empty(),
+                "should return an empty list when enterprise_id is missing and both dynamic endpoints fail; got {:?}",
+                models.iter().map(|m| &m.id).collect::<Vec<_>>()
             );
         });
         reset_model_cache();
@@ -1218,6 +1263,7 @@ mod tests {
     #[test]
     fn backoff_increases_and_caps() {
         reset_model_cache();
+        let _guard = super::super::tests::test_lock().blocking_lock();
         // First failure → 30 s backoff.
         super::apply_failure_backoff();
         assert!(super::is_in_backoff());
@@ -1239,5 +1285,122 @@ mod tests {
             }
         }
         reset_model_cache();
+    }
+
+    // -- API key login tests -------------------------------------------------
+
+    #[test]
+    fn api_key_login_persists_api_credential_roundtrip() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-cb-apikey-roundtrip-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            super::api_key_login("ck-test-placeholder-key", 0)
+                .await
+                .expect("api key login must succeed on a fresh store");
+            let entry = store::load_entry(STORE_KEY)
+                .await
+                .expect("load stored credential")
+                .expect("credential must exist after api key login");
+            match entry {
+                StoredCredential::Api { key, metadata } => {
+                    assert_eq!(key, "ck-test-placeholder-key");
+                    assert!(metadata.is_none(), "api key login stores no metadata");
+                }
+                other => panic!("expected Api credential, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn api_key_login_rejects_empty_key() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!("bitfun-cb-apikey-empty-{}", uuid::Uuid::new_v4()))
+                    .join("subscription_auth.json"),
+            );
+            assert!(
+                super::api_key_login("   ", 0).await.is_err(),
+                "whitespace-only key must be rejected"
+            );
+            assert!(
+                store::load_entry(STORE_KEY).await.unwrap().is_none(),
+                "no credential must be stored for an empty key"
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_fresh_returns_api_key_without_refresh() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-cb-apikey-ensure-fresh-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Api {
+                    key: "ck-test-placeholder-key".to_string(),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            // An Api credential never expires: ensure_fresh must return the
+            // key verbatim with i64::MAX expiry and never reach the refresh
+            // endpoint (no network call in this test proves that path).
+            let (access, account_id, expires) =
+                super::ensure_fresh(&SubscriptionHttpOptions::default())
+                    .await
+                    .expect("ensure_fresh must succeed for Api credentials");
+            assert_eq!(access, "ck-test-placeholder-key");
+            assert_eq!(account_id, None);
+            assert_eq!(expires, i64::MAX);
+        });
+    }
+
+    #[test]
+    fn load_auth_for_models_supports_api_credential() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!("bitfun-cb-apikey-models-{}", uuid::Uuid::new_v4()))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Api {
+                    key: "ck-test-placeholder-key".to_string(),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Previously this failed with "not an OAuth login"; Api
+            // credentials must resolve for the model list chain.
+            let (access, metadata_map) = super::load_auth_for_models()
+                .await
+                .expect("load_auth_for_models must accept Api credentials");
+            assert_eq!(access, "ck-test-placeholder-key");
+            assert_eq!(metadata_map, None);
+        });
     }
 }
