@@ -217,8 +217,7 @@ pub(crate) fn build_request_body_with_context(
 /// - `X-Conversation-Request-ID`: turn-stable (one value per user prompt,
 ///   shared by every request/retry of that turn); falls back to a per-request
 ///   value only when the turn-level ID is unavailable.
-/// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-IDE-*`/
-///   `X-Requested-With`: official client fingerprint.
+/// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-IDE-*`: official client fingerprint.
 /// - `X-Private-Data`: model-optimization switch, always `"false"` (主人定标:
 ///   enableModelOptimization 必须关, never configurable).
 /// - `X-IDE-Version`: defaults to the official CodeBuddy CLI version 2.141.0;
@@ -254,10 +253,12 @@ fn codebuddy_fingerprint_headers(
         headers.push(("X-Agent-Purpose", purpose));
     }
     // Official CLI client info (codebuddy.js module 33387 + clientInfoProvider):
-    // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType/ideName
-    // both fall back to platform; version = CLI package version 2.141.0.
+    // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType follows
+    // platform; ideName is an empty string in the CLI environment (recon
+    // CB-DIAG-R3 §4.1 #6); version = CLI package version 2.141.0.
     headers.push(("X-IDE-Type", "CLI".to_string()));
-    headers.push(("X-IDE-Name", "CLI".to_string()));
+    let ide_name = configured_header(client, "X-IDE-Name").unwrap_or_default();
+    headers.push(("X-IDE-Name", ide_name));
     // Version follows the channel: default to the official CodeBuddy CLI
     // version, overridable per model entry via `custom_headers` (e.g.
     // Workbuddy 2.115.0 or a desktop version).
@@ -267,7 +268,6 @@ fn codebuddy_fingerprint_headers(
     // Model-optimization switch: 主人定标 enableModelOptimization 必须关,
     // always send "false" — never configurable, never "true".
     headers.push(("X-Private-Data", "false".to_string()));
-    headers.push(("X-Requested-With", "XMLHttpRequest".to_string()));
     // Identity headers resolved by the subscription auth layer (`X-User-Id`,
     // `X-Enterprise-Id`, `X-Tenant-Id`, `X-Department-Info`, `X-Userinfo`,
     // `X-Domain`). The official CLI injects them into every inference request
@@ -572,7 +572,6 @@ mod tests {
             "X-IDE-Name",
             "X-IDE-Version",
             "X-Private-Data",
-            "X-Requested-With",
         ] {
             assert!(
                 names.contains(&expected),
@@ -595,7 +594,9 @@ mod tests {
             "X-Agent-Purpose must be omitted by default"
         );
         assert_eq!(get("X-IDE-Type"), "CLI");
-        assert_eq!(get("X-IDE-Name"), "CLI");
+        // X-IDE-Name is an empty string in the official CLI environment
+        // (recon CB-DIAG-R3 §4.1 #6); overridable via custom_headers.
+        assert_eq!(get("X-IDE-Name"), "");
         // Official CodeBuddy CLI version (package.json of
         // @tencent-ai/codebuddy-code 2.141.0), NOT BitFun's own version.
         assert_eq!(get("X-IDE-Version"), "2.141.0");
@@ -611,7 +612,12 @@ mod tests {
         );
         // Model-optimization switch defaults to "false" (official default).
         assert_eq!(get("X-Private-Data"), "false");
-        assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
+        // X-Requested-With is NOT sent: the official /v2 inference assembly
+        // never emits it (recon CB-DIAG-R3 §4.1 #5).
+        assert!(
+            !names.contains(&"X-Requested-With"),
+            "X-Requested-With must not be sent on /v2 inference"
+        );
         // Identity headers come only from the subscription auth layer; with a
         // bare custom_headers config they stay absent.
         assert!(headers.iter().all(|(n, _)| *n != "X-User-Id"));
@@ -648,6 +654,26 @@ mod tests {
         assert_eq!(get("X-IDE-Version"), "2.115.0");
         // X-Agent-Purpose is injected only when configured.
         assert_eq!(get("X-Agent-Purpose"), "person_agent");
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_custom_headers_override_ide_name() {
+        let mut client = test_client();
+        client.config.custom_headers = Some(
+            [("X-IDE-Name".to_string(), "Workbuddy".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
+        let get = |name: &str| {
+            headers
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.as_str())
+                .unwrap()
+        };
+        // Channel-scoped IDE name override wins over the empty CLI default.
+        assert_eq!(get("X-IDE-Name"), "Workbuddy");
     }
 
     #[test]
