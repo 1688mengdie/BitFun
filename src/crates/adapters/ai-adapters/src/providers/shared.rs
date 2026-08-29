@@ -38,9 +38,16 @@ where
 /// `codebuddy_fingerprint_headers` (providers/openai/chat.rs). That layer
 /// reads configured values via `configured_header` and enforces fixed
 /// semantics (e.g. `X-Private-Data` is always "false" per 主人定标 — model
-/// optimization must stay off, never configurable). Re-applying these keys
+/// optimization must stay off, never configurable). It also consumes the
+/// identity headers resolved by the subscription auth layer (X-User-Id etc.,
+/// carried on `custom_headers` by the client factory). Re-applying these keys
 /// from `custom_headers` here would produce duplicate header values because
 /// reqwest's `header()` appends instead of replaces.
+///
+/// `X-Product-Version` stays reserved (dropped): the official CLI /v2
+/// inference assembly never emits it (nor `X-Product`, which is not carried by
+/// custom_headers), so dropping it prevents the generic channel from silently
+/// reintroducing a header the fingerprint layer deliberately omits.
 ///
 /// `X-API-Key` is deliberately NOT reserved: other channels (e.g. Qoder)
 /// rely on `custom_headers` to inject their own `X-API-Key`.
@@ -49,6 +56,16 @@ const CODEBUDDY_FINGERPRINT_RESERVED_HEADERS: &[&str] = &[
     "X-IDE-Version",
     "X-Product-Version",
     "X-Agent-Purpose",
+    // Identity headers resolved by the subscription auth layer. The factory
+    // carries them on custom_headers (merge mode); the fingerprint layer
+    // appends them to the inference request, so the generic channel must not
+    // re-apply them (reqwest header() appends and would duplicate values).
+    "X-User-Id",
+    "X-Userinfo",
+    "X-Enterprise-Id",
+    "X-Tenant-Id",
+    "X-Department-Info",
+    "X-Domain",
 ];
 
 pub(crate) fn apply_custom_headers(
@@ -469,9 +486,10 @@ mod tests {
         // P2-1 regression: X-Private-Data is always "false" (主人定标 — model
         // optimization must stay off) and must not be overridden by
         // custom_headers. The fingerprint layer owns X-Private-Data,
-        // X-IDE-Version, X-Product-Version and X-Agent-Purpose exclusively;
-        // custom_headers entries for these keys must be dropped so reqwest's
-        // append semantics cannot produce duplicate values.
+        // X-IDE-Version, X-Agent-Purpose exclusively; custom_headers entries
+        // for these keys must be dropped so reqwest's append semantics cannot
+        // produce duplicate values. X-Product-Version stays dropped because
+        // the official /v2 inference assembly never emits it.
         let config = AIConfig {
             name: "shared-test".to_string(),
             base_url: "https://copilot.tencent.com/v1".to_string(),
@@ -489,6 +507,8 @@ mod tests {
                     ("X-Private-Data".to_string(), "true".to_string()),
                     ("X-IDE-Version".to_string(), "9.9.9".to_string()),
                     ("X-Agent-Purpose".to_string(), "person_agent".to_string()),
+                    ("X-User-Id".to_string(), "u-123".to_string()),
+                    ("X-Domain".to_string(), "copilot.tencent.com".to_string()),
                     ("X-Custom-Other".to_string(), "kept".to_string()),
                 ]
                 .into_iter()
@@ -512,6 +532,11 @@ mod tests {
             "X-IDE-Version",
             "X-Product-Version",
             "X-Agent-Purpose",
+            // Identity headers ride on custom_headers from the auth layer and
+            // are consumed by the fingerprint layer; the generic channel must
+            // not duplicate them.
+            "X-User-Id",
+            "X-Domain",
         ] {
             assert!(
                 headers.get(reserved).is_none(),

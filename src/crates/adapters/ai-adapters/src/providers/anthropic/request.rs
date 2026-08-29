@@ -7,7 +7,7 @@ use crate::client::quirks::{
 use crate::client::sse::execute_sse_request;
 use crate::client::{AIClient, StreamResponse};
 use crate::providers::shared;
-use crate::stream::{handle_anthropic_stream_with_usage_semantics};
+use crate::stream::handle_anthropic_stream_with_usage_semantics;
 use crate::trace::ModelExchangeTraceConfig;
 use crate::types::{
     Message, ModelRequestContext, ReasoningPresetAction, ReasoningPresetDescriptor, ToolDefinition,

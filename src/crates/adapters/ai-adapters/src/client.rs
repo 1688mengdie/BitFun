@@ -87,7 +87,8 @@ impl AIClient {
         proxy_config: Option<ProxyConfig>,
         stream_options: StreamOptions,
     ) -> Self {
-        let client = http::create_http_client(proxy_config, config.skip_ssl_verify);
+        let client =
+            http::create_http_client(proxy_config, config.skip_ssl_verify, &config.base_url);
         Self {
             client,
             config,
