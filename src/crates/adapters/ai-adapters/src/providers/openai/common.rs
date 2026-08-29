@@ -211,8 +211,9 @@ pub(crate) async fn list_models(client: &AIClient) -> Result<Vec<RemoteModelInfo
 
     // CodeBuddy's Tencent backend (`copilot.tencent.com`) exposes no public
     // OpenAI `/models` endpoint. Fetch the dynamic model catalog through the
-    // subscription auth layer (enterprise endpoint → /v3/config → static
-    // fallback), mirroring the official client's ModelsProductProvider chain.
+    // subscription auth layer (enterprise endpoint → /v3/config); when both
+    // endpoints fail, the runtime returns an empty list instead of a static
+    // fallback (owner order 2026-08-29).
     if url.contains("copilot.tencent.com") {
         #[cfg(feature = "subscription-auth")]
         {
@@ -305,6 +306,11 @@ pub(crate) fn is_known_codex_reasoning_model(model_id: &str) -> bool {
 /// CodeBuddy backend model catalog (mirrors the official client's model list).
 /// The Tencent gateway accepts these real model ids only; arbitrary ids are
 /// rejected, so the discovery surface must not invent names.
+///
+/// no-feature build only; runtime fallback removed by owner order 2026-08-29 —
+/// `subscription-auth` builds return an empty list when both dynamic endpoints
+/// fail instead of serving this stale catalog.
+#[cfg(not(feature = "subscription-auth"))]
 const CODEBUDDY_MODELS: &[&str] = &[
     "glm-5.2",
     "glm-5.1",
@@ -319,6 +325,7 @@ const CODEBUDDY_MODELS: &[&str] = &[
     "auto",
 ];
 
+#[cfg(not(feature = "subscription-auth"))]
 pub(crate) fn static_codebuddy_models() -> Vec<RemoteModelInfo> {
     CODEBUDDY_MODELS
         .iter()
