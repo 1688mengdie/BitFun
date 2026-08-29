@@ -474,7 +474,8 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
 
   const {
     requests: permissionRequests,
-    activeBatch: activePermissionBatch,
+    ownedRequests: ownedPermissionRequests,
+    ownedActiveBatch: activePermissionBatch,
     respond: respondPermission,
     respondBatch: respondPermissionBatch,
   } = usePermissionRequests(activeSession?.sessionId);
@@ -482,7 +483,7 @@ export const ModernFlowChatContainer: React.FC<ModernFlowChatContainerProps> = (
     ? {
         ownerSessionId: activeSession.sessionId,
         batch: activePermissionBatch,
-        totalPendingCount: permissionRequests.length,
+        totalPendingCount: ownedPermissionRequests.length,
         aboveChatInput: permissionPanelAboveChatInput,
         onRespond: respondPermission,
         onRespondBatch: respondPermissionBatch,
