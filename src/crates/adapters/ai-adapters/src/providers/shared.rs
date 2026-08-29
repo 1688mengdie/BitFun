@@ -44,6 +44,11 @@ where
 /// from `custom_headers` here would produce duplicate header values because
 /// reqwest's `header()` appends instead of replaces.
 ///
+/// `X-Product-Version` stays reserved (dropped): the official CLI /v2
+/// inference assembly never emits it (nor `X-Product`, which is not carried by
+/// custom_headers), so dropping it prevents the generic channel from silently
+/// reintroducing a header the fingerprint layer deliberately omits.
+///
 /// `X-API-Key` is deliberately NOT reserved: other channels (e.g. Qoder)
 /// rely on `custom_headers` to inject their own `X-API-Key`.
 const CODEBUDDY_FINGERPRINT_RESERVED_HEADERS: &[&str] = &[
@@ -481,9 +486,10 @@ mod tests {
         // P2-1 regression: X-Private-Data is always "false" (主人定标 — model
         // optimization must stay off) and must not be overridden by
         // custom_headers. The fingerprint layer owns X-Private-Data,
-        // X-IDE-Version, X-Product-Version and X-Agent-Purpose exclusively;
-        // custom_headers entries for these keys must be dropped so reqwest's
-        // append semantics cannot produce duplicate values.
+        // X-IDE-Version, X-Agent-Purpose exclusively; custom_headers entries
+        // for these keys must be dropped so reqwest's append semantics cannot
+        // produce duplicate values. X-Product-Version stays dropped because
+        // the official /v2 inference assembly never emits it.
         let config = AIConfig {
             name: "shared-test".to_string(),
             base_url: "https://copilot.tencent.com/v1".to_string(),

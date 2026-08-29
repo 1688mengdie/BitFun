@@ -217,13 +217,13 @@ pub(crate) fn build_request_body_with_context(
 /// - `X-Conversation-Request-ID`: turn-stable (one value per user prompt,
 ///   shared by every request/retry of that turn); falls back to a per-request
 ///   value only when the turn-level ID is unavailable.
-/// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-Product`/`X-IDE-*`/
-///   `X-Product-Version`/`X-Requested-With`: official client fingerprint.
+/// - `X-Agent-Intent`/`X-Agent-Purpose`/`X-IDE-*`/
+///   `X-Requested-With`: official client fingerprint.
 /// - `X-Private-Data`: model-optimization switch, always `"false"` (主人定标:
 ///   enableModelOptimization 必须关, never configurable).
-/// - `X-IDE-Version`/`X-Product-Version`: default to the official CodeBuddy
-///   CLI version 2.141.0; a configured `custom_headers` value overrides it so
-///   the version follows the channel (CLI vs Workbuddy vs desktop).
+/// - `X-IDE-Version`: defaults to the official CodeBuddy CLI version 2.141.0;
+///   a configured `custom_headers` value overrides it so the version follows
+///   the channel (CLI vs Workbuddy vs desktop).
 ///
 /// Request-unique IDs (`X-Request-ID`/`X-Conversation-Message-ID`) are
 /// appended by the caller so this function stays deterministic for tests.
@@ -253,7 +253,6 @@ fn codebuddy_fingerprint_headers(
     if let Some(purpose) = configured_header(client, "X-Agent-Purpose") {
         headers.push(("X-Agent-Purpose", purpose));
     }
-    headers.push(("X-Product", "SaaS".to_string()));
     // Official CLI client info (codebuddy.js module 33387 + clientInfoProvider):
     // PRODUCT_TYPE="CLI"; platform defaults to PRODUCT_TYPE; ideType/ideName
     // both fall back to platform; version = CLI package version 2.141.0.
@@ -264,8 +263,7 @@ fn codebuddy_fingerprint_headers(
     // Workbuddy 2.115.0 or a desktop version).
     let ide_version =
         configured_header(client, "X-IDE-Version").unwrap_or_else(|| "2.141.0".to_string());
-    headers.push(("X-IDE-Version", ide_version.clone()));
-    headers.push(("X-Product-Version", ide_version));
+    headers.push(("X-IDE-Version", ide_version));
     // Model-optimization switch: 主人定标 enableModelOptimization 必须关,
     // always send "false" — never configurable, never "true".
     headers.push(("X-Private-Data", "false".to_string()));
@@ -471,6 +469,7 @@ async fn send_qoder_signed_stream(
 mod tests {
     use super::*;
     use crate::types::AIConfig;
+    #[cfg(feature = "subscription-auth")]
     use base64::Engine as _;
 
     #[test]
@@ -569,11 +568,9 @@ mod tests {
             "X-Conversation-ID",
             "X-Conversation-Request-ID",
             "X-Agent-Intent",
-            "X-Product",
             "X-IDE-Type",
             "X-IDE-Name",
             "X-IDE-Version",
-            "X-Product-Version",
             "X-Private-Data",
             "X-Requested-With",
         ] {
@@ -597,13 +594,21 @@ mod tests {
             !names.contains(&"X-Agent-Purpose"),
             "X-Agent-Purpose must be omitted by default"
         );
-        assert_eq!(get("X-Product"), "SaaS");
         assert_eq!(get("X-IDE-Type"), "CLI");
         assert_eq!(get("X-IDE-Name"), "CLI");
         // Official CodeBuddy CLI version (package.json of
         // @tencent-ai/codebuddy-code 2.141.0), NOT BitFun's own version.
         assert_eq!(get("X-IDE-Version"), "2.141.0");
-        assert_eq!(get("X-Product-Version"), "2.141.0");
+        // X-Product/X-Product-Version are NOT sent: the official CLI /v2
+        // inference assembly never emits them (recon CB-DIAG-R3 §4.1 #3-#4).
+        assert!(
+            !names.contains(&"X-Product"),
+            "X-Product must not be sent on /v2 inference"
+        );
+        assert!(
+            !names.contains(&"X-Product-Version"),
+            "X-Product-Version must not be sent on /v2 inference"
+        );
         // Model-optimization switch defaults to "false" (official default).
         assert_eq!(get("X-Private-Data"), "false");
         assert_eq!(get("X-Requested-With"), "XMLHttpRequest");
@@ -626,7 +631,6 @@ mod tests {
         client.config.custom_headers = Some(
             [
                 ("X-IDE-Version".to_string(), "2.115.0".to_string()),
-                ("X-Product-Version".to_string(), "2.115.0".to_string()),
                 ("X-Agent-Purpose".to_string(), "person_agent".to_string()),
             ]
             .into_iter()
@@ -642,12 +646,12 @@ mod tests {
         };
         // Channel-scoped version override (Workbuddy) wins over the CLI default.
         assert_eq!(get("X-IDE-Version"), "2.115.0");
-        assert_eq!(get("X-Product-Version"), "2.115.0");
         // X-Agent-Purpose is injected only when configured.
         assert_eq!(get("X-Agent-Purpose"), "person_agent");
     }
 
     #[test]
+    #[cfg(feature = "subscription-auth")]
     fn codebuddy_fingerprint_headers_include_identity_headers_from_auth_layer() {
         // E3: the subscription auth layer resolves identity headers
         // (X-User-Id etc.) and the factory carries them on custom_headers; the
@@ -714,6 +718,27 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(get("X-Private-Data"), "false");
+    }
+
+    #[test]
+    fn codebuddy_fingerprint_headers_never_emit_product_headers() {
+        // Even with an explicit custom_headers override, X-Product and
+        // X-Product-Version must stay absent from /v2 inference requests:
+        // the fingerprint layer owns the header set, and the shared reserved
+        // list (providers/shared.rs) drops these keys before they could be
+        // re-applied by the generic custom_headers channel.
+        let mut client = test_client();
+        client.config.custom_headers = Some(
+            [
+                ("X-Product".to_string(), "SaaS".to_string()),
+                ("X-Product-Version".to_string(), "2.115.0".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        let headers = codebuddy_fingerprint_headers(&client, Some(&ctx_with_ids()));
+        assert!(headers.iter().all(|(n, _)| *n != "X-Product"));
+        assert!(headers.iter().all(|(n, _)| *n != "X-Product-Version"));
     }
 
     #[test]
