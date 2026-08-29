@@ -4980,7 +4980,7 @@ impl ExecutionEngine {
         let success = has_final_response
             || matches!(
                 effective_finish_reason,
-                "max_rounds" | "repeated_tool_failures"
+                "max_rounds" | "repeated_tool_failures" | "empty_initial_turn"
             );
 
         // Post-processing hook: when a DeepResearch dialog turn finishes
