@@ -4,16 +4,37 @@ use anyhow::{anyhow, Result};
 use log::{debug, error, info, warn};
 use reqwest::{Client, Proxy};
 
+/// Default User-Agent for AI provider requests.
+const DEFAULT_USER_AGENT: &str = "BitFun/1.0";
+
+/// Official CodeBuddy CLI version carried by the CodeBuddy User-Agent override
+/// (single source of truth; mirrors @tencent-ai/codebuddy-code package.json,
+/// recon CB-DIAG-R3).
+const CODEBUDDY_CLI_VERSION: &str = "2.141.0";
+
+/// Resolves the User-Agent for AI provider requests. The CodeBuddy Tencent
+/// gateway must see the official CLI identity (`CLI/<version>
+/// CodeBuddy/<version>`, recon CB-DIAG-R3 log:1056); every other provider
+/// keeps the default BitFun identity unchanged.
+pub(crate) fn user_agent_for_base_url(base_url: &str) -> String {
+    if base_url.contains("copilot.tencent.com") {
+        format!("CLI/{CODEBUDDY_CLI_VERSION} CodeBuddy/{CODEBUDDY_CLI_VERSION}")
+    } else {
+        DEFAULT_USER_AGENT.to_string()
+    }
+}
+
 pub(crate) fn create_http_client(
     proxy_config: Option<ProxyConfig>,
     skip_ssl_verify: bool,
+    base_url: &str,
 ) -> Client {
     let mut builder = Client::builder()
         .tls_backend_rustls()
         .connect_timeout(std::time::Duration::from_secs(
             AIClient::STREAM_CONNECT_TIMEOUT_SECS,
         ))
-        .user_agent("BitFun/1.0")
+        .user_agent(user_agent_for_base_url(base_url))
         .pool_idle_timeout(std::time::Duration::from_secs(
             AIClient::HTTP_POOL_IDLE_TIMEOUT_SECS,
         ))
@@ -88,8 +109,36 @@ fn normalize_proxy_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_proxy, normalize_proxy_url};
+    use super::{build_proxy, normalize_proxy_url, user_agent_for_base_url};
     use crate::types::ProxyConfig;
+
+    #[test]
+    fn codebuddy_base_url_gets_official_cli_user_agent() {
+        assert_eq!(
+            user_agent_for_base_url("https://copilot.tencent.com/v1"),
+            "CLI/2.141.0 CodeBuddy/2.141.0"
+        );
+        assert_eq!(
+            user_agent_for_base_url("https://copilot.tencent.com.evil.example/v1"),
+            "CLI/2.141.0 CodeBuddy/2.141.0"
+        );
+    }
+
+    #[test]
+    fn other_providers_keep_default_user_agent() {
+        assert_eq!(
+            user_agent_for_base_url("https://api.openai.com/v1"),
+            "BitFun/1.0"
+        );
+        assert_eq!(
+            user_agent_for_base_url("https://api.deepseek.com/v1"),
+            "BitFun/1.0"
+        );
+        assert_eq!(
+            user_agent_for_base_url("https://gateway.qoder.com.cn/v1"),
+            "BitFun/1.0"
+        );
+    }
 
     #[test]
     fn normalizes_bare_host_and_port_to_http_proxy_url() {

@@ -323,8 +323,7 @@ mod tests {
             "cache_creation_input_tokens": null
         }"#;
         let usage: Usage = serde_json::from_str(raw).expect("valid non-native usage");
-        let unified =
-            usage.into_unified(AnthropicUsageSemantics::NonNative);
+        let unified = usage.into_unified(AnthropicUsageSemantics::NonNative);
 
         // prompt stays verbatim: fresh 127790 + cached 126848 = 254638.
         assert_eq!(unified.prompt_token_count, 254_638);

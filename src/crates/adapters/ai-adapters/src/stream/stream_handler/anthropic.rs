@@ -2,8 +2,8 @@ use super::inline_think::InlineThinkParser;
 use super::stream_stats::StreamStats;
 use super::{next_stream_item, StreamTimeoutController, StreamTimeoutStage, TimedStreamItem};
 use crate::stream::types::anthropic::{
-    AnthropicUsageSemantics, AnthropicSSEError, ContentBlock, ContentBlockDelta,
-    ContentBlockStart, MessageDelta, MessageStart, Usage,
+    AnthropicSSEError, AnthropicUsageSemantics, ContentBlock, ContentBlockDelta, ContentBlockStart,
+    MessageDelta, MessageStart, Usage,
 };
 use crate::stream::types::unified::UnifiedResponse;
 use anyhow::{anyhow, Result};
@@ -225,8 +225,7 @@ pub async fn handle_anthropic_stream_with_usage_semantics(
                 } else {
                     Some(usage.clone())
                 };
-                let unified_response = message_delta
-                    .into_unified_response(usage_semantics);
+                let unified_response = message_delta.into_unified_response(usage_semantics);
                 if unified_response.finish_reason.is_some() {
                     received_finish_reason = true;
                 }

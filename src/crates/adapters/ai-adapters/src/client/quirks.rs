@@ -34,10 +34,10 @@ pub(crate) fn is_zhipuai_url(url: &str) -> bool {
 /// Native Anthropic (api.anthropic.com) keeps the disjoint-fields semantics.
 /// Unknown hosts are conservatively treated as native to avoid silently
 /// changing numbers for well-behaved gateways until measured otherwise.
-pub(crate) fn anthropic_usage_semantics_for_url(url: &str) -> crate::stream::types::anthropic::AnthropicUsageSemantics {
-    if is_zhipuai_url(url)
-        || is_openbitfun_anthropic_url(url)
-    {
+pub(crate) fn anthropic_usage_semantics_for_url(
+    url: &str,
+) -> crate::stream::types::anthropic::AnthropicUsageSemantics {
+    if is_zhipuai_url(url) || is_openbitfun_anthropic_url(url) {
         return crate::stream::types::anthropic::AnthropicUsageSemantics::NonNative;
     }
     crate::stream::types::anthropic::AnthropicUsageSemantics::Native
@@ -47,14 +47,12 @@ pub(crate) fn anthropic_usage_semantics_for_url(url: &str) -> crate::stream::typ
 /// over the Anthropic wire while its `input_tokens` mirrors the vendor's own
 /// full-prompt accounting rather than native disjoint-field semantics.
 pub(crate) fn is_openbitfun_anthropic_url(url: &str) -> bool {
-    reqwest::Url::parse(url.trim())
-        .ok()
-        .is_some_and(|url| {
-            url.host_str().is_some_and(|host| {
-                host.trim_end_matches('.')
-                    .eq_ignore_ascii_case("api.openbitfun.com")
-            })
+    reqwest::Url::parse(url.trim()).ok().is_some_and(|url| {
+        url.host_str().is_some_and(|host| {
+            host.trim_end_matches('.')
+                .eq_ignore_ascii_case("api.openbitfun.com")
         })
+    })
 }
 
 pub(crate) fn is_deepseek_reasoning_effort_model(model_name: &str) -> bool {
