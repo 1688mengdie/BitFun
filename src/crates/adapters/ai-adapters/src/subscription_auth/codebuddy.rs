@@ -269,6 +269,30 @@ async fn persist_tokens(
     Ok(())
 }
 
+/// Logs in with a direct API key (`ck_`-prefixed) and stores it as an `Api`
+/// credential. No network exchange happens: the gateway accepts the key as a
+/// bearer token. `metadata` stays `None`; `resolve` already treats absent
+/// metadata as "skip all identity headers", which the CLI proved is accepted
+/// anonymously.
+pub(crate) async fn api_key_login(key: &str, expected_revision: u64) -> Result<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(anyhow!("CodeBuddy API key must not be empty"));
+    }
+    let outcome = store::upsert_if_revision(
+        STORE_KEY,
+        expected_revision,
+        StoredCredential::Api {
+            key: key.to_string(),
+            metadata: None,
+        },
+    )
+    .await?;
+    super::require_current_store_revision(super::SubscriptionProvider::CodeBuddy, outcome)?;
+    log::info!("codebuddy subscription API key saved");
+    Ok(())
+}
+
 /// Starts the private auth API login flow. The browser URL is returned
 /// immediately; the runner polls for the token in the background.
 pub(crate) async fn begin_login(
@@ -333,6 +357,11 @@ async fn ensure_fresh(options: &SubscriptionHttpOptions) -> Result<(String, Opti
     let entry = snapshot
         .credential
         .ok_or_else(|| anyhow!("CodeBuddy is not connected; sign in first"))?;
+    // Api credentials (direct API key login) have no refresh semantics: the
+    // key never expires, so no refresh endpoint is ever called.
+    if let StoredCredential::Api { key, .. } = &entry {
+        return Ok((key.clone(), None, i64::MAX));
+    }
     let StoredCredential::Oauth {
         refresh: refresh_token,
         access,
@@ -727,13 +756,15 @@ async fn load_auth_for_models(
     let entry = snapshot
         .credential
         .ok_or_else(|| anyhow!("CodeBuddy is not connected; sign in first"))?;
-    let StoredCredential::Oauth {
-        access, metadata, ..
-    } = entry
-    else {
-        return Err(anyhow!("CodeBuddy credential is not an OAuth login"));
+    let metadata = match &entry {
+        StoredCredential::Oauth { metadata, .. } => metadata.clone(),
+        StoredCredential::Api { metadata, .. } => metadata.clone(),
     };
     let metadata_map = metadata.and_then(|v| v.as_object().cloned());
+    let access = match entry {
+        StoredCredential::Oauth { access, .. } => access,
+        StoredCredential::Api { key, .. } => key,
+    };
     Ok((access, metadata_map))
 }
 
@@ -1239,5 +1270,122 @@ mod tests {
             }
         }
         reset_model_cache();
+    }
+
+    // -- API key login tests -------------------------------------------------
+
+    #[test]
+    fn api_key_login_persists_api_credential_roundtrip() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-cb-apikey-roundtrip-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            super::api_key_login("ck-test-placeholder-key", 0)
+                .await
+                .expect("api key login must succeed on a fresh store");
+            let entry = store::load_entry(STORE_KEY)
+                .await
+                .expect("load stored credential")
+                .expect("credential must exist after api key login");
+            match entry {
+                StoredCredential::Api { key, metadata } => {
+                    assert_eq!(key, "ck-test-placeholder-key");
+                    assert!(metadata.is_none(), "api key login stores no metadata");
+                }
+                other => panic!("expected Api credential, got {other:?}"),
+            }
+        });
+    }
+
+    #[test]
+    fn api_key_login_rejects_empty_key() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!("bitfun-cb-apikey-empty-{}", uuid::Uuid::new_v4()))
+                    .join("subscription_auth.json"),
+            );
+            assert!(
+                super::api_key_login("   ", 0).await.is_err(),
+                "whitespace-only key must be rejected"
+            );
+            assert!(
+                store::load_entry(STORE_KEY).await.unwrap().is_none(),
+                "no credential must be stored for an empty key"
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_fresh_returns_api_key_without_refresh() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!(
+                        "bitfun-cb-apikey-ensure-fresh-{}",
+                        uuid::Uuid::new_v4()
+                    ))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Api {
+                    key: "ck-test-placeholder-key".to_string(),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            // An Api credential never expires: ensure_fresh must return the
+            // key verbatim with i64::MAX expiry and never reach the refresh
+            // endpoint (no network call in this test proves that path).
+            let (access, account_id, expires) =
+                super::ensure_fresh(&SubscriptionHttpOptions::default())
+                    .await
+                    .expect("ensure_fresh must succeed for Api credentials");
+            assert_eq!(access, "ck-test-placeholder-key");
+            assert_eq!(account_id, None);
+            assert_eq!(expires, i64::MAX);
+        });
+    }
+
+    #[test]
+    fn load_auth_for_models_supports_api_credential() {
+        let _guard = super::super::tests::test_lock().blocking_lock();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            store::set_store_path_for_test(
+                std::env::temp_dir()
+                    .join(format!("bitfun-cb-apikey-models-{}", uuid::Uuid::new_v4()))
+                    .join("subscription_auth.json"),
+            );
+            store::upsert(
+                STORE_KEY,
+                StoredCredential::Api {
+                    key: "ck-test-placeholder-key".to_string(),
+                    metadata: None,
+                },
+            )
+            .await
+            .unwrap();
+            // Previously this failed with "not an OAuth login"; Api
+            // credentials must resolve for the model list chain.
+            let (access, metadata_map) = super::load_auth_for_models()
+                .await
+                .expect("load_auth_for_models must accept Api credentials");
+            assert_eq!(access, "ck-test-placeholder-key");
+            assert_eq!(metadata_map, None);
+        });
     }
 }

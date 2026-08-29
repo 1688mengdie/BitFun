@@ -660,9 +660,10 @@ pub async fn start_login_with_options(
 }
 
 /// Logs in with a Personal Access Token, supported by providers whose gateways
-/// exchange a PAT for a short-lived job token (currently Qoder). The exchange
-/// happens synchronously and the resulting credential is persisted, so the
-/// account is immediately connected on success.
+/// exchange a PAT for a short-lived job token (currently Qoder). CodeBuddy
+/// accepts an API key directly through this channel and stores it as an `Api`
+/// credential without a network exchange. The credential is persisted
+/// synchronously, so the account is immediately connected on success.
 pub async fn start_pat_login(provider: SubscriptionProvider, pat: String) -> Result<()> {
     start_pat_login_with_options(provider, pat, SubscriptionHttpOptions::default()).await
 }
@@ -678,6 +679,13 @@ pub async fn start_pat_login_with_options(
             let guard = store_lock(provider).lock().await;
             let expected_revision = store::credential_revision(provider.key()).await?;
             let result = qoder::pat_login(&pat, expected_revision, &options).await;
+            drop(guard);
+            result
+        }
+        SubscriptionProvider::CodeBuddy => {
+            let guard = store_lock(provider).lock().await;
+            let expected_revision = store::credential_revision(provider.key()).await?;
+            let result = codebuddy::api_key_login(&pat, expected_revision).await;
             drop(guard);
             result
         }
@@ -1001,6 +1009,24 @@ mod tests {
         assert_eq!(SubscriptionProvider::ALL.len(), 5);
         assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::CodeBuddy));
         assert!(SubscriptionProvider::ALL.contains(&SubscriptionProvider::Qoder));
+    }
+
+    #[tokio::test]
+    async fn codebuddy_pat_command_stores_api_credential() {
+        let _guard = test_lock().lock().await;
+        store::set_store_path_for_test(temp_store_path());
+        start_pat_login_with_options(
+            SubscriptionProvider::CodeBuddy,
+            "ck-test-placeholder-key".to_string(),
+            SubscriptionHttpOptions::default(),
+        )
+        .await
+        .expect("CodeBuddy API key login must be supported");
+        let entry = store::load_entry(SubscriptionProvider::CodeBuddy.key())
+            .await
+            .unwrap()
+            .expect("credential stored after CodeBuddy key login");
+        assert!(matches!(entry, StoredCredential::Api { .. }));
     }
 
     #[tokio::test]
