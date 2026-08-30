@@ -63,6 +63,7 @@ mod tests {
         let config = AIConfig {
             stream_idle_timeout_secs: None,
             stream_ttft_timeout_secs: None,
+            stream_connect_timeout_secs: None,
             ..Default::default()
         };
 
