@@ -10,7 +10,7 @@ import PATTERNS, {
 } from '../data/orchestration-patterns';
 import { LegionPresetAPI } from '@/infrastructure/api/service-api/LegionPresetAPI';
 import { createLogger } from '@/shared/utils/logger';
-import { DependencyGraph } from '@/tools/bitfun-canvas/runtime/sdk/diagrams';
+import WorkflowDiagram from './WorkflowDiagram';
 import '../AgentsView.scss';
 import './CreateLegionPage.scss';
 
@@ -120,15 +120,11 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
       data-bf-part="canvas"
       data-testid="legion-pattern-canvas"
     >
-      <DependencyGraph
-        nodes={pattern.nodes.map((n) => ({ id: n.id, label: n.role, description: n.agent }))}
-        edges={pattern.edges.map((e) => ({ from: e.from, to: e.to, label: e.condition }))}
-        direction="vertical"
-        nodeWidth={172}
-        nodeHeight={46}
-        rankGap={64}
-        nodeGap={48}
-        padding={20}
+      <WorkflowDiagram
+        nodes={pattern.nodes.map((n) => ({ id: n.id, label: n.role, agent: n.agent, gate: n.gate }))}
+        edges={pattern.edges.map((e) => ({ from: e.from, to: e.to, condition: e.condition }))}
+        gateLabel={t('legionPattern.gate')}
+        emptyLabel={t('legionPattern.noNodes')}
       />
     </div>
   );
@@ -226,8 +222,8 @@ const CreateLegionPage: React.FC<CreateLegionPageProps> = ({ onBack }) => {
             </div>
           </section>
 
-          {/* Canvas (R-WF-17 assertion 1: DAG canvas display via official
-              DependencyGraph, not a handcrafted list-only rendering) */}
+          {/* Canvas (R-WF-17 assertion 1: display-only SVG DAG rendering the
+              real preset.nodes/edges, per owner's display-type SVG decision) */}
           <section className="create-agent-page__section" data-bf-component="create-legion-page" data-bf-part="canvasSection">
             <h2 className="create-agent-page__section-title">
               {t('legionPattern.canvas')}

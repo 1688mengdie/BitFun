@@ -32,6 +32,7 @@ import { recordHistorySessionDiagnosticEvent } from '@/flow_chat/services/histor
 import { resolveSessionRelationship } from '@/flow_chat/utils/sessionMetadata';
 import {
   compareSessionsForNavStable,
+  isGroupChatTreeNode,
   isOrphanSession,
   resolveSessionOrphanKind,
   sessionBelongsToWorkspaceNavRow,
@@ -660,38 +661,51 @@ const SessionsSection: React.FC<SessionsSectionProps> = ({
     return () => window.removeEventListener('bitfun:session-switched', handleSessionSwitched);
   }, []);
 
-  const sessions = useMemo(
-    () =>
-      Array.from(flowChatState.sessions.values())
-        .filter((s: Session) => {
-          if (s.isTransient) {
+  const sessions = useMemo(() => {
+    const allSessions = Array.from(flowChatState.sessions.values());
+    // R-8 group chat tree (GROUP P5): member parent chain = group_id (J1 backend
+    // dual-writes relationship.parent_session_id + customMetadata.parentSessionId;
+    // deriveSessionRelationshipFromMetadata restores parentSessionId). Collect the
+    // group chat session id set for this scope for isGroupChatTreeNode.
+    const groupChatIds = new Set(allSessions.filter(s => sessionIsGroupChat(s)).map(s => s.sessionId));
+    return allSessions
+      .filter((s: Session) => {
+        if (s.isTransient) {
+          return false;
+        }
+        // R-WF-12: partition group chats vs plain sessions. Group chats
+        // render only in the group-chats section (groupChatsOnly); the
+        // plain assistant list hides them (hideGroupChats) and also hides
+        // workflow-owned Claws (hideWorkflowMembers).
+        const isGroupChat = sessionIsGroupChat(s);
+        if (groupChatsOnly) {
+          // R-8 group chat tree (GROUP P5): the group-chats section renders the
+          // group chat tree - group session as top-level node, its members as
+          // subtree children. Retention = isGroupChatTreeNode (group itself +
+          // members whose parent chain points to a group in this scope). Members
+          // are grouped under the group node by childrenByParent below.
+          // NOTE: identity only via parent chain = group_id; never mix in
+          // workflowMember (legionNodeId, legion workflow member marker; preset
+          // group members do not write it) - mixing drops tree children.
+          if (!isGroupChatTreeNode(s, groupChatIds)) {
             return false;
           }
-          // R-WF-12: partition group chats vs plain sessions. Group chats
-          // render only in the group-chats section (groupChatsOnly); the
-          // plain assistant list hides them (hideGroupChats) and also hides
-          // workflow-owned Claws (hideWorkflowMembers).
-          const isGroupChat = sessionIsGroupChat(s);
-          if (groupChatsOnly) {
-            if (!isGroupChat || sessionIsWorkflowMember(s)) {
-              return false;
-            }
-          } else {
-            if (hideGroupChats && isGroupChat) {
-              return false;
-            }
-            if (hideWorkflowMembers && sessionIsWorkflowMember(s)) {
-              return false;
-            }
+        } else {
+          if (hideGroupChats && isGroupChat) {
+            return false;
           }
-          if (workspacePath) {
-            return sessionBelongsToWorkspaceNavRow(s, workspacePath, remoteConnectionId, remoteSshHost);
+          if (hideWorkflowMembers && sessionIsWorkflowMember(s)) {
+            return false;
           }
-          return !s.workspacePath;
-        })
-        .sort(compareSessionsForNavStable),
-    [flowChatState.sessions, workspacePath, remoteConnectionId, remoteSshHost, hideGroupChats, hideWorkflowMembers, groupChatsOnly]
-  );
+        }
+        if (workspacePath) {
+          return sessionBelongsToWorkspaceNavRow(s, workspacePath, remoteConnectionId, remoteSshHost);
+        }
+        return !s.workspacePath;
+      })
+      .sort(compareSessionsForNavStable);
+  }, [flowChatState.sessions, workspacePath, remoteConnectionId, remoteSshHost, hideGroupChats, hideWorkflowMembers, groupChatsOnly]);
+
 
   const { topLevelSessions: allTopLevelSessions, orphanedSessions, childrenByParent } = useMemo(() => {
     const childMap = new Map<string, Session[]>();

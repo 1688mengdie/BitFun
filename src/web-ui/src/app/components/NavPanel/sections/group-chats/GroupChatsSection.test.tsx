@@ -13,16 +13,6 @@ vi.mock('@/infrastructure/i18n/hooks/useI18n', async () => {
   return { useI18n: () => ({ t: createTestI18nT('common') }) };
 });
 
-const openSceneMock = vi.fn();
-vi.mock('@/app/hooks/useSceneManager', () => ({
-  useSceneManager: () => ({ openScene: openSceneMock }),
-}));
-
-const openCreateLegionMock = vi.fn();
-vi.mock('@/app/scenes/agents/agentsStore', () => ({
-  useAgentsStore: { getState: () => ({ openCreateLegion: openCreateLegionMock }) },
-}));
-
 // R-WF-12: empty hint subscription. The store's session map starts empty, so
 // GroupChatsSection renders the "no group chats yet" hint; the subscribe
 // returns a no-op unsubscribe.
@@ -81,19 +71,10 @@ describe('GroupChatsSection (R-WF-12)', () => {
     expect(section).not.toBeNull();
   });
 
-  it('renders both create entries: new workflow and new group chat (验收断言 2)', () => {
+  it('renders the single create entry: new group chat only (验收断言 2)', () => {
     renderSection();
-    expect(container.querySelector('[data-testid="nav-group-chats-create-workflow-btn"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="nav-group-chats-create-workflow-btn"]')).toBeNull();
     expect(container.querySelector('[data-testid="nav-group-chats-create-group-btn"]')).not.toBeNull();
-  });
-
-  it('opens the workflow (legion) creation page when creating a workflow (验收断言 2)', () => {
-    renderSection();
-    const workflowBtn = container.querySelector<HTMLButtonElement>('[data-testid="nav-group-chats-create-workflow-btn"]')!;
-    act(() => workflowBtn.click());
-
-    expect(openCreateLegionMock).toHaveBeenCalledTimes(1);
-    expect(openSceneMock).toHaveBeenCalledWith('agents');
   });
 
   it('forwards the group chat create action to the existing dialog opener (验收断言 2)', () => {

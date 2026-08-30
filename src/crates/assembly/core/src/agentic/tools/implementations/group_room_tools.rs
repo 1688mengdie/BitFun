@@ -40,6 +40,7 @@ use crate::infrastructure::get_path_manager_arc;
 use crate::util::errors::{BitFunError, BitFunResult};
 use async_trait::async_trait;
 use bitfun_runtime_ports::GROUP_MASTER_ACTOR;
+use bitfun_services_core::session::types::SessionRelationship;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -668,7 +669,76 @@ impl GroupRoomTool {
             member_ids.push(session.session_id);
         }
         // 建群（群主会话 + 欢迎 turn + 成员登记），成员 = 刚实例化的真实会话。
-        Self::create_group(coordinator, name, &member_ids, workspace).await
+        let group_id = Self::create_group(coordinator, name, &member_ids, workspace).await?;
+        // J1 后端父链（任务书 GROUP §一 案 B 修正版，任务书 §四.7「零后端改动」唯一
+        // 例外，J1 实测归因必需）：建群后为每个成员会话写父链三样——血缘
+        // relationship.parent_session_id=group_id、会话树 register_child(group_id,
+        // member_id, 1)、customMetadata.parentSessionId=group_id（对齐前端
+        // sessionMetadata.ts:214 读取，覆盖前端树渲染）。
+        //
+        // 复用既有原语（先抄后改）：persist_session_lineage（session_manager.rs:8269，
+        // 内部 apply_session_lineage 写 metadata.relationship）+ register_child
+        // （tree.rs:50，纯内存树）。三样均以「尽力写入、失败 warn 继续」容错（与
+        // add_group_member 反标容错一致，S-38 防幽灵：建群已成功，父链失败上抛
+        // Err 会造孤儿群）。双写顺序必须**先 persist 后写 customMetadata.parentSessionId**
+        // ——apply_session_lineage（lineage.rs:150）剥离 LINEAGE_CUSTOM_METADATA_KEYS
+        //（含 parentSessionId），若先写 customMetadata 再 persist，parentSessionId
+        // 会被剥掉（前端 :214 读不到）。
+        {
+            let manager = coordinator.get_session_manager();
+            for member_id in &member_ids {
+                let relationship = SessionRelationship {
+                    kind: None,
+                    parent_session_id: Some(group_id.clone()),
+                    depth: Some(1),
+                    ..Default::default()
+                };
+                if let Err(error) = manager.persist_session_lineage(member_id, relationship).await {
+                    warn!(
+                        "Failed to persist session lineage (parent={}) for group member={}, error={}",
+                        group_id, member_id, error
+                    );
+                }
+                if let Err(error) =
+                    coordinator.session_tree().register_child(&group_id, member_id, 1)
+                {
+                    warn!(
+                        "Failed to register group member {} under {} in session tree, error={:?}",
+                        member_id, group_id, error
+                    );
+                }
+                if let Some(member_workspace) =
+                    Self::resolve_member_workspace(manager, member_id).await
+                {
+                    if let Err(error) = manager
+                        .update_session_metadata(
+                            &PathBuf::from(&member_workspace),
+                            member_id,
+                            |metadata| {
+                                let custom = metadata
+                                    .custom_metadata
+                                    .get_or_insert_with(|| json!({}))
+                                    .as_object_mut()
+                                    .expect("custom_metadata is always an object");
+                                custom.insert("parentSessionId".to_string(), json!(group_id));
+                            },
+                        )
+                        .await
+                    {
+                        warn!(
+                            "Failed to write customMetadata.parentSessionId for group member={}, group={}, error={}",
+                            member_id, group_id, error
+                        );
+                    }
+                } else {
+                    warn!(
+                        "Failed to resolve member workspace for lineage customMetadata: member={}, group={}",
+                        member_id, group_id
+                    );
+                }
+            }
+        }
+        Ok(group_id)
     }
 
     /// 拉成员 = 校验调用方传入的真实会话 ID 存在 + 记入群成员表

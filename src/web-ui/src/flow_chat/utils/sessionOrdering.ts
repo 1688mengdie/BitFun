@@ -206,3 +206,49 @@ export function sessionIsWorkflowMember(
 ): boolean {
   return session?.workflowMember === true;
 }
+
+/**
+ * R-8 group chat tree (GROUP P5): whether a session belongs to the group chat
+ * tree view.
+ *
+ * A group chat = a special conversation hung on a tree UI: the group session
+ * (isGroupChat) is the top-level node and its member sessions render as subtree
+ * children. Member identity = consuming the member parent chain: the J1 case-B
+ * revised backend dual-writes lineage for every member in
+ * create_group_from_preset - relationship.parent_session_id = group_id +
+ * customMetadata.parentSessionId = group_id (group_room_tools.rs). The frontend
+ * deriveSessionRelationshipFromMetadata (sessionMetadata.ts:184-228) restores
+ * session.parentSessionId = group_id. So a member whose parent chain lands in
+ * `groupIds` (all group session ids in this scope) belongs to the group chat tree.
+ *
+ * NOTE identity: only the parent chain = group id counts; never mix in
+ * `workflowMember` (customMetadata.legionNodeId, legion_control_tool.rs:1323) -
+ * that is a legion workflow member marker, a different source from group tree
+ * members (preset group members do not write legionNodeId, only parentSessionId).
+ * Mixing misclassifies group tree members as orphaned -> drops child nodes.
+ *
+ * @param session session to test
+ * @param groupIds all group session ids in this scope
+ */
+export function isGroupChatTreeNode(
+  session: Session | null | undefined,
+  groupIds: ReadonlySet<string>
+): boolean {
+  if (!session) {
+    return false;
+  }
+  if (sessionIsGroupChat(session)) {
+    return true;
+  }
+  // Group tree member parent chain = group_id. Member sessionKind = 'normal', so
+  // the parent lives in session.parentSessionId (FlowChatStore restores it via
+  // deriveSessionRelationshipFromMetadata reading customMetadata.parentSessionId /
+  // relationship.parent_session_id, :7296).
+  // NOTE: never re-derive via resolveSessionRelationship(session): that normalizes
+  // via normalizeSessionRelationship which strips parentSessionId for
+  // sessionKind='normal' (:104-113) -> parent chain reads empty -> member judged
+  // non-tree-node -> child nodes dropped.
+  const parentSessionId = session.parentSessionId ?? session.btwOrigin?.parentSessionId;
+  return Boolean(parentSessionId && groupIds.has(parentSessionId));
+}
+

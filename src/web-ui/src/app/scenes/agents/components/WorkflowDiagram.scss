@@ -1,0 +1,88 @@
+/**
+ * WorkflowDiagram — display-only SVG DAG surface.
+ * Node sizing/geometry lives in WorkflowDiagram.tsx; this file only styles the
+ * visual layer (edges + node chips), using the shared appearance tokens.
+ */
+
+@use '../../../../component-library/styles/tokens' as *;
+
+.workflow-diagram {
+  position: relative;
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--bf-appearance-token-border-subtle);
+  border-radius: 12px;
+  background: var(--bf-appearance-token-element-bg-soft);
+
+  &--empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 140px;
+    padding: $size-gap-3;
+  }
+
+  &__empty {
+    margin: 0;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+  }
+
+  &__edges {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+  }
+
+  &__edge {
+    fill: none;
+    stroke: var(--bf-appearance-token-border-strong);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+  }
+
+  &__node {
+    position: absolute;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: $size-gap-2;
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    border-radius: 10px;
+    background: var(--bf-appearance-token-color-bg-primary);
+    box-shadow: 0 1px 2px color-mix(in srgb, var(--bf-appearance-token-color-overlay-slate-rgb) 14%, transparent);
+    overflow: hidden;
+  }
+
+  &__node-label {
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+    font-weight: $font-weight-semibold;
+    color: var(--bf-appearance-token-color-text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__node-desc {
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__node-gate {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--bf-appearance-token-color-accent-500);
+    color: var(--bf-appearance-token-color-accent-500);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 8%, transparent);
+  }
+}
