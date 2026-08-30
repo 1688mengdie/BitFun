@@ -146,8 +146,12 @@ export const PresetPicker: React.FC<PresetPickerProps> = ({
   }, [value]);
 
   return (
-    <div className="preset-picker">
-      <div className="preset-picker__header">
+    <div
+      className="preset-picker"
+      data-bf-component="preset-picker"
+      data-bf-part="root"
+    >
+      <div className="preset-picker__header" data-bf-component="preset-picker" data-bf-part="header">
         <span className="preset-picker__label">{t('nav.groupChats.presetWorkflow')}</span>
       </div>
 
@@ -157,13 +161,21 @@ export const PresetPicker: React.FC<PresetPickerProps> = ({
         </div>
       ) : null}
 
-      <div className="preset-picker__list" role="radiogroup" aria-label={t('nav.groupChats.presetWorkflow')}>
+      <div
+        className="preset-picker__list"
+        role="radiogroup"
+        aria-label={t('nav.groupChats.presetWorkflow')}
+        data-bf-component="preset-picker"
+        data-bf-part="optionList"
+      >
         <button
           type="button"
           role="radio"
           aria-checked={selectedEmpty}
           data-testid="preset-option-none"
           className={`preset-picker__option${selectedEmpty ? ' is-selected' : ''}`}
+          data-bf-component="preset-picker"
+          data-bf-part="option"
           onClick={() => handleSelect(null)}
           disabled={disabled}
         >
@@ -182,6 +194,8 @@ export const PresetPicker: React.FC<PresetPickerProps> = ({
               data-testid="preset-option"
               data-preset-id={pattern.id}
               className={`preset-picker__option${isSelected ? ' is-selected' : ''}`}
+              data-bf-component="preset-picker"
+              data-bf-part="option"
               onClick={() => handleSelect(pattern)}
               disabled={disabled}
             >
@@ -198,7 +212,7 @@ export const PresetPicker: React.FC<PresetPickerProps> = ({
       </div>
 
       {value && memberPreview.length > 0 ? (
-        <div className="preset-picker__preview">
+        <div className="preset-picker__preview" data-bf-component="preset-picker" data-bf-part="preview">
           <div className="preset-picker__preview-label">
             {t('nav.groupChats.presetMembersCount', { count: memberPreview.length })}
           </div>

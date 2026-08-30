@@ -118,6 +118,8 @@ const NodePalette: React.FC<NodePaletteProps> = ({
         data-category={option.category}
         data-active={isActive}
         aria-pressed={isActive}
+        data-bf-component="node-palette"
+        data-bf-part="option"
         onClick={() => onSelect?.(option.id)}
       >
         <span className="node-palette__option-name">{option.name}</span>
@@ -134,16 +136,34 @@ const NodePalette: React.FC<NodePaletteProps> = ({
   };
 
   return (
-    <div className="node-palette" data-testid="node-palette" role="list" aria-label={t('nodePalette.title')}>
-      <h3 className="node-palette__title">{t('nodePalette.title')}</h3>
+    <div
+      className="node-palette"
+      data-testid="node-palette"
+      role="list"
+      aria-label={t('nodePalette.title')}
+      data-bf-component="node-palette"
+      data-bf-part="root"
+    >
+      <h3 className="node-palette__title" data-bf-component="node-palette" data-bf-part="title">{t('nodePalette.title')}</h3>
 
-      <div className="node-palette__section" data-testid="node-palette-main-claw">
+      <div
+        className="node-palette__section"
+        data-testid="node-palette-main-claw"
+        data-bf-component="node-palette"
+        data-bf-part="section"
+      >
         <h4 className="node-palette__section-title">{t('nodePalette.mainClaw')}</h4>
         <div className="node-palette__options">{renderChip(mainClaw)}</div>
       </div>
 
       {sections.map((section) => (
-        <div key={section.category} className="node-palette__section" data-category={section.category}>
+        <div
+          key={section.category}
+          className="node-palette__section"
+          data-category={section.category}
+          data-bf-component="node-palette"
+          data-bf-part="section"
+        >
           <h4 className="node-palette__section-title">{section.label}</h4>
           <div className="node-palette__options">
             {section.items.map((option) => renderChip(option))}
