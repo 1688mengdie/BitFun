@@ -906,6 +906,11 @@ pub struct AIConfig {
     #[serde(default = "default_stream_ttft_timeout")]
     pub stream_ttft_timeout_secs: Option<u64>,
 
+    /// TCP connect timeout in seconds while opening a streaming request;
+    /// `None` means wait indefinitely.
+    #[serde(default = "default_stream_connect_timeout")]
+    pub stream_connect_timeout_secs: Option<u64>,
+
     /// Tool execution timeout in seconds; `None` means wait indefinitely.
     #[serde(default = "default_tool_execution_timeout")]
     pub tool_execution_timeout_secs: Option<u64>,
@@ -1145,6 +1150,12 @@ fn default_stream_idle_timeout() -> Option<u64> {
 /// Default timeout while waiting for the first effective streamed output.
 fn default_stream_ttft_timeout() -> Option<u64> {
     Some(600)
+}
+
+/// TCP connect timeout in seconds while opening a streaming request;
+/// `None` means wait indefinitely.
+fn default_stream_connect_timeout() -> Option<u64> {
+    Some(10)
 }
 
 /// Default is no timeout (wait forever).
@@ -1961,6 +1972,7 @@ impl Default for AIConfig {
             proxy: ProxyConfig::default(),
             stream_idle_timeout_secs: default_stream_idle_timeout(),
             stream_ttft_timeout_secs: default_stream_ttft_timeout(),
+            stream_connect_timeout_secs: default_stream_connect_timeout(),
             tool_execution_timeout_secs: default_tool_execution_timeout(),
             enable_deferred_tool_loading: default_enable_deferred_tool_loading(),
             allow_tool_json_repair: true,
@@ -2787,6 +2799,7 @@ mod tests {
 
         assert_eq!(config.stream_idle_timeout_secs, Some(600));
         assert_eq!(config.stream_ttft_timeout_secs, Some(600));
+        assert_eq!(config.stream_connect_timeout_secs, Some(10));
         assert!(config.enable_deferred_tool_loading);
         assert!(config.allow_tool_json_repair);
         assert_eq!(config.subagent_max_concurrency, 5);
@@ -2962,6 +2975,7 @@ mod tests {
 
         assert_eq!(config.stream_idle_timeout_secs, Some(600));
         assert_eq!(config.stream_ttft_timeout_secs, Some(600));
+        assert_eq!(config.stream_connect_timeout_secs, Some(10));
         assert!(config.allow_tool_json_repair);
         assert_eq!(config.subagent_max_concurrency, 5);
         assert_eq!(
