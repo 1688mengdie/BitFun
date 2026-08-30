@@ -882,6 +882,27 @@ impl ExecutionEngine {
         Self::tool_call_signature(tool_calls)
     }
 
+    /// Tools that legitimately poll or read and may repeat without indicating a
+    /// no-progress loop. A round whose calls are all read/poll tools is exempted
+    /// from successful-repeat convergence detection, but stays subject to the
+    /// deterministic max-round/exhaustion backstops. A round containing a
+    /// non-poll (write/execute/mutating) tool with an identical signature is the
+    /// signal the convergence detector looks for.
+    fn is_legitimate_poll_tool(tool_calls: &[crate::agentic::core::ToolCall]) -> bool {
+        tool_calls.iter().all(|tool_call| {
+            matches!(
+                tool_call.tool_name.as_str(),
+                "Read"
+                    | "Grep"
+                    | "Glob"
+                    | "LS"
+                    | "WebSearch"
+                    | "WebFetch"
+                    | "ListModels"
+            )
+        })
+    }
+
     /// Whether a partial stream recovery should trigger a continuation round
     /// instead of treating truncated assistant text as the final answer.
     ///
@@ -3708,6 +3729,9 @@ impl ExecutionEngine {
         let mut recent_failed_tool_signatures: Vec<String> = Vec::new();
         let mut failed_tool_recovery_attempts: usize = 0;
         const MAX_FAILED_TOOL_RECOVERY_ATTEMPTS: usize = 3;
+        let mut successful_tool_signature_count: usize = 0;
+        let mut successful_recovery_attempts: usize = 0;
+        const MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS: usize = 3;
         const MAX_PARTIAL_CONTINUATION_ATTEMPTS: usize = 3;
         let mut full_compression_count = 0usize;
         let mut compression_failure_count = 0u32;
@@ -4348,14 +4372,18 @@ impl ExecutionEngine {
                 .is_some()
                 {
                     recent_failed_tool_signatures.push(round_signature);
+                    successful_tool_signature_count = 0;
                 } else {
                     recent_failed_tool_signatures.clear();
                     failed_tool_recovery_attempts = 0;
+                    successful_tool_signature_count =
+                        ContextHealthSnapshot::repeated_tool_signature_count(&recent_tool_signatures);
                 }
             } else {
                 recent_tool_signatures.clear();
                 recent_failed_tool_signatures.clear();
                 failed_tool_recovery_attempts = 0;
+                successful_tool_signature_count = 0;
             }
 
             let after_round_pressure = Self::estimate_auto_compression_pressure(
@@ -4434,6 +4462,48 @@ impl ExecutionEngine {
                         break;
                     }
                 }
+            }
+
+            // Successful-tool convergence detection (mirror of the failed-path recovery
+            // above). A model that keeps calling the same non-read-only tool with identical
+            // arguments is not making progress even though each call succeeds: inject a
+            // convergence reminder so it changes strategy. The deterministic backstop that
+            // finalizes after the cap is enforced in the follow-up branch.
+            if !Self::is_legitimate_poll_tool(&round_result.tool_calls)
+                && successful_tool_signature_count >= max_consec
+                && successful_recovery_attempts < MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS
+            {
+                successful_recovery_attempts += 1;
+                warn!(
+                    "Repeated successful tool call detected: {} consecutive rounds with identical tool signatures, injecting convergence reminder #{}",
+                    successful_tool_signature_count, successful_recovery_attempts
+                );
+                let reminder = format!(
+                    "<system_reminder>Repeated successful tool calls detected: the same tool call with identical arguments has succeeded {} times in a row. \
+                    This looks like a loop without progress. You MUST now change your strategy: try a different approach, break the task into smaller steps, \
+                    or stop if the goal is already met.</system_reminder>",
+                    successful_tool_signature_count
+                );
+                let user_msg = Message::internal_reminder(
+                    InternalReminderKind::LoopRecovery,
+                    reminder,
+                )
+                .with_turn_id(context.dialog_turn_id.clone());
+                messages.push(user_msg.clone());
+                self.remember_generation_message(
+                    &context.session_id,
+                    &context.dialog_turn_id,
+                    &user_msg,
+                );
+                if let Err(e) = self
+                    .session_manager
+                    .add_message(&context.session_id, user_msg)
+                    .await
+                {
+                    warn!("Failed to persist successful-tool recovery reminder: {}", e);
+                }
+                recent_tool_signatures.clear();
+                successful_tool_signature_count = 0;
             }
 
             // Periodic-pattern loop detection.
@@ -5181,6 +5251,60 @@ mod tests {
         assert!(!reached_fixed_model_round_limit(200, 199));
         assert!(reached_fixed_model_round_limit(200, 200));
         assert!(reached_fixed_model_round_limit(200, 201));
+    }
+
+    #[test]
+    fn legitimate_poll_tools_are_exempt_from_successful_loop_detection() {
+        let read = vec![ToolCall {
+            tool_id: "call-1".to_string(),
+            tool_name: "Read".to_string(),
+            arguments: json!({ "path": "src/main.rs" }),
+            raw_arguments: None,
+            is_error: false,
+            parse_error: None,
+            recovered_from_truncation: false,
+            repair_kind: Default::default(),
+        }];
+        assert!(ExecutionEngine::is_legitimate_poll_tool(&read));
+
+        let mixed_poll = vec![
+            ToolCall {
+                tool_id: "call-1".to_string(),
+                tool_name: "Grep".to_string(),
+                arguments: json!({ "pattern": "fn main" }),
+                raw_arguments: None,
+                is_error: false,
+                parse_error: None,
+                recovered_from_truncation: false,
+                repair_kind: Default::default(),
+            },
+            ToolCall {
+                tool_id: "call-2".to_string(),
+                tool_name: "Glob".to_string(),
+                arguments: json!({ "pattern": "**/*.rs" }),
+                raw_arguments: None,
+                is_error: false,
+                parse_error: None,
+                recovered_from_truncation: false,
+                repair_kind: Default::default(),
+            },
+        ];
+        assert!(ExecutionEngine::is_legitimate_poll_tool(&mixed_poll));
+    }
+
+    #[test]
+    fn mutating_tools_are_not_exempt_from_successful_loop_detection() {
+        let edit = vec![ToolCall {
+            tool_id: "call-1".to_string(),
+            tool_name: "Edit".to_string(),
+            arguments: json!({ "filePath": "src/main.rs" }),
+            raw_arguments: None,
+            is_error: false,
+            parse_error: None,
+            recovered_from_truncation: false,
+            repair_kind: Default::default(),
+        }];
+        assert!(!ExecutionEngine::is_legitimate_poll_tool(&edit));
     }
 
     #[test]
