@@ -368,44 +368,52 @@ fn stream_json_patch_success_emits_one_success_terminal() {
 }
 
 #[test]
-fn stream_json_malformed_sse_retries_then_completes() {
+fn stream_json_malformed_sse_is_a_deterministic_terminal_error() {
     let server = MockOpenAiServer::malformed_sse_then_immediate();
     let environment = CliTestEnvironment::new();
     environment.configure_mock_model(server.base_url());
     let mut command = environment.std_command();
     command.args([
         "exec",
-        "exercise malformed provider stream retry",
+        "exercise malformed provider stream",
         "--output-format",
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(2);
+    // A malformed SSE frame is a deterministic provider protocol error (not a
+    // transient network/rate/timeout failure), so upfix-4 admission leaves no
+    // retry budget: the turn terminates at attempt 1 after a single request.
+    server.assert_chat_completion_requests(1);
 
     let stdout = stdout(&output);
-    assert!(output.status.success(), "{}\n{stdout}", stderr(&output));
+    assert!(!output.status.success(), "{stdout}");
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     let events = jsonl_events(&stdout);
-    assert!(
-        events.iter().any(|value| {
-            value["event"]["type"] == "TextChunk"
-                && value["event"]["text"]
-                    .as_str()
-                    .is_some_and(|text| text.contains(STREAM_COMPLETED_MARKER))
-        }),
-        "retried model stream did not complete: {stdout}"
-    );
     assert_eq!(
         events
             .iter()
             .filter(|value| is_terminal_event(value))
             .count(),
         1,
-        "retried stream must emit exactly one terminal envelope: {stdout}"
+        "malformed stream must emit exactly one terminal envelope: {stdout}"
     );
     assert_eq!(
-        events.last().expect("retried stream terminal event")["event"]["type"],
-        "DialogTurnCompleted",
-        "retried stream terminal must be last: {stdout}"
+        events.last().expect("malformed stream terminal event")["event"]["type"],
+        "DialogTurnFailed",
+        "malformed stream terminal must be last: {stdout}"
+    );
+    let terminal_error = events.last().expect("malformed stream terminal event")["event"]["error"]
+        .as_str()
+        .expect("malformed stream error text");
+    assert!(
+        terminal_error.contains("SSE parsing error"),
+        "malformed stream reason was lost: {stdout}"
+    );
+    assert!(
+        events.iter().all(|value| {
+            !(value["event"]["type"] == "DialogTurnCompleted" && value["event"]["success"] == true)
+        }),
+        "malformed stream emitted a successful completion: {stdout}"
     );
 }
 
@@ -422,7 +430,10 @@ fn stream_json_provider_http_403_emits_one_error_terminal() {
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // An authorization rejection (403) is a deterministic error: upfix-4 terminates
+    // the turn at attempt 1 after a single provider request instead of exhausting
+    // the retry ladder.
+    server.assert_chat_completion_requests(1);
 
     let stdout = stdout(&output);
     assert!(!output.status.success(), "{stdout}");
@@ -485,7 +496,9 @@ fn stream_json_provider_and_patch_failures_publish_one_final_classification() {
         &output_target,
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // The 403 is deterministic, so only a single attempt reaches the provider: the
+    // patch delivery (not the provider) becomes the final classifier.
+    server.assert_chat_completion_requests(1);
 
     let stdout = stdout(&output);
     let stderr = stderr(&output);
@@ -535,7 +548,10 @@ fn stream_json_disconnect_then_exhausted_retry_failure_emits_one_error_terminal(
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // The first attempt's mid-stream disconnect is transient (Network), so upfix-4
+    // still retries once; the retried request is a deterministic 403, which then
+    // terminates the turn at a terminal error (two provider requests in total).
+    server.assert_chat_completion_requests(2);
 
     let stdout = stdout(&output);
     assert!(!output.status.success(), "{stdout}");
