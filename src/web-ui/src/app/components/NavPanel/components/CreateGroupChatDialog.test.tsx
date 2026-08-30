@@ -81,6 +81,13 @@ vi.mock('@/infrastructure/api/service-api/SessionAPI', () => ({
   },
 }));
 
+vi.mock('@/infrastructure/api/service-api/LegionPresetAPI', () => ({
+  LegionPresetAPI: {
+    listPresets: vi.fn(),
+    createPreset: vi.fn(),
+  },
+}));
+
 vi.mock('@/shared/notification-system', () => ({
   notificationService: {
     success: vi.fn(),
@@ -92,6 +99,7 @@ vi.mock('@/shared/notification-system', () => ({
 import CreateGroupChatDialog from './CreateGroupChatDialog';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
+import { LegionPresetAPI } from '@/infrastructure/api/service-api/LegionPresetAPI';
 import { notificationService } from '@/shared/notification-system';
 import type { SessionMetadata } from '@/shared/types/session-history';
 
@@ -119,6 +127,9 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
     root = createRoot(container);
     vi.mocked(toolAPI.executeTool).mockReset();
     vi.mocked(sessionAPI.listSessions).mockReset();
+    vi.mocked(LegionPresetAPI.listPresets).mockReset();
+    vi.mocked(LegionPresetAPI.createPreset).mockReset();
+    vi.mocked(LegionPresetAPI.listPresets).mockResolvedValue([]);
     vi.mocked(notificationService.success).mockReset();
   });
 
@@ -352,5 +363,114 @@ describe('CreateGroupChatDialog (R-GC-13 / R-GC-19 / R-GC-30)', () => {
 
     expect(toolAPI.executeTool).toHaveBeenCalledTimes(1);
     expect(onCreated).not.toHaveBeenCalled();
+  });
+
+  it('GROUP P2: selecting a saved preset passes preset_id (no members, no materialize)', async () => {
+    const savedPreset = {
+      id: 'saved-preset-1',
+      name: 'Saved Workflow',
+      description: 'A saved workflow preset',
+      nodes: [
+        { id: 'n1', agent: 'agentic', role: 'Exec', prompt: 'execute' },
+        { id: 'n2', agent: 'DeepReview', role: 'Review', prompt: 'review', gate: true },
+      ],
+      edges: [{ from: 'n1', to: 'n2' }],
+    };
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
+    vi.mocked(LegionPresetAPI.listPresets).mockResolvedValue([savedPreset]);
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-preset' },
+    });
+    const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Select the saved preset; its member preview (preset.nodes) renders.
+    const presetOption = document.querySelector<HTMLButtonElement>(
+      '[data-testid="preset-option"][data-preset-id="saved-preset-1"]',
+    );
+    expect(presetOption).not.toBeNull();
+    act(() => presetOption!.click());
+    await act(async () => { await Promise.resolve(); });
+    expect(document.querySelectorAll('[data-testid="preset-member-preview"]')).toHaveLength(2);
+
+    setGroupName('预设备');
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    // Saved preset id already resolves on disk -> no materialization, pass preset_id.
+    expect(LegionPresetAPI.createPreset).not.toHaveBeenCalled();
+    expect(toolAPI.executeTool).toHaveBeenCalledWith({
+      toolName: 'create_group_chat',
+      parameters: { action: 'create', name: '预设备', preset_id: 'saved-preset-1', workspace: '/workspace-a' },
+      workspacePath: '/workspace-a',
+      context: { sessionId: '' },
+    });
+    expect(onCreated).toHaveBeenCalledWith('group-preset', '预设备');
+  });
+
+  it('GROUP P2: selecting an unsaved built-in preset materializes it (createPreset) then passes preset_id', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([]);
+    vi.mocked(LegionPresetAPI.listPresets).mockResolvedValue([]);
+    vi.mocked(LegionPresetAPI.createPreset).mockResolvedValue(undefined);
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-builtin' },
+    });
+    const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // triad-minimal is a built-in pattern not present in listPresets -> unsaved.
+    const triadOption = document.querySelector<HTMLButtonElement>(
+      '[data-testid="preset-option"][data-preset-id="triad-minimal"]',
+    );
+    expect(triadOption).not.toBeNull();
+    act(() => triadOption!.click());
+    await act(async () => { await Promise.resolve(); });
+
+    setGroupName('内置模板群');
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    // Built-in not yet persisted -> materialize via createPreset, then pass preset_id.
+    expect(LegionPresetAPI.createPreset).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'triad-minimal',
+      name: expect.any(String),
+      nodes: expect.any(Array),
+    }));
+    expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
+      parameters: { action: 'create', name: '内置模板群', preset_id: 'triad-minimal', workspace: '/workspace-a' },
+    }));
+    expect(onCreated).toHaveBeenCalledWith('group-builtin', '内置模板群');
+  });
+
+  it('GROUP P2: no preset selection falls back to manual member mode (members param)', async () => {
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([makeSession('claw-1', 'Claw', 'Assist A')]);
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'create_group_chat',
+      success: true,
+      result: { groupId: 'group-manual' },
+    });
+    const { onCreated } = renderDialog();
+    await act(async () => { await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); });
+
+    // Default state: no preset -> manual member list visible.
+    const checkboxes = [...document.querySelectorAll<HTMLInputElement>('[data-testid="member-checkbox"]')];
+    expect(checkboxes).toHaveLength(1);
+    toggleMember(0);
+    setGroupName('手动群');
+    clickCreate();
+    await act(async () => { await Promise.resolve(); });
+
+    expect(LegionPresetAPI.createPreset).not.toHaveBeenCalled();
+    expect(toolAPI.executeTool).toHaveBeenCalledWith(expect.objectContaining({
+      parameters: { action: 'create', name: '手动群', members: ['claw-1'], workspace: '/workspace-a' },
+    }));
+    expect(onCreated).toHaveBeenCalledWith('group-manual', '手动群');
   });
 });

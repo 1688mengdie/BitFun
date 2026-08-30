@@ -646,11 +646,9 @@ describeWithJsdom('AgentsScene', () => {
     const toolIds = Array.from(zone?.querySelectorAll<HTMLElement>('[data-testid]') ?? [])
       .map((el) => el.getAttribute('data-testid'));
     const createIdx = toolIds.indexOf('agents-create-agent-btn');
-    const legionIdx = toolIds.indexOf('agents-create-legion-btn');
     const reviewIdx = toolIds.indexOf('agents-open-review-team-btn');
     expect(createIdx).toBeGreaterThanOrEqual(0);
-    expect(legionIdx).toBeGreaterThan(createIdx);
-    expect(reviewIdx).toBeGreaterThan(legionIdx);
+    expect(reviewIdx).toBeGreaterThan(createIdx);
     // The create-agent button carries the primary highlight.
     const createBtn = zone?.querySelector('[data-testid="agents-create-agent-btn"]');
     expect(createBtn?.className).toContain('gallery-action-btn--primary');
@@ -685,20 +683,18 @@ describeWithJsdom('AgentsScene', () => {
       .map((s) => s.getAttribute('id'));
     expect(zones).toContain('core-agents-zone');
     expect(zones).toContain('agents-zone');
-    expect(zones).toContain('legions-zone');
-    expect(zones).toContain('agent-teams-zone');
+    expect(zones).toContain('workflow-zone');
 
-    // The teams zone is no longer nested inside agents-zone.
+    // The workflow zone is no longer nested inside agents-zone.
     const agentsZone = container.querySelector('[data-testid="agents-custom-zone"]');
-    const teamsZone = container.querySelector('[data-testid="agents-teams-zone"]');
-    expect(agentsZone?.contains(teamsZone ?? null)).toBe(false);
+    const workflowZone = container.querySelector('[data-testid="agents-workflow-zone"]');
+    expect(agentsZone?.contains(workflowZone ?? null)).toBe(false);
 
-    // Anchor bar exposes all four zones.
+    // Anchor bar exposes all zones.
     for (const testId of [
       'agents-anchor-core',
       'agents-anchor-custom',
-      'agents-anchor-legions',
-      'agents-anchor-teams',
+      'agents-anchor-workflow',
     ]) {
       expect(container.querySelector(`[data-testid="${testId}"]`)).toBeTruthy();
     }

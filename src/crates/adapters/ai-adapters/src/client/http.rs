@@ -28,12 +28,13 @@ pub(crate) fn create_http_client(
     proxy_config: Option<ProxyConfig>,
     skip_ssl_verify: bool,
     base_url: &str,
+    connect_timeout_secs: Option<u64>,
 ) -> Client {
-    let mut builder = Client::builder()
-        .tls_backend_rustls()
-        .connect_timeout(std::time::Duration::from_secs(
-            AIClient::STREAM_CONNECT_TIMEOUT_SECS,
-        ))
+    let mut builder = Client::builder().tls_backend_rustls();
+    if let Some(connect_timeout) = connect_timeout_secs {
+        builder = builder.connect_timeout(std::time::Duration::from_secs(connect_timeout));
+    }
+    let mut builder = builder
         .user_agent(user_agent_for_base_url(base_url))
         .pool_idle_timeout(std::time::Duration::from_secs(
             AIClient::HTTP_POOL_IDLE_TIMEOUT_SECS,
@@ -109,8 +110,16 @@ fn normalize_proxy_url(url: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_proxy, normalize_proxy_url, user_agent_for_base_url};
+    use super::{build_proxy, create_http_client, normalize_proxy_url, user_agent_for_base_url};
     use crate::types::ProxyConfig;
+
+    #[test]
+    fn create_http_client_without_connect_timeout_constructs() {
+        // None => no connect_timeout is applied (wait indefinitely); the builder
+        // path must still produce a usable client without panicking.
+        let client = create_http_client(None, false, "https://example.com", None);
+        assert!(client.get("https://example.com/").build().is_ok());
+    }
 
     #[test]
     fn codebuddy_base_url_gets_official_cli_user_agent() {

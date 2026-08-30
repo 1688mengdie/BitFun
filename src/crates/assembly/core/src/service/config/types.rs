@@ -910,6 +910,11 @@ pub struct AIConfig {
     #[serde(default = "default_stream_ttft_timeout")]
     pub stream_ttft_timeout_secs: Option<u64>,
 
+    /// TCP connect timeout in seconds while opening a streaming request; `None`
+    /// means wait indefinitely.
+    #[serde(default = "default_stream_connect_timeout")]
+    pub stream_connect_timeout_secs: Option<u64>,
+
     /// Tool execution timeout in seconds; `None` means wait indefinitely.
     #[serde(default = "default_tool_execution_timeout")]
     pub tool_execution_timeout_secs: Option<u64>,
@@ -2534,6 +2539,11 @@ fn default_stream_ttft_timeout() -> Option<u64> {
     Some(600)
 }
 
+/// Default TCP connect timeout when opening a streaming request.
+fn default_stream_connect_timeout() -> Option<u64> {
+    Some(10)
+}
+
 /// Default is no timeout (wait forever).
 fn default_tool_execution_timeout() -> Option<u64> {
     None
@@ -3612,6 +3622,7 @@ impl Default for AIConfig {
             proxy: ProxyConfig::default(),
             stream_idle_timeout_secs: default_stream_idle_timeout(),
             stream_ttft_timeout_secs: default_stream_ttft_timeout(),
+            stream_connect_timeout_secs: default_stream_connect_timeout(),
             tool_execution_timeout_secs: default_tool_execution_timeout(),
             enable_deferred_tool_loading: default_enable_deferred_tool_loading(),
             allow_tool_json_repair: true,
@@ -4033,10 +4044,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_max_rounds_defaults_to_unlimited_and_explicit_limits_survive() {
+    fn missing_max_rounds_defaults_to_local_limit_and_explicit_limits_survive() {
+        // 本地定标（DEFAULT_MAX_ROUNDS=50，见 default_max_rounds 注释）：P0
+        // 积分止损收缩后本地默认 50 而非上游 0=无限；显式设 0 仍表达无限制。
         let defaulted: GlobalConfig = serde_json::from_value(serde_json::json!({}))
             .expect("legacy global config should deserialize");
-        assert_eq!(defaulted.ai.max_rounds, 0);
+        assert_eq!(defaulted.ai.max_rounds, super::DEFAULT_MAX_ROUNDS);
 
         let limited: GlobalConfig = serde_json::from_value(serde_json::json!({
             "ai": { "max_rounds": 37 }
@@ -4445,6 +4458,7 @@ mod tests {
 
         assert_eq!(config.stream_idle_timeout_secs, Some(600));
         assert_eq!(config.stream_ttft_timeout_secs, Some(600));
+        assert_eq!(config.stream_connect_timeout_secs, Some(10));
         assert!(config.enable_deferred_tool_loading);
         assert!(config.allow_tool_json_repair);
         assert_eq!(config.subagent_max_concurrency, 5);
@@ -4620,6 +4634,7 @@ mod tests {
 
         assert_eq!(config.stream_idle_timeout_secs, Some(600));
         assert_eq!(config.stream_ttft_timeout_secs, Some(600));
+        assert_eq!(config.stream_connect_timeout_secs, Some(10));
         assert!(config.allow_tool_json_repair);
         assert_eq!(config.subagent_max_concurrency, 5);
         assert_eq!(

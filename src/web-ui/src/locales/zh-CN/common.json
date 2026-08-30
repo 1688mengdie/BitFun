@@ -141,7 +141,13 @@
       "forked": "子群「{{name}}」已创建",
       "forkNeedsMessage": "请先发送至少一条消息后再裂变。",
       "confirmFork": "确认裂变",
-      "membersSearch": "搜索成员..."
+      "membersSearch": "搜索成员...",
+      "presetWorkflow": "预设工作流",
+      "presetWorkflowHint": "选择预设将根据模板自动创建成员；不选预设可手动添加成员。",
+      "noPresetSelection": "不使用预设（手动选择成员）",
+      "presetMembersCount": "预设成员（{{count}}）",
+      "presetLoadFailed": "预设列表加载失败，仅显示内置模板。",
+      "presetGate": "关卡"
     },
     "search": {
       "triggerPlaceholder": "搜索",

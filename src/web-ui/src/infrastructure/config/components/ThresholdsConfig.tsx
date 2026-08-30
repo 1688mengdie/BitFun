@@ -36,6 +36,11 @@ interface ThresholdsShape {
     max_dispatch_per_parent_window: number;
     dispatch_window_secs: number;
     dispatch_cooldown_secs: number;
+    max_send_input_per_session_window: number;
+    send_input_window_secs: number;
+    max_tokens_per_session_24h: number;
+    max_send_input_per_session_24h: number;
+    session_24h_window_secs: number;
   };
   compression: {
     safety_reserve_tokens: number;
@@ -157,6 +162,11 @@ const DEFAULT_THRESHOLDS: ThresholdsShape = {
     max_dispatch_per_parent_window: 20,
     dispatch_window_secs: 3600,
     dispatch_cooldown_secs: 300,
+    max_send_input_per_session_window: 60,
+    send_input_window_secs: 3600,
+    max_tokens_per_session_24h: 30_000_000,
+    max_send_input_per_session_24h: 300,
+    session_24h_window_secs: 86_400,
   },
   compression: {
     safety_reserve_tokens: 10_000,
@@ -402,6 +412,11 @@ export default function ThresholdsConfig() {
       renderField('subagent', 'max_dispatch_per_parent_window', 0),
       renderField('subagent', 'dispatch_window_secs', 1),
       renderField('subagent', 'dispatch_cooldown_secs', 0),
+      renderField('subagent', 'max_send_input_per_session_window', 0),
+      renderField('subagent', 'send_input_window_secs', 1),
+      renderField('subagent', 'max_tokens_per_session_24h', 0),
+      renderField('subagent', 'max_send_input_per_session_24h', 0),
+      renderField('subagent', 'session_24h_window_secs', 1),
     ]);
     add('compression', [
       renderField('compression', 'safety_reserve_tokens', 1, 100),

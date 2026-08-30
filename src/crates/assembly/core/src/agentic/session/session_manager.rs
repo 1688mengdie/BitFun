@@ -1165,7 +1165,10 @@ impl SessionManager {
                 // Upstream 2a75d37ea: skip eviction unless the session is Idle
                 // right now (the removal re-check is `cleanup_candidate_matches_session`).
                 if !matches!(session.state, SessionState::Idle)
-                    || !Self::should_persist_session_with_transient_ids(session, transient_session_ids)
+                    || !Self::should_persist_session_with_transient_ids(
+                        session,
+                        transient_session_ids,
+                    )
                     || !Self::is_session_expired(session, now, timeout)
                     || matches!(session.state, SessionState::Processing { .. })
                 {

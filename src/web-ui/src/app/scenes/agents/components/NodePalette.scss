@@ -1,0 +1,104 @@
+/**
+ * NodePalette — selectable node-type palette.
+ * Visual language aligned with CreateLegionPage (agent-surface-card chips).
+ */
+
+@use '../../../../component-library/styles/tokens' as *;
+
+.node-palette {
+  display: flex;
+  flex-direction: column;
+  gap: $size-gap-3;
+  min-width: 0;
+
+  &__title {
+    margin: 0;
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+    font-weight: $font-weight-semibold;
+    color: var(--bf-appearance-token-color-text-primary);
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+  }
+
+  &__section-title {
+    margin: 0;
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    font-weight: $font-weight-medium;
+    color: var(--bf-appearance-token-color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  &__options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: $size-gap-2;
+  }
+
+  &__option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    position: relative;
+    max-width: 220px;
+    padding: $size-gap-2 $size-gap-3;
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    border-radius: 10px;
+    background: var(--bf-appearance-token-element-bg-soft);
+    color: var(--bf-appearance-token-color-text-primary);
+    cursor: pointer;
+    transition:
+      border-color 150ms ease,
+      background-color 150ms ease,
+      transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    &:hover {
+      border-color: var(--bf-appearance-token-border-medium);
+      transform: translateY(-1px);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--bf-appearance-token-color-accent-500);
+      outline-offset: 2px;
+    }
+
+    &--active {
+      border-color: var(--bf-appearance-token-color-accent-500);
+      background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 10%, var(--bf-appearance-token-color-bg-primary));
+    }
+  }
+
+  &__option-name {
+    font-size: var(--bf-appearance-token-flowchat-font-size-sm);
+    font-weight: $font-weight-medium;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__option-desc {
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    color: var(--bf-appearance-token-color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+
+  &__option-badge {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    border: 1px solid var(--bf-appearance-token-color-accent-500);
+    color: var(--bf-appearance-token-color-accent-500);
+    font-size: var(--bf-appearance-token-flowchat-font-size-xs);
+    background: color-mix(in srgb, var(--bf-appearance-token-color-accent-500) 8%, transparent);
+  }
+}

@@ -416,6 +416,7 @@ const AIModelConfig: React.FC = () => {
   });
   const [streamIdleTimeoutInput, setStreamIdleTimeoutInput] = useState('');
   const [streamTtftTimeoutInput, setStreamTtftTimeoutInput] = useState('');
+  const [streamConnectTimeoutInput, setStreamConnectTimeoutInput] = useState('');
   const [isStreamTimeoutSaving, setIsStreamTimeoutSaving] = useState(false);
   const [allowNormalToolJsonRepair, setAllowNormalToolJsonRepair] = useState(true);
   const [isToolJsonRepairSaving, setIsToolJsonRepairSaving] = useState(false);
@@ -488,9 +489,15 @@ const AIModelConfig: React.FC = () => {
     () => parseOptionalPositiveIntegerInput(streamTtftTimeoutInput),
     [streamTtftTimeoutInput]
   );
+  const parsedStreamConnectTimeout = useMemo(
+    () => parseOptionalPositiveIntegerInput(streamConnectTimeoutInput),
+    [streamConnectTimeoutInput]
+  );
   const isStreamIdleTimeoutInvalid = parsedStreamIdleTimeout === undefined;
   const isStreamTtftTimeoutInvalid = parsedStreamTtftTimeout === undefined;
-  const isStreamTimeoutInvalid = isStreamIdleTimeoutInvalid || isStreamTtftTimeoutInvalid;
+  const isStreamConnectTimeoutInvalid = parsedStreamConnectTimeout === undefined;
+  const isStreamTimeoutInvalid =
+    isStreamIdleTimeoutInvalid || isStreamTtftTimeoutInvalid || isStreamConnectTimeoutInvalid;
 
   const getCustomRequestBodyTrimHint = useCallback((provider?: string): string => {
     switch (provider) {
@@ -555,11 +562,12 @@ const AIModelConfig: React.FC = () => {
 
   const loadConfig = useCallback(async () => {
     try {
-      const [models, proxy, streamIdleTimeoutSecs, streamTtftTimeoutSecs, allowJsonRepair] = await Promise.all([
+      const [models, proxy, streamIdleTimeoutSecs, streamTtftTimeoutSecs, streamConnectTimeoutSecs, allowJsonRepair] = await Promise.all([
         configManager.getConfig<AIModelConfigType[]>('ai.models'),
         configManager.getConfig<ProxyConfig>('ai.proxy'),
         configManager.getConfig<number | null>('ai.stream_idle_timeout_secs'),
         configManager.getConfig<number | null>('ai.stream_ttft_timeout_secs'),
+        configManager.getConfig<number | null>('ai.stream_connect_timeout_secs'),
         configManager.getConfig<boolean>('ai.allow_tool_json_repair'),
       ]);
       setAiModels(models);
@@ -573,6 +581,9 @@ const AIModelConfig: React.FC = () => {
       );
       setStreamTtftTimeoutInput(
         streamTtftTimeoutSecs != null ? String(streamTtftTimeoutSecs) : ''
+      );
+      setStreamConnectTimeoutInput(
+        streamConnectTimeoutSecs != null ? String(streamConnectTimeoutSecs) : ''
       );
       setAllowNormalToolJsonRepair(allowJsonRepair !== false);
     } catch (error) {
@@ -1879,12 +1890,19 @@ const AIModelConfig: React.FC = () => {
           'ai.stream_ttft_timeout_secs',
           parsedStreamTtftTimeout ?? null
         ),
+        configManager.setConfig(
+          'ai.stream_connect_timeout_secs',
+          parsedStreamConnectTimeout ?? null
+        ),
       ]);
       setStreamIdleTimeoutInput(
         parsedStreamIdleTimeout != null ? String(parsedStreamIdleTimeout) : ''
       );
       setStreamTtftTimeoutInput(
         parsedStreamTtftTimeout != null ? String(parsedStreamTtftTimeout) : ''
+      );
+      setStreamConnectTimeoutInput(
+        parsedStreamConnectTimeout != null ? String(parsedStreamConnectTimeout) : ''
       );
       notification.success(t('streamIdleTimeout.saveSuccess'));
     } catch (error) {
@@ -3158,6 +3176,21 @@ const AIModelConfig: React.FC = () => {
       </Tooltip>
     </span>
   );
+  const streamConnectTimeoutLabel = (
+    <span className="bitfun-ai-model-config__inline-header-main">
+      <span>{t('streamConnectTimeout.label')}</span>
+      <Tooltip content={t('streamConnectTimeout.hint')} placement="top">
+        <span
+          className="bitfun-ai-model-config__inline-header-info"
+          role="button"
+          tabIndex={0}
+          aria-label={t('streamConnectTimeout.hint')}
+        >
+          <Info size={14} />
+        </span>
+      </Tooltip>
+    </span>
+  );
   const reasoningPanelDraft = reasoningPanelDraftKey
     ? selectedModelDrafts.find(draft => draft.key === reasoningPanelDraftKey)
     : undefined;
@@ -3612,6 +3645,17 @@ const AIModelConfig: React.FC = () => {
               value={streamIdleTimeoutInput}
               onChange={(e) => setStreamIdleTimeoutInput(e.target.value)}
               placeholder={t('streamIdleTimeout.placeholder')}
+              inputSize="small"
+            />
+          </ConfigPageRow>
+          <ConfigPageRow
+            label={streamConnectTimeoutLabel}
+            align="center"
+          >
+            <Input
+              value={streamConnectTimeoutInput}
+              onChange={(e) => setStreamConnectTimeoutInput(e.target.value)}
+              placeholder={t('streamConnectTimeout.placeholder')}
               inputSize="small"
             />
           </ConfigPageRow>

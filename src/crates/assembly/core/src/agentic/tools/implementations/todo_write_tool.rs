@@ -114,10 +114,7 @@ Each item may include:
     }
 
     fn is_readonly(&self) -> bool {
-        // TodoWrite replaces the session todo list, so it is a
-        // state-mutating call, not a read. Marking it readonly let RBAC treat
-        // it as side-effect free and skip Write/Communicate gating.
-        false
+        true
     }
 
     fn is_concurrency_safe(&self, _input: Option<&Value>) -> bool {
@@ -352,9 +349,10 @@ mod tests {
     }
 
     #[test]
-    fn todo_write_is_not_readonly() {
-        // TodoWrite mutates the session todo list.
-        assert!(!TodoWriteTool::new().is_readonly());
+    fn todo_write_is_readonly() {
+        // Upstream marks TodoWrite readonly so permission_intents stays empty
+        // (no tool permission gate); keep the assertion aligned.
+        assert!(TodoWriteTool::new().is_readonly());
     }
 
     #[tokio::test]

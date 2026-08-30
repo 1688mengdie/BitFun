@@ -32,10 +32,13 @@ import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
+import { LegionPresetAPI } from '@/infrastructure/api/service-api/LegionPresetAPI';
+import type { LegionPattern } from '@/app/scenes/agents/data/orchestration-patterns';
 import type { SessionMetadata } from '@/shared/types/session-history';
 import type { WorkspaceInfo } from '@/shared/types';
 import { createLogger } from '@/shared/utils/logger';
 import { notificationService } from '@/shared/notification-system';
+import { PresetPicker } from './PresetPicker';
 import './CreateGroupChatDialog.scss';
 
 const log = createLogger('CreateGroupChatDialog');
@@ -69,6 +72,12 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // GROUP P2: preset mode — selected workflow preset (null = manual member mode).
+  // selectedPresetIsSaved = true when the id already resolves on disk (a saved
+  // preset), so the create flow passes preset_id directly; false means a built-in
+  // template not yet persisted, so the create flow materializes it first.
+  const [selectedPreset, setSelectedPreset] = useState<LegionPattern | null>(null);
+  const [selectedPresetIsSaved, setSelectedPresetIsSaved] = useState(false);
 
   // R-GC-19: keep a stable reference to assistantWorkspaces (the array reference
   // passed by the parent may change every render; using it directly in useCallback
@@ -123,6 +132,8 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     if (!isOpen) {
       setName('');
       setSelectedMemberIds(new Set());
+      setSelectedPreset(null);
+      setSelectedPresetIsSaved(false);
       setLoadFailed(false);
       return;
     }
@@ -155,12 +166,43 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     if (!trimmedName || isSubmitting) return;
     setIsSubmitting(true);
     try {
-      // R-GC-30 / R-GC-R6: members = the owner's own picks from the real
-      // session list (every real session including agentic, not filtered).
-      // The backend create validates each picked id exists and registers it
-      // in the group's groupChats (group_room_tools.rs create_group); it does
-      // not create fresh member sessions.
-      const memberIds = Array.from(selectedMemberIds);
+      // GROUP P2 preset mode: when a workflow preset is selected, the group is
+      // instantiated from the preset — the backend create_group_from_preset
+      // (group_room_tools.rs :1871) auto-creates member sessions per node.agent.
+      // A built-in template not yet persisted must be materialized first
+      // (createPreset) so its id resolves on disk; a saved preset id already
+      // resolves and is passed as-is.
+      let parameters: Record<string, unknown>;
+      if (selectedPreset) {
+        if (!selectedPresetIsSaved) {
+          await LegionPresetAPI.createPreset({
+            id: selectedPreset.id,
+            name: selectedPreset.name,
+            description: selectedPreset.description,
+            nodes: selectedPreset.nodes,
+            edges: selectedPreset.edges,
+          });
+        }
+        parameters = {
+          action: 'create',
+          name: trimmedName,
+          preset_id: selectedPreset.id,
+          workspace: workspacePath || undefined,
+        };
+      } else {
+        // R-GC-30 / R-GC-R6: members = the owner's own picks from the real
+        // session list (every real session including agentic, not filtered).
+        // The backend create validates each picked id exists and registers it
+        // in the group's groupChats (group_room_tools.rs create_group); it does
+        // not create fresh member sessions.
+        const memberIds = Array.from(selectedMemberIds);
+        parameters = {
+          action: 'create',
+          name: trimmedName,
+          members: memberIds,
+          workspace: workspacePath || undefined,
+        };
+      }
       // Contract section 1.4: go through execute_tool (ToolAPI camelCase
       // wrapper); direct invoke('create_group_chat') is forbidden.
       // BUG-01 (2026-08-22): pass the caller session id in the tool context so
@@ -168,7 +210,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
       // is owned by the master actor, the caller = the current active session).
       const response = await toolAPI.executeTool({
         toolName: 'create_group_chat',
-        parameters: { action: 'create', name: trimmedName, members: memberIds, workspace: workspacePath || undefined },
+        parameters,
         workspacePath,
         context: { sessionId: flowChatStore.getActiveSession()?.sessionId ?? '' },
       });
@@ -200,7 +242,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
     } finally {
       setIsSubmitting(false);
     }
-  }, [isSubmitting, name, onClose, onCreated, selectedMemberIds, t, workspacePath]);
+  }, [isSubmitting, name, onClose, onCreated, selectedMemberIds, selectedPreset, selectedPresetIsSaved, t, workspacePath]);
 
   return (
     <Modal
@@ -222,9 +264,24 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
           />
         </div>
 
+        {/* GROUP P2: workflow preset selection — built-in PATTERNS merged with
+            saved legion presets (LegionPresetAPI.listPresets). Selecting a
+            preset drives preset_id create; no preset falls back to manual
+            member mode below. */}
+        <PresetPicker
+          value={selectedPreset}
+          onChange={(pattern, isSaved) => {
+            setSelectedPreset(pattern);
+            setSelectedPresetIsSaved(isSaved);
+          }}
+          disabled={isSubmitting}
+        />
+
         {/* R-GC-30 / R-GC-R6: real-session member multi-select (owner picks;
             runtime-fetched list, zero hardcoded). R-GC-28's member-count input
-            is removed. */}
+            is removed. Manual member mode is the fallback when no preset is
+            selected (GROUP P2). */}
+        {!selectedPreset && (
         <div className="group-chat-dialog__members">
           <div className="group-chat-dialog__members-header">
             <span className="group-chat-dialog__members-label">{t('nav.groupChats.members')}</span>
@@ -272,6 +329,7 @@ export const CreateGroupChatDialog: React.FC<CreateGroupChatDialogProps> = ({
             </div>
           )}
         </div>
+        )}
 
         <div className="group-chat-dialog__actions">
           <Button type="button" variant="ghost" onClick={onClose} disabled={isSubmitting}>

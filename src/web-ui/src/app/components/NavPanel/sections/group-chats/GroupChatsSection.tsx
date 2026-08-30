@@ -1,9 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Users, Workflow } from 'lucide-react';
+import { Users } from 'lucide-react';
 import { Tooltip } from '@/component-library';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
-import { useSceneManager } from '@/app/hooks/useSceneManager';
-import { useAgentsStore } from '@/app/scenes/agents/agentsStore';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
 import type { FlowChatState } from '@/flow_chat/types/flow-chat';
 import { sessionIsGroupChat } from '@/flow_chat/utils/sessionOrdering';
@@ -23,10 +21,9 @@ interface GroupChatsSectionProps {
 
 /**
  * R-WF-12: dedicated "Group Chats" nav section. Self-contained: renders its
- * own section header (collapsible), the two create entries ("New workflow" ->
- * agents scene CreateLegionPage, "New group chat" -> existing
- * CreateGroupChatDialog), and the group-chat-only session list. Reuses
- * SessionsSection with `groupChatsOnly` — no new session machinery.
+ * own section header (collapsible), the single create entry ("New group chat"
+ * -> existing CreateGroupChatDialog), and the group-chat-only session list.
+ * Reuses SessionsSection with `groupChatsOnly` — no new session machinery.
  */
 const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
   workspaceId,
@@ -36,7 +33,6 @@ const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
   onCreateGroupChat,
 }) => {
   const { t } = useI18n('common');
-  const { openScene } = useSceneManager();
   const [isOpen, setIsOpen] = useState(true);
   const [groupChatCount, setGroupChatCount] = useState(0);
 
@@ -59,16 +55,8 @@ const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
     return flowChatStore.subscribeSelector(selectCount, setGroupChatCount);
   }, [workspacePath]);
 
-  const handleCreateWorkflow = useCallback(() => {
-    // R-WF-12: "New workflow" opens the agents scene at the workflow (legion)
-    // creation page, reusing the existing CreateLegionPage flow.
-    useAgentsStore.getState().openCreateLegion();
-    openScene('agents');
-  }, [openScene]);
-
   const toggleOpen = useCallback(() => setIsOpen(open => !open), []);
 
-  const newWorkflowLabel = t('nav.groupChats.newWorkflow');
   const newGroupChatLabel = t('nav.groupChats.newGroupChat');
 
   return (
@@ -86,17 +74,6 @@ const GroupChatsSection: React.FC<GroupChatsSectionProps> = ({
         onToggle={toggleOpen}
         actions={
           <div className="bitfun-nav-panel__section-actions" data-bf-component="nav-panel" data-bf-part="groupChatsActions">
-            <Tooltip content={newWorkflowLabel} placement="right" followCursor>
-              <button
-                type="button"
-                className="bitfun-nav-panel__section-action"
-                aria-label={newWorkflowLabel}
-                onClick={handleCreateWorkflow}
-                data-testid="nav-group-chats-create-workflow-btn"
-              >
-                <Workflow size={13} />
-              </button>
-            </Tooltip>
             <Tooltip content={newGroupChatLabel} placement="right" followCursor>
               <button
                 type="button"

@@ -480,6 +480,7 @@
     "nodes": "Nodes ({{count}})",
     "edges": "Edges ({{count}})",
     "noEdges": "No edges",
+    "noNodes": "No nodes",
     "canvas": "Canvas preview",
     "usePattern": "Use this pattern",
     "savePreset": "Save preset",
@@ -724,6 +725,14 @@
       "pending_attention": "Needs attention",
       "viewed": "Viewed"
     }
+  },
+  "nodePalette": {
+    "title": "Node types",
+    "mainClaw": "Main Claw",
+    "mode": "Built-in modes",
+    "subagent": "Sub-agents",
+    "acp": "ACP bridge",
+    "custom": "Custom"
   },
   "capability": {
     "warning": "Missing capabilities: {{cats}}",

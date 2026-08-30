@@ -480,6 +480,7 @@
     "nodes": "节点（{{count}}）",
     "edges": "连线（{{count}}）",
     "noEdges": "无连线",
+    "noNodes": "无节点",
     "canvas": "画布预览",
     "usePattern": "使用此模式",
     "savePreset": "保存预设",
@@ -724,6 +725,14 @@
       "pending_attention": "待关注",
       "viewed": "已查看"
     }
+  },
+  "nodePalette": {
+    "title": "节点类型",
+    "mainClaw": "主 Claw",
+    "mode": "内置智能体",
+    "subagent": "子代理",
+    "acp": "ACP 桥接",
+    "custom": "自定义"
   },
   "capability": {
     "warning": "{{cats}} 能力缺失",

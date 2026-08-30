@@ -6,6 +6,7 @@ import {
   compareSessionsForNavStable,
   getSessionMetadataSortTimestamp,
   getSessionSortTimestamp,
+  isGroupChatTreeNode,
   isOrphanMetadata,
   isOrphanSession,
   orphanSessionSortRank,
@@ -250,3 +251,43 @@ describe('sessionIsGroupChat / sessionIsWorkflowMember (R-WF-12)', () => {
     expect(sessionIsWorkflowMember(undefined)).toBe(false);
   });
 });
+
+describe('isGroupChatTreeNode (R-8 group chat tree · GROUP P5)', () => {
+  const groupIds = new Set(['group-a', 'group-b']);
+
+  it('keeps a group chat session itself as a tree node', () => {
+    expect(isGroupChatTreeNode(createSession({ sessionId: 'group-a', isGroupChat: true }), groupIds)).toBe(true);
+  });
+
+  it('keeps a member whose parent chain points to a group chat in this scope', () => {
+    // GROUP P5: consuming the member parent chain (J1 backend dual-writes
+    // relationship.parent_session_id + customMetadata.parentSessionId = group_id,
+    // restored via deriveSessionRelationshipFromMetadata). A member whose parent
+    // chain lands in this scope's group id set belongs to the group chat tree.
+    const member = createSession({ sessionId: 'group-a-member-1', parentSessionId: 'group-a' });
+    expect(isGroupChatTreeNode(member, groupIds)).toBe(true);
+  });
+
+  it('rejects a member whose parent is not a group chat in this scope', () => {
+    const orphanMember = createSession({ sessionId: 'orphan-member', parentSessionId: 'missing-group' });
+    expect(isGroupChatTreeNode(orphanMember, groupIds)).toBe(false);
+  });
+
+  it('rejects a plain top-level session (no group parent)', () => {
+    expect(isGroupChatTreeNode(createSession({ sessionId: 'plain' }), groupIds)).toBe(false);
+  });
+
+  it('rejects null/undefined sessions', () => {
+    expect(isGroupChatTreeNode(null, groupIds)).toBe(false);
+    expect(isGroupChatTreeNode(undefined, groupIds)).toBe(false);
+  });
+
+  it('does not mix legion workflowMember marker as a group member identity', () => {
+    // Identity only via parent chain = group_id; workflowMember (legionNodeId) is
+    // a legion workflow member marker, not written by preset group members, so it
+    // must never be used as a group tree member identity (mixing drops children).
+    const legionMember = createSession({ sessionId: 'legion-member', workflowMember: true });
+    expect(isGroupChatTreeNode(legionMember, groupIds)).toBe(false);
+  });
+});
+

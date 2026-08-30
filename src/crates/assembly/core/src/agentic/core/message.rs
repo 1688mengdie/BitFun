@@ -356,15 +356,15 @@ impl From<Message> for AIMessage {
             MessageContent::Text(text) => {
                 // Check if text is empty to avoid sending empty content to API
                 let content = if text.trim().is_empty() {
-                    // Should not have empty text messages, but provide default value for defensive programming
+                    // Empty text is a degenerate input; do not fabricate a placeholder.
+                    // Return None so downstream converters apply their existing
+                    // empty-content semantics (skip/drop) instead of treating a fake
+                    // token as a real user/assistant utterance or a system directive.
+                    // This also closes the loop with the empty-reminder early return
+                    // in render_internal_reminder, so an empty reminder no longer
+                    // yields a fabricated user token here.
                     warn!("Empty text message detected: role={}", role);
-                    if role == "user" {
-                        Some("(empty message)".to_string())
-                    } else if role == "system" {
-                        Some("You are a helpful assistant.".to_string())
-                    } else {
-                        Some(" ".to_string()) // Minimum valid value
-                    }
+                    None
                 } else {
                     Some(text)
                 };
@@ -404,9 +404,20 @@ impl From<Message> for AIMessage {
                     content.push(']');
                 }
 
+                let content = if content.trim().is_empty() {
+                    // Empty multimodal content (no text and no images) must not reach
+                    // the provider as a bare empty string. Return None so downstream
+                    // converters apply their empty-content handling instead of billing
+                    // an empty request round. This also closes the loop with the
+                    // empty-reminder early return in render_internal_reminder.
+                    None
+                } else {
+                    Some(content)
+                };
+
                 Self {
                     role: "user".to_string(),
-                    content: Some(content),
+                    content,
                     reasoning_content: None,
                     thinking_signature: None,
                     tool_calls: None,
@@ -898,10 +909,55 @@ impl Display for MessageContent {
 #[cfg(test)]
 mod tests {
     use super::{Message, ToolCall};
+    use crate::agentic::image_analysis::ImageContextData;
     use crate::util::types::Message as AIMessage;
     use bitfun_agent_stream::ToolArgumentRepairKind;
     use bitfun_core_types::{ModelResponseReplay, ModelResponseReplayItem};
     use serde_json::json;
+
+    #[test]
+    fn empty_text_empty_images_multimodal_becomes_none() {
+        let ai_msg = AIMessage::from(Message::user_multimodal(String::new(), vec![]));
+
+        // An empty multimodal message (no text and no images) must not reach the
+        // provider as a bare empty string; it should become None.
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn non_empty_text_multimodal_preserves_content() {
+        let ai_msg = AIMessage::from(Message::user_multimodal("hi".to_string(), vec![]));
+
+        assert_eq!(ai_msg.content.as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn multimodal_with_images_kept_when_text_empty() {
+        let image = ImageContextData {
+            id: "img_1".to_string(),
+            image_path: Some("/tmp/photo.png".to_string()),
+            data_url: None,
+            mime_type: "image/png".to_string(),
+            metadata: Some(json!({ "name": "photo" })),
+        };
+
+        let ai_msg = AIMessage::from(Message::user_multimodal(String::new(), vec![image]));
+
+        // Image-only multimodal content (no text) is valid and must be preserved.
+        let content = ai_msg
+            .content
+            .expect("image-attached content should be present");
+        assert!(content.contains("[Attached image(s):"));
+        assert!(content.contains("photo"));
+    }
+
+    #[test]
+    fn user_multimodal_constructor_feeds_conversion() {
+        let ai_msg = AIMessage::from(Message::user_multimodal(String::new(), vec![]));
+
+        assert_eq!(ai_msg.role, "user");
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
 
     #[test]
     fn preserves_empty_reasoning_content_for_provider_replay() {
@@ -912,6 +968,34 @@ mod tests {
 
         assert_eq!(ai_msg.reasoning_content.as_deref(), Some(""));
         assert_eq!(ai_msg.thinking_signature.as_deref(), Some("sig_1"));
+    }
+
+    #[test]
+    fn empty_text_user_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::user(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn empty_text_system_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::system(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn empty_text_assistant_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::assistant(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn non_empty_text_preserves_content() {
+        let ai_msg = AIMessage::from(Message::user("hi".to_string()));
+
+        assert_eq!(ai_msg.content.as_deref(), Some("hi"));
     }
 
     #[test]

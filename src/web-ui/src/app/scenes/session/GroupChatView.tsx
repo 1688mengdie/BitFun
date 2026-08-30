@@ -48,6 +48,8 @@ import { ModernFlowChatContainer as FlowChatContainer } from '../../../flow_chat
 import { ChatInput } from '../../../flow_chat/components/ChatInput';
 import type { ChatInputRegistration, ChatInputSubmission } from '../../../flow_chat/components/chatInputRegistration';
 import { flowChatStore } from '../../../flow_chat/store/FlowChatStore';
+import { stateMachineManager } from '../../../flow_chat/state-machine';
+import { SessionExecutionState } from '../../../flow_chat/state-machine/types';
 import { openMainSession } from '../../../flow_chat/services/sessionActivation';
 import type { DialogTurn } from '../../../flow_chat/types/flow-chat';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
@@ -440,10 +442,34 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
   );
 
   // R-GC-15: member rows — name from listSessions metadata, fallback raw id.
+  // GROUP P5 (R-8 group chat tree): members render as children of the group
+  // session; project their realtime running/idle state via stateMachineManager
+  // (same source as SessionsSection). Unloaded/non-running members are idle;
+  // never hardcode or fabricate a status.
   const memberRows = useMemo(
-    () => memberIds.map(id => ({ id, name: memberMetaById.get(id)?.sessionName || id })),
+    () => memberIds.map(id => {
+      const runningState = stateMachineManager.getCurrentState(id);
+      const isRunning = runningState === SessionExecutionState.PROCESSING
+        || runningState === SessionExecutionState.FINISHING;
+      return {
+        id,
+        name: memberMetaById.get(id)?.sessionName || id,
+        isRunning,
+      };
+    }),
     [memberIds, memberMetaById],
   );
+
+  // Subscribe to stateMachineManager global changes so the member running/idle
+  // badge refreshes live; without it the member status stays frozen at the
+  // moment the dialog opened.
+  useEffect(() => {
+    return stateMachineManager.subscribeGlobal(() => {
+      // Lightweight re-render (same no-side-effect pattern as loadHistory
+      // finally); only needed when the members dialog depends on member state.
+      forceRender(v => v + 1);
+    });
+  }, []);
 
   // R-GC-24: group chat menu rendered inside the original FlowChatHeader left
   // action group (reuses IconButton + Modal + Select; no custom top bar).
@@ -584,7 +610,7 @@ export const GroupChatView: React.FC<GroupChatViewProps> = ({
  */
 interface GroupMembersDialogProps {
   groupName?: string;
-  memberRows: Array<{ id: string; name: string }>;
+  memberRows: Array<{ id: string; name: string; isRunning?: boolean }>;
   isLoading: boolean;
   loadFailed: boolean;
   busy: boolean;
@@ -633,8 +659,17 @@ function GroupMembersDialog({
                 data-bf-component="group-member-list-dialog"
                 data-bf-part="memberRow"
                 data-member-id={member.id}
+                data-member-running={member.isRunning ? 'true' : undefined}
               >
                 <span className="group-chat-dialog__member-name">{member.name}</span>
+                {member.isRunning ? (
+                  <span
+                    className="group-chat-dialog__member-state"
+                    data-testid="group-chat-member-running"
+                  >
+                    {t('shared:statuses.running')}
+                  </span>
+                ) : null}
                 <Button
                   type="button"
                   variant="ghost"

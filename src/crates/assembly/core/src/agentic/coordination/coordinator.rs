@@ -6530,17 +6530,25 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
 
         // P0-8: Even when SessionState is Idle, a previously cancelled turn's
         // spawn task may still be draining (writing tail messages into the
-        // in-memory context cache). Wait briefly for it to finish so the new
-        // turn does not race with it. This is a no-op when no turn is in flight.
-        let pending = self
-            .wait_session_drained(&session_id, Duration::from_millis(800))
-            .await;
-        if pending > 0 {
-            warn!(
-                "Starting new dialog while previous turn still draining: session_id={}, pending={}",
-                session_id, pending
-            );
-        }
+        // in-memory context cache). This is a no-op when no turn is in flight.
+        //
+        // B3-2（BILLING-F1-0830 终版裁决）: the old best-effort 800ms budget
+        // raced the drain: state flips to Idle before the previous turn's
+        // spawn drops its tail-write guards, so warn-and-continue admitted
+        // same-session concurrent dialog turns (T3). Admission now reuses the
+        // strict maintenance barrier (same primitive the recovery chain uses
+        // below): wait up to 30s for the active-turn counter to reach zero and
+        // fail the admission with a timeout error otherwise. The error keeps
+        // the caller's submission intact — the scheduler requeues
+        // non-interactive (AgentSession/ScheduledJob) submissions for a later
+        // dispatch, while DesktopUi callers simply resubmit — so no follow-up
+        // is lost and same-session execution overlap stays impossible. The
+        // wait is bounded by construction: the counter is guaranteed to reach
+        // zero on every exit path (including panic) via
+        // SessionExecutionGuard::drop, and admission holds no lock the tail
+        // writes need, so the wait cannot deadlock.
+        self.ensure_session_execution_drained(&session_id, Duration::from_secs(30))
+            .await?;
 
         // Check session state
         // Allow Idle or any error state (user can retry after error)
@@ -8041,7 +8049,22 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             Some(entry) => entry.value().clone(),
             None => return 0,
         };
-        let deadline = Instant::now() + max_wait;
+        // B3-2 防呆（审查官 P0-1）：Duration::MAX + Instant::now() 会无符号
+        // 溢出 panic（release 下回绕成过去时刻）。deadline 一律用 checked_add
+        // 构造：溢出视作「无上限」，直接等计数归零。
+        let deadline = match Instant::now().checked_add(max_wait) {
+            Some(deadline) => deadline,
+            None => loop {
+                if counter.load(Ordering::SeqCst) == 0 {
+                    self.active_turns_per_session
+                        .remove_if(session_id, |_, current| {
+                            Arc::ptr_eq(current, &counter) && current.load(Ordering::SeqCst) == 0
+                        });
+                    return 0;
+                }
+                sleep(Duration::from_millis(20)).await;
+            },
+        };
         loop {
             let pending = counter.load(Ordering::SeqCst);
             if pending == 0 {
@@ -8127,6 +8150,26 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
     pub(crate) fn set_active_turn_count_for_test(&self, session_id: &str, count: usize) {
         self.active_turns_per_session
             .insert(session_id.to_string(), Arc::new(AtomicUsize::new(count)));
+    }
+
+    /// Test hook for the B3-2 admission drain wait: spawn a task that drops
+    /// the session's active-turn counter to zero after `delay`. Mirrors the
+    /// production RAII guarantee (SessionExecutionGuard::drop always zeroes
+    /// the counter) with a controlled, observable release.
+    #[cfg(test)]
+    pub(crate) fn release_active_turn_after_for_test(
+        &self,
+        session_id: &str,
+        delay: std::time::Duration,
+    ) {
+        let counter = match self.active_turns_per_session.get(session_id) {
+            Some(entry) => entry.value().clone(),
+            None => return,
+        };
+        tokio::spawn(async move {
+            sleep(delay).await;
+            counter.store(0, Ordering::SeqCst);
+        });
     }
 
     /// Strict maintenance barrier for callers that must not overlap an older
@@ -17417,9 +17460,10 @@ mod tests {
         AgentSessionCreateRequest, AgentSessionManagementPort, AgentSessionRenameRequest,
         AgentSubmissionPort, AgentSubmissionRequest, AgentSubmissionSource,
         AgentThreadGoalGetRequest, AgentThreadGoalManagementPort, AgentUserShellCommandPort,
-        AgentUserShellCommandRequest, DelegationPolicy, PermissionEffect, PermissionMode,
-        PermissionRule, PermissionRuntimeCeiling, PortErrorKind, SessionStoragePathRequest,
-        SubagentContextMode, ThreadGoal, ThreadGoalStatus,
+        AgentUserShellCommandRequest, DelegationPolicy, DialogSubmissionPolicy,
+        DialogTriggerSource, PermissionEffect, PermissionMode, PermissionRule,
+        PermissionRuntimeCeiling, PortErrorKind, SessionStoragePathRequest, SubagentContextMode,
+        ThreadGoal, ThreadGoalStatus,
     };
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -20285,7 +20329,6 @@ mod tests {
             )
             .await
             .expect("ReviewFixer turn should pass admission after the intentional binding update");
-
         let updated = session_manager
             .get_session(&session.session_id)
             .expect("review session should remain loaded");

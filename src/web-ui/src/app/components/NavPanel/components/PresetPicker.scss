@@ -1,0 +1,170 @@
+/**
+ * PresetPicker styles — existing appearance tokens and size tokens only (no new
+ * style system). Reuses the CreateGroupChatDialog row/state/actions shape so the
+ * preset selection and member preview read as part of the same dialog.
+ */
+
+@use '../../../../component-library/styles/tokens.scss' as *;
+
+.preset-picker {
+  display: flex;
+  flex-direction: column;
+  gap: $size-gap-2;
+  min-width: 0;
+  color: var(--bf-appearance-token-color-text-primary);
+
+  &__header {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+  }
+
+  &__label {
+    font-size: var(--bf-appearance-token-font-size-xs);
+    font-weight: 600;
+    color: var(--bf-appearance-token-color-text-secondary);
+  }
+
+  &__state {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+    padding: $size-gap-3 $size-gap-2;
+    border: 1px dashed var(--bf-appearance-token-border-subtle);
+    border-radius: $size-radius-base;
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-xs);
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    border-radius: $size-radius-base;
+    padding: $size-gap-1;
+    gap: 2px;
+  }
+
+  &__option {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    min-width: 0;
+    width: 100%;
+    padding: $size-gap-2;
+    border: none;
+    border-radius: $size-radius-sm;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+    color: var(--bf-appearance-token-color-text-secondary);
+    font: inherit;
+    transition: color $motion-fast $easing-standard,
+                background $motion-fast $easing-standard;
+
+    &:hover {
+      color: var(--bf-appearance-token-color-text-primary);
+      background: var(--bf-appearance-token-element-bg-soft);
+    }
+
+    &.is-selected {
+      color: var(--bf-appearance-token-color-text-primary);
+      background: var(--bf-appearance-token-element-bg-soft);
+    }
+  }
+
+  &__option-title {
+    font-size: var(--bf-appearance-token-font-size-sm);
+    font-weight: 500;
+    color: inherit;
+  }
+
+  &__option-sub {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+    font-size: var(--bf-appearance-token-font-size-xs);
+    color: var(--bf-appearance-token-color-text-muted);
+  }
+
+  &__option-count {
+    flex: 0 0 auto;
+    margin-left: $size-gap-1;
+    padding: 0 $size-gap-1;
+    border-radius: $size-radius-sm;
+    background: var(--bf-appearance-token-element-bg-soft);
+    white-space: nowrap;
+  }
+
+  &__preview {
+    display: flex;
+    flex-direction: column;
+    gap: $size-gap-2;
+    min-width: 0;
+  }
+
+  &__preview-label {
+    font-size: var(--bf-appearance-token-font-size-xs);
+    font-weight: 600;
+    color: var(--bf-appearance-token-color-text-secondary);
+  }
+
+  &__member-list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    max-height: 160px;
+    overflow-y: auto;
+    border: 1px solid var(--bf-appearance-token-border-subtle);
+    border-radius: $size-radius-base;
+    padding: $size-gap-1;
+    gap: 2px;
+  }
+
+  &__member-row {
+    display: flex;
+    align-items: center;
+    gap: $size-gap-2;
+    min-width: 0;
+    padding: 4px $size-gap-2;
+    border-radius: $size-radius-sm;
+    color: var(--bf-appearance-token-color-text-secondary);
+    font-size: var(--bf-appearance-token-font-size-sm);
+  }
+
+  &__member-role {
+    flex: 1 1 0;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--bf-appearance-token-color-text-primary);
+  }
+
+  &__member-agent {
+    flex: 0 0 auto;
+    padding: 0 $size-gap-1;
+    border-radius: $size-radius-sm;
+    background: var(--bf-appearance-token-element-bg-soft);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-xs);
+    white-space: nowrap;
+  }
+
+  &__member-gate {
+    flex: 0 0 auto;
+    padding: 0 $size-gap-1;
+    border-radius: $size-radius-sm;
+    background: var(--bf-appearance-token-element-bg-soft);
+    color: var(--bf-appearance-token-color-text-muted);
+    font-size: var(--bf-appearance-token-font-size-xs);
+    white-space: nowrap;
+  }
+}

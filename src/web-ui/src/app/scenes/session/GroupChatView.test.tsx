@@ -193,11 +193,24 @@ vi.mock('@/flow_chat/services/sessionActivation', () => ({
   openMainSession: vi.fn(() => Promise.resolve()),
 }));
 
+// GROUP P5 (R-8 group chat tree): member status projection reuses
+// stateMachineManager. The test mocks the singleton so member running/idle
+// badge state is assertable; default all IDLE (badge hidden).
+const stateMachineMocks = vi.hoisted(() => ({
+  getCurrentState: vi.fn(() => 'idle'),
+  subscribeGlobal: vi.fn(() => () => {}),
+}));
+
+vi.mock('@/flow_chat/state-machine', () => ({
+  stateMachineManager: stateMachineMocks,
+}));
+
 import GroupChatView from './GroupChatView';
 import { toolAPI } from '@/infrastructure/api/service-api/ToolAPI';
 import { sessionAPI } from '@/infrastructure/api/service-api/SessionAPI';
 import { openMainSession } from '@/flow_chat/services/sessionActivation';
 import { flowChatStore } from '@/flow_chat/store/FlowChatStore';
+import { stateMachineManager } from '@/flow_chat/state-machine';
 import type { SessionMetadata } from '@/shared/types/session-history';
 
 const makeSession = (id: string, agentType: string, sessionName?: string): SessionMetadata => ({
@@ -231,6 +244,9 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     flowChatMocks.addDialogTurn.mockClear();
     flowChatMocks.getState.mockClear();
     flowChatMocks.getState.mockReturnValue({ sessions: new Map(), activeSessionId: null });
+    stateMachineMocks.getCurrentState.mockReset();
+    stateMachineMocks.getCurrentState.mockReturnValue('idle');
+    stateMachineMocks.subscribeGlobal.mockReturnValue(() => {});
   });
 
   afterEach(() => {
@@ -980,5 +996,52 @@ describe('GroupChatView (R-GC-14 view + R-GC-15 member management)', () => {
     );
     expect(forkCalls).toHaveLength(0);
     expect(openMainSession).not.toHaveBeenCalled();
+  });
+
+  // ── GROUP P5 (R-8 group chat tree): member status projection ───────
+  it('projects member running status via stateMachineManager (running member shows badge, idle does not)', async () => {
+    vi.mocked(toolAPI.executeTool).mockResolvedValue({
+      toolName: 'get_group_history',
+      success: true,
+      result: { messages: [] },
+    });
+    vi.mocked(sessionAPI.loadSessionMetadata).mockResolvedValue({
+      sessionId: 'group-1',
+      sessionName: '项目群',
+      agentType: 'group',
+      modelName: 'auto',
+      createdAt: 0,
+      lastActiveAt: 0,
+      turnCount: 0,
+      messageCount: 0,
+      toolCallCount: 0,
+      status: 'active',
+      tags: [],
+      customMetadata: { groupChats: ['claw-1', 'claw-2'] },
+    });
+    vi.mocked(sessionAPI.listSessions).mockResolvedValue([
+      makeSession('claw-1', 'Claw', 'Assist A'),
+      makeSession('claw-2', 'Claw', 'Assist C'),
+    ]);
+    // claw-1 running (PROCESSING), claw-2 idle (IDLE)
+    stateMachineMocks.getCurrentState.mockImplementation((id: string) =>
+      id === 'claw-1' ? 'processing' : 'idle',
+    );
+    renderView();
+    await flush();
+
+    const membersBtn = [...document.querySelectorAll<HTMLButtonElement>('button[aria-label]')].find(
+      b => b.getAttribute('aria-label')?.includes('Members'),
+    );
+    expect(membersBtn).not.toBeNull();
+    act(() => membersBtn!.click());
+    await flush();
+
+    const runningBadges = [...document.querySelectorAll<HTMLElement>('[data-testid="group-chat-member-running"]')];
+    expect(runningBadges).toHaveLength(1);
+    expect(runningBadges[0]!.closest('[data-member-id]')?.getAttribute('data-member-id')).toBe('claw-1');
+    // idle member shows no badge
+    const idleRow = [...document.querySelectorAll<HTMLElement>('[data-member-id="claw-2"]')][0];
+    expect(idleRow?.querySelector('[data-testid="group-chat-member-running"]')).toBeNull();
   });
 });

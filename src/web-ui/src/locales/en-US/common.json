@@ -141,7 +141,13 @@
       "forked": "Child group \"{{name}}\" created",
       "forkNeedsMessage": "Send at least one message before forking.",
       "confirmFork": "Confirm fork",
-      "membersSearch": "Search members..."
+      "membersSearch": "Search members...",
+      "presetWorkflow": "Preset workflow",
+      "presetWorkflowHint": "Selecting a preset auto-creates members from the template; skip to pick members manually.",
+      "noPresetSelection": "No preset (pick members manually)",
+      "presetMembersCount": "Preset members ({{count}})",
+      "presetLoadFailed": "Failed to load presets; showing built-in templates only.",
+      "presetGate": "gate"
     },
     "search": {
       "triggerPlaceholder": "Search",
