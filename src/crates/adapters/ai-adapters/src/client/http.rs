@@ -7,12 +7,10 @@ use reqwest::{Client, Proxy};
 pub(crate) fn create_http_client(
     proxy_config: Option<ProxyConfig>,
     skip_ssl_verify: bool,
+    connect_timeout: Option<std::time::Duration>,
 ) -> Client {
     let mut builder = Client::builder()
         .tls_backend_rustls()
-        .connect_timeout(std::time::Duration::from_secs(
-            AIClient::STREAM_CONNECT_TIMEOUT_SECS,
-        ))
         .user_agent("BitFun/1.0")
         .pool_idle_timeout(std::time::Duration::from_secs(
             AIClient::HTTP_POOL_IDLE_TIMEOUT_SECS,
@@ -22,6 +20,10 @@ pub(crate) fn create_http_client(
             AIClient::HTTP_TCP_KEEPALIVE_SECS,
         )))
         .danger_accept_invalid_certs(skip_ssl_verify);
+
+    if let Some(timeout) = connect_timeout {
+        builder = builder.connect_timeout(timeout);
+    }
 
     if skip_ssl_verify {
         warn!(

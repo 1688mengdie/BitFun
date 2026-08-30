@@ -435,6 +435,15 @@
     "save": "Save First Token Timeout",
     "saveSuccess": "First token timeout saved"
   },
+  "streamConnectTimeout": {
+    "title": "Connect Timeout",
+    "label": "TCP Connect Timeout (seconds)",
+    "hint": "Maximum wait time when establishing a TCP connection. Leave empty to wait indefinitely.",
+    "placeholder": "Leave empty for no timeout",
+    "invalid": "Enter a positive integer in seconds, or leave this field empty.",
+    "save": "Save Connect Timeout",
+    "saveSuccess": "Connect timeout saved"
+  },
   "toolArgumentJsonRepair": {
     "title": "Tool Argument JSON Repair",
     "description": "Applies to the next model round.",

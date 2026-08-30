@@ -356,6 +356,7 @@ export interface AIConfig {
   conversation_history_limit: number;
   stream_idle_timeout_secs?: number | null;
   stream_ttft_timeout_secs?: number | null;
+  stream_connect_timeout_secs?: number | null;
   tool_execution_timeout_secs?: number | null;
   allow_tool_json_repair?: boolean;
   subagent_batch_execution_policy?: 'safe_only' | 'force_parallel' | 'serial';

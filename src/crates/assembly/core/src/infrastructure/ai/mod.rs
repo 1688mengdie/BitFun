@@ -28,10 +28,13 @@ pub fn build_stream_options_for_model(
     _model_config: Option<&AIModelConfig>,
 ) -> StreamOptions {
     let idle_timeout = config.stream_idle_timeout_secs.map(Duration::from_secs);
+    let ttft_timeout = config.stream_ttft_timeout_secs.map(Duration::from_secs);
+    let connect_timeout = config.stream_connect_timeout_secs.map(Duration::from_secs);
 
     StreamOptions {
         idle_timeout,
-        ttft_timeout: config.stream_ttft_timeout_secs.map(Duration::from_secs),
+        ttft_timeout,
+        connect_timeout,
     }
 }
 
@@ -52,6 +55,7 @@ mod tests {
 
         assert_eq!(options.ttft_timeout, Some(Duration::from_secs(600)));
         assert_eq!(options.idle_timeout, Some(Duration::from_secs(600)));
+        assert_eq!(options.connect_timeout, Some(Duration::from_secs(10)));
     }
 
     #[test]
@@ -66,5 +70,6 @@ mod tests {
 
         assert_eq!(options.ttft_timeout, None);
         assert_eq!(options.idle_timeout, None);
+        assert_eq!(options.connect_timeout, None);
     }
 }

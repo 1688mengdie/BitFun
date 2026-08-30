@@ -435,6 +435,15 @@
     "save": "保存首 Token 超时",
     "saveSuccess": "首 Token 超时已保存"
   },
+  "streamConnectTimeout": {
+    "title": "连接超时",
+    "label": "TCP 连接超时（秒）",
+    "hint": "建立 TCP 连接时的最大等待时间。留空表示无限等待。",
+    "placeholder": "留空表示不设超时",
+    "invalid": "请输入正整数秒数，或留空。",
+    "save": "保存连接超时",
+    "saveSuccess": "连接超时已保存"
+  },
   "toolArgumentJsonRepair": {
     "title": "工具参数 JSON 修复",
     "description": "修改将在下一轮模型调用生效。",

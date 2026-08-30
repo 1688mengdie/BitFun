@@ -196,7 +196,8 @@ impl CliTestEnvironment {
                 },
                 "max_rounds": 1,
                 "stream_idle_timeout_secs": 10,
-                "stream_ttft_timeout_secs": 10
+                "stream_ttft_timeout_secs": 10,
+                "stream_connect_timeout_secs": 10
             }
         });
         std::fs::write(

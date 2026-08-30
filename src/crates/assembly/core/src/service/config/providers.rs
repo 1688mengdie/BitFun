@@ -80,6 +80,12 @@ fn ai_validation_error_location(message: &str) -> (String, String) {
             "AI_STREAM_TTFT_TIMEOUT_INVALID".to_string(),
         );
     }
+    if message.contains("stream_connect_timeout_secs") {
+        return (
+            "ai.stream_connect_timeout_secs".to_string(),
+            "AI_STREAM_CONNECT_TIMEOUT_INVALID".to_string(),
+        );
+    }
     if message.contains("session-title task model") {
         return (
             "ai.task_models.session_title".to_string(),
@@ -150,6 +156,14 @@ impl ConfigProvider for AIConfigProvider {
                 if stream_ttft_timeout_secs == 0 {
                     return Err(BitFunError::validation(
                         "AI stream_ttft_timeout_secs must be greater than 0".to_string(),
+                    ));
+                }
+            }
+
+            if let Some(stream_connect_timeout_secs) = ai_config.stream_connect_timeout_secs {
+                if stream_connect_timeout_secs == 0 {
+                    return Err(BitFunError::validation(
+                        "AI stream_connect_timeout_secs must be greater than 0".to_string(),
                     ));
                 }
             }

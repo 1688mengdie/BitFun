@@ -52,6 +52,9 @@ pub struct StreamOptions {
     /// reasoning, or tool-call data) after a request starts. `None` means wait
     /// indefinitely.
     pub ttft_timeout: Option<Duration>,
+    /// TCP connect timeout in seconds while opening a streaming request.
+    /// `None` means wait indefinitely.
+    pub connect_timeout: Option<Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +70,6 @@ impl AIClient {
     pub(crate) const TEST_IMAGE_EXPECTED_CODE: &'static str = "BYGR";
     pub(crate) const TEST_IMAGE_PNG_BASE64: &'static str =
         "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACBklEQVR42u3ZsREAIAwDMYf9dw4txwJupI7Wua+YZEPBfO91h4ZjAgQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABIAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAAAAAAAEDRZI3QGf7jDvEPAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAAAjABAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQALwuLkoG8OSfau4AAAAASUVORK5CYII=";
-    pub(crate) const STREAM_CONNECT_TIMEOUT_SECS: u64 = 10;
     pub(crate) const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 30;
     pub(crate) const HTTP_TCP_KEEPALIVE_SECS: u64 = 60;
 
@@ -87,7 +89,11 @@ impl AIClient {
         proxy_config: Option<ProxyConfig>,
         stream_options: StreamOptions,
     ) -> Self {
-        let client = http::create_http_client(proxy_config, config.skip_ssl_verify);
+        let client = http::create_http_client(
+            proxy_config,
+            config.skip_ssl_verify,
+            stream_options.connect_timeout,
+        );
         Self {
             client,
             config,
