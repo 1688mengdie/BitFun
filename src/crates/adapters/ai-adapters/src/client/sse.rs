@@ -196,6 +196,19 @@ fn retry_delay_ms(attempt: usize, headers: &HeaderMap, status: StatusCode) -> u6
     }
 }
 
+/// Returns true when `status` represents a transient condition that may succeed
+/// on a later attempt: server errors (5xx), rate limiting (429), and request or
+/// gateway timeouts (408/504).
+///
+/// Deterministic client errors (400/401/403/404/413/422) are excluded because
+/// retrying them reproduces the same failure and burns request budget/credits.
+fn is_transient_http_status(status: StatusCode) -> bool {
+    status.is_server_error()
+        || status == StatusCode::TOO_MANY_REQUESTS
+        || status == StatusCode::REQUEST_TIMEOUT
+        || status == StatusCode::GATEWAY_TIMEOUT
+}
+
 struct ManagedResponseStream {
     inner: UnboundedReceiverStream<Result<UnifiedResponse>>,
     handler_cancel: CancellationToken,
@@ -368,7 +381,7 @@ where
                             .await;
                     }
 
-                    if attempt < max_tries - 1 {
+                    if attempt < max_tries - 1 && is_transient_http_status(status) {
                         let delay_ms = retry_delay_ms(attempt, &headers, status);
                         debug!(
                             "Retrying {} after {}ms (transport_attempt {}, status {})",
@@ -379,7 +392,7 @@ where
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                     }
-                    continue;
+                    break;
                 }
             }
             StreamSendOutcome::Transport(e) => {
@@ -434,17 +447,12 @@ where
                         .await;
                 }
 
-                if attempt < max_tries - 1 {
-                    let delay_ms = exponential_retry_delay_ms(attempt);
-                    debug!(
-                        "Retrying {} after {}ms (transport_attempt {})",
-                        label,
-                        delay_ms,
-                        attempt + 2
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                }
-                continue;
+                // The request body was already sent to the server before the TTFT
+                // timeout fired (send() completed and the first-token wait began).
+                // Retrying with the same body re-sends an already-billed request
+                // (double-billing). Treat it as a terminal error: break out of the
+                // retry loop and surface the timeout to the caller.
+                break;
             }
         };
 
@@ -525,6 +533,16 @@ mod tests {
         }
     }
 
+    async fn hanging_until_timeout(
+        State(state): State<RetryFixtureState>,
+        Json(_body): Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        state.attempts.fetch_add(1, Ordering::SeqCst);
+        // Never complete the response so the client's send() future blocks and the
+        // injected ttft_timeout fires as StreamSendOutcome::TtftTimeout.
+        std::future::pending::<axum::response::Response>().await
+    }
+
     async fn forbidden_with_retry_after(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
         assert_eq!(body["model"], "configured-model");
         (
@@ -583,6 +601,41 @@ mod tests {
     }
 
     #[test]
+    fn is_transient_http_status_classifies_terminal_and_transient() {
+        // Deterministic client errors are terminal and must not be retried.
+        for terminal in [
+            StatusCode::BAD_REQUEST,
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::NOT_FOUND,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ] {
+            assert!(
+                !is_transient_http_status(terminal),
+                "{} should be terminal",
+                terminal
+            );
+        }
+
+        // Transient conditions are retried: server errors, rate limit, and timeouts.
+        for transient in [
+            StatusCode::INTERNAL_SERVER_ERROR,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::REQUEST_TIMEOUT,
+        ] {
+            assert!(
+                is_transient_http_status(transient),
+                "{} should be transient",
+                transient
+            );
+        }
+    }
+
+    #[test]
     fn remaining_ttft_timeout_subtracts_elapsed_request_time() {
         let start = std::time::Instant::now() - Duration::from_secs(2);
         let remaining = remaining_ttft_timeout(start, Some(Duration::from_secs(5)));
@@ -616,7 +669,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_bad_request_uses_existing_retry_loop() {
+    async fn bad_requests_are_terminal_and_not_retried() {
         let attempts = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
             .route("/chat/completions", post(bad_requests_then_success))
@@ -651,11 +704,55 @@ mod tests {
         .await;
 
         server_task.abort();
+        // Deterministic 4xx (400) must be terminal: the request is not retried
+        // with the same body, so the fixture is called exactly once.
         assert!(
-            result.is_ok(),
-            "ordinary and context-overflow 400 responses should both retry"
+            result.is_err(),
+            "deterministic 400 responses should be terminal and not retried"
         );
-        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ttft_timeout_is_terminal_and_not_retried() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/chat/completions", post(hanging_until_timeout))
+            .with_state(RetryFixtureState {
+                attempts: Arc::clone(&attempts),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ttft fixture");
+        let address = listener.local_addr().expect("ttft fixture address");
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("ttft fixture should run");
+        });
+        let url = format!("http://{address}/chat/completions");
+        let client = reqwest::Client::new();
+        let request_body = serde_json::json!({"model": "configured-model"});
+
+        let result = execute_sse_request(
+            "OpenAI Streaming API",
+            &url,
+            &request_body,
+            3,
+            Some(Duration::from_millis(100)),
+            None,
+            || client.post(&url),
+            |_response, tx, _tx_raw, _remaining_ttft_timeout| async move {
+                drop(tx);
+            },
+        )
+        .await;
+
+        server_task.abort();
+        // A TTFT timeout means the request was already sent; it must be terminal
+        // (no re-send of the same body) so the fixture is called exactly once.
+        assert!(result.is_err(), "TTFT timeout should be terminal");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
