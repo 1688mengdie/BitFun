@@ -391,6 +391,10 @@ where
                             status
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                        // Transient statuses (5xx/429/408) may succeed on a later
+                        // attempt, so retry rather than treating this response as a
+                        // terminal failure.
+                        continue;
                     }
                     break;
                 }
@@ -525,6 +529,27 @@ mod tests {
                         "message": "Maximum context length exceeded",
                         "type": "invalid_request_error",
                         "code": "context_length_exceeded"
+                    }
+                })),
+            )
+                .into_response(),
+            _ => StatusCode::OK.into_response(),
+        }
+    }
+
+    async fn server_errors_then_success(
+        State(state): State<RetryFixtureState>,
+        Json(body): Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        assert_eq!(body["model"], "configured-model");
+        match state.attempts.fetch_add(1, Ordering::SeqCst) {
+            0 => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": {
+                        "message": "temporary server overload",
+                        "type": "server_error",
+                        "code": "server_error"
                     }
                 })),
             )
@@ -711,6 +736,54 @@ mod tests {
             "deterministic 400 responses should be terminal and not retried"
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn transient_server_errors_are_retried() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/chat/completions", post(server_errors_then_success))
+            .with_state(RetryFixtureState {
+                attempts: Arc::clone(&attempts),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind transient fixture");
+        let address = listener.local_addr().expect("transient fixture address");
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("transient fixture should run");
+        });
+        let url = format!("http://{address}/chat/completions");
+        let client = reqwest::Client::new();
+        let request_body = serde_json::json!({"model": "configured-model"});
+
+        let result = execute_sse_request(
+            "OpenAI Streaming API",
+            &url,
+            &request_body,
+            2,
+            None,
+            None,
+            || client.post(&url),
+            |_response, tx, _tx_raw, _remaining_ttft_timeout| async move {
+                drop(tx);
+            },
+        )
+        .await;
+
+        server_task.abort();
+        // A transient server error (503) must be retried before the request
+        // succeeds, so the fixture is expected to be called more than once.
+        assert!(
+            result.is_ok(),
+            "transient server error should be retried and eventually succeed"
+        );
+        assert!(
+            attempts.load(Ordering::SeqCst) > 1,
+            "transient 5xx should be retried rather than treated as terminal"
+        );
     }
 
     #[tokio::test]
