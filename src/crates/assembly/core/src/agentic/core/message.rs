@@ -356,15 +356,15 @@ impl From<Message> for AIMessage {
             MessageContent::Text(text) => {
                 // Check if text is empty to avoid sending empty content to API
                 let content = if text.trim().is_empty() {
-                    // Should not have empty text messages, but provide default value for defensive programming
+                    // Empty text is a degenerate input; do not fabricate a placeholder.
+                    // Return None so downstream converters apply their existing
+                    // empty-content semantics (skip/drop) instead of treating a fake
+                    // token as a real user/assistant utterance or a system directive.
+                    // This also closes the loop with the empty-reminder early return
+                    // in render_internal_reminder, so an empty reminder no longer
+                    // yields a fabricated user token here.
                     warn!("Empty text message detected: role={}", role);
-                    if role == "user" {
-                        Some("(empty message)".to_string())
-                    } else if role == "system" {
-                        Some("You are a helpful assistant.".to_string())
-                    } else {
-                        Some(" ".to_string()) // Minimum valid value
-                    }
+                    None
                 } else {
                     Some(text)
                 };
@@ -912,6 +912,34 @@ mod tests {
 
         assert_eq!(ai_msg.reasoning_content.as_deref(), Some(""));
         assert_eq!(ai_msg.thinking_signature.as_deref(), Some("sig_1"));
+    }
+
+    #[test]
+    fn empty_text_user_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::user(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn empty_text_system_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::system(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn empty_text_assistant_becomes_none_content() {
+        let ai_msg = AIMessage::from(Message::assistant(String::new()));
+
+        assert_eq!(ai_msg.content.as_deref(), None);
+    }
+
+    #[test]
+    fn non_empty_text_preserves_content() {
+        let ai_msg = AIMessage::from(Message::user("hi".to_string()));
+
+        assert_eq!(ai_msg.content.as_deref(), Some("hi"));
     }
 
     #[test]
