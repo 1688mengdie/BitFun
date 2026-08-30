@@ -892,13 +892,7 @@ impl ExecutionEngine {
         tool_calls.iter().all(|tool_call| {
             matches!(
                 tool_call.tool_name.as_str(),
-                "Read"
-                    | "Grep"
-                    | "Glob"
-                    | "LS"
-                    | "WebSearch"
-                    | "WebFetch"
-                    | "ListModels"
+                "Read" | "Grep" | "Glob" | "LS" | "WebSearch" | "WebFetch" | "ListModels"
             )
         })
     }
@@ -3729,7 +3723,7 @@ impl ExecutionEngine {
         let mut recent_failed_tool_signatures: Vec<String> = Vec::new();
         let mut failed_tool_recovery_attempts: usize = 0;
         const MAX_FAILED_TOOL_RECOVERY_ATTEMPTS: usize = 3;
-        let mut successful_tool_signature_count: usize = 0;
+        let mut successful_tool_signature_count: usize;
         let mut successful_recovery_attempts: usize = 0;
         const MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS: usize = 3;
         const MAX_PARTIAL_CONTINUATION_ATTEMPTS: usize = 3;
@@ -4377,7 +4371,9 @@ impl ExecutionEngine {
                     recent_failed_tool_signatures.clear();
                     failed_tool_recovery_attempts = 0;
                     successful_tool_signature_count =
-                        ContextHealthSnapshot::repeated_tool_signature_count(&recent_tool_signatures);
+                        ContextHealthSnapshot::repeated_tool_signature_count(
+                            &recent_tool_signatures,
+                        );
                 }
             } else {
                 recent_tool_signatures.clear();
@@ -4484,11 +4480,9 @@ impl ExecutionEngine {
                     or stop if the goal is already met.</system_reminder>",
                     successful_tool_signature_count
                 );
-                let user_msg = Message::internal_reminder(
-                    InternalReminderKind::LoopRecovery,
-                    reminder,
-                )
-                .with_turn_id(context.dialog_turn_id.clone());
+                let user_msg =
+                    Message::internal_reminder(InternalReminderKind::LoopRecovery, reminder)
+                        .with_turn_id(context.dialog_turn_id.clone());
                 messages.push(user_msg.clone());
                 self.remember_generation_message(
                     &context.session_id,
