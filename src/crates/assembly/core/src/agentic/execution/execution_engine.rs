@@ -4799,7 +4799,7 @@ impl ExecutionEngine {
         let mut recent_tool_signatures: Vec<String> = Vec::new();
         let mut recent_failed_tool_signatures: Vec<String> = Vec::new();
         let mut failed_tool_recovery_attempts: usize = 0;
-        let mut successful_tool_signature_count: usize = 0;
+        let mut successful_tool_signature_count: usize;
         let mut successful_recovery_attempts: usize = 0;
         const MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS: usize = 3;
         let max_partial_continuation_attempts: usize = 3;
@@ -5751,7 +5751,6 @@ impl ExecutionEngine {
                         warn!("Failed to persist successful-tool recovery reminder: {}", e);
                     }
                     recent_tool_signatures.clear();
-                    successful_tool_signature_count = 0;
                 } else {
                     warn!(
                         "Repeated successful tool calls exceeded max convergence attempts ({}), finalizing without tools",
