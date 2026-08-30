@@ -4033,10 +4033,12 @@ mod tests {
     }
 
     #[test]
-    fn missing_max_rounds_defaults_to_unlimited_and_explicit_limits_survive() {
+    fn missing_max_rounds_defaults_to_local_limit_and_explicit_limits_survive() {
+        // 本地定标（DEFAULT_MAX_ROUNDS=50，见 default_max_rounds 注释）：P0
+        // 积分止损收缩后本地默认 50 而非上游 0=无限；显式设 0 仍表达无限制。
         let defaulted: GlobalConfig = serde_json::from_value(serde_json::json!({}))
             .expect("legacy global config should deserialize");
-        assert_eq!(defaulted.ai.max_rounds, 0);
+        assert_eq!(defaulted.ai.max_rounds, super::DEFAULT_MAX_ROUNDS);
 
         let limited: GlobalConfig = serde_json::from_value(serde_json::json!({
             "ai": { "max_rounds": 37 }

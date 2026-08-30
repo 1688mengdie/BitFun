@@ -4561,6 +4561,11 @@ mod tests {
             last_submitted_agent_type: None,
             compression_state: CompressionState::default(),
             runtime_state: SessionState::Idle,
+            last_progress_at: None,
+            interrupt_reason: None,
+            last_completed_at: None,
+            needs_attention: false,
+            viewed: false,
         };
 
         let restored = PersistenceManager::build_session_from_persisted_parts(

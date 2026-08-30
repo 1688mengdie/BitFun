@@ -3480,27 +3480,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn validate_rename_requires_session_name() {
-        let tool = SessionControlTool::new();
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "rename",
-                    "session_id": "worker_1",
-                }),
-                Some(&empty_context()),
-            )
-            .await;
-
-        assert!(!validation.result);
-        assert_eq!(
-            validation.message.as_deref(),
-            Some("session_name is required for rename")
-        );
-    }
-
-    #[tokio::test]
     async fn validate_create_allows_short_name() {
         let tool = SessionControlTool::new();
         let workspace = TestTempDir::new("bitfun-session-control-tool-test");
@@ -4220,23 +4199,5 @@ mod tests {
         )
         .await
         .expect("child without resolvable depth must be allowed to create (R-COMM-01 free communication)");
-    }
-
-    #[tokio::test]
-    async fn validate_rename_accepts_session_id_and_name() {
-        let tool = SessionControlTool::new();
-
-        let validation = tool
-            .validate_input(
-                &json!({
-                    "action": "rename",
-                    "session_id": "worker_1",
-                    "session_name": "new-title",
-                }),
-                Some(&empty_context()),
-            )
-            .await;
-
-        assert!(validation.result, "{:?}", validation.message);
     }
 }

@@ -838,7 +838,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
 
@@ -911,7 +918,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
 
@@ -943,7 +957,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
 
@@ -973,7 +994,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
         let result = compressor
@@ -1048,7 +1076,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
         let checkpoint = plan
@@ -1095,7 +1130,14 @@ mod tests {
         ];
 
         let plan = compressor
-            .plan_compression_for_turn("session", "turn-current", &messages, 128_000, recent_target)
+            .plan_compression_for_turn(
+                "session",
+                "turn-current",
+                &messages,
+                128_000,
+                recent_target,
+                None,
+            )
             .expect("planning succeeds")
             .expect("plan exists");
         let checkpoint = plan

@@ -6529,7 +6529,7 @@ mod tests {
         InternalReminderKind, Message, MessageRole, MessageSemanticKind, ToolCall, ToolResult,
     };
     use crate::agentic::events::{EventQueue, EventQueueConfig};
-    use crate::agentic::execution::{ExecutionEngineConfig, RoundExecutor, StreamProcessor};
+    use crate::agentic::execution::{RoundExecutor, StreamProcessor};
     use crate::agentic::persistence::PersistenceManager;
 
     use crate::agentic::session::compression::CompressionConfig;

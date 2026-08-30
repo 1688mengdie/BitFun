@@ -36,6 +36,7 @@ pub fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn create_test_command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let command = std::process::Command::new(program);
     #[cfg(windows)]

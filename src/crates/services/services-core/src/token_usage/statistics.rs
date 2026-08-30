@@ -462,14 +462,7 @@ mod tests {
         let t0 = Utc.with_ymd_and_hms(2026, 8, 16, 10, 0, 0).unwrap();
         let records = vec![
             record("model-a", t0, 1000, 200, 500, true),
-            record(
-                "model-a",
-                t0 + Duration::minutes(30),
-                2000,
-                300,
-                0,
-                false,
-            ),
+            record("model-a", t0 + Duration::minutes(30), 2000, 300, 0, false),
             record("model-b", t0 + Duration::hours(2), 500, 50, 0, false),
         ];
 
@@ -509,14 +502,7 @@ mod tests {
     fn same_named_models_with_different_keys_are_not_merged() {
         let t0 = Utc.with_ymd_and_hms(2026, 8, 16, 10, 0, 0).unwrap();
         let first = record("shared-model", t0, 100, 0, 0, false);
-        let mut second = record(
-            "shared-model",
-            t0 + Duration::minutes(1),
-            200,
-            0,
-            0,
-            false,
-        );
+        let mut second = record("shared-model", t0 + Duration::minutes(1), 200, 0, 0, false);
         second.model_config_id = "another-config".to_string();
 
         let stats = aggregate_statistics(&[first, second], UsageGranularity::Hour, attribution());
