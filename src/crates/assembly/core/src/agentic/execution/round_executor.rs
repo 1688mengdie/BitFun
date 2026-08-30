@@ -433,7 +433,17 @@ impl RoundExecutor {
                     error!("AI request failed: {}", e);
                     let provider_error = e.downcast_ref::<AiProviderError>().cloned();
                     let err_msg = e.to_string();
-                    if local_attempt_index < max_attempts - 1 {
+                    // Classify upfront so the retry admission gate can reject deterministic
+                    // request errors (4xx/context_length_exceeded) without replaying the request.
+                    let category = provider_error
+                        .as_ref()
+                        .map(|error| error.category.clone())
+                        .unwrap_or_else(|| {
+                            bitfun_core_types::errors::classify_ai_error_message(&err_msg)
+                        });
+                    if local_attempt_index < max_attempts - 1
+                        && bitfun_core_types::errors::is_retryable_category(&category)
+                    {
                         self.record_retry_diagnostic(
                             &context,
                             &round_id,
@@ -463,12 +473,6 @@ impl RoundExecutor {
                         local_attempt_index += 1;
                         continue;
                     }
-                    let category = provider_error
-                        .as_ref()
-                        .map(|error| error.category.clone())
-                        .unwrap_or_else(|| {
-                            bitfun_core_types::errors::classify_ai_error_message(&err_msg)
-                        });
                     let error = if category == ErrorCategory::ContextOverflow {
                         BitFunError::RecoverableContextOverflow(provider_error.unwrap_or_else(
                             || AiProviderError::classified(err_msg, ErrorCategory::ContextOverflow),
@@ -813,7 +817,9 @@ impl RoundExecutor {
                         Self::error_trace_response("error", err_msg.clone()),
                     )
                     .await;
-                    if local_attempt_index < max_attempts - 1 {
+                    if local_attempt_index < max_attempts - 1
+                        && bitfun_core_types::errors::is_retryable_category(&stream_error_category)
+                    {
                         self.record_retry_diagnostic(
                             &context,
                             &round_id,
