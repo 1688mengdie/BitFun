@@ -496,6 +496,14 @@ impl RoundExecutor {
                     error!("AI request failed: {}", e);
                     let provider_error = e.downcast_ref::<AiProviderError>().cloned();
                     let err_msg = e.to_string();
+                    // Classify upfront so the retry admission gate can reject deterministic
+                    // request errors (4xx/context_length_exceeded) without replaying the request.
+                    let category = provider_error
+                        .as_ref()
+                        .map(|error| error.category.clone())
+                        .unwrap_or_else(|| {
+                            bitfun_core_types::errors::classify_ai_error_message(&err_msg)
+                        });
                     // 401/403 subscription auto-refresh: force-refresh the
                     // provider credential, drop the cached client, and retry
                     // once with a fresh token. Mirrors the CLI contract
@@ -540,7 +548,9 @@ impl RoundExecutor {
                             }
                         }
                     }
-                    if local_attempt_index < max_attempts - 1 {
+                    if local_attempt_index < max_attempts - 1
+                        && bitfun_core_types::errors::is_retryable_category(&category)
+                    {
                         self.record_retry_diagnostic(
                             &context,
                             &round_id,
@@ -576,12 +586,6 @@ impl RoundExecutor {
                         local_attempt_index += 1;
                         continue;
                     }
-                    let category = provider_error
-                        .as_ref()
-                        .map(|error| error.category.clone())
-                        .unwrap_or_else(|| {
-                            bitfun_core_types::errors::classify_ai_error_message(&err_msg)
-                        });
                     let error = if category == ErrorCategory::ContextOverflow {
                         BitFunError::RecoverableContextOverflow(provider_error.unwrap_or_else(
                             || AiProviderError::classified(err_msg, ErrorCategory::ContextOverflow),
@@ -994,7 +998,9 @@ impl RoundExecutor {
                         Self::error_trace_response("error", err_msg.clone()),
                     )
                     .await;
-                    if local_attempt_index < max_attempts - 1 {
+                    if local_attempt_index < max_attempts - 1
+                        && bitfun_core_types::errors::is_retryable_category(&stream_error_category)
+                    {
                         self.record_retry_diagnostic(
                             &context,
                             &round_id,
@@ -1769,23 +1775,16 @@ impl RoundExecutor {
 
     /// Check whether an error message represents a transient (retryable) condition.
     ///
-    /// Errors that already exhausted the SSE-layer retry budget (e.g. "failed
-    /// after N attempts:" or "Stream retry budget exhausted") are **not**
-    /// transient from the round-executor perspective — the SSE transport layer
-    /// already retried with exponential backoff and `Retry-After` parsing.
-    /// Re-entering the send loop would multiply attempts (10 × 10 = 100) and
-    /// hold the user in a long silent stall.
+    /// This text fallback is only used when no structured `AiProviderError`
+    /// can be downcast. The primary admission decision uses
+    /// `is_retryable_category`, so this needs only the budget-exhausted
+    /// signal. The former "failed after N attempts:" sentence is not treated
+    /// as exhausted here: the main-dialog chain runs a single SSE attempt, so
+    /// that sentence is always present and would wrongly mark every error as
+    /// non-retryable (the max_attempts=1 trap).
     fn is_transient_network_error(error_message: &str) -> bool {
         let msg = error_message.to_lowercase();
 
-        // The SSE layer already exhausted its own retry budget — do not
-        // re-enter another round of attempts from the round executor.
-        // We require BOTH "failed after " and "attempts:" to co-occur,
-        // which uniquely identifies the SSE/round-executor budget-exhausted
-        // format without catching generic errors like "failed after timeout".
-        if msg.contains("failed after ") && msg.contains("attempts:") {
-            return false;
-        }
         if msg.contains("retry budget exhausted") {
             return false;
         }

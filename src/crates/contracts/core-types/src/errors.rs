@@ -422,7 +422,7 @@ fn is_context_overflow_message(message: &str) -> bool {
         || (message.contains("prompt has") && message.contains("configured context size"))
 }
 
-fn is_retryable_category(category: &ErrorCategory) -> bool {
+pub fn is_retryable_category(category: &ErrorCategory) -> bool {
     matches!(
         category,
         ErrorCategory::Network
