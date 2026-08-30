@@ -21,9 +21,9 @@ pub(crate) fn create_http_client(
         )))
         .danger_accept_invalid_certs(skip_ssl_verify);
 
-    if let Some(timeout) = connect_timeout {
-        builder = builder.connect_timeout(timeout);
-    }
+    // Default to 10s connect timeout if not specified (mirror stream_ttft behavior)
+    let timeout = connect_timeout.unwrap_or(std::time::Duration::from_secs(10));
+    builder = builder.connect_timeout(timeout);
 
     if skip_ssl_verify {
         warn!(
