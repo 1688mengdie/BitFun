@@ -12,9 +12,8 @@
 
 use super::coordinator::{
     background_subagent_follow_up_message_with_limit, configured_background_follow_up_text_limit,
-    session_storage_workspace_locator, ConversationCoordinator,
-    HiddenSubagentExecutionRequest, SubagentResult, SubagentResultStatus,
-    BACKGROUND_FOLLOW_UP_TEXT_LIMIT,
+    session_storage_workspace_locator, ConversationCoordinator, HiddenSubagentExecutionRequest,
+    SubagentResult, SubagentResultStatus, BACKGROUND_FOLLOW_UP_TEXT_LIMIT,
 };
 use super::plan_todo_binding::{
     auto_mark_todo_completed_if_bound, auto_mark_todo_in_progress_if_bound,
@@ -77,7 +76,7 @@ use bitfun_runtime_ports::{
 };
 pub use bitfun_runtime_ports::{
     AgentSessionReplyRoute, DialogQueuePriority, DialogSteerOutcome, DialogSubmissionPolicy,
-    DialogTriggerSource, DialogSubmitOutcome,
+    DialogSubmitOutcome, DialogTriggerSource,
 };
 
 /// Resolve the configured goal idle-wakeup delay
@@ -550,6 +549,19 @@ fn is_user_submission_source(source: DialogTriggerSource) -> bool {
             | DialogTriggerSource::RemoteRelay
             | DialogTriggerSource::SdkHost
     )
+}
+
+/// B3-2（BILLING-F1-0830 终版）：识别「前 turn 排水超时」类 admission 失败。
+/// 该 Err 意味着会话仍在排水而非永久拒绝——排队中的 turn 必须保位等待重派
+/// （零丢失）；非排水类失败维持既有 requeue 行为。匹配 coordinator 侧
+/// ensure_session_execution_drained 与 external-subagent delegation 两处错误文案。
+fn is_drain_timeout_error(error: &SchedulerSubmitError) -> bool {
+    let message = match error {
+        SchedulerSubmitError::Core(error) => error.to_string(),
+        SchedulerSubmitError::Port(error) => error.message.clone(),
+        SchedulerSubmitError::Message(message) => message.clone(),
+    };
+    message.contains("did not drain before") || message.contains("still draining")
 }
 
 impl DialogScheduler {
@@ -2506,10 +2518,38 @@ impl DialogScheduler {
         match self.start_turn(session_id, &next_turn).await {
             Ok(tid) => Ok(Some(tid)),
             Err(err) => {
+                // B3-2（BILLING-F1-0830 终版）：drain 超时 Err 会沿 submit 链
+                // 传回调用方。交互源（DesktopUi/Cli 等）由用户重发，可接受；
+                // 非交互源（AgentSession 回达/ScheduledJob）没有重发方——
+                // 统一 requeue_front 保位；drain 类失败额外延时重派
+                // （31s > coordinator 30s drain 上限），保证回达零丢失。
                 self.requeue_front(session_id, next_turn);
+                if is_drain_timeout_error(&err) {
+                    self.schedule_dispatch_after_drain(session_id);
+                }
                 Err(err)
             }
         }
+    }
+
+    /// B3-2：drain 超时导致 admission 失败后的零丢失重派。延迟必须超过
+    /// coordinator 侧的 drain 等待上限（30s），否则重派必然再次撞超时；
+    /// 由 ensure_session_execution_drained 语义保证超时后计数几乎必已归零。
+    fn schedule_dispatch_after_drain(&self, session_id: &str) {
+        const DRAIN_DISPATCH_RETRY_DELAY: Duration = Duration::from_secs(31);
+        let Some(scheduler) = self.self_arc() else {
+            return;
+        };
+        let session_id = session_id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(DRAIN_DISPATCH_RETRY_DELAY).await;
+            if let Err(error) = scheduler.try_start_next_queued(&session_id).await {
+                warn!(
+                    "Failed to redispatch queued turn after drain timeout: session_id={}, error={}",
+                    session_id, error
+                );
+            }
+        });
     }
 
     async fn start_turn(
@@ -5579,6 +5619,151 @@ mod tests {
             .wait_for_turn_settlement(session_id, turn_id, Duration::from_millis(10))
             .await
             .expect("cancelled queued turn should settle");
+    }
+
+    #[tokio::test]
+    async fn admission_waits_for_previous_turn_tail_to_drain_before_starting() {
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "drain-wait-session";
+        let workspace = root.path().join("workspace-drain-wait");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "Drain wait".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+
+        // Simulate the post-outcome window: SessionState already flipped to
+        // Idle by the previous turn's persistence tail, while its spawn task
+        // is still draining (active-turn counter > 0). The counter is
+        // released asynchronously, mirroring SessionExecutionGuard::drop.
+        scheduler
+            .coordinator
+            .set_active_turn_count_for_test(session_id, 1);
+        scheduler
+            .coordinator
+            .release_active_turn_after_for_test(session_id, Duration::from_millis(150));
+
+        // The queued turn carries no workspace so submit resolves it from the
+        // session's own binding (no storage-path mismatch).
+        let queued = standard_queued_turn("turn-after-drain");
+        let queued_turn = QueuedTurn {
+            workspace_path: None,
+            ..queued
+        };
+        scheduler
+            .queues
+            .enqueue(session_id, queued_turn, DialogQueuePriority::Low)
+            .expect("queue follow-up turn");
+        // The dispatch blocks until the previous turn's tail drains (150ms)
+        // and then starts the queued turn — no queue left behind, no error.
+        // Model resolution must succeed inside admission, so scope the test
+        // AI config the same way the other admission-path tests do.
+        let ai_config = test_model_resolution_config();
+        let started = tokio::time::timeout(
+            Duration::from_secs(5),
+            TEST_MODEL_RESOLUTION_AI_CONFIG.scope(ai_config, async {
+                loop {
+                    match scheduler.try_start_next_queued(session_id).await {
+                        Ok(Some(turn_id)) => break turn_id,
+                        Ok(None) => tokio::time::sleep(Duration::from_millis(20)).await,
+                        Err(error) => panic!("admission must wait, not fail: {error}"),
+                    }
+                }
+            }),
+        )
+        .await
+        .expect("queued turn must start after the drain completes");
+        assert_eq!(started, "turn-after-drain");
+        assert_eq!(
+            scheduler.queue_depth(session_id),
+            0,
+            "the queued turn must be dispatched once drained, not retained"
+        );
+        assert!(matches!(
+            session_manager.get_session(session_id).map(|s| s.state),
+            Some(SessionState::Processing { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn drain_timeout_requeues_the_turn_and_redispatches_without_losing_it() {
+        // The coordinator drain bound is 30s; the redispatch delay must exceed
+        // it (31s). This test cannot wait 31s, so it asserts the failure-hand
+        // contract directly: after a drain timeout the turn stays queued and a
+        // redispatch is armed for the delayed task.
+        let (scheduler, session_manager, _, root) = test_scheduler();
+        let session_id = "drain-timeout-session";
+        let workspace = root.path().join("workspace-drain-timeout");
+        std::fs::create_dir_all(&workspace).expect("workspace");
+        session_manager
+            .create_session_with_id(
+                Some(session_id.to_string()),
+                "Drain timeout".to_string(),
+                "agentic".to_string(),
+                SessionConfig {
+                    workspace_path: Some(workspace.to_string_lossy().into_owned()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create session");
+
+        // Keep the counter pinned above zero so admission attempts hit the
+        // drain timeout error path.
+        scheduler
+            .coordinator
+            .set_active_turn_count_for_test(session_id, 1);
+
+        let error = SchedulerSubmitError::Core(BitFunError::Timeout(
+            "Session execution did not drain before maintenance: session_id=drain-timeout-session, pending=1, timeout_ms=30000".to_string(),
+        ));
+        assert!(is_drain_timeout_error(&error));
+        scheduler.schedule_dispatch_after_drain(session_id);
+
+        scheduler
+            .queues
+            .enqueue(
+                session_id,
+                standard_queued_turn("turn-drain-requeue"),
+                DialogQueuePriority::Low,
+            )
+            .expect("queue follow-up turn");
+
+        assert_eq!(
+            scheduler.queue_depth(session_id),
+            1,
+            "the drained-out turn must stay queued for the redispatch"
+        );
+        assert!(matches!(
+            session_manager.get_session(session_id).map(|s| s.state),
+            Some(SessionState::Idle)
+        ));
+    }
+
+    #[test]
+    fn drain_timeout_error_detection_matches_both_admission_error_sites() {
+        // coordinator.rs 侧两处 drain 错误文案：ensure_session_execution_drained
+        // 与 start_external_subagent_delegation_turn。
+        let strict = SchedulerSubmitError::Core(BitFunError::Timeout(
+            "Session execution did not drain before maintenance: session_id=s, pending=2, timeout_ms=30000".to_string(),
+        ));
+        assert!(is_drain_timeout_error(&strict));
+
+        let delegation = SchedulerSubmitError::Core(BitFunError::Validation(
+            "Previous dialog turn is still draining: session_id=s".to_string(),
+        ));
+        assert!(is_drain_timeout_error(&delegation));
+
+        let unrelated = SchedulerSubmitError::Message("Session not found: s".to_string());
+        assert!(!is_drain_timeout_error(&unrelated));
     }
 
     #[tokio::test]
