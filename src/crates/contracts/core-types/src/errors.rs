@@ -422,7 +422,7 @@ fn is_context_overflow_message(message: &str) -> bool {
         || (message.contains("prompt has") && message.contains("configured context size"))
 }
 
-fn is_retryable_category(category: &ErrorCategory) -> bool {
+pub fn is_retryable_category(category: &ErrorCategory) -> bool {
     matches!(
         category,
         ErrorCategory::Network
@@ -512,7 +512,7 @@ fn extract_http_status(message: &str) -> Option<u16> {
 mod tests {
     use super::{
         ai_error_detail_from_message, classify_ai_error_message, classify_ai_error_parts,
-        AiProviderError, ErrorCategory,
+        is_retryable_category, AiProviderError, ErrorCategory,
     };
 
     #[test]
@@ -533,6 +533,28 @@ mod tests {
             ),
             ErrorCategory::ProviderUnavailable
         );
+    }
+
+    #[test]
+    fn is_retryable_category_matches_transient_vs_terminal_semantic() {
+        // Transient categories must be retryable so the round_executor retry gate keeps
+        // replaying them (preserved correct behavior).
+        assert!(is_retryable_category(&ErrorCategory::Network));
+        assert!(is_retryable_category(&ErrorCategory::RateLimit));
+        assert!(is_retryable_category(&ErrorCategory::Timeout));
+        assert!(is_retryable_category(&ErrorCategory::ProviderUnavailable));
+
+        // Deterministic request/terminal categories must NOT be retryable so the retry gate
+        // turns them into an immediate terminal error instead of replaying the request.
+        assert!(!is_retryable_category(&ErrorCategory::ContextOverflow));
+        assert!(!is_retryable_category(&ErrorCategory::InvalidRequest));
+        assert!(!is_retryable_category(&ErrorCategory::Auth));
+        assert!(!is_retryable_category(&ErrorCategory::Permission));
+        assert!(!is_retryable_category(&ErrorCategory::ProviderQuota));
+        assert!(!is_retryable_category(&ErrorCategory::ProviderBilling));
+        assert!(!is_retryable_category(&ErrorCategory::ModelError));
+        assert!(!is_retryable_category(&ErrorCategory::ContentPolicy));
+        assert!(!is_retryable_category(&ErrorCategory::Unknown));
     }
 
     #[test]
