@@ -4506,6 +4506,21 @@ impl ExecutionEngine {
                 successful_tool_signature_count = 0;
             }
 
+            // Deterministic backstop: if the model ignored the convergence reminders and keeps
+            // repeating the same successful tool signature past the cap, finalize without tools
+            // instead of looping forever.
+            if !Self::is_legitimate_poll_tool(&round_result.tool_calls)
+                && successful_tool_signature_count >= max_consec
+                && successful_recovery_attempts >= MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS
+            {
+                warn!(
+                    "Repeated successful tool calls exceeded max convergence attempts ({}), finalizing without tools",
+                    MAX_SUCCESSFUL_LOOP_RECOVERY_ATTEMPTS
+                );
+                finalization_reason = Some("repeated_successful_tool_calls");
+                break;
+            }
+
             // Periodic-pattern loop detection.
             //
             // The strict consecutive check above only fires on `A-A-A` patterns.
