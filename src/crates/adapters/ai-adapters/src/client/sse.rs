@@ -399,17 +399,12 @@ where
                         .await;
                 }
 
-                if attempt < max_tries - 1 {
-                    let delay_ms = exponential_retry_delay_ms(attempt);
-                    debug!(
-                        "Retrying {} after {}ms (transport_attempt {})",
-                        label,
-                        delay_ms,
-                        attempt + 2
-                    );
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                }
-                continue;
+                // The request body was already sent to the server before the TTFT
+                // timeout fired (send() completed and the first-token wait began).
+                // Retrying with the same body re-sends an already-billed request
+                // (double-billing). Treat it as a terminal error: break out of the
+                // retry loop and surface the timeout to the caller.
+                break;
             }
         };
 
@@ -488,6 +483,16 @@ mod tests {
                 .into_response(),
             _ => StatusCode::OK.into_response(),
         }
+    }
+
+    async fn hanging_until_timeout(
+        State(state): State<RetryFixtureState>,
+        Json(_body): Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        state.attempts.fetch_add(1, Ordering::SeqCst);
+        // Never complete the response so the client's send() future blocks and the
+        // injected ttft_timeout fires as StreamSendOutcome::TtftTimeout.
+        std::future::pending::<axum::response::Response>().await
     }
 
     async fn forbidden_with_retry_after(Json(body): Json<serde_json::Value>) -> impl IntoResponse {
@@ -657,6 +662,48 @@ mod tests {
             result.is_err(),
             "deterministic 400 responses should be terminal and not retried"
         );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn ttft_timeout_is_terminal_and_not_retried() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/chat/completions", post(hanging_until_timeout))
+            .with_state(RetryFixtureState {
+                attempts: Arc::clone(&attempts),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind ttft fixture");
+        let address = listener.local_addr().expect("ttft fixture address");
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("ttft fixture should run");
+        });
+        let url = format!("http://{address}/chat/completions");
+        let client = reqwest::Client::new();
+        let request_body = serde_json::json!({"model": "configured-model"});
+
+        let result = execute_sse_request(
+            "OpenAI Streaming API",
+            &url,
+            &request_body,
+            3,
+            Some(Duration::from_millis(100)),
+            None,
+            || client.post(&url),
+            |_response, tx, _tx_raw, _remaining_ttft_timeout| async move {
+                drop(tx);
+            },
+        )
+        .await;
+
+        server_task.abort();
+        // A TTFT timeout means the request was already sent; it must be terminal
+        // (no re-send of the same body) so the fixture is called exactly once.
+        assert!(result.is_err(), "TTFT timeout should be terminal");
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
