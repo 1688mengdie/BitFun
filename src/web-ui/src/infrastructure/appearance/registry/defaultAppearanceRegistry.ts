@@ -299,6 +299,9 @@ import { virtualItemAppearanceDescriptor } from '@/flow_chat/components/modern/V
 import { beeColonyMonitorAppearanceDescriptor } from '@/app/layout/BeeColonyMonitor.appearance';
 import { createLegionPageAppearanceDescriptor } from '@/app/scenes/agents/components/CreateLegionPage.appearance';
 import { legionCardAppearanceDescriptor } from '@/app/scenes/agents/components/LegionCard.appearance';
+import { presetPickerAppearanceDescriptor } from '@/app/components/NavPanel/components/PresetPicker.appearance';
+import { nodePaletteAppearanceDescriptor } from '@/app/scenes/agents/components/NodePalette.appearance';
+import { workflowDiagramAppearanceDescriptor } from '@/app/scenes/agents/components/WorkflowDiagram.appearance';
 import { AppearanceRegistry } from './AppearanceRegistry';
 
 export function createDefaultAppearanceRegistry(): AppearanceRegistry {
@@ -354,6 +357,9 @@ export function createDefaultAppearanceRegistry(): AppearanceRegistry {
     .registerComponent(createLegionPageAppearanceDescriptor)
     .registerComponent(legionCardAppearanceDescriptor)
     .registerComponent(beeColonyMonitorAppearanceDescriptor)
+    .registerComponent(presetPickerAppearanceDescriptor)
+    .registerComponent(nodePaletteAppearanceDescriptor)
+    .registerComponent(workflowDiagramAppearanceDescriptor)
     .registerComponent(keyboardShortcutsAppearanceDescriptor)
     .registerComponent(taskToolDisplayAppearanceDescriptor)
     .registerComponent(basicsConfigAppearanceDescriptor)

@@ -175,7 +175,12 @@ const WorkflowDiagram: React.FC<WorkflowDiagramProps> = ({ nodes, edges, gateLab
 
   if (layout.nodes.length === 0) {
     return (
-      <div className="workflow-diagram workflow-diagram--empty" data-testid="workflow-diagram">
+      <div
+        className="workflow-diagram workflow-diagram--empty"
+        data-testid="workflow-diagram"
+        data-bf-component="workflow-diagram"
+        data-bf-part="empty"
+      >
         {emptyLabel ? <p className="workflow-diagram__empty">{emptyLabel}</p> : null}
       </div>
     );
@@ -186,12 +191,16 @@ const WorkflowDiagram: React.FC<WorkflowDiagramProps> = ({ nodes, edges, gateLab
       className="workflow-diagram"
       data-testid="workflow-diagram"
       style={{ width: layout.width, height: layout.height }}
+      data-bf-component="workflow-diagram"
+      data-bf-part="root"
     >
       <svg
         className="workflow-diagram__edges"
         width={layout.width}
         height={layout.height}
         aria-hidden="true"
+        data-bf-component="workflow-diagram"
+        data-bf-part="edges"
       >
         {layout.edges.map((edge, index) => (
           <path
@@ -209,8 +218,10 @@ const WorkflowDiagram: React.FC<WorkflowDiagramProps> = ({ nodes, edges, gateLab
           className="workflow-diagram__node"
           style={{ left: x, top: y, width: WORKFLOW_NODE_WIDTH, height: WORKFLOW_NODE_HEIGHT }}
           data-node-id={node.id}
+          data-bf-component="workflow-diagram"
+          data-bf-part="node"
         >
-          <span className="workflow-diagram__node-label" title={node.label}>
+          <span className="workflow-diagram__node-label" title={node.label} data-bf-component="workflow-diagram" data-bf-part="nodeLabel">
             {node.label}
           </span>
           {node.agent ? (
