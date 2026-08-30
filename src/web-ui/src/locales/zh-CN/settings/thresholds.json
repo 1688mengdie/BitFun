@@ -19,7 +19,12 @@
       "session_references_per_turn": "每轮会话引用上限",
       "max_dispatch_per_parent_window": "每父会话窗口内派发上限",
       "dispatch_window_secs": "派发统计窗口（秒）",
-      "dispatch_cooldown_secs": "触发上限后的冷却时间（秒）"
+      "dispatch_cooldown_secs": "触发上限后的冷却时间（秒）",
+      "max_send_input_per_session_window": "每子代理会话窗口内 send_input 续接上限",
+      "send_input_window_secs": "send_input 频率统计窗口（秒）",
+      "max_tokens_per_session_24h": "子代理会话 24 小时 token 上限",
+      "max_send_input_per_session_24h": "子代理会话 24 小时续接轮次上限",
+      "session_24h_window_secs": "子代理会话 24 小时统计窗口（秒）"
     },
     "compression": {
       "__title": "上下文压缩",

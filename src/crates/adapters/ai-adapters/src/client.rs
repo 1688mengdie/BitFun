@@ -26,13 +26,7 @@ use reqwest::Client;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const SEND_MESSAGE_STREAM_ATTEMPTS: usize = 10;
 const TEST_CONNECTION_STREAM_ATTEMPTS: usize = 5;
-const SEND_MESSAGE_RETRY_BASE_DELAY_MS: u64 = 500;
-const SEND_MESSAGE_RATE_LIMIT_RETRY_BASE_DELAY_MS: u64 = 2_000;
-const SEND_MESSAGE_MAX_EXPONENTIAL_DELAY_MS: u64 = 30_000;
-const SEND_MESSAGE_MAX_RATE_LIMIT_DELAY_MS: u64 = 60_000;
-const SEND_MESSAGE_MAX_RETRY_EXPONENT_SHIFT: u32 = 6;
 
 /// Streamed response result with the parsed stream and optional raw SSE receiver.
 pub struct StreamResponse {
@@ -44,7 +38,7 @@ pub struct StreamResponse {
 }
 
 /// Runtime stream behavior shared across provider implementations.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct StreamOptions {
     /// Maximum idle time between streamed chunks. `None` means wait indefinitely.
     pub idle_timeout: Option<Duration>,
@@ -52,6 +46,39 @@ pub struct StreamOptions {
     /// reasoning, or tool-call data) after a request starts. `None` means wait
     /// indefinitely.
     pub ttft_timeout: Option<Duration>,
+    /// Request retry budget for the aggregation loop. Clamped to at least 1 at
+    /// the use site so a configured 0 can never fall through to the trailing
+    /// `unreachable!` (mirrors `ai.thresholds.model_retry.max_attempts`).
+    pub max_attempts: usize,
+    /// Base retry backoff delay (ms), mirroring `model_retry.base_delay_ms`.
+    pub retry_base_delay_ms: u64,
+    /// Rate-limit retry base delay (ms), mirroring `rate_limit_base_delay_ms`.
+    pub rate_limit_retry_base_delay_ms: u64,
+    /// Exponential-delay cap (ms), mirroring `max_exponential_delay_ms`.
+    pub max_exponential_delay_ms: u64,
+    /// Rate-limit delay cap (ms), mirroring `max_rate_limit_delay_ms`.
+    pub max_rate_limit_delay_ms: u64,
+    /// Maximum retry exponent shift, mirroring `max_exponent_shift`.
+    pub max_exponent_shift: u32,
+    /// HTTP connect timeout (seconds); `None` means wait indefinitely (no timeout),
+    /// mirroring `stream_ttft_timeout_secs` / `stream_idle_timeout_secs`.
+    pub connect_timeout_secs: Option<u64>,
+}
+
+impl Default for StreamOptions {
+    fn default() -> Self {
+        Self {
+            idle_timeout: None,
+            ttft_timeout: None,
+            max_attempts: 10,
+            retry_base_delay_ms: 500,
+            rate_limit_retry_base_delay_ms: 2_000,
+            max_exponential_delay_ms: 30_000,
+            max_rate_limit_delay_ms: 60_000,
+            max_exponent_shift: 6,
+            connect_timeout_secs: Some(10),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -67,7 +94,6 @@ impl AIClient {
     pub(crate) const TEST_IMAGE_EXPECTED_CODE: &'static str = "BYGR";
     pub(crate) const TEST_IMAGE_PNG_BASE64: &'static str =
         "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAIAAADTED8xAAACBklEQVR42u3ZsREAIAwDMYf9dw4txwJupI7Wua+YZEPBfO91h4ZjAgQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABIAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAAAAAAAEDRZI3QGf7jDvEPAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAAEAAIAAYAAQAAgABAACAABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAACAAEAAIAAQAAgABgABAAAjABAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQAAgABAACAAGAAEAAIAAQALwuLkoG8OSfau4AAAAASUVORK5CYII=";
-    pub(crate) const STREAM_CONNECT_TIMEOUT_SECS: u64 = 10;
     pub(crate) const HTTP_POOL_IDLE_TIMEOUT_SECS: u64 = 30;
     pub(crate) const HTTP_TCP_KEEPALIVE_SECS: u64 = 60;
 
@@ -87,8 +113,12 @@ impl AIClient {
         proxy_config: Option<ProxyConfig>,
         stream_options: StreamOptions,
     ) -> Self {
-        let client =
-            http::create_http_client(proxy_config, config.skip_ssl_verify, &config.base_url);
+        let client = http::create_http_client(
+            proxy_config,
+            config.skip_ssl_verify,
+            &config.base_url,
+            stream_options.connect_timeout_secs,
+        );
         Self {
             client,
             config,
@@ -229,7 +259,7 @@ impl AIClient {
             messages,
             tools,
             extra_body,
-            SEND_MESSAGE_STREAM_ATTEMPTS,
+            self.stream_options.max_attempts,
             trace,
             None,
         )
@@ -334,7 +364,7 @@ impl AIClient {
             custom_body,
             request_context,
             trace,
-            SEND_MESSAGE_STREAM_ATTEMPTS,
+            self.stream_options.max_attempts,
         )
         .await
     }
@@ -352,7 +382,7 @@ impl AIClient {
             extra_body,
             None,
             trace,
-            SEND_MESSAGE_STREAM_ATTEMPTS,
+            self.stream_options.max_attempts,
         )
         .await
     }
@@ -366,6 +396,7 @@ impl AIClient {
         trace: Option<ModelExchangeTraceConfig>,
         max_attempts: usize,
     ) -> Result<GeminiResponse> {
+        let max_attempts = max_attempts.max(1);
         for attempt in 0..max_attempts {
             let stream_response = match self
                 .send_message_stream_with_extra_body_and_max_attempts(
@@ -383,7 +414,11 @@ impl AIClient {
                     if attempt == max_attempts - 1 {
                         return Err(error);
                     }
-                    let delay_ms = send_message_retry_delay_ms_for_error(attempt, &error);
+                    let delay_ms = send_message_retry_delay_ms_for_error(
+                        attempt,
+                        &error,
+                        &self.stream_options,
+                    );
                     warn!(
                         "Retrying AI stream request after error: attempt={}/{}, delay_ms={}, error={}",
                         attempt + 1,
@@ -413,7 +448,11 @@ impl AIClient {
                     if attempt == max_attempts - 1 {
                         return Err(error);
                     }
-                    let delay_ms = send_message_retry_delay_ms_for_error(attempt, &error);
+                    let delay_ms = send_message_retry_delay_ms_for_error(
+                        attempt,
+                        &error,
+                        &self.stream_options,
+                    );
                     warn!(
                         "Retrying aggregated AI stream after error: attempt={}/{}, delay_ms={}, error={}",
                         attempt + 1,
@@ -536,14 +575,24 @@ impl AIClient {
 
 #[cfg(test)]
 fn send_message_retry_delay_ms(attempt_index: usize, error_message: &str) -> u64 {
-    send_message_retry_delay_ms_with_provider(attempt_index, error_message, None)
+    send_message_retry_delay_ms_with_provider(
+        attempt_index,
+        error_message,
+        None,
+        &StreamOptions::default(),
+    )
 }
 
-fn send_message_retry_delay_ms_for_error(attempt_index: usize, error: &anyhow::Error) -> u64 {
+fn send_message_retry_delay_ms_for_error(
+    attempt_index: usize,
+    error: &anyhow::Error,
+    stream_options: &StreamOptions,
+) -> u64 {
     send_message_retry_delay_ms_with_provider(
         attempt_index,
         &error.to_string(),
         error.downcast_ref::<AiProviderError>(),
+        stream_options,
     )
 }
 
@@ -551,10 +600,11 @@ fn send_message_retry_delay_ms_with_provider(
     attempt_index: usize,
     error_message: &str,
     provider_error: Option<&AiProviderError>,
+    stream_options: &StreamOptions,
 ) -> u64 {
     let shift = u32::try_from(attempt_index)
         .unwrap_or(u32::MAX)
-        .min(SEND_MESSAGE_MAX_RETRY_EXPONENT_SHIFT);
+        .min(stream_options.max_exponent_shift);
     let msg = error_message.to_lowercase();
     let is_rate_limit = provider_error
         .is_some_and(|error| error.category == ErrorCategory::RateLimit)
@@ -563,21 +613,23 @@ fn send_message_retry_delay_ms_with_provider(
         || msg.contains("too many requests");
 
     let fallback = if is_rate_limit {
-        SEND_MESSAGE_RATE_LIMIT_RETRY_BASE_DELAY_MS
+        stream_options
+            .rate_limit_retry_base_delay_ms
             .saturating_mul(1u64 << shift)
-            .min(SEND_MESSAGE_MAX_RATE_LIMIT_DELAY_MS)
+            .min(stream_options.max_rate_limit_delay_ms)
     } else {
-        SEND_MESSAGE_RETRY_BASE_DELAY_MS
+        stream_options
+            .retry_base_delay_ms
             .saturating_mul(1u64 << shift)
-            .min(SEND_MESSAGE_MAX_EXPONENTIAL_DELAY_MS)
+            .min(stream_options.max_exponential_delay_ms)
     };
 
     match provider_error.and_then(|error| error.retry_after_ms) {
         Some(retry_after_ms) if is_rate_limit => retry_after_ms
             .max(fallback)
-            .min(SEND_MESSAGE_MAX_RATE_LIMIT_DELAY_MS),
+            .min(stream_options.max_rate_limit_delay_ms),
         Some(retry_after_ms) if retry_after_ms > 0 => {
-            retry_after_ms.min(SEND_MESSAGE_MAX_RATE_LIMIT_DELAY_MS)
+            retry_after_ms.min(stream_options.max_rate_limit_delay_ms)
         }
         Some(_) | None => fallback,
     }
@@ -634,7 +686,10 @@ fn gemini_response_to_trace(response: &GeminiResponse) -> ModelExchangeResponseT
 
 #[cfg(test)]
 mod tests {
-    use super::{send_message_retry_delay_ms, AIClient};
+    use super::{
+        send_message_retry_delay_ms, send_message_retry_delay_ms_with_provider, AIClient,
+        StreamOptions,
+    };
     use crate::providers::{anthropic, gemini, gemini::GeminiMessageConverter, openai};
     use crate::types::{AIConfig, ModelRequestContext, ToolDefinition};
     use crate::types::{ReasoningPresetAction, ReasoningPresetDescriptor};
@@ -2567,5 +2622,55 @@ mod tests {
             16_000
         );
         assert_eq!(send_message_retry_delay_ms(5, "too many requests"), 60_000);
+    }
+
+    #[test]
+    fn aggregated_retry_delay_reads_configured_backoff_values() {
+        let options = StreamOptions {
+            retry_base_delay_ms: 1_000,
+            max_exponential_delay_ms: 4_000,
+            max_exponent_shift: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            send_message_retry_delay_ms_with_provider(0, "connection reset", None, &options),
+            1_000
+        );
+        // shift capped by max_exponent_shift=2 and then by max_exponential_delay_ms=4000.
+        assert_eq!(
+            send_message_retry_delay_ms_with_provider(5, "connection reset", None, &options),
+            4_000
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_configured_max_attempts_clamps_to_one_without_panic() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let app = Router::new()
+            .route("/chat/completions", post(malformed_stream_then_success))
+            .with_state(StreamRetryFixtureState {
+                attempts: Arc::clone(&attempts),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind zero-attempt fixture");
+        let address = listener.local_addr().expect("zero-attempt fixture address");
+        let server_task = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("zero-attempt fixture should run");
+        });
+        let mut client = make_test_client("openai", None);
+        client.config.request_url = format!("http://{address}/chat/completions");
+        client.stream_options.max_attempts = 0;
+
+        let result = client.send_message_with_trace(Vec::new(), None, None).await;
+
+        server_task.abort();
+        assert!(
+            result.is_err(),
+            "max_attempts=0 must clamp to one attempt and return an error, not panic"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

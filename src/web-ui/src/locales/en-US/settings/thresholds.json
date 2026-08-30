@@ -19,7 +19,12 @@
       "session_references_per_turn": "Session references per turn",
       "max_dispatch_per_parent_window": "Max dispatches per parent per window",
       "dispatch_window_secs": "Dispatch window length (s)",
-      "dispatch_cooldown_secs": "Dispatch cooldown after cap (s)"
+      "dispatch_cooldown_secs": "Dispatch cooldown after cap (s)",
+      "max_send_input_per_session_window": "Max send_input continuations per session window",
+      "send_input_window_secs": "send_input frequency window (s)",
+      "max_tokens_per_session_24h": "Per-session 24h token ceiling",
+      "max_send_input_per_session_24h": "Per-session 24h continuation turns",
+      "session_24h_window_secs": "Per-session 24h stats window (s)"
     },
     "compression": {
       "__title": "Context compression",
