@@ -909,11 +909,11 @@ impl Display for MessageContent {
 #[cfg(test)]
 mod tests {
     use super::{Message, ToolCall};
+    use crate::agentic::image_analysis::ImageContextData;
     use crate::util::types::Message as AIMessage;
     use bitfun_agent_stream::ToolArgumentRepairKind;
     use bitfun_core_types::{ModelResponseReplay, ModelResponseReplayItem};
     use serde_json::json;
-    use crate::agentic::image_analysis::ImageContextData;
 
     #[test]
     fn empty_text_empty_images_multimodal_becomes_none() {
@@ -944,7 +944,9 @@ mod tests {
         let ai_msg = AIMessage::from(Message::user_multimodal(String::new(), vec![image]));
 
         // Image-only multimodal content (no text) is valid and must be preserved.
-        let content = ai_msg.content.expect("image-attached content should be present");
+        let content = ai_msg
+            .content
+            .expect("image-attached content should be present");
         assert!(content.contains("[Attached image(s):"));
         assert!(content.contains("photo"));
     }
