@@ -628,7 +628,7 @@ struct CodeBuddyModelEntry {
 /// Results are cached in memory for [`MODELS_CACHE_TTL`] (6 min). On HTTP
 /// failure the enterprise endpoint enters exponential backoff (30 s → 300 s);
 /// during backoff the call skips straight to /v3/config.
-pub(crate) async fn list_models(
+pub async fn list_models(
     options: &SubscriptionHttpOptions,
 ) -> Result<Vec<crate::types::RemoteModelInfo>> {
     // 1. Return cached result if still fresh.
