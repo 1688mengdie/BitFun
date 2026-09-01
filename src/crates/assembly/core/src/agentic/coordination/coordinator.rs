@@ -113,6 +113,7 @@ use crate::service::workspace::{
     get_global_workspace_service, WorkspaceActivityMode, WorkspaceCreateOptions, WorkspaceInfo,
     WorkspaceKind, WorkspaceService,
 };
+#[cfg(feature = "git")]
 use crate::service::worktree::{WorktreeRemoveRequest, WorktreeService};
 use crate::service_agent_runtime::CoreServiceAgentRuntime;
 use crate::util::errors::{BitFunError, BitFunResult};
@@ -899,7 +900,8 @@ impl HiddenSubagentExecutionRequest {
     }
 }
 
-pub use bitfun_runtime_ports::{DialogSubmissionPolicy, DialogTriggerSource};
+pub use bitfun_runtime_ports::{DialogSubmissionPolicy};
+pub use bitfun_runtime_ports::DialogTriggerSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssistantBootstrapSkipReason {
@@ -8719,6 +8721,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
             .await;
         // Step3 (W6): 删除前读取会话的 worktree 绑定（execution_target.worktree_id），
         // 供删除成功后联动清理。读取失败不阻塞删除（best-effort）。
+        #[cfg(feature = "git")]
         let worktree_binding = self
             .session_manager
             .load_session_metadata(&session_storage_path, session_id)
@@ -8825,6 +8828,7 @@ Update the persona files and delete BOOTSTRAP.md as soon as bootstrap is complet
         // - worktree 有改动/未发布/锁定 → remove 失败 → 保留不删，仅 log 提示
         // - remove 失败不阻塞会话删除（会话照删，worktree 靠既有 24h 定时清理兜底）
         // - 幂等：会话已删后重复 delete 无 worktree 绑定（metadata 已删）→ 无操作
+        #[cfg(feature = "git")]
         if let Some((worktree_id, project_workspace_path)) = worktree_binding {
             if let Err(remove_error) = WorktreeService::remove(WorktreeRemoveRequest {
                 request_id: format!("session-delete:{session_id}:{worktree_id}"),
@@ -15271,6 +15275,7 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
         // 沿用 task/<序号> 系，原分支已是 task/N 则保持分支名，仅同步
         // display_name，三方一致即可）。
         // 失败（worktree 不存在/分支被占用等）不阻塞会话 rename，仅 log 提示。
+        #[cfg(feature = "git")]
         let worktree_binding = self
             .session_manager
             .load_session_metadata(&effective_storage_path, &request.session_id)
@@ -15288,6 +15293,7 @@ impl bitfun_runtime_ports::AgentSessionManagementPort for ConversationCoordinato
                     .unwrap_or_else(|| effective_storage_path.to_string_lossy().to_string());
                 worktree_id.map(|worktree_id| (worktree_id, project_workspace_path))
             });
+        #[cfg(feature = "git")]
         if let Some((worktree_id, project_workspace_path)) = worktree_binding {
             let worktree_request_id =
                 format!("session-rename:{}:{}", request.session_id, worktree_id);

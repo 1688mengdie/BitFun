@@ -162,6 +162,7 @@ impl StaticToolProviderFactory<dyn Tool> for ProductConcreteToolFactory {
             "CallDeferredTool" => Some(Arc::new(CallDeferredTool::new())),
             #[cfg(feature = "tools-git")]
             "GetFileDiff" => Some(Arc::new(GetFileDiffTool::new())),
+            #[cfg(feature = "tools-git")]
             "SessionControl" => Some(Arc::new(SessionControlTool::new())),
             "LegionControl" => Some(Arc::new(LegionControlTool::new())),
             "create_group_chat" => group_room_alias_tool_for_name("create_group_chat")

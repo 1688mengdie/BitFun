@@ -235,10 +235,6 @@ agent-runtime = [
     "bitfun-services-core/session-git",
     "bitfun-services-core/token-usage-statistics",
     "filesystem",
-    # Local fork (U-23/K18): session_control_tool references service::git /
-    # service::worktree unconditionally, which upstream only builds under the
-    # `git` feature. Mirror B1 dev fix so the agent-runtime facade compiles.
-    "git",
     "local-storage",
     "process-runtime",
     "terminal",
@@ -250,10 +246,6 @@ agent-runtime = [
     "tool-packs",
     "tools-basic",
     "tools-agent-control",
-    # SessionControl create-with-worktree path (U-15/U-23 lesson: feature-combo
-    # completeness — the tool body unconditionally references
-    # service::worktree + service::git, so the agent-runtime facade must pull them).
-    "git",
     "tokio/io-util",
     "tokio/macros",
     "tokio/rt",
