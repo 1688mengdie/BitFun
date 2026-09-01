@@ -39,38 +39,6 @@ impl ChatMode {
                 let config_owner =
                     bitfun_core::service::config::get_global_config_service().await?;
                 let model = crate::model_selection::model_from_mutation(mutation, None)?;
-                
-                // Check if this is a CodeBuddy model and fetch dynamic list
-                let is_codebuddy = model.provider.eq_ignore_ascii_case("codebuddy") 
-                    || model.base_url.contains("copilot.tencent.com");
-                
-                if is_codebuddy {
-                    // Fetch dynamic model list from CodeBuddy API
-                    use bitfun_ai_adapters::subscription_auth::SubscriptionHttpOptions;
-                    match bitfun_ai_adapters::subscription_auth::codebuddy::list_models(&SubscriptionHttpOptions::default()).await {
-                        Ok(dynamic_models) if !dynamic_models.is_empty() => {
-                            // Register all dynamic models to runtime config
-                            for dyn_model in &dynamic_models {
-                                config_owner.install_runtime_ai_model(bitfun_core::service::config::AIModelConfig {
-                                    id: dyn_model.id.clone(),
-                                    name: dyn_model.display_name.clone().unwrap_or(dyn_model.id.clone()),
-                                    base_url: "https://copilot.tencent.com".to_string(),
-                                    provider: "CodeBuddy".to_string(),
-                                    api_key: Default::default(),
-                                    ..Default::default()
-                                }).await.ok();
-                            }
-                            log::info!("Registered {} dynamic models from CodeBuddy", dynamic_models.len());
-                        }
-                        Ok(_) => {
-                            log::warn!("CodeBuddy returned empty model list, proceeding with single model");
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to fetch CodeBuddy dynamic models: {}, proceeding with single model", e);
-                        }
-                    }
-                }
-                
                 let added_model_id = model.id.clone();
                 config_owner
                     .add_ai_model(model)
