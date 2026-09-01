@@ -5171,40 +5171,7 @@ pub async fn start_subscription_pat_login(
         options,
     )
     .await
-    .map_err(|e| format!("Failed to log in with personal access token: {e:#}"))?;
-    
-    // After successful CodeBuddy login, fetch dynamic model list
-    if request.provider.eq("codebuddy") {
-        use bitfun_ai_adapters::subscription_auth::codebuddy;
-        match codebuddy::list_models(&options).await {
-            Ok(dynamic_models) if !dynamic_models.is_empty() => {
-                tracing::info!("CodeBuddy login successful, registered {} dynamic models", dynamic_models.len());
-                // Register dynamic models to runtime config
-                if let Ok(config_owner) = bitfun_core::service::config::get_global_config_service().await {
-                    for dyn_model in &dynamic_models {
-                        let _ = config_owner.install_runtime_ai_model(
-                            bitfun_core::service::config::AIModelConfig {
-                                id: dyn_model.id.clone(),
-                                name: dyn_model.display_name.clone().unwrap_or(dyn_model.id.clone()),
-                                base_url: "https://copilot.tencent.com".to_string(),
-                                provider: "CodeBuddy".to_string(),
-                                api_key: Default::default(),
-                                ..Default::default()
-                            }
-                        ).await;
-                    }
-                }
-            }
-            Ok(_) => {
-                tracing::warn!("CodeBuddy returned empty model list after login");
-            }
-            Err(e) => {
-                tracing::warn!("Failed to fetch CodeBuddy dynamic models after login: {}", e);
-            }
-        }
-    }
-    
-    Ok(())
+    .map_err(|e| format!("Failed to log in with personal access token: {e:#}"))
 }
 
 #[tauri::command]
