@@ -572,10 +572,11 @@ struct EnterpriseModelsData {
 
 /// Response from `GET /v3/config` (authenticated).
 ///
-/// The gateway has shipped two shapes for the model list: the documented
-/// `data.models.data` nesting and a flatter `data.data.models` array. Both are
-/// accepted so a gateway-side shape change cannot silently empty the catalog.
-/// `models` is `null` when the request is unauthenticated.
+/// The gateway has shipped two shapes for the model list:
+/// - Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`
+/// - Actual live shape: `data.agents[].models` holds `String[]` (model IDs)
+/// Both are accepted so a gateway-side shape change cannot silently empty the
+/// catalog. `models` is `null` when the request is unauthenticated.
 #[derive(Debug, Deserialize)]
 struct V3ConfigResponse {
     #[allow(dead_code)]
@@ -587,12 +588,12 @@ struct V3ConfigResponse {
 
 #[derive(Debug, Deserialize)]
 struct V3ConfigData {
-    /// Documented shape: `data.models.data` holds the model entries.
+    /// Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`.
     #[serde(default)]
     models: Option<V3ModelsData>,
-    /// Alternate shape: `data.data.models` holds the model entries.
+    /// Live shape: `data.agents[].models` holds `String[]` (model IDs).
     #[serde(default)]
-    data: Option<V3NestedModels>,
+    agents: Option<Vec<AgentEntry>>,
     #[allow(dead_code)]
     agent: Option<serde_json::Value>,
     #[allow(dead_code)]
@@ -603,11 +604,11 @@ struct V3ConfigData {
     features: Option<serde_json::Value>,
 }
 
-/// Captures the `data.data.models` variant.
+/// Captures the live shape: `data.agents[].models`.
 #[derive(Debug, Deserialize)]
-struct V3NestedModels {
+struct AgentEntry {
     #[serde(default)]
-    models: Vec<CodeBuddyModelEntry>,
+    models: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -619,14 +620,29 @@ struct V3ModelsData {
 impl V3ConfigResponse {
     /// Resolves the model entries from whichever shape the gateway returned.
     fn model_entries(self) -> Vec<CodeBuddyModelEntry> {
+        // Try documented shape first (higher fidelity with name/tags/etc.)
         if let Some(models) = self.data.models {
             if !models.data.is_empty() {
                 return models.data;
             }
         }
+        // Fall back to live shape: convert string IDs to minimal entries
         self.data
-            .data
-            .map(|nested| nested.models)
+            .agents
+            .map(|agents| {
+                agents
+                    .into_iter()
+                    .flat_map(|a| a.models)
+                    .filter(|id| !id.is_empty())
+                    .map(|id| CodeBuddyModelEntry {
+                        id,
+                        name: None,
+                        tags: vec![],
+                        supports_images: false,
+                        supports_reasoning: false,
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -1289,26 +1305,30 @@ mod tests {
         assert!(resp.data.models.is_none());
     }
 
-    /// The gateway has also served the model list as `data.data.models`. The
-    /// resolver must accept that shape so a gateway change cannot empty the
-    /// catalog (root cause of the 2026-09-01 empty model list).
+    /// The gateway has also served the model list as `data.agents[].models`
+    /// (string array). The resolver must accept that shape so a gateway change
+    /// cannot empty the catalog.
     #[test]
-    fn parse_v3_config_accepts_legacy_data_models_shape() {
+    fn parse_v3_config_accepts_agents_models_shape() {
         let json = r#"{
             "code": 0,
             "msg": "OK",
             "data": {
-                "data": {
-                    "models": [
-                        { "id": "hy4-preview", "name": "HY4-Preview" }
-                    ]
-                }
+                "agents": [
+                    {
+                        "commands": ["init"],
+                        "models": ["hy4-preview","glm-5.2"]
+                    }
+                ]
             }
         }"#;
         let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
         let entries = resp.model_entries();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "hy4-preview");
+        assert_eq!(entries[1].id, "glm-5.2");
+        // String IDs become minimal entries (no name/tags)
+        assert!(entries[0].name.is_none());
     }
 
     /// Both shapes present: the documented `models.data` nesting wins.
