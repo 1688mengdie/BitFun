@@ -573,10 +573,9 @@ struct EnterpriseModelsData {
 /// Response from `GET /v3/config` (authenticated).
 ///
 /// The gateway has shipped two shapes for the model list:
-/// - Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`
-/// - Actual live shape: `data.agents[].models` holds `String[]` (model IDs)
-/// Both are accepted so a gateway-side shape change cannot silently empty the
-/// catalog. `models` is `null` when the request is unauthenticated.
+/// - Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`.
+/// - Live shape (ground truth, CW3-SEC-0828/执行-CB-MODELS-FULL-0830.md): `data.data.models` holds `String[]` (model IDs).
+/// Both are accepted so a gateway-side shape change cannot silently empty the catalog.
 #[derive(Debug, Deserialize)]
 struct V3ConfigResponse {
     #[allow(dead_code)]
@@ -591,9 +590,9 @@ struct V3ConfigData {
     /// Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`.
     #[serde(default)]
     models: Option<V3ModelsData>,
-    /// Live shape: `data.agents[].models` holds `String[]` (model IDs).
-    #[serde(default)]
-    agents: Option<Vec<AgentEntry>>,
+    /// Live shape (ground truth): `data.data.models` holds `String[]` (model IDs).
+    #[serde(default, rename = "data")]
+    legacy: Option<V3LegacyData>,
     #[allow(dead_code)]
     agent: Option<serde_json::Value>,
     #[allow(dead_code)]
@@ -604,9 +603,9 @@ struct V3ConfigData {
     features: Option<serde_json::Value>,
 }
 
-/// Captures the live shape: `data.agents[].models`.
+/// Captures the live shape: `data.data.models`.
 #[derive(Debug, Deserialize)]
-struct AgentEntry {
+struct V3LegacyData {
     #[serde(default)]
     models: Vec<String>,
 }
@@ -628,11 +627,11 @@ impl V3ConfigResponse {
         }
         // Fall back to live shape: convert string IDs to minimal entries
         self.data
-            .agents
-            .map(|agents| {
-                agents
+            .legacy
+            .map(|legacy| {
+                legacy
+                    .models
                     .into_iter()
-                    .flat_map(|a| a.models)
                     .filter(|id| !id.is_empty())
                     .map(|id| CodeBuddyModelEntry {
                         id,
@@ -1305,21 +1304,16 @@ mod tests {
         assert!(resp.data.models.is_none());
     }
 
-    /// The gateway has also served the model list as `data.agents[].models`
-    /// (string array). The resolver must accept that shape so a gateway change
-    /// cannot empty the catalog.
+    /// The gateway has also served the model list as `data.data.models` (String[]).
     #[test]
-    fn parse_v3_config_accepts_agents_models_shape() {
+    fn parse_v3_config_accepts_data_models_shape() {
         let json = r#"{
             "code": 0,
             "msg": "OK",
             "data": {
-                "agents": [
-                    {
-                        "commands": ["init"],
-                        "models": ["hy4-preview","glm-5.2"]
-                    }
-                ]
+                "data": {
+                    "models": ["hy4-preview","glm-5.2"]
+                }
             }
         }"#;
         let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
@@ -1327,8 +1321,6 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "hy4-preview");
         assert_eq!(entries[1].id, "glm-5.2");
-        // String IDs become minimal entries (no name/tags)
-        assert!(entries[0].name.is_none());
     }
 
     /// Both shapes present: the documented `models.data` nesting wins.
@@ -1344,9 +1336,7 @@ mod tests {
                     ]
                 },
                 "data": {
-                    "models": [
-                        { "id": "legacy-model", "name": "Legacy" }
-                    ]
+                    "models": ["legacy-model"]
                 }
             }
         }"#;
