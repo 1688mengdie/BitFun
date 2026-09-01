@@ -158,7 +158,6 @@ impl ExecutionEngineConfig {
         Self {
             max_rounds: ai_config.max_rounds,
             max_consecutive_same_tool: ai_config.thresholds.execution.duplicate_tool_calls.max(1),
-            ..Self::default()
         }
     }
 }

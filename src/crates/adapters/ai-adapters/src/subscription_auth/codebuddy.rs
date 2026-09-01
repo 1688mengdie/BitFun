@@ -578,7 +578,7 @@ struct EnterpriseModelsData {
 /// - `data.models.data`          — `CodeBuddyModelEntry[]` (documented)
 /// - `data.data.models`          — `String[]` model IDs (KB CW3-SEC-0828)
 /// - `data.agents[].models`      — `String[]` model IDs (observed 2026-09-01)
-/// Unknown or absent shapes resolve to an empty list (unauthenticated etc.).
+/// - Unknown or absent shapes resolve to an empty list (unauthenticated etc.).
 fn parse_v3_config_models(body: &str) -> Result<Vec<CodeBuddyModelEntry>> {
     let value: serde_json::Value =
         serde_json::from_str(body).context("parse codebuddy /v3/config response")?;
