@@ -572,78 +572,66 @@ struct EnterpriseModelsData {
 
 /// Response from `GET /v3/config` (authenticated).
 ///
-/// The gateway has shipped two shapes for the model list:
-/// - Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`.
-/// - Live shape (ground truth, CW3-SEC-0828/执行-CB-MODELS-FULL-0830.md): `data.data.models` holds `String[]` (model IDs).
-/// Both are accepted so a gateway-side shape change cannot silently empty the catalog.
-#[derive(Debug, Deserialize)]
-struct V3ConfigResponse {
-    #[allow(dead_code)]
-    code: Option<i64>,
-    #[allow(dead_code)]
-    msg: Option<String>,
-    data: V3ConfigData,
-}
+/// The gateway has changed the model-list shape over time, so parsing is done
+/// leniently against the raw JSON value rather than a fixed struct. Known
+/// shapes, all supported:
+/// - `data.models.data`          — `CodeBuddyModelEntry[]` (documented)
+/// - `data.data.models`          — `String[]` model IDs (KB CW3-SEC-0828)
+/// - `data.agents[].models`      — `String[]` model IDs (observed 2026-09-01)
+/// Unknown or absent shapes resolve to an empty list (unauthenticated etc.).
+fn parse_v3_config_models(body: &str) -> Result<Vec<CodeBuddyModelEntry>> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).context("parse codebuddy /v3/config response")?;
+    let data = value.get("data");
+    let Some(data) = data.and_then(|d| d.as_object()) else {
+        return Ok(Vec::new());
+    };
 
-#[derive(Debug, Deserialize)]
-struct V3ConfigData {
-    /// Documented shape: `data.models.data` holds `CodeBuddyModelEntry[]`.
-    #[serde(default)]
-    models: Option<V3ModelsData>,
-    /// Live shape (ground truth): `data.data.models` holds `String[]` (model IDs).
-    #[serde(default, rename = "data")]
-    legacy: Option<V3LegacyData>,
-    #[allow(dead_code)]
-    agent: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    mcp: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    codebase: Option<serde_json::Value>,
-    #[allow(dead_code)]
-    features: Option<serde_json::Value>,
-}
-
-/// Captures the live shape: `data.data.models`.
-#[derive(Debug, Deserialize)]
-struct V3LegacyData {
-    #[serde(default)]
-    models: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct V3ModelsData {
-    #[serde(default)]
-    data: Vec<CodeBuddyModelEntry>,
-}
-
-impl V3ConfigResponse {
-    /// Resolves the model entries from whichever shape the gateway returned.
-    fn model_entries(self) -> Vec<CodeBuddyModelEntry> {
-        // Try documented shape first (higher fidelity with name/tags/etc.)
-        if let Some(models) = self.data.models {
-            if !models.data.is_empty() {
-                return models.data;
+    // Shape 1: data.models.data — object entries with full fidelity.
+    if let Some(models) = data.get("models") {
+        if let Some(entries) = models.get("data").and_then(|d| d.as_array()) {
+            let parsed = entries
+                .iter()
+                .filter_map(|e| serde_json::from_value::<CodeBuddyModelEntry>(e.clone()).ok())
+                .collect::<Vec<_>>();
+            if !parsed.is_empty() {
+                return Ok(parsed);
             }
         }
-        // Fall back to live shape: convert string IDs to minimal entries
-        self.data
-            .legacy
-            .map(|legacy| {
-                legacy
-                    .models
-                    .into_iter()
-                    .filter(|id| !id.is_empty())
-                    .map(|id| CodeBuddyModelEntry {
-                        id,
-                        name: None,
-                        tags: vec![],
-                        supports_images: false,
-                        supports_reasoning: false,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
     }
+
+    let mut ids: Vec<String> = Vec::new();
+
+    // Shape 2: data.data.models — flat string ID array.
+    if let Some(legacy) = data.get("data") {
+        if let Some(models) = legacy.get("models").and_then(|m| m.as_array()) {
+            ids.extend(models.iter().filter_map(|m| m.as_str().map(String::from)));
+        }
+    }
+
+    // Shape 3: data.agents[].models — per-agent string ID arrays.
+    if let Some(agents) = data.get("agents").and_then(|a| a.as_array()) {
+        for agent in agents {
+            if let Some(models) = agent.get("models").and_then(|m| m.as_array()) {
+                ids.extend(models.iter().filter_map(|m| m.as_str().map(String::from)));
+            }
+        }
+    }
+
+    // Deduplicate while preserving order (agent lists overlap).
+    let mut seen = std::collections::HashSet::new();
+    let entries = ids
+        .into_iter()
+        .filter(|id| !id.is_empty() && seen.insert(id.clone()))
+        .map(|id| CodeBuddyModelEntry {
+            id,
+            name: None,
+            tags: vec![],
+            supports_images: false,
+            supports_reasoning: false,
+        })
+        .collect();
+    Ok(entries)
 }
 
 /// A single model entry from either the enterprise or /v3/config endpoint.
@@ -933,9 +921,7 @@ async fn fetch_v3_models(
         "codebuddy /v3/config raw response (first 800 chars): {}",
         body.chars().take(800).collect::<String>()
     );
-    let payload: V3ConfigResponse =
-        serde_json::from_str(&body).context("parse codebuddy /v3/config response")?;
-    let entries = payload.model_entries();
+    let entries = parse_v3_config_models(&body)?;
     log::debug!("codebuddy /v3/config resolved {} model entries", entries.len());
     Ok(map_model_entries(entries))
 }
@@ -1281,10 +1267,10 @@ mod tests {
                 "features": null
             }
         }"#;
-        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
-        let entries = resp.data.models.unwrap().data;
+        let entries = parse_v3_config_models(json).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "deepseek-v4-pro");
+        assert_eq!(entries[0].name.as_deref(), Some("DeepSeek-V4-Pro"));
     }
 
     #[test]
@@ -1300,8 +1286,8 @@ mod tests {
                 "features": null
             }
         }"#;
-        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
-        assert!(resp.data.models.is_none());
+        let entries = parse_v3_config_models(json).unwrap();
+        assert!(entries.is_empty());
     }
 
     /// The gateway has also served the model list as `data.data.models` (String[]).
@@ -1316,14 +1302,34 @@ mod tests {
                 }
             }
         }"#;
-        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
-        let entries = resp.model_entries();
+        let entries = parse_v3_config_models(json).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].id, "hy4-preview");
         assert_eq!(entries[1].id, "glm-5.2");
     }
 
-    /// Both shapes present: the documented `models.data` nesting wins.
+    /// Live shape observed 2026-09-01: `data.agents[].models` (String[]).
+    #[test]
+    fn parse_v3_config_accepts_agents_models_shape() {
+        let json = r#"{
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "agents": [
+                    {
+                        "commands": ["init"],
+                        "models": ["hy4-preview","glm-5.2","hy4-preview"]
+                    }
+                ]
+            }
+        }"#;
+        let entries = parse_v3_config_models(json).unwrap();
+        assert_eq!(entries.len(), 2, "duplicate ids must be deduplicated");
+        assert_eq!(entries[0].id, "hy4-preview");
+        assert_eq!(entries[1].id, "glm-5.2");
+    }
+
+    /// Both object and string shapes present: object entries win (higher fidelity).
     #[test]
     fn parse_v3_config_prefers_documented_models_shape() {
         let json = r#"{
@@ -1340,10 +1346,10 @@ mod tests {
                 }
             }
         }"#;
-        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
-        let entries = resp.model_entries();
+        let entries = parse_v3_config_models(json).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "documented-model");
+        assert_eq!(entries[0].name.as_deref(), Some("Documented"));
     }
 
     /// An unauthenticated response carries neither shape and must resolve to
@@ -1359,11 +1365,44 @@ mod tests {
                 "mcp": null
             }
         }"#;
-        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
-        assert!(resp.model_entries().is_empty());
+        let entries = parse_v3_config_models(json).unwrap();
+        assert!(entries.is_empty());
     }
 
+    /// The exact body captured from the live gateway on 2026-09-01.
     #[test]
+    fn parse_v3_config_live_sample_20260901() {
+        let json = r#"{
+            "code":0,
+            "msg":"OK",
+            "requestId":"29355a9e212bd80c82734c6efed68dd9",
+            "data":{
+                "agents":[
+                    {
+                        "commands":["init","compact","statusline","insights"],
+                        "description":"cli agent",
+                        "instructions":"cli-agent-prompt",
+                        "modelTags":["craft"],
+                        "models":["hy4-preview","hy3","hy3-x","glm-5.3","glm-5.3-flash","glm-5.2","glm-5.1","glm-5v-turbo","minimax-m3-pay","minimax-m2.7","kimi-k3-2","kimi-k2.7","kimi-k2.6","deepseek-v4-pro","deepseek-v4-flash"],
+                        "name":"cli",
+                        "tags":["cli","default","model:craft"]
+                    }
+                ]
+            }
+        }"#;
+        let entries = parse_v3_config_models(json).unwrap();
+        assert_eq!(entries.len(), 15);
+        assert_eq!(entries[0].id, "hy4-preview");
+        assert_eq!(entries[14].id, "deepseek-v4-flash");
+    }
+
+    /// Verifies the owner order 2026-08-29 "no static fallback" strategy when
+    /// both dynamic endpoints fail. Depends on the real gateway being
+    /// unreachable, so it is ignored on network-enabled machines; the
+    /// parse-level empty-list behavior is covered by
+    /// `parse_v3_config_unauthenticated_resolves_empty_entries`.
+    #[test]
+    #[ignore = "network-dependent: requires copilot.tencent.com to be unreachable"]
     fn no_enterprise_id_dynamic_failure_returns_empty_list() {
         reset_model_cache();
         let _guard = super::super::tests::test_lock().blocking_lock();
@@ -1386,9 +1425,9 @@ mod tests {
             )
             .await
             .unwrap();
-            // No enterprise_id → enterprise endpoint skipped → /v3/config will
-            // fail (no real network) → owner order 2026-08-29: empty list, no
-            // static fallback.
+            // No enterprise_id → enterprise endpoint skipped → /v3/config
+            // against an unreachable address → owner order 2026-08-29: empty
+            // list, no static fallback.
             let models = super::list_models(&SubscriptionHttpOptions::default())
                 .await
                 .expect("list_models must not fail");
@@ -1401,7 +1440,11 @@ mod tests {
         reset_model_cache();
     }
 
+    /// Asserts the missing-enterprise-id warning path through a live gateway
+    /// attempt. Network-dependent (see the sibling test above), so ignored on
+    /// network-enabled machines.
     #[test]
+    #[ignore = "network-dependent: requires copilot.tencent.com to be unreachable"]
     fn enterprise_id_missing_logs_warning() {
         reset_model_cache();
         let _guard = super::super::tests::test_lock().blocking_lock();
@@ -1736,9 +1779,7 @@ mod tests {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         assert!(status.is_success(), "capture response must succeed");
-        let payload: V3ConfigResponse =
-            serde_json::from_str(&body).expect("capture payload parses");
-        let models = map_model_entries(payload.data.models.map(|m| m.data).unwrap_or_default());
+        let models = map_model_entries(parse_v3_config_models(&body).expect("capture payload parses"));
         let request = capture.await.unwrap();
         (request, models)
     }
