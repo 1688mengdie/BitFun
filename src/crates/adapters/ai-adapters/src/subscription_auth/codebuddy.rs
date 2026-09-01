@@ -571,6 +571,11 @@ struct EnterpriseModelsData {
 }
 
 /// Response from `GET /v3/config` (authenticated).
+///
+/// The gateway has shipped two shapes for the model list: the documented
+/// `data.models.data` nesting and a flatter `data.data.models` array. Both are
+/// accepted so a gateway-side shape change cannot silently empty the catalog.
+/// `models` is `null` when the request is unauthenticated.
 #[derive(Debug, Deserialize)]
 struct V3ConfigResponse {
     #[allow(dead_code)]
@@ -582,10 +587,14 @@ struct V3ConfigResponse {
 
 #[derive(Debug, Deserialize)]
 struct V3ConfigData {
+    /// Documented shape: `data.models.data` holds the model entries.
+    #[serde(default)]
+    models: Option<V3ModelsData>,
+    /// Alternate shape: `data.data.models` holds the model entries.
+    #[serde(default)]
+    data: Option<V3NestedModels>,
     #[allow(dead_code)]
     agent: Option<serde_json::Value>,
-    /// `null` when the request is unauthenticated; `Some(models)` with auth.
-    models: Option<V3ModelsData>,
     #[allow(dead_code)]
     mcp: Option<serde_json::Value>,
     #[allow(dead_code)]
@@ -594,10 +603,32 @@ struct V3ConfigData {
     features: Option<serde_json::Value>,
 }
 
+/// Captures the `data.data.models` variant.
+#[derive(Debug, Deserialize)]
+struct V3NestedModels {
+    #[serde(default)]
+    models: Vec<CodeBuddyModelEntry>,
+}
+
 #[derive(Debug, Deserialize)]
 struct V3ModelsData {
     #[serde(default)]
     data: Vec<CodeBuddyModelEntry>,
+}
+
+impl V3ConfigResponse {
+    /// Resolves the model entries from whichever shape the gateway returned.
+    fn model_entries(self) -> Vec<CodeBuddyModelEntry> {
+        if let Some(models) = self.data.models {
+            if !models.data.is_empty() {
+                return models.data;
+            }
+        }
+        self.data
+            .data
+            .map(|nested| nested.models)
+            .unwrap_or_default()
+    }
 }
 
 /// A single model entry from either the enterprise or /v3/config endpoint.
@@ -880,16 +911,17 @@ async fn fetch_v3_models(
             body.chars().take(400).collect::<String>()
         ));
     }
-    // Diagnostic: capture the raw /v3/config shape so the model-list parsing
-    // contract can be verified against the live gateway response. Credentials
-    // are never logged; the body is truncated to keep the log bounded.
-    log::warn!(
+    // Diagnostic: the response shape has changed upstream before; keep a
+    // truncated, credential-free sample so a future parse failure is
+    // diagnosable from the log alone.
+    log::debug!(
         "codebuddy /v3/config raw response (first 800 chars): {}",
         body.chars().take(800).collect::<String>()
     );
     let payload: V3ConfigResponse =
         serde_json::from_str(&body).context("parse codebuddy /v3/config response")?;
-    let entries = payload.data.models.map(|m| m.data).unwrap_or_default();
+    let entries = payload.model_entries();
+    log::debug!("codebuddy /v3/config resolved {} model entries", entries.len());
     Ok(map_model_entries(entries))
 }
 
@@ -1255,6 +1287,70 @@ mod tests {
         }"#;
         let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
         assert!(resp.data.models.is_none());
+    }
+
+    /// The gateway has also served the model list as `data.data.models`. The
+    /// resolver must accept that shape so a gateway change cannot empty the
+    /// catalog (root cause of the 2026-09-01 empty model list).
+    #[test]
+    fn parse_v3_config_accepts_legacy_data_models_shape() {
+        let json = r#"{
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "data": {
+                    "models": [
+                        { "id": "hy4-preview", "name": "HY4-Preview" }
+                    ]
+                }
+            }
+        }"#;
+        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
+        let entries = resp.model_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "hy4-preview");
+    }
+
+    /// Both shapes present: the documented `models.data` nesting wins.
+    #[test]
+    fn parse_v3_config_prefers_documented_models_shape() {
+        let json = r#"{
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "models": {
+                    "data": [
+                        { "id": "documented-model", "name": "Documented" }
+                    ]
+                },
+                "data": {
+                    "models": [
+                        { "id": "legacy-model", "name": "Legacy" }
+                    ]
+                }
+            }
+        }"#;
+        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
+        let entries = resp.model_entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, "documented-model");
+    }
+
+    /// An unauthenticated response carries neither shape and must resolve to
+    /// an empty list rather than failing to parse.
+    #[test]
+    fn parse_v3_config_unauthenticated_resolves_empty_entries() {
+        let json = r#"{
+            "code": 0,
+            "msg": "OK",
+            "data": {
+                "agent": null,
+                "models": null,
+                "mcp": null
+            }
+        }"#;
+        let resp: V3ConfigResponse = serde_json::from_str(json).unwrap();
+        assert!(resp.model_entries().is_empty());
     }
 
     #[test]
