@@ -880,6 +880,13 @@ async fn fetch_v3_models(
             body.chars().take(400).collect::<String>()
         ));
     }
+    // Diagnostic: capture the raw /v3/config shape so the model-list parsing
+    // contract can be verified against the live gateway response. Credentials
+    // are never logged; the body is truncated to keep the log bounded.
+    log::warn!(
+        "codebuddy /v3/config raw response (first 800 chars): {}",
+        body.chars().take(800).collect::<String>()
+    );
     let payload: V3ConfigResponse =
         serde_json::from_str(&body).context("parse codebuddy /v3/config response")?;
     let entries = payload.data.models.map(|m| m.data).unwrap_or_default();
