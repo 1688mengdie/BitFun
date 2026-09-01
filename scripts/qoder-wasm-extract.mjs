@@ -6,20 +6,42 @@
 // magic so BitFun can instantiate the signing/decryption module directly.
 //
 // Rerunnable: `node scripts/qoder-wasm-extract.mjs [--bundle <path>]`.
-// The bundle path defaults to the npm global install of @qodercn-ai/qoderclicn.
+// The bundle path defaults to the npm global install of @qodercn-ai/qoderclicn
+// (resolved via `npm root -g`), overridable with QODER_BUNDLE or --bundle.
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_BUNDLE = 'C:/Users/Administrator/AppData/Roaming/npm/node_modules/@qodercn-ai/qoderclicn/bundle/qoderclicn.js';
 const OUT = resolve(root, 'src/crates/adapters/ai-adapters/resources/qoder_auth_wasm_bg.wasm');
 const EXPECTED_BYTES = 297_238;
 const WASM_MAGIC = '0061736d01000000';
 
+// Resolve the default bundle from the npm global install instead of a
+// machine-specific absolute path (repo-hygiene CI contract). Override with
+// QODER_BUNDLE or --bundle when the package lives elsewhere.
+function defaultBundlePath() {
+  if (process.env.QODER_BUNDLE) return process.env.QODER_BUNDLE;
+  try {
+    // Windows spawns .cmd wrappers via cmd.exe; use ComSpec explicitly so no
+    // shell-flag concatenation is involved (fixed args only, no user input).
+    const isWin = process.platform === 'win32';
+    const npmBin = isWin ? process.env.ComSpec : 'npm';
+    const npmArgs = isWin ? ['/d', '/s', '/c', 'npm root -g'] : ['root', '-g'];
+    const globalRoot = execFileSync(npmBin, npmArgs, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return resolve(globalRoot, '@qodercn-ai/qoderclicn/bundle/qoderclicn.js');
+  } catch {
+    return '';
+  }
+}
+
 function parseArgs(argv) {
-  const args = { bundle: DEFAULT_BUNDLE, out: OUT };
+  const args = { bundle: defaultBundlePath(), out: OUT };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === '--bundle') args.bundle = argv[i + 1];
     if (argv[i] === '--out') args.out = argv[i + 1];
@@ -30,6 +52,12 @@ function parseArgs(argv) {
 const { bundle, out } = parseArgs(process.argv.slice(2));
 
 let source;
+if (!bundle) {
+  console.error(
+    '[FAIL] cannot locate @qodercn-ai/qoderclicn bundle; install it globally or pass --bundle <path> / QODER_BUNDLE',
+  );
+  process.exit(1);
+}
 try {
   source = readFileSync(bundle, 'utf8');
 } catch (error) {
