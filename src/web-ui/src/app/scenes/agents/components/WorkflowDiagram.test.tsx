@@ -3,11 +3,12 @@
 import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import WorkflowDiagram, {
+import WorkflowDiagram from './WorkflowDiagram';
+import {
   computeWorkflowDepths,
   computeWorkflowDagLayout,
   WORKFLOW_NODE_WIDTH,
-} from './WorkflowDiagram';
+} from './WorkflowDiagram.model';
 
 let container: HTMLDivElement;
 let root: Root | null = null;

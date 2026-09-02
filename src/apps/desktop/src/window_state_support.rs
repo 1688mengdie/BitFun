@@ -23,9 +23,9 @@
 #[cfg(any(target_os = "windows", test))]
 use std::path::Path;
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 use tauri::Manager;
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 use tauri_plugin_window_state::AppHandleExt;
 
 #[cfg(any(target_os = "windows", test))]

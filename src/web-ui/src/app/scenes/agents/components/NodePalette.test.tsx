@@ -4,10 +4,11 @@ import React, { act } from 'react';
 import type { TFunction } from 'i18next';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import NodePalette, {
+import NodePalette from './NodePalette';
+import {
   buildNodePaletteOptions,
   resolveMainClawOption,
-} from './NodePalette';
+} from './NodePalette.model';
 import type { AgentWithCapabilities } from '../agentsStore';
 
 let container: HTMLDivElement;

@@ -2708,11 +2708,22 @@ mod tests {
             "a concurrent idempotent submit must not spawn twice"
         );
         drop(first);
-        assert!(
-            store
+        // BSD flock can release the descriptor lock asynchronously right after
+        // close, so poll briefly instead of demanding an immediate re-acquire.
+        let mut recovered = false;
+        for _ in 0..50 {
+            if store
                 .try_claim_worker_spawn("job-spawn-retry")
                 .expect("recovery claim")
-                .is_some(),
+                .is_some()
+            {
+                recovered = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            recovered,
             "the OS lock must release after controller loss so a retry can recover the queued job"
         );
     }

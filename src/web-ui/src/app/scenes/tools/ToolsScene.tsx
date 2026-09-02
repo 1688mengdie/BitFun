@@ -4,6 +4,7 @@ import { useUserToolGroups } from '@/app/scenes/agents/components/useUserToolGro
 import ToolSuiteView from '@/app/scenes/agents/components/ToolSuiteView';
 import type { AgentProfileConfigItem } from '@/infrastructure/config/types';
 import { configAPI } from '@/infrastructure/api';
+import { api } from '@/infrastructure/api/service-api/ApiClient';
 import { createLogger } from '@/shared/utils/logger';
 import './ToolsScene.scss';
 
@@ -29,9 +30,8 @@ const ToolsScene: React.FC = () => {
     let active = true;
     const load = async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const [allTools, configs] = await Promise.all([
-          invoke<Array<{ name: string; description: string; is_readonly: boolean }>>('get_all_tools_info'),
+          api.invoke<Array<{ name: string; description: string; is_readonly: boolean }>>('get_all_tools_info'),
           configAPI.getAgentProfileConfigs().catch(() => ({})),
         ]);
         if (!active) return;

@@ -335,7 +335,7 @@ const AssistantDefaultsPage: React.FC = () => {
         }
       }
     })();
-  }, [canQueryToolCatalog, renderedPeerDeviceId]);
+  }, [canQueryToolCatalog, renderedPeerDeviceId, userSelectableTools]);
 
   useEffect(() => {
     if (!detail) return;

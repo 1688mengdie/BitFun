@@ -888,6 +888,7 @@ mod tests {
                 "ListModels",
                 "Skill",
                 "AskUserQuestion",
+                "TodoWrite",
                 "get_goal",
                 "PlanList",
                 "PlanRead",

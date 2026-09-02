@@ -1022,6 +1022,8 @@ const CODE_AGENT_IDS: &[&str] = &[
     "FileFinder",
     "GenerateDoc",
     "MemoryPhase2",
+    "Legion",
+    "group",
 ];
 const DEEP_REVIEW_AGENT_IDS: &[&str] = &[
     "ReviewWorker",

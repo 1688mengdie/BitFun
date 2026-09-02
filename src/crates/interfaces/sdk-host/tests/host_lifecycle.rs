@@ -616,6 +616,10 @@ impl AgentSessionRestorePort for FakeOwner {
                 turn_count: 1,
                 created_at_ms: 1,
                 last_active_at_ms: 2,
+                parent_session_id: None,
+                status: None,
+                display_state: None,
+                is_daemon: false,
             },
             state: SessionState::Idle,
         })
