@@ -109,17 +109,31 @@ vi.mock('@/component-library', () => ({
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn(async (cmd: string) => {
-    if (cmd === 'get_all_tools_info') {
-      return [
-        { name: 'Read', description: 'read', is_readonly: true },
-        { name: 'Grep', description: 'grep', is_readonly: true },
-        { name: 'GetToolSpec', description: 'gateway', is_readonly: true },
-      ];
-    }
-    return [];
-  }),
+  invoke: vi.fn(async () => []),
 }));
+
+// The page routes command calls through the ApiClient adapter layer, so the
+// tool-catalog stub must intercept api.invoke (a bare @tauri-apps/api/core
+// mock is never reached by production code).
+vi.mock('@/infrastructure/api/service-api/ApiClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/infrastructure/api/service-api/ApiClient')>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      invoke: vi.fn(async (cmd: string) => {
+        if (cmd === 'get_all_tools_info') {
+          return [
+            { name: 'Read', description: 'read', is_readonly: true },
+            { name: 'Grep', description: 'grep', is_readonly: true },
+            { name: 'GetToolSpec', description: 'gateway', is_readonly: true },
+          ];
+        }
+        return [];
+      }),
+    },
+  };
+});
 
 vi.mock('@/app/components', () => ({
   GalleryZone: ({

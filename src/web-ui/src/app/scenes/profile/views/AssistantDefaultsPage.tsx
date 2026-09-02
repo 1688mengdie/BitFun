@@ -335,7 +335,10 @@ const AssistantDefaultsPage: React.FC = () => {
         }
       }
     })();
-  }, [canQueryToolCatalog, renderedPeerDeviceId, userSelectableTools]);
+    // userSelectableTools is derived from the catalog this effect loads; adding
+    // it to the deps would refetch the catalog on every load and loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canQueryToolCatalog, renderedPeerDeviceId]);
 
   useEffect(() => {
     if (!detail) return;

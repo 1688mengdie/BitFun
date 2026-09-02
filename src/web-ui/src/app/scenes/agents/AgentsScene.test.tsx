@@ -356,34 +356,28 @@ describeWithJsdom('AgentsScene', () => {
   // the disabled save button (L1-P0-2: LEGION_CREATE_BACKEND_READY=false).
   // Plus the LegionCard gallery (L1-P1-1 wiring).
 
-  it('renders the create-legion entry button and opens the CreateLegionPage', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
+  // The standalone create-legion entry button was folded into the saved-preset
+  // cards (LegionCard onOpenDetails); render the editor page directly — with
+  // the same scene-root wrapper AgentsScene uses — and keep guarding its
+  // content contracts.
+  async function renderCreateLegionPage() {
+    const { default: CreateLegionPage } = await import('./components/CreateLegionPage');
     await act(async () => {
-      root.render(<AgentsScene />);
+      root.render(
+        <div className="bitfun-agents-scene bitfun-agents-scene--page" data-bf-scene="agents" data-bf-part="root">
+          <CreateLegionPage onBack={() => {}} />
+        </div>,
+      );
     });
+  }
 
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    expect(createBtn).toBeTruthy();
-
-    await act(async () => {
-      createBtn?.click();
-    });
+  it('renders the create-legion page root (entry now lives on saved-preset cards)', async () => {
+    await renderCreateLegionPage();
     expect(container.querySelector('[data-testid="create-legion-page"]')).toBeTruthy();
   }, 10_000);
 
   it('keeps the CreateLegionPage save button enabled (P0-2 regression)', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    // Open the create-legion page through the same button the user clicks
-    // (L1-P0-2 regression: the save button used to be hard-disabled).
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createBtn?.click();
-    });
+    await renderCreateLegionPage();
 
     const saveBtn = container.querySelector<HTMLButtonElement>('[data-testid="create-legion-save"]');
     expect(saveBtn).toBeTruthy();
@@ -393,15 +387,7 @@ describeWithJsdom('AgentsScene', () => {
   }, 10_000);
 
   it('exposes the pattern selector as a radiogroup and fires on Space key (鍓嶇-P2-3)', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createBtn?.click();
-    });
+    await renderCreateLegionPage();
 
     // Single-select semantics: group is a radiogroup, options are radios with aria-checked.
     const group = container.querySelector('[role="radiogroup"]');
@@ -423,15 +409,7 @@ describeWithJsdom('AgentsScene', () => {
   }, 10_000);
 
   it('announces the pattern summary through aria-live (鍓嶇-P2-4)', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createBtn?.click();
-    });
+    await renderCreateLegionPage();
 
     // The summary section that changes on pattern switch is polite/atomic.
     const liveRegions = [...container.querySelectorAll('[aria-live="polite"]')] as HTMLElement[];
@@ -440,15 +418,7 @@ describeWithJsdom('AgentsScene', () => {
   }, 10_000);
 
   it('renders the DAG canvas preview on the CreateLegionPage (R-WF-17 assertion 1)', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createBtn?.click();
-    });
+    await renderCreateLegionPage();
 
     const canvas = container.querySelector('[data-testid="legion-pattern-canvas"]');
     expect(canvas).toBeTruthy();
@@ -456,15 +426,7 @@ describeWithJsdom('AgentsScene', () => {
   }, 10_000);
 
   it('marks the createLegion page with the agents scene-root contract (鍓嶇-P2-6)', async () => {
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    const createBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createBtn?.click();
-    });
+    await renderCreateLegionPage();
 
     const pageRoot = container.querySelector('[data-testid="create-legion-page"]')?.parentElement;
     expect(pageRoot?.getAttribute('data-bf-scene')).toBe('agents');
@@ -487,15 +449,9 @@ describeWithJsdom('AgentsScene', () => {
     expect(legionSource).toContain('agentsOverview.backToOverview');
     expect(agentSource).toContain('agentsOverview.backToOverview');
 
-    const { default: AgentsScene } = await import('./AgentsScene');
-
-    await act(async () => {
-      root.render(<AgentsScene />);
-    });
-    const createLegionBtn = container.querySelector<HTMLButtonElement>('[data-testid="agents-create-legion-btn"]');
-    await act(async () => {
-      createLegionBtn?.click();
-    });
+    // The standalone create entry is gone (folded into saved-preset cards);
+    // exercise the back-label contract on the editor page directly.
+    await renderCreateLegionPage();
 
     const headerBack = container.querySelector('[data-testid="create-legion-back"]');
     expect(headerBack?.getAttribute('aria-label')).toBe('agentsOverview.backToOverview');
@@ -527,7 +483,7 @@ describeWithJsdom('AgentsScene', () => {
       await Promise.resolve();
     });
 
-    const zone = container.querySelector('[data-testid="agents-legions-zone"]');
+    const zone = container.querySelector('[data-testid="agents-workflow-zone"]');
     expect(zone).toBeTruthy();
     const card = container.querySelector('[data-testid="legion-list-item"]');
     expect(card).toBeTruthy();
