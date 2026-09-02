@@ -1150,11 +1150,17 @@ mod tests {
         // CLI `refreshDeviceCredential` maps the refresh response as
         // `security_oauth_token = device_token`, `refresh_token`, and reads
         // expiries from `expires_at` / `refresh_token_expires_at`.
+        // Expiries are generated relative to the clock: hardcoded dates go
+        // stale and turn `ms > now_ms()` into a permanent failure.
+        let expires_at = (chrono::Utc::now() + chrono::Duration::days(30))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        let refresh_expires_at = (chrono::Utc::now() + chrono::Duration::days(60))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let payload = serde_json::json!({
             "device_token": "device-token-1",
             "refresh_token": "refresh-token-1",
-            "expires_at": "2026-09-01T00:00:00+00:00",
-            "refresh_token_expires_at": "2026-12-01T00:00:00+00:00"
+            "expires_at": expires_at,
+            "refresh_token_expires_at": refresh_expires_at
         });
         let parsed: RefreshTokenResponse = serde_json::from_value(payload).unwrap();
         assert_eq!(parsed.device_token, "device-token-1");
