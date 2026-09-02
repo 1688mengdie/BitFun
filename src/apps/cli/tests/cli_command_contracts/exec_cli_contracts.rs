@@ -368,7 +368,7 @@ fn stream_json_patch_success_emits_one_success_terminal() {
 }
 
 #[test]
-fn stream_json_malformed_sse_retries_then_completes() {
+fn stream_json_transient_503_retries_then_completes() {
     let server = MockOpenAiServer::malformed_sse_then_immediate();
     let environment = CliTestEnvironment::new();
     environment.configure_mock_model(server.base_url());
@@ -380,6 +380,8 @@ fn stream_json_malformed_sse_retries_then_completes() {
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
+    // Attempt 0 answers 503 (transient) and attempt 1 streams successfully:
+    // exactly two requests under the sse.rs retry-category contract.
     server.assert_chat_completion_requests(2);
 
     let stdout = stdout(&output);
@@ -422,7 +424,9 @@ fn stream_json_provider_http_403_emits_one_error_terminal() {
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // 403 is a deterministic client error: terminal on the first attempt
+    // (mirrors the sse.rs transport retry-category contract).
+    server.assert_chat_completion_requests(1);
 
     let stdout = stdout(&output);
     assert!(!output.status.success(), "{stdout}");
@@ -485,7 +489,9 @@ fn stream_json_provider_and_patch_failures_publish_one_final_classification() {
         &output_target,
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // 403 is terminal on the first attempt (sse.rs retry-category contract);
+    // the final patch-write failure is classified after the single request.
+    server.assert_chat_completion_requests(1);
 
     let stdout = stdout(&output);
     let stderr = stderr(&output);
@@ -535,7 +541,10 @@ fn stream_json_disconnect_then_exhausted_retry_failure_emits_one_error_terminal(
         "stream-json",
     ]);
     let output = command_output_with_timeout(&mut command, std::time::Duration::from_secs(30));
-    server.assert_chat_completion_requests(10);
+    // Attempt 0 disconnects mid-stream (transport retry) and attempt 1 answers
+    // 403, which is terminal under the sse.rs retry-category contract: exactly
+    // two requests, no further retries.
+    server.assert_chat_completion_requests(2);
 
     let stdout = stdout(&output);
     assert!(!output.status.success(), "{stdout}");

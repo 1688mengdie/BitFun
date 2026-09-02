@@ -586,7 +586,7 @@ const TrendChart: React.FC<TrendChartProps> = ({ points, granularity, timeZone }
                 { label: t('trend.legend.cacheRead'), value: hovered.cacheReadTokens, color: SERIES_COLORS.cacheRead },
                 {
                   label: t('trend.legend.cacheHitRate'),
-                  // #2534 semantics: tooltip mirrors the rendered line, where
+                  // PR 2534 semantics: tooltip mirrors the rendered line, where
                   // buckets without telemetry plot at 0%.
                   value: hoveredHitRate ?? 0,
                   color: SERIES_COLORS.cacheHitRate,

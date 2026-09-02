@@ -900,7 +900,7 @@ impl HiddenSubagentExecutionRequest {
     }
 }
 
-pub use bitfun_runtime_ports::{DialogSubmissionPolicy};
+pub use bitfun_runtime_ports::DialogSubmissionPolicy;
 pub use bitfun_runtime_ports::DialogTriggerSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

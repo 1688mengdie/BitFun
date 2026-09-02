@@ -693,14 +693,18 @@ impl GroupRoomTool {
                     depth: Some(1),
                     ..Default::default()
                 };
-                if let Err(error) = manager.persist_session_lineage(member_id, relationship).await {
+                if let Err(error) = manager
+                    .persist_session_lineage(member_id, relationship)
+                    .await
+                {
                     warn!(
                         "Failed to persist session lineage (parent={}) for group member={}, error={}",
                         group_id, member_id, error
                     );
                 }
-                if let Err(error) =
-                    coordinator.session_tree().register_child(&group_id, member_id, 1)
+                if let Err(error) = coordinator
+                    .session_tree()
+                    .register_child(&group_id, member_id, 1)
                 {
                     warn!(
                         "Failed to register group member {} under {} in session tree, error={:?}",

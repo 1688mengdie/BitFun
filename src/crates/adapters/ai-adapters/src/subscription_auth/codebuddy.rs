@@ -922,7 +922,10 @@ async fn fetch_v3_models(
         body.chars().take(800).collect::<String>()
     );
     let entries = parse_v3_config_models(&body)?;
-    log::debug!("codebuddy /v3/config resolved {} model entries", entries.len());
+    log::debug!(
+        "codebuddy /v3/config resolved {} model entries",
+        entries.len()
+    );
     Ok(map_model_entries(entries))
 }
 
@@ -1779,7 +1782,8 @@ mod tests {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         assert!(status.is_success(), "capture response must succeed");
-        let models = map_model_entries(parse_v3_config_models(&body).expect("capture payload parses"));
+        let models =
+            map_model_entries(parse_v3_config_models(&body).expect("capture payload parses"));
         let request = capture.await.unwrap();
         (request, models)
     }

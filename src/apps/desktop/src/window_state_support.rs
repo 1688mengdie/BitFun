@@ -13,12 +13,22 @@
 //! signal: after each successful save the persisted `main` entry is corrected
 //! in place when the native placement reports a maximized window. Unreadable
 //! or missing files are never recreated or deleted.
+//!
+//! Every non-test consumer lives behind `#[cfg(target_os = "windows")]` in
+//! `lib.rs`, so on non-Windows builds only the unit tests reference this
+//! module; each item carries `#[cfg(any(target_os = "windows", test))]` to
+//! keep the dead-code lint quiet while the correction logic stays
+//! unit-testable on every host.
 
+#[cfg(any(target_os = "windows", test))]
 use std::path::Path;
 
+#[cfg(any(target_os = "windows", test))]
 use tauri::Manager;
+#[cfg(any(target_os = "windows", test))]
 use tauri_plugin_window_state::AppHandleExt;
 
+#[cfg(any(target_os = "windows", test))]
 const MAIN_WINDOW_LABEL: &str = "main";
 
 // ─── Authoritative maximized placement ────────────────────────────────────────
@@ -28,12 +38,14 @@ const MAIN_WINDOW_LABEL: &str = "main";
 ///
 /// Kept platform-independent so the correction logic is unit-testable
 /// everywhere; only the query itself is Windows-specific.
+#[cfg(any(target_os = "windows", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct NativePlacementReport {
     pub show_cmd: i32,
     pub restore_to_maximized: bool,
 }
 
+#[cfg(any(target_os = "windows", test))]
 impl NativePlacementReport {
     /// Whether the placement describes a window that is zoomed now or will be
     /// maximized once it leaves the minimized state.
@@ -88,6 +100,7 @@ fn query_native_window_placement(window: &tauri::WebviewWindow) -> Option<Native
 ///
 /// Returns `true` when the flag flipped. Non-maximized placements and entries
 /// already marked maximized never modify the document.
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn apply_maximized_correction(
     document: &mut serde_json::Value,
     report: &NativePlacementReport,
@@ -117,6 +130,7 @@ pub(crate) fn read_persisted_main_maximized(app: &tauri::AppHandle) -> Option<bo
     document.get(MAIN_WINDOW_LABEL)?.get("maximized")?.as_bool()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn set_bool_if_changed(
     entry: &mut serde_json::Map<String, serde_json::Value>,
     key: &str,
@@ -162,6 +176,7 @@ pub(crate) fn correct_saved_main_window_state(app: &tauri::AppHandle) {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn correct_saved_state_file(
     state_path: &Path,
     report: &NativePlacementReport,
@@ -187,6 +202,7 @@ fn correct_saved_state_file(
     Ok(true)
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn replace_state_file_atomically(state_path: &Path, temporary_path: &Path) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {

@@ -1,11 +1,11 @@
-use super::session_control_tool::{
-    get_available_agent_type_ids_for_creation, resolve_session_mutation_authorization,
-    SessionMutationAuthOptions,
-};
 #[cfg(feature = "git")]
 use super::session_control_tool::SessionControlWorkspaceTarget;
 #[cfg(feature = "git")]
 use super::session_control_tool::SessionWorktreeCreateResult;
+use super::session_control_tool::{
+    get_available_agent_type_ids_for_creation, resolve_session_mutation_authorization,
+    SessionMutationAuthOptions,
+};
 use super::util::normalize_path;
 use crate::agentic::agents::AcpAgent;
 use crate::agentic::coordination::plan_todo_binding::{

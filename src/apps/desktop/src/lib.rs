@@ -73,6 +73,10 @@ pub(crate) fn ensure_config_root_dirs() {
 
 /// `app_data_dir` replacement: `<config_root>/app_data`, or Tauri's default when
 /// no config root is configured.
+///
+/// The only non-test consumer is the Windows-only WebView recovery state path,
+/// so the helper is cfg-gated to mirror that usage on other platforms.
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn app_data_dir<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
 ) -> tauri::Result<std::path::PathBuf> {

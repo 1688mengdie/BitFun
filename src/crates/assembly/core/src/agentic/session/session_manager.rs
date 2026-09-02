@@ -11570,6 +11570,7 @@ mod tests {
         .is_empty());
     }
 
+    #[test]
     fn idle_eviction_never_selects_a_processing_session_as_a_candidate() {
         // R-WF-11 复审⑤ P1-1: an in-memory `Processing` session is a live turn.
         // A long turn with no phase refresh (idle timeout exceeded) must NOT be

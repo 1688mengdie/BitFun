@@ -302,9 +302,15 @@ pub(crate) struct MockOpenAiServer {
 enum MockModelResponse {
     Immediate,
     Gated,
-    Http403 { reason: String },
+    Http403 {
+        reason: String,
+    },
     DisconnectThenHttp403,
-    MalformedSseThenImmediate,
+    /// Attempt 0 streams the opening marker and then closes the connection
+    /// without a terminator (transport-level drop). The transport error is
+    /// retryable under the sse.rs retry-category contract, so the next
+    /// attempt streams a complete response.
+    DisconnectThenImmediate,
 }
 
 impl MockOpenAiServer {
@@ -327,7 +333,7 @@ impl MockOpenAiServer {
     }
 
     pub(crate) fn malformed_sse_then_immediate() -> Self {
-        Self::spawn(MockModelResponse::MalformedSseThenImmediate)
+        Self::spawn(MockModelResponse::DisconnectThenImmediate)
     }
 
     pub(crate) fn base_url(&self) -> &str {
@@ -416,7 +422,7 @@ impl MockOpenAiServer {
                                 response,
                                 MockModelResponse::Http403 { .. }
                                     | MockModelResponse::DisconnectThenHttp403
-                            ) || (matches!(response, MockModelResponse::MalformedSseThenImmediate)
+                            ) || (matches!(response, MockModelResponse::DisconnectThenImmediate)
                                 && attempt < 2);
                         if accepts_more_requests {
                             continue;
@@ -482,13 +488,6 @@ fn serve_model_response(
         )
         .expect("write mock response headers");
 
-    if matches!(response, MockModelResponse::MalformedSseThenImmediate) && attempt == 0 {
-        write_chunk(stream, b"data: not-json\n\n").expect("write malformed SSE frame");
-        let _ = stream.write_all(b"0\r\n\r\n");
-        let _ = stream.flush();
-        return;
-    }
-
     write_sse_chunk(
         stream,
         &json!({
@@ -522,7 +521,14 @@ fn serve_model_response(
     )
     .expect("write mock streaming marker");
 
-    if matches!(response, MockModelResponse::DisconnectThenHttp403) {
+    if matches!(
+        response,
+        MockModelResponse::DisconnectThenHttp403 | MockModelResponse::DisconnectThenImmediate
+    ) && attempt == 0
+    {
+        // Attempt 0 drops the connection right after the opening marker: the
+        // transport error is retryable under the sse.rs retry-category
+        // contract, so the next attempt reaches the complete response below.
         return;
     }
 
