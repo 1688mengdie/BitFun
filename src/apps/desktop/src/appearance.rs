@@ -313,6 +313,7 @@ impl AppearanceConfig {
                 "loadingApp": "Starting OpenBitFun...",
                 "minimize": "Minimize",
                 "maximize": "Maximize",
+                "restore": "Restore",
                 "close": "Close",
                 "petLoading": "Loading companion..."
             }),
@@ -320,6 +321,7 @@ impl AppearanceConfig {
                 "loadingApp": "正在啟動 OpenBitFun...",
                 "minimize": "最小化",
                 "maximize": "最大化",
+                "restore": "還原",
                 "close": "關閉",
                 "petLoading": "正在載入助手..."
             }),
@@ -327,6 +329,7 @@ impl AppearanceConfig {
                 "loadingApp": "正在启动 OpenBitFun...",
                 "minimize": "最小化",
                 "maximize": "最大化",
+                "restore": "还原",
                 "close": "关闭",
                 "petLoading": "正在加载助手..."
             }),
