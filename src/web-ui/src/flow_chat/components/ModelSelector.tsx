@@ -1223,10 +1223,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   );
   const effectiveReasoningDescriptor = selectedReasoningDescriptor ?? defaultReasoningDescriptor;
   const currentReasoningLabel = effectiveReasoningDescriptor
-    ? presetDisplayLabel(effectiveReasoningDescriptor, orderedReasoningPresets, t)
+    ? presetDisplayLabel(effectiveReasoningDescriptor, t)
     : t('reasoningSelector.auto');
   const reasoningPresetLabels = orderedReasoningPresets.map(preset => (
-    presetDisplayLabel(preset, orderedReasoningPresets, t)
+    presetDisplayLabel(preset, t)
   ));
   const hasNativeReasoningSettings = orderedReasoningPresets.length > 0;
   useEffect(() => {
@@ -2274,7 +2274,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
                 {orderedReasoningPresets.map((preset, index) => {
                   const isSelected = selectedReasoningDescriptor?.id === preset.id;
                   const label = reasoningPresetLabels[index]
-                    ?? presetDisplayLabel(preset, orderedReasoningPresets, t);
+                    ?? presetDisplayLabel(preset, t);
 
                   return (
                     <MenuItem
